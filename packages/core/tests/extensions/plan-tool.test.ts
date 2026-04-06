@@ -1,42 +1,77 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect } from "effect"
+import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
 import { PlanTool } from "@gent/core/extensions/plan-tool"
-import { Agents, AgentRunnerService, type AgentRunResult } from "@gent/core/domain/agent"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-
-const TestExtRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
-    },
-  ]),
-)
-import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { EventStore } from "@gent/core/domain/event"
-import { Storage } from "@gent/core/storage/sqlite-storage"
 import type { ToolContext } from "@gent/core/domain/tool"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
-const RuntimePlatformLayer = RuntimePlatform.Test({
-  cwd: process.cwd(),
-  home: "/tmp/test-home",
-  platform: "test",
-})
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const ctx: ToolContext = {
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
-  cwd: "/tmp",
-  home: "/tmp",
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
+const makeCtx = (overrides: {
+  agentRun?: (
+    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+  ) => Effect.Effect<AgentRunResult>
+  reviewDecision?: "yes" | "no" | "edit"
+}): ToolContext => {
+  const agentRun =
+    overrides.agentRun ??
+    (() =>
+      Effect.succeed({
+        _tag: "success" as const,
+        text: "output",
+        sessionId: "s1",
+        agentName: "test",
+      }))
+  return {
+    sessionId: "test-session",
+    branchId: "test-branch",
+    toolCallId: "test-call",
+    cwd: "/tmp",
+    home: "/tmp",
+    extension: {
+      send: dieStub("extension.send"),
+      ask: dieStub("extension.ask"),
+      getUiSnapshots: dieStub("extension.getUiSnapshots"),
+      getUiSnapshot: dieStub("extension.getUiSnapshot"),
+    },
+    agent: {
+      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      require: (name) => {
+        const agent = Object.values(Agents).find((a) => a.name === name)
+        return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
+      },
+      run: agentRun,
+      resolveDualModelPair: () =>
+        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+    },
+    session: {
+      listMessages: dieStub("session.listMessages"),
+      getSession: dieStub("session.getSession"),
+      getDetail: dieStub("session.getDetail"),
+      renameCurrent: dieStub("session.renameCurrent"),
+      estimateContextPercent: dieStub("session.estimateContextPercent"),
+      search: dieStub("session.search"),
+    },
+    interaction: {
+      approve: dieStub("interaction.approve"),
+      present: dieStub("interaction.present"),
+      confirm: dieStub("interaction.confirm"),
+      review: () =>
+        Effect.succeed({
+          decision: overrides.reviewDecision ?? "yes",
+          path: "/tmp/test-plan.md",
+        }),
+    },
+    turn: {
+      queueFollowUp: dieStub("turn.queueFollowUp"),
+      interject: dieStub("turn.interject"),
+    },
+    extensions: {
+      send: dieStub("extensions.send"),
+      ask: dieStub("extensions.ask"),
+    },
+    approve: dieStub("approve"),
+  } as ToolContext
 }
 
 describe("Plan Tool", () => {
@@ -44,8 +79,8 @@ describe("Plan Tool", () => {
     const calls: Array<{ prompt: string }> = []
     let callIdx = 0
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) => {
+    const ctx = makeCtx({
+      agentRun: (params) => {
         calls.push({ prompt: params.prompt })
         callIdx++
         return Effect.succeed({
@@ -56,16 +91,6 @@ describe("Plan Tool", () => {
         } as AgentRunResult & { _tag: "success" })
       },
     })
-
-    const layer = Layer.mergeAll(
-      runnerLayer,
-
-      TestExtRegistry,
-      PromptPresenter.Test([], ["yes"]),
-      EventStore.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
 
     return PlanTool.execute({ prompt: "implement caching" }, ctx).pipe(
       Effect.map((result) => {
@@ -90,15 +115,14 @@ describe("Plan Tool", () => {
         expect(result.decision).toBe("yes")
         expect(result.plan).toBeDefined()
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("includes context and files in plan prompt", () => {
     const calls: Array<{ prompt: string }> = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) => {
+    const ctx = makeCtx({
+      agentRun: (params) => {
         calls.push({ prompt: params.prompt })
         return Effect.succeed({
           _tag: "success" as const,
@@ -108,16 +132,6 @@ describe("Plan Tool", () => {
         } as AgentRunResult & { _tag: "success" })
       },
     })
-
-    const layer = Layer.mergeAll(
-      runnerLayer,
-
-      TestExtRegistry,
-      PromptPresenter.Test([], ["yes"]),
-      EventStore.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
 
     return PlanTool.execute(
       {
@@ -132,44 +146,33 @@ describe("Plan Tool", () => {
         expect(calls[0]!.prompt).toContain("JWT tokens")
         expect(calls[0]!.prompt).toContain("src/auth.ts")
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("returns rejected when user rejects plan", () => {
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) =>
+    const ctx = makeCtx({
+      agentRun: (params) =>
         Effect.succeed({
           _tag: "success" as const,
           text: "output",
           sessionId: "s1",
           agentName: params.agent.name,
         } as AgentRunResult & { _tag: "success" }),
+      reviewDecision: "no",
     })
-
-    const layer = Layer.mergeAll(
-      runnerLayer,
-
-      TestExtRegistry,
-      PromptPresenter.Test([], ["no"]),
-      EventStore.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
 
     return PlanTool.execute({ prompt: "refactor" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.decision).toBe("no")
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("uses different models for adversarial planning", () => {
     const models: string[] = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) => {
+    const ctx = makeCtx({
+      agentRun: (params) => {
         if (params.overrides?.modelId !== undefined) {
           models.push(params.overrides.modelId)
         }
@@ -182,31 +185,20 @@ describe("Plan Tool", () => {
       },
     })
 
-    const layer = Layer.mergeAll(
-      runnerLayer,
-
-      TestExtRegistry,
-      PromptPresenter.Test([], ["yes"]),
-      EventStore.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
-
     return PlanTool.execute({ prompt: "test" }, ctx).pipe(
       Effect.map(() => {
         // Should have at least 2 different models used
         const uniqueModels = new Set(models)
         expect(uniqueModels.size).toBe(2)
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("fix mode runs single plan+execute cycle", () => {
     const calls: string[] = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) =>
+    const ctx = makeCtx({
+      agentRun: (params) =>
         Effect.sync(() => {
           calls.push(params.prompt)
           if (
@@ -238,16 +230,6 @@ describe("Plan Tool", () => {
         }),
     })
 
-    const layer = Layer.mergeAll(
-      runnerLayer,
-      TestExtRegistry,
-      PromptPresenter.Test([], ["yes"]),
-      EventStore.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-      Storage.Test(),
-    )
-
     return PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         // Single cycle: plan phases + execute (no evaluator loop)
@@ -267,7 +249,6 @@ describe("Plan Tool", () => {
           ),
         ).toBe(false)
       }),
-      Effect.provide(layer),
     )
   })
 })

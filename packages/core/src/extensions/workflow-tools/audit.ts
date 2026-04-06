@@ -1,10 +1,8 @@
 import { Effect, Schema } from "effect"
-import { AgentRunnerService, type AgentDefinition, type AgentRunner } from "../../domain/agent.js"
-import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import type { AgentDefinition } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
-import { requireAgent, ExtensionRegistry } from "../../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../../runtime/runtime-platform.js"
-import { requireText, runCommand, type WorkflowRunContext } from "../../runtime/workflow-helpers.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import { requireText, runCommand } from "../../runtime/workflow-helpers.js"
 
 interface AuditConcern {
   name: string
@@ -171,33 +169,35 @@ Summarize what changed, which findings are resolved, and what remains.`
 }
 
 const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
-  runner: AgentRunner
+  ctx: ExtensionHostContext
   architect: AgentDefinition
   auditor: AgentDefinition
-  runnerContext: WorkflowRunContext
+  toolCallId?: string
   paths: ReadonlyArray<string>
   prompt?: string
   maxConcerns: number
   evaluatorFeedback?: string
 }) {
-  const registry = yield* ExtensionRegistry
-  const [primaryModel, reviewerModel] = yield* registry.resolveDualModelPair()
+  const { ctx } = params
+  const [primaryModel, reviewerModel] = yield* ctx.agent.resolveDualModelPair()
   const auditOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,
   }
 
-  const detectResult = yield* params.runner.run({
-    agent: params.architect,
-    prompt: buildDetectPrompt(
-      params.prompt,
-      params.paths,
-      params.maxConcerns,
-      params.evaluatorFeedback,
-    ),
-    ...params.runnerContext,
-    overrides: { ...auditOverrides, modelId: primaryModel },
-  })
+  const runAgent = (agent: AgentDefinition, prompt: string, modelId: typeof primaryModel) =>
+    ctx.agent.run({
+      agent,
+      prompt,
+      toolCallId: params.toolCallId as never,
+      overrides: { ...auditOverrides, modelId },
+    })
+
+  const detectResult = yield* runAgent(
+    params.architect,
+    buildDetectPrompt(params.prompt, params.paths, params.maxConcerns, params.evaluatorFeedback),
+    primaryModel,
+  )
   const detectText = yield* requireText(detectResult, "audit-detect")
   const concerns = parseConcerns(detectText, params.maxConcerns)
 
@@ -212,18 +212,8 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
         const prompt = buildConcernAuditPrompt(concern, params.paths, params.prompt)
         const [primaryResult, reviewerResult] = yield* Effect.all(
           [
-            params.runner.run({
-              agent: params.auditor,
-              prompt,
-              ...params.runnerContext,
-              overrides: { ...auditOverrides, modelId: primaryModel },
-            }),
-            params.runner.run({
-              agent: params.auditor,
-              prompt,
-              ...params.runnerContext,
-              overrides: { ...auditOverrides, modelId: reviewerModel },
-            }),
+            runAgent(params.auditor, prompt, primaryModel),
+            runAgent(params.auditor, prompt, reviewerModel),
           ] as const,
           { concurrency: 2 },
         )
@@ -237,12 +227,11 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     { concurrency: 4 },
   )
 
-  const synthesisResult = yield* params.runner.run({
-    agent: params.architect,
-    prompt: buildSynthesisPrompt(pairedNotes, params.prompt),
-    ...params.runnerContext,
-    overrides: { ...auditOverrides, modelId: primaryModel },
-  })
+  const synthesisResult = yield* runAgent(
+    params.architect,
+    buildSynthesisPrompt(pairedNotes, params.prompt),
+    primaryModel,
+  )
   const raw = yield* requireText(synthesisResult, "audit-synthesize")
   const findings = parseFindings(raw)
   return { raw, findings }
@@ -262,40 +251,28 @@ export const AuditTool = defineTool({
   ],
   params: AuditParams,
   execute: Effect.fn("AuditTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* AgentRunnerService
-    const presenter = yield* PromptPresenter
-    const platform = yield* RuntimePlatform
-
     const mode = params.mode ?? "report"
     const maxConcerns = params.maxConcerns ?? 5
     const paths = yield* resolveAuditPaths(params.paths)
-    const runnerContext: WorkflowRunContext = {
-      parentSessionId: ctx.sessionId,
-      parentBranchId: ctx.branchId,
-      toolCallId: ctx.toolCallId,
-      cwd: platform.cwd,
-    }
 
-    const architect = yield* requireAgent("architect")
-    const auditor = yield* requireAgent("auditor")
+    const architect = yield* ctx.agent.require("architect")
+    const auditor = yield* ctx.agent.require("auditor")
     const callerAgentName = ctx.agentName ?? "cowork"
-    const executor = yield* requireAgent(callerAgentName)
+    const executor = yield* ctx.agent.require(callerAgentName)
 
     // Detect → adversarial audit → synthesize (always runs)
     const report = yield* runAuditCycle({
-      runner,
+      ctx,
       architect,
       auditor,
-      runnerContext,
+      toolCallId: ctx.toolCallId,
       paths,
       prompt: params.prompt,
       maxConcerns,
     })
 
     if (mode === "report") {
-      yield* presenter.present({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
+      yield* ctx.interaction.present({
         content: report.raw,
         title: "Audit Findings",
       })
@@ -307,10 +284,10 @@ export const AuditTool = defineTool({
       return { mode, output: "No findings to fix.", findings: [], paths }
     }
 
-    const execResult = yield* runner.run({
+    const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutionPrompt(report.findings, params.prompt),
-      ...runnerContext,
+      toolCallId: ctx.toolCallId,
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

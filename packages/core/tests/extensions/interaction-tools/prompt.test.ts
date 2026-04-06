@@ -1,37 +1,22 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect } from "effect"
 import { PromptTool } from "@gent/core/extensions/interaction-tools/prompt"
-import type { ToolContext } from "@gent/core/domain/tool"
-import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
-
-const ctx: ToolContext = {
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
-  toolCallId: "test-call" as ToolCallId,
-  approve: () => Effect.succeed({ approved: true }),
-  cwd: "/tmp",
-  home: "/tmp",
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
-}
-
-const PlatformLayer = Layer.merge(
-  BunServices.layer,
-  RuntimePlatform.Test({
-    cwd: process.cwd(),
-    home: "/tmp/test-home",
-    platform: "test",
-  }),
-)
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 describe("Prompt Tool", () => {
   it.live("review mode: writes content and returns decision", () => {
-    const layer = Layer.merge(PromptPresenter.Test([], ["yes"]), PlatformLayer)
+    const ctx = testToolContext({
+      interaction: {
+        approve: () => Effect.die("interaction.approve not wired"),
+        present: () => Effect.die("interaction.present not wired"),
+        confirm: () => Effect.die("interaction.confirm not wired"),
+        review: () =>
+          Effect.succeed({
+            decision: "yes" as const,
+            path: "/tmp/test-prompt.md",
+          }),
+      },
+    })
 
     return PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
       Effect.map((result) => {
@@ -41,12 +26,18 @@ describe("Prompt Tool", () => {
           expect(result.path).toBe("/tmp/test-prompt.md")
         }
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("confirm mode: returns yes/no decision", () => {
-    const layer = Layer.merge(PromptPresenter.Test(["no"]), PlatformLayer)
+    const ctx = testToolContext({
+      interaction: {
+        approve: () => Effect.die("interaction.approve not wired"),
+        present: () => Effect.die("interaction.present not wired"),
+        confirm: () => Effect.succeed("no" as const),
+        review: () => Effect.die("interaction.review not wired"),
+      },
+    })
 
     return PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
       Effect.map((result) => {
@@ -55,12 +46,18 @@ describe("Prompt Tool", () => {
           expect(result.decision).toBe("no")
         }
       }),
-      Effect.provide(layer),
     )
   })
 
   it.live("present mode: returns shown status", () => {
-    const layer = Layer.merge(PromptPresenter.Test(), PlatformLayer)
+    const ctx = testToolContext({
+      interaction: {
+        approve: () => Effect.die("interaction.approve not wired"),
+        present: () => Effect.void,
+        confirm: () => Effect.die("interaction.confirm not wired"),
+        review: () => Effect.die("interaction.review not wired"),
+      },
+    })
 
     return PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(
       Effect.map((result) => {
@@ -69,7 +66,6 @@ describe("Prompt Tool", () => {
           expect(result.status).toBe("shown")
         }
       }),
-      Effect.provide(layer),
     )
   })
 })

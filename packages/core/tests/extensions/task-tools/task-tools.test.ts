@@ -5,15 +5,18 @@ import { TaskListTool } from "@gent/core/extensions/task-tools/task-list"
 import { TaskGetTool } from "@gent/core/extensions/task-tools/task-get"
 import { TaskUpdateTool } from "@gent/core/extensions/task-tools/task-update"
 import { DelegateTool } from "@gent/core/extensions/subagent-tools/delegate"
+import { Agents } from "@gent/core/domain/agent"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
+import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
 import { TaskService } from "@gent/core/extensions/task-tools-service"
 import { TaskExtension } from "@gent/core/extensions/task-tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
 const mockRunnerSuccess = {
   run: (params) =>
@@ -27,18 +30,36 @@ const mockRunnerSuccess = {
 
 const makeCtx = Effect.gen(function* () {
   const runtime = yield* ExtensionStateRuntime
-  return {
+  return testToolContext({
     sessionId: "s1" as SessionId,
     branchId: "b1",
     toolCallId: "tc1",
-    cwd: "/tmp",
-    home: "/tmp",
+    agent: {
+      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      require: (name) => {
+        const agent = Object.values(Agents).find((a) => a.name === name)
+        return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
+      },
+      run: (params) =>
+        Effect.succeed({
+          _tag: "success" as const,
+          text: `done: ${params.prompt}`,
+          sessionId: "child-session" as SessionId,
+          agentName: params.agent.name,
+        }),
+      resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
+    },
+    extension: {
+      send: (message, branchId) => runtime.send("s1" as SessionId, message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.ask("s1" as SessionId, message, branchId ?? "b1"),
+      getUiSnapshots: dieStub("extension.getUiSnapshots"),
+      getUiSnapshot: dieStub("extension.getUiSnapshot"),
+    },
     extensions: {
       send: (message, branchId) => runtime.send("s1" as SessionId, message, branchId ?? "b1"),
       ask: (message, branchId) => runtime.ask("s1" as SessionId, message, branchId ?? "b1"),
     },
-    approve: () => Effect.die("approve() not wired in test"),
-  } satisfies ToolContext
+  }) as ToolContext
 })
 
 const layer = createToolTestLayer({

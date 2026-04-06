@@ -1,17 +1,8 @@
 import { Effect, Schema } from "effect"
-import {
-  AgentRunnerService,
-  getDurableAgentRunSessionId,
-  type AgentDefinition,
-  type AgentRunner,
-} from "../../domain/agent.js"
+import { getDurableAgentRunSessionId, type AgentDefinition } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
-import { requireAgent, ExtensionRegistry } from "../../runtime/extensions/registry.js"
-import {
-  requireText,
-  runCommand as runCommandBase,
-  type WorkflowRunContext,
-} from "../../runtime/workflow-helpers.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import { requireText, runCommand as runCommandBase } from "../../runtime/workflow-helpers.js"
 
 export class CodeReviewError extends Schema.TaggedErrorClass<CodeReviewError>()("CodeReviewError", {
   message: Schema.String,
@@ -179,35 +170,30 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
   ].join("\n")
 
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
-  runner: AgentRunner
+  ctx: ExtensionHostContext
   reviewer: AgentDefinition
-  runnerContext: WorkflowRunContext
+  toolCallId?: string
   reviewInput: string
   description?: string
 }) {
-  const registry = yield* ExtensionRegistry
-  const [modelA, modelB] = yield* registry.resolveDualModelPair()
+  const { ctx } = params
+  const [modelA, modelB] = yield* ctx.agent.resolveDualModelPair()
   const reviewPrompt = buildReviewPrompt(params.reviewInput, params.description)
   const reviewOverrides = {
     allowedTools: ["grep", "glob", "read", "memory_search"] as const,
     deniedTools: ["bash"] as const,
   }
 
+  const runAgent = (prompt: string, modelId: typeof modelA) =>
+    ctx.agent.run({
+      agent: params.reviewer,
+      prompt,
+      toolCallId: params.toolCallId as never,
+      overrides: { ...reviewOverrides, modelId },
+    })
+
   const [reviewResultA, reviewResultB] = yield* Effect.all(
-    [
-      params.runner.run({
-        agent: params.reviewer,
-        prompt: reviewPrompt,
-        ...params.runnerContext,
-        overrides: { ...reviewOverrides, modelId: modelA },
-      }),
-      params.runner.run({
-        agent: params.reviewer,
-        prompt: reviewPrompt,
-        ...params.runnerContext,
-        overrides: { ...reviewOverrides, modelId: modelB },
-      }),
-    ] as const,
+    [runAgent(reviewPrompt, modelA), runAgent(reviewPrompt, modelB)] as const,
     { concurrency: 2 },
   )
   const reviewA = yield* requireText(reviewResultA, "review-A")
@@ -215,27 +201,16 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
   const [critiqueResultOfA, critiqueResultOfB] = yield* Effect.all(
     [
-      params.runner.run({
-        agent: params.reviewer,
-        prompt: buildAdversarialPrompt(reviewA, params.reviewInput, params.description),
-        ...params.runnerContext,
-        overrides: { ...reviewOverrides, modelId: modelB },
-      }),
-      params.runner.run({
-        agent: params.reviewer,
-        prompt: buildAdversarialPrompt(reviewB, params.reviewInput, params.description),
-        ...params.runnerContext,
-        overrides: { ...reviewOverrides, modelId: modelA },
-      }),
+      runAgent(buildAdversarialPrompt(reviewA, params.reviewInput, params.description), modelB),
+      runAgent(buildAdversarialPrompt(reviewB, params.reviewInput, params.description), modelA),
     ] as const,
     { concurrency: 2 },
   )
   const critiqueOfA = yield* requireText(critiqueResultOfA, "critique-of-A")
   const critiqueOfB = yield* requireText(critiqueResultOfB, "critique-of-B")
 
-  const synthesisResult = yield* params.runner.run({
-    agent: params.reviewer,
-    prompt: buildSynthesisPrompt(
+  const synthesisResult = yield* runAgent(
+    buildSynthesisPrompt(
       reviewA,
       reviewB,
       critiqueOfA,
@@ -243,9 +218,8 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
       params.reviewInput,
       params.description,
     ),
-    ...params.runnerContext,
-    overrides: { ...reviewOverrides, modelId: modelA },
-  })
+    modelA,
+  )
   const raw = yield* requireText(synthesisResult, "synthesize")
   const comments = yield* decodeReviewComments(raw)
 
@@ -271,19 +245,11 @@ export const CodeReviewTool = defineTool({
   ],
   params: CodeReviewParams,
   execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* AgentRunnerService
-
     const mode = params.mode ?? "report"
-    const runnerContext: WorkflowRunContext = {
-      parentSessionId: ctx.sessionId,
-      parentBranchId: ctx.branchId,
-      toolCallId: ctx.toolCallId,
-      cwd: ctx.cwd,
-    }
 
-    const reviewer = yield* requireAgent("reviewer")
+    const reviewer = yield* ctx.agent.require("reviewer")
     const callerAgentName = ctx.agentName ?? "cowork"
-    const executor = yield* requireAgent(callerAgentName)
+    const executor = yield* ctx.agent.require(callerAgentName)
 
     const reviewInput = yield* resolveReviewInput({
       content: params.content,
@@ -293,9 +259,9 @@ export const CodeReviewTool = defineTool({
 
     // Adversarial review cycle (always runs)
     const report = yield* runReviewCycle({
-      runner,
+      ctx,
       reviewer,
-      runnerContext,
+      toolCallId: ctx.toolCallId,
       reviewInput,
       description: params.description,
     })
@@ -316,10 +282,10 @@ export const CodeReviewTool = defineTool({
       return { mode, comments: [], summary, raw: report.raw, output: "No findings to fix." }
     }
 
-    const execResult = yield* runner.run({
+    const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(report.comments, params.description),
-      ...runnerContext,
+      toolCallId: ctx.toolCallId,
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

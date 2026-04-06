@@ -1,11 +1,8 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
-import { AgentRunnerService } from "../../domain/agent.js"
-import { requireAgent } from "../../runtime/extensions/registry.js"
 import { headTailChars } from "../../domain/output-buffer.js"
 import type { Message, MessagePart, Branch } from "../../domain/message.js"
 import type { SessionId } from "../../domain/ids.js"
-import { Storage } from "../../storage/sqlite-storage.js"
 
 // Read Session Error
 
@@ -111,9 +108,7 @@ export const ReadSessionTool = defineTool({
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
   execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
-    const storage = yield* Storage
-
-    const tree = yield* storage.getSessionDetail(params.sessionId as SessionId).pipe(
+    const tree = yield* ctx.session.getDetail(params.sessionId as SessionId).pipe(
       Effect.mapError(
         (e) =>
           new ReadSessionError({
@@ -138,17 +133,12 @@ export const ReadSessionTool = defineTool({
 
     // If goal provided, use AI extraction
     if (params.goal !== undefined) {
-      const runner = yield* AgentRunnerService
-
       const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${params.goal}`
-
-      const result = yield* runner.run({
-        agent: yield* requireAgent("summarizer"),
+      const summarizer = yield* ctx.agent.require("summarizer")
+      const result = yield* ctx.agent.run({
+        agent: summarizer,
         prompt,
-        parentSessionId: ctx.sessionId,
-        parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: ctx.cwd,
       })
 
       if (result._tag === "error") {

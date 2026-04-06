@@ -1,54 +1,51 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect } from "effect"
 import { CodeReviewTool } from "@gent/core/extensions/subagent-tools/code-review"
-import { Agents, AgentRunnerService } from "@gent/core/domain/agent"
-import type { ToolContext } from "@gent/core/domain/tool"
+import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { SessionId } from "@gent/core/domain/ids"
-import { EventStore } from "@gent/core/domain/event"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
-const ctx: ToolContext = {
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
-  cwd: "/tmp",
-  home: "/tmp",
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
-}
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const TestExtRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
+const makeCtx = (overrides: {
+  agentRun: (
+    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+  ) => Effect.Effect<AgentRunResult>
+}) =>
+  testToolContext({
+    agent: {
+      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      require: (name) => {
+        const agent = Object.values(Agents).find((a) => a.name === name)
+        return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
+      },
+      run: overrides.agentRun,
+      resolveDualModelPair: () =>
+        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
     },
-  ]),
-)
+    interaction: {
+      approve: dieStub("interaction.approve"),
+      present: dieStub("interaction.present"),
+      confirm: dieStub("interaction.confirm"),
+      review: dieStub("interaction.review"),
+    },
+  })
 
+// RuntimePlatform needed — resolveReviewInput carries it in the type even when content is provided
 const runtimePlatformLayer = RuntimePlatform.Test({
   cwd: process.cwd(),
   home: "/tmp/test-home",
   platform: "test",
 })
 
-const platformLayer = Layer.mergeAll(BunServices.layer, runtimePlatformLayer, TestExtRegistry)
-
-const workflowTestLayer = Layer.mergeAll(TestExtRegistry, EventStore.Test(), Storage.Test())
-
 describe("CodeReviewTool", () => {
   it.live("passes description to runner", () => {
     let capturedPrompt = ""
     const capturedOverrides: Array<Record<string, unknown> | undefined> = []
-    const capturingRunner = Layer.succeed(AgentRunnerService, {
-      run: (params) => {
+    const ctx = makeCtx({
+      agentRun: (params) => {
         capturedPrompt = params.prompt
         capturedOverrides.push(params.overrides as Record<string, unknown> | undefined)
         return Effect.succeed({
@@ -61,7 +58,7 @@ describe("CodeReviewTool", () => {
         })
       },
     })
-    const layer = Layer.mergeAll(capturingRunner, platformLayer, workflowTestLayer)
+
     return CodeReviewTool.execute(
       { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
       ctx,
@@ -74,7 +71,7 @@ describe("CodeReviewTool", () => {
         expect(reviewOverrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
         expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
@@ -88,8 +85,8 @@ describe("CodeReviewTool", () => {
         text: "Missing null check",
       },
     ])
-    const runner = Layer.succeed(AgentRunnerService, {
-      run: () =>
+    const ctx = makeCtx({
+      agentRun: () =>
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
@@ -98,20 +95,20 @@ describe("CodeReviewTool", () => {
           persistence: "ephemeral" as const,
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
+
     return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.comments.length).toBe(1)
         expect(result.comments[0]!.severity).toBe("high")
         expect(result.summary?.high).toBe(1)
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
   it.live("falls back to raw text on parse failure", () => {
-    const runner = Layer.succeed(AgentRunnerService, {
-      run: () =>
+    const ctx = makeCtx({
+      agentRun: () =>
         Effect.succeed({
           _tag: "success" as const,
           text: "not valid json",
@@ -120,20 +117,20 @@ describe("CodeReviewTool", () => {
           persistence: "ephemeral" as const,
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
+
     return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.comments.length).toBe(0)
         expect(result.raw).toBe("not valid json")
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
   it.live("fix mode runs single review+execute cycle", () => {
     const prompts: string[] = []
-    const runner = Layer.succeed(AgentRunnerService, {
-      run: (params) =>
+    const ctx = makeCtx({
+      agentRun: (params) =>
         Effect.sync(() => {
           prompts.push(params.prompt)
           if (params.prompt.includes("Synthesize these adversarial reviews")) {
@@ -172,7 +169,7 @@ describe("CodeReviewTool", () => {
           }
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
+
     return CodeReviewTool.execute(
       { description: "test", content: "fake diff", mode: "fix" },
       ctx,
@@ -189,7 +186,7 @@ describe("CodeReviewTool", () => {
           ),
         ).toBe(false)
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
@@ -197,8 +194,8 @@ describe("CodeReviewTool", () => {
     const jsonOutput = JSON.stringify([
       { file: "a.ts", severity: "low", type: "style", text: "minor" },
     ])
-    const runner = Layer.succeed(AgentRunnerService, {
-      run: () =>
+    const ctx = makeCtx({
+      agentRun: () =>
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
@@ -207,12 +204,12 @@ describe("CodeReviewTool", () => {
           persistence: "ephemeral" as const,
         }),
     })
-    const layer = Layer.mergeAll(runner, platformLayer, workflowTestLayer)
+
     return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.session).toBeUndefined()
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 })

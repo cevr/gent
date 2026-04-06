@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import {
   AgentName,
-  AgentRunnerService,
   getDurableAgentRunSessionId,
   type AgentRunError,
   type AgentRunResult,
@@ -10,7 +9,6 @@ import {
 import type { SessionId } from "../../domain/ids.js"
 import type { Task } from "../../domain/task.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
-import { ExtensionRegistry } from "../../runtime/extensions/registry.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -49,9 +47,6 @@ export const DelegateTool = defineTool({
   ],
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
-    const runner = yield* AgentRunnerService
-    const registry = yield* ExtensionRegistry
-
     const hasChain = (params.chain?.length ?? 0) > 0
     const hasTasks = (params.tasks?.length ?? 0) > 0
     const hasSingle = params.agent !== undefined && params.task !== undefined
@@ -62,7 +57,7 @@ export const DelegateTool = defineTool({
     }
 
     const resolveAgent = (agentName: string) =>
-      registry.getAgent(agentName).pipe(
+      ctx.agent.get(agentName).pipe(
         Effect.map((agent) => {
           if (agent === undefined) {
             return { ok: false as const, error: `Unknown agent: ${agentName}` }
@@ -148,13 +143,10 @@ export const DelegateTool = defineTool({
         if (!resolved.ok) return { error: resolved.error }
 
         const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput)
-        const result = yield* runner.run({
+        const result = yield* ctx.agent.run({
           agent: resolved.agent,
           prompt: taskWithContext,
-          parentSessionId: ctx.sessionId,
-          parentBranchId: ctx.branchId,
           toolCallId: ctx.toolCallId,
-          cwd: ctx.cwd,
         })
 
         results.push(result)
@@ -200,13 +192,10 @@ export const DelegateTool = defineTool({
                 error: resolved.error,
               })
             }
-            return runner.run({
+            return ctx.agent.run({
               agent: resolved.agent,
               prompt: task.task,
-              parentSessionId: ctx.sessionId,
-              parentBranchId: ctx.branchId,
               toolCallId: ctx.toolCallId,
-              cwd: ctx.cwd,
             })
           }),
         )
@@ -234,13 +223,10 @@ export const DelegateTool = defineTool({
       const resolved = yield* resolveAgent(params.agent ?? "")
       if (!resolved.ok) return { error: resolved.error }
 
-      const result = yield* runner.run({
+      const result = yield* ctx.agent.run({
         agent: resolved.agent,
         prompt: params.task ?? "",
-        parentSessionId: ctx.sessionId,
-        parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: ctx.cwd,
       })
 
       if (result._tag === "error") {

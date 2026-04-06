@@ -1,14 +1,8 @@
 import { Effect, Schema } from "effect"
-import { AgentRunnerService, type AgentRunner, type AgentDefinition } from "../domain/agent.js"
-import { requireAgent, ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
+import type { AgentDefinition } from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import {
-  requireText,
-  runAdversarialPair,
-  type WorkflowRunContext,
-} from "../runtime/workflow-helpers.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import { requireText } from "../runtime/workflow-helpers.js"
 
 export const PlanParams = Schema.Struct({
   prompt: Schema.String.annotate({ description: "What to plan" }),
@@ -114,17 +108,25 @@ const buildExecutePrompt = (plan: string) =>
   ].join("\n")
 
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
-  runner: AgentRunner
+  ctx: ExtensionHostContext
   architect: AgentDefinition
-  runnerContext: WorkflowRunContext
+  toolCallId?: string
   mode: "plan-only" | "fix"
   prompt: string
   context?: string
   files?: ReadonlyArray<string>
   evaluatorFeedback?: string
 }) {
-  const registry = yield* ExtensionRegistry
-  const [modelA, modelB] = yield* registry.resolveDualModelPair()
+  const { ctx } = params
+  const [modelA, modelB] = yield* ctx.agent.resolveDualModelPair()
+
+  const runAgent = (prompt: string, modelId: typeof modelA) =>
+    ctx.agent.run({
+      agent: params.architect,
+      prompt,
+      toolCallId: params.toolCallId as never,
+      overrides: { modelId },
+    })
 
   const planPrompt = buildPlanPrompt(
     params.prompt,
@@ -132,31 +134,17 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     params.files,
     params.evaluatorFeedback,
   )
-  const [planResultA, planResultB] = yield* runAdversarialPair(
-    params.runner,
-    params.architect,
-    planPrompt,
-    modelA,
-    modelB,
-    params.runnerContext,
+  const [planResultA, planResultB] = yield* Effect.all(
+    [runAgent(planPrompt, modelA), runAgent(planPrompt, modelB)] as const,
+    { concurrency: 2 },
   )
   const planA = yield* requireText(planResultA, "plan-A")
   const planB = yield* requireText(planResultB, "plan-B")
 
   const [reviewResultOfB, reviewResultOfA] = yield* Effect.all(
     [
-      params.runner.run({
-        agent: params.architect,
-        prompt: buildReviewPrompt(planB),
-        ...params.runnerContext,
-        overrides: { modelId: modelA },
-      }),
-      params.runner.run({
-        agent: params.architect,
-        prompt: buildReviewPrompt(planA),
-        ...params.runnerContext,
-        overrides: { modelId: modelB },
-      }),
+      runAgent(buildReviewPrompt(planB), modelA),
+      runAgent(buildReviewPrompt(planA), modelB),
     ] as const,
     { concurrency: 2 },
   )
@@ -165,30 +153,18 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
 
   const [revisedResultA, revisedResultB] = yield* Effect.all(
     [
-      params.runner.run({
-        agent: params.architect,
-        prompt: buildIncorporatePrompt(planA, reviewOfA),
-        ...params.runnerContext,
-        overrides: { modelId: modelA },
-      }),
-      params.runner.run({
-        agent: params.architect,
-        prompt: buildIncorporatePrompt(planB, reviewOfB),
-        ...params.runnerContext,
-        overrides: { modelId: modelB },
-      }),
+      runAgent(buildIncorporatePrompt(planA, reviewOfA), modelA),
+      runAgent(buildIncorporatePrompt(planB, reviewOfB), modelB),
     ] as const,
     { concurrency: 2 },
   )
   const revisedA = yield* requireText(revisedResultA, "incorporate-A")
   const revisedB = yield* requireText(revisedResultB, "incorporate-B")
 
-  const synthesisResult = yield* params.runner.run({
-    agent: params.architect,
-    prompt: buildSynthesizePrompt(revisedA, revisedB, params.mode),
-    ...params.runnerContext,
-    overrides: { modelId: modelA },
-  })
+  const synthesisResult = yield* runAgent(
+    buildSynthesizePrompt(revisedA, revisedB, params.mode),
+    modelA,
+  )
   const synthesizedPlan = yield* requireText(synthesisResult, "synthesize")
 
   return synthesizedPlan
@@ -202,27 +178,17 @@ export const PlanTool = defineTool({
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,
   execute: Effect.fn("PlanTool.execute")(function* (params, ctx: ToolContext) {
-    const runner = yield* AgentRunnerService
-    const presenter = yield* PromptPresenter
-    const platform = yield* RuntimePlatform
-
     const mode = params.mode ?? "plan-only"
-    const runnerContext: WorkflowRunContext = {
-      parentSessionId: ctx.sessionId,
-      parentBranchId: ctx.branchId,
-      toolCallId: ctx.toolCallId,
-      cwd: platform.cwd,
-    }
 
-    const architect = yield* requireAgent("architect")
+    const architect = yield* ctx.agent.require("architect")
     const callerAgentName = ctx.agentName ?? "cowork"
-    const executor = yield* requireAgent(callerAgentName)
+    const executor = yield* ctx.agent.require(callerAgentName)
 
     // Adversarial planning cycle (always runs)
     const synthesizedPlan = yield* runPlanningCycle({
-      runner,
+      ctx,
       architect,
-      runnerContext,
+      toolCallId: ctx.toolCallId,
       mode,
       prompt: params.prompt,
       context: params.context,
@@ -230,9 +196,7 @@ export const PlanTool = defineTool({
     })
 
     if (mode === "plan-only") {
-      const reviewResult = yield* presenter.review({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
+      const reviewResult = yield* ctx.interaction.review({
         content: synthesizedPlan,
         title: "Implementation Plan",
         fileNameSeed: ctx.toolCallId,
@@ -250,10 +214,10 @@ export const PlanTool = defineTool({
     }
 
     // Fix mode: single cycle — plan + execute. Agent uses @gent/auto for iteration.
-    const execResult = yield* runner.run({
+    const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(synthesizedPlan),
-      ...runnerContext,
+      toolCallId: ctx.toolCallId,
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

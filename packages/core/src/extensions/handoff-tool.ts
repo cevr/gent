@@ -1,8 +1,5 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../domain/tool.js"
-import { AgentRunnerService } from "../domain/agent.js"
-import { requireAgent } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 // Handoff Tool Error
 
@@ -40,27 +37,22 @@ export const HandoffTool = defineTool({
   ],
   params: HandoffParams,
   execute: Effect.fn("HandoffTool.execute")(function* (params, ctx) {
-    const runner = yield* AgentRunnerService
-    const platform = yield* RuntimePlatform
-
     // Use summarizer agent to refine context if it's large
     let summary = params.context
     if (params.context.length > 2000) {
-      const summarizeResult = yield* runner.run({
-        agent: yield* requireAgent("summarizer"),
+      const summarizer = yield* ctx.agent.require("summarizer")
+      const summarizeResult = yield* ctx.agent.run({
+        agent: summarizer,
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
-        parentSessionId: ctx.sessionId,
-        parentBranchId: ctx.branchId,
         toolCallId: ctx.toolCallId,
-        cwd: platform.cwd,
       })
       if (summarizeResult._tag === "success") {
         summary = summarizeResult.text
       }
     }
 
-    // Present handoff to user via ctx.approve() — blocks until confirmed or rejected
-    const decision = yield* ctx.approve({
+    // Present handoff to user via ctx.interaction.approve() — blocks until confirmed or rejected
+    const decision = yield* ctx.interaction.approve({
       text: summary,
       metadata: { type: "handoff", reason: params.reason },
     })

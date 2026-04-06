@@ -14,7 +14,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol"
-import type { BranchId, SessionId } from "./ids"
+import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -82,6 +82,7 @@ export declare namespace ExtensionHostContext {
       agent: AgentDefinition
       prompt: string
       cwd?: string
+      toolCallId?: ToolCallId
       overrides?: AgentExecutionOverrides
       persistence?: AgentPersistence
     }) => Effect.Effect<AgentRunResult, AgentRunError>

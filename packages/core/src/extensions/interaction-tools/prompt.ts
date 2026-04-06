@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
-import { PromptPresenter } from "../../domain/prompt-presenter.js"
 
 // Prompt Params — discriminated union on mode
 
@@ -68,12 +67,8 @@ export const PromptTool = defineTool({
     "mode=review for content that should be persisted and can be edited by the user.",
   params: PromptParams,
   execute: Effect.fn("PromptTool.execute")(function* (params, ctx) {
-    const presenter = yield* PromptPresenter
-
     if (params.mode === "present") {
-      yield* presenter.present({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
+      yield* ctx.interaction.present({
         content: params.content,
         title: params.title,
       })
@@ -81,9 +76,7 @@ export const PromptTool = defineTool({
     }
 
     if (params.mode === "confirm") {
-      const decision = yield* presenter.confirm({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
+      const decision = yield* ctx.interaction.confirm({
         content: params.content,
         title: params.title,
       })
@@ -91,9 +84,7 @@ export const PromptTool = defineTool({
     }
 
     // review mode
-    const result = yield* presenter.review({
-      sessionId: ctx.sessionId,
-      branchId: ctx.branchId,
+    const result = yield* ctx.interaction.review({
       content: params.content,
       title: params.title,
       fileNameSeed: ctx.toolCallId,

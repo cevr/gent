@@ -1,62 +1,56 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect } from "effect"
 import { AuditTool } from "@gent/core/extensions/workflow-tools/audit"
-import { Agents, AgentRunnerService, type AgentRunResult } from "@gent/core/domain/agent"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
-const TestExtRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
-    },
-  ]),
-)
-import { PromptPresenter } from "@gent/core/domain/prompt-presenter"
-import { EventStore } from "@gent/core/domain/event"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import type { ToolContext } from "@gent/core/domain/tool"
-
-const RuntimePlatformLayer = RuntimePlatform.Test({
-  cwd: process.cwd(),
-  home: "/tmp/test-home",
-  platform: "test",
-})
-
-const ctx: ToolContext = {
-  sessionId: "test-session",
-  branchId: "test-branch",
-  toolCallId: "test-call",
-  agentName: "cowork",
-  cwd: "/tmp",
-  home: "/tmp",
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
-}
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
 const makeSuccess = (
   text: string,
-  sessionId: AgentRunResult & { _tag: "success" } extends { sessionId: infer S }
-    ? S
-    : never = "s1" as AgentRunResult & { _tag: "success" } extends { sessionId: infer S }
-    ? S
-    : never,
-  agentName: AgentRunResult & { _tag: "success" } extends { agentName: infer A }
-    ? A
-    : never = "architect" as AgentRunResult & { _tag: "success" } extends { agentName: infer A }
-    ? A
-    : never,
+  sessionId: string = "s1",
+  agentName: string = "architect",
 ): AgentRunResult => ({
   _tag: "success",
   text,
   sessionId,
   agentName,
+})
+
+const makeCtx = (overrides: {
+  agentRun: (
+    params: Parameters<ExtensionHostContext.Agent["run"]>[0],
+  ) => Effect.Effect<AgentRunResult>
+  present?: ExtensionHostContext.Interaction["present"]
+}): ToolContext =>
+  testToolContext({
+    agentName: "cowork",
+    agent: {
+      get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
+      require: (name) => {
+        const agent = Object.values(Agents).find((a) => a.name === name)
+        return agent !== undefined ? Effect.succeed(agent) : Effect.die(`Agent "${name}" not found`)
+      },
+      run: overrides.agentRun,
+      resolveDualModelPair: () =>
+        Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
+    },
+    interaction: {
+      approve: dieStub("interaction.approve"),
+      present: overrides.present ?? (() => Effect.void),
+      confirm: dieStub("interaction.confirm"),
+      review: dieStub("interaction.review"),
+    },
+  })
+
+// RuntimePlatform still needed — resolveAuditPaths carries it in the type even when paths are provided
+const runtimePlatformLayer = RuntimePlatform.Test({
+  cwd: process.cwd(),
+  home: "/tmp/test-home",
+  platform: "test",
 })
 
 describe("Audit Tool", () => {
@@ -65,8 +59,8 @@ describe("Audit Tool", () => {
     () => {
       const calls: Array<{ agentName: string; prompt: string }> = []
 
-      const runnerLayer = Layer.succeed(AgentRunnerService, {
-        run: (params) =>
+      const ctx = makeCtx({
+        agentRun: (params) =>
           Effect.sync(() => {
             const prompt = params.prompt
             calls.push({ agentName: params.agent.name, prompt })
@@ -90,16 +84,6 @@ describe("Audit Tool", () => {
             return makeSuccess("ok")
           }),
       })
-
-      const layer = Layer.mergeAll(
-        runnerLayer,
-        TestExtRegistry,
-        PromptPresenter.Test(["yes"]),
-        EventStore.Test(),
-        Storage.Test(),
-        BunServices.layer,
-        RuntimePlatformLayer,
-      )
 
       return AuditTool.execute(
         {
@@ -128,7 +112,7 @@ describe("Audit Tool", () => {
           expect(result.output).toBe("Applied all fixes.")
           expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
         }),
-        Effect.provide(layer),
+        Effect.provide(runtimePlatformLayer),
       )
     },
   )
@@ -136,8 +120,8 @@ describe("Audit Tool", () => {
   it.live("report mode skips execution", () => {
     const calls: Array<{ prompt: string }> = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) => {
+    const ctx = makeCtx({
+      agentRun: (params) => {
         calls.push({ prompt: params.prompt })
         if (params.prompt.includes("Identify audit concerns")) {
           return Effect.succeed(makeSuccess("1. security: Check security patterns"))
@@ -154,55 +138,35 @@ describe("Audit Tool", () => {
       },
     })
 
-    const layer = Layer.mergeAll(
-      runnerLayer,
-      TestExtRegistry,
-      PromptPresenter.Test(["yes"]),
-      EventStore.Test(),
-      Storage.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
-
     return AuditTool.execute({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.findings.length).toBe(1)
         const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
         expect(executeCalls.length).toBe(0)
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
   it.live("stops when no concerns detected", () => {
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: () => Effect.succeed(makeSuccess("No specific concerns found for this code.")),
+    const ctx = makeCtx({
+      agentRun: () => Effect.succeed(makeSuccess("No specific concerns found for this code.")),
     })
-
-    const layer = Layer.mergeAll(
-      runnerLayer,
-      TestExtRegistry,
-      PromptPresenter.Test(),
-      EventStore.Test(),
-      Storage.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
 
     return AuditTool.execute({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.findings.length).toBe(0)
         expect(result.output).toBe("No findings to fix.")
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
   it.live("uses primary agent for execution, not architect", () => {
     const executorAgents: string[] = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) =>
+    const ctx = makeCtx({
+      agentRun: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Execute this audit plan")) {
             executorAgents.push(params.agent.name)
@@ -220,30 +184,20 @@ describe("Audit Tool", () => {
         }),
     })
 
-    const layer = Layer.mergeAll(
-      runnerLayer,
-      TestExtRegistry,
-      PromptPresenter.Test(["yes"]),
-      EventStore.Test(),
-      Storage.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
-
     return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
       Effect.map(() => {
         expect(executorAgents.length).toBeGreaterThan(0)
         expect(executorAgents[0]).toBe("cowork")
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 
   it.live("auditor subagents run read-only with bash denied", () => {
     const auditOverrides: Array<Record<string, unknown> | undefined> = []
 
-    const runnerLayer = Layer.succeed(AgentRunnerService, {
-      run: (params) =>
+    const ctx = makeCtx({
+      agentRun: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Audit the code for this concern:")) {
             auditOverrides.push(params.overrides as Record<string, unknown> | undefined)
@@ -261,16 +215,6 @@ describe("Audit Tool", () => {
         }),
     })
 
-    const layer = Layer.mergeAll(
-      runnerLayer,
-      TestExtRegistry,
-      PromptPresenter.Test(["yes"]),
-      EventStore.Test(),
-      Storage.Test(),
-      BunServices.layer,
-      RuntimePlatformLayer,
-    )
-
     return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
       Effect.map(() => {
         expect(auditOverrides.length).toBeGreaterThan(0)
@@ -279,7 +223,7 @@ describe("Audit Tool", () => {
           expect(overrides?.["deniedTools"]).toEqual(["bash"])
         }
       }),
-      Effect.provide(layer),
+      Effect.provide(runtimePlatformLayer),
     )
   })
 })

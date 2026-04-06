@@ -88,6 +88,7 @@ export const makeExtensionHostContext = (
         prompt: params.prompt,
         parentSessionId: runInfo.sessionId,
         parentBranchId: runInfo.branchId,
+        toolCallId: params.toolCallId,
         cwd: params.cwd ?? deps.platform.cwd,
         overrides: params.overrides,
         persistence: params.persistence,
