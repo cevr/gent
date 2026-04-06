@@ -287,4 +287,58 @@ describe("buildTurnPrompt", () => {
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).not.toContain("Prefer")
   })
+
+  test("synthesizes delegation targets when delegate is in tool set", () => {
+    const tools = [
+      {
+        name: "delegate",
+        action: "delegate" as const,
+        description: "Delegate work",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const targets = [
+      new AgentDefinition({ name: "explore", description: "Fast codebase search" }),
+      new AgentDefinition({ name: "reviewer", description: "Code review" }),
+      new AgentDefinition({ name: "no-desc" }), // no description — should be excluded
+    ]
+    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
+    expect(result).toContain("## Delegation Targets")
+    expect(result).toContain("**explore**: Fast codebase search")
+    expect(result).toContain("**reviewer**: Code review")
+    expect(result).not.toContain("no-desc")
+  })
+
+  test("excludes current agent from delegation targets", () => {
+    const self = new AgentDefinition({ name: "test-agent", description: "Self" })
+    const tools = [
+      {
+        name: "delegate",
+        action: "delegate" as const,
+        description: "Delegate",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const targets = [self, new AgentDefinition({ name: "other", description: "Other agent" })]
+    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
+    expect(result).toContain("**other**: Other agent")
+    expect(result).not.toContain("**test-agent**")
+  })
+
+  test("omits delegation targets when delegate not in tool set", () => {
+    const tools = [
+      {
+        name: "read",
+        action: "read" as const,
+        description: "Read",
+        params: {} as never,
+        execute: (() => {}) as never,
+      },
+    ]
+    const targets = [new AgentDefinition({ name: "explore", description: "Search" })]
+    const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
+    expect(result).not.toContain("## Delegation Targets")
+  })
 })

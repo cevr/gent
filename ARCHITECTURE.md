@@ -133,7 +133,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 ### Agent Runs
 
 - Default persistence is durable.
-- Read-only helper agents (`explore`, `finder`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
+- Read-only helper agents (`explore`, `librarian`, `reviewer`, `auditor`, `summarizer`, `title`) default to ephemeral.
 - Durable runs persist a child session/branch and can be revisited with `read_session`.
 - Ephemeral runs still execute a full local `AgentLoop`, but against isolated in-memory storage; they return text/usage/tool-call metadata without polluting the session tree.
 - Callers that need durable history must opt in explicitly, e.g. task execution forces `persistence: "durable"`.
@@ -362,11 +362,11 @@ The actor tracks `InteractionPresented`/`InteractionResolved` events. Its UI sna
 
 `@gent/auto` — iterative workflow driver via effect-machine.
 
-State: `Inactive | Working | AwaitingCounsel`. Signal tool: `auto_checkpoint`. Gate: counsel review between iterations. Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
+State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: peer review via delegate between iterations. Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
 
 ### JSONL Persistence
 
-`AutoJournal` writes append-only `.gent/auto/<goal-slug>.jsonl` relative to cwd. `active.json` pointer tracks which journal to resume. Row types: `config`, `checkpoint`, `counsel`.
+`AutoJournal` writes append-only `.gent/auto/<goal-slug>.jsonl` relative to cwd. `active.json` pointer tracks which journal to resume. Row types: `config`, `checkpoint`, `review`.
 
 Cross-session replay via `onInit`: child sessions verify ancestry includes `active.sessionId`. Fail-closed for legacy pointers without `sessionId`. Root sessions never replay.
 

@@ -205,6 +205,23 @@ describe("AgentRunner", () => {
           { service: "EventStore", method: "publish", match: { _tag: "AgentRunSpawned" } },
           { service: "EventStore", method: "publish", match: { _tag: "AgentRunSucceeded" } },
         ])
+
+        // Verify enriched AgentRunSucceeded payload fields (args is the event object directly)
+        const successEvent = calls.find((c) => {
+          const args = c.args as Record<string, unknown> | undefined
+          return (
+            c.service === "EventStore" &&
+            c.method === "publish" &&
+            args?._tag === "AgentRunSucceeded"
+          )
+        })
+        expect(successEvent).toBeDefined()
+        const event = successEvent!.args as Record<string, unknown>
+        expect(event.preview).toBeDefined()
+        expect(typeof event.preview).toBe("string")
+        expect(event.savedPath).toBeDefined()
+        expect(typeof event.savedPath).toBe("string")
+        expect(event.savedPath).toContain("/tmp/gent/outputs/")
       }).pipe(Effect.provide(layer)),
     )
   })

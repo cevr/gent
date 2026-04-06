@@ -324,14 +324,12 @@ export const Agents = {
   cowork: defineAgent({
     name: "cowork",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect"],
     systemPromptAddendum: "Cowork agent. Fast, practical, execute changes. Minimal prose.",
   }),
 
   deepwork: defineAgent({
     name: "deepwork",
     kind: "primary",
-    canDelegateToAgents: ["explore", "architect"],
     reasoningEffort: "high",
     systemPromptAddendum: "Deepwork agent. Thorough analysis, careful tradeoffs.",
   }),

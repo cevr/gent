@@ -18,9 +18,8 @@ Add an `"rlm"` agent whose `systemPromptAddendum` teaches the file-symbol mental
 
 - Add `"rlm"` to `AgentName` literal union
 - Add `RLM_PROMPT` constant with the programming model instructions (file-symbol protocol, decomposition strategy, workspace convention, depth awareness)
-- Add `rlm` to `Agents` object: `kind: "subagent"`, `allowedTools: ["read", "write", "bash", "glob", "grep", "delegate"]`, `canDelegateToAgents: ["rlm", "explore"]` (self-delegation = recursion)
+- Add `rlm` to `Agents` object: `allowedTools: ["read", "write", "bash", "glob", "grep", "delegate"]` (any agent with `delegate` can target any registered agent, including self for recursion)
 - Add `rlm` to `AgentModels` with a sensible default (sonnet), but this is overridable — see step 2
-- Update `cowork.canDelegateToAgents` and `deepwork.canDelegateToAgents` to include `"rlm"`
 
 ### 2. Add depth + model fields to `SubagentRunner` interface
 
