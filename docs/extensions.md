@@ -80,14 +80,16 @@ ext.agent({
 
 ### ext.command(name, options)
 
-Register a slash command:
+Register a slash command. Handler receives args and `ExtensionHostContext`:
 
 ```ts
 ext.command("deploy", {
   description: "Deploy the current branch",
-  handler: async (args) => {
+  handler: async (args, ctx) => {
     const result = await ext.exec("deploy", [args])
     console.log(result.stdout)
+    // Steer the agent via ctx.turn
+    await Effect.runPromise(ctx.turn.queueFollowUp({ content: `Deployed: ${result.stdout}` }))
   },
 })
 ```

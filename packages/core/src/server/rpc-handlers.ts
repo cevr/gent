@@ -19,6 +19,18 @@ import { InteractionCommands } from "./interaction-commands.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
+import {
+  makeExtensionHostContext,
+  type MakeExtensionHostContextDeps,
+} from "../runtime/make-extension-host-context.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import { ApprovalService } from "../runtime/approval-service.js"
+import { PromptPresenter } from "../domain/prompt-presenter.js"
+import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
+import { AgentRunnerService } from "../domain/agent.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -287,6 +299,98 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "extension.ask": ({ sessionId, message, branchId }) =>
         extensionStateRuntime.ask(sessionId, message, branchId),
+
+      "extension.listCommands": () =>
+        extensionRegistry
+          .listCommands()
+          .pipe(
+            Effect.map((cmds) => cmds.map((c) => ({ name: c.name, description: c.description }))),
+          ),
+
+      "extension.invokeCommand": ({ name, args, sessionId, branchId }) =>
+        Effect.gen(function* () {
+          const cmds = yield* extensionRegistry.listCommands()
+          const cmd = cmds.find((c) => c.name === name)
+          if (cmd === undefined) {
+            return yield* Effect.die(`Unknown command: ${name}`)
+          }
+
+          // Resolve deps lazily for host context (same pattern as tool-runner)
+          const lazyDeps = yield* Effect.all({
+            platform: Effect.serviceOption(RuntimePlatform),
+            approvalService: Effect.serviceOption(ApprovalService),
+            promptPresenter: Effect.serviceOption(PromptPresenter),
+            turnControl: Effect.serviceOption(ExtensionTurnControl),
+            storage: Effect.serviceOption(Storage),
+            searchStorage: Effect.serviceOption(SearchStorage),
+            agentRunner: Effect.serviceOption(AgentRunnerService),
+            eventPublisher: Effect.serviceOption(EventPublisher),
+          })
+
+          const die = (label: string) => () => Effect.die(`${label} not available in invokeCommand`)
+          const hostDeps: MakeExtensionHostContextDeps = {
+            platform:
+              lazyDeps.platform._tag === "Some"
+                ? lazyDeps.platform.value
+                : ({ cwd: "/", home: "/" } as MakeExtensionHostContextDeps["platform"]),
+            extensionStateRuntime,
+            approvalService:
+              lazyDeps.approvalService._tag === "Some"
+                ? lazyDeps.approvalService.value
+                : ({
+                    present: die("ApprovalService"),
+                    storeResolution: die("ApprovalService"),
+                    respond: die("ApprovalService"),
+                    rehydrate: die("ApprovalService"),
+                  } as MakeExtensionHostContextDeps["approvalService"]),
+            promptPresenter:
+              lazyDeps.promptPresenter._tag === "Some"
+                ? lazyDeps.promptPresenter.value
+                : ({
+                    present: die("PromptPresenter"),
+                    confirm: die("PromptPresenter"),
+                    review: die("PromptPresenter"),
+                  } as MakeExtensionHostContextDeps["promptPresenter"]),
+            extensionRegistry,
+            turnControl:
+              lazyDeps.turnControl._tag === "Some"
+                ? lazyDeps.turnControl.value
+                : ({
+                    queueFollowUp: die("TurnControl"),
+                    interject: die("TurnControl"),
+                    bind: die("TurnControl"),
+                  } as MakeExtensionHostContextDeps["turnControl"]),
+            storage:
+              lazyDeps.storage._tag === "Some"
+                ? lazyDeps.storage.value
+                : ({} as MakeExtensionHostContextDeps["storage"]),
+            searchStorage:
+              lazyDeps.searchStorage._tag === "Some"
+                ? lazyDeps.searchStorage.value
+                : ({
+                    searchMessages: () => Effect.succeed([]),
+                  } as MakeExtensionHostContextDeps["searchStorage"]),
+            agentRunner:
+              lazyDeps.agentRunner._tag === "Some"
+                ? lazyDeps.agentRunner.value
+                : ({
+                    run: die("AgentRunnerService"),
+                  } as MakeExtensionHostContextDeps["agentRunner"]),
+            eventPublisher:
+              lazyDeps.eventPublisher._tag === "Some"
+                ? lazyDeps.eventPublisher.value
+                : ({
+                    publish: () => Effect.void,
+                    terminateSession: die("EventPublisher"),
+                  } as MakeExtensionHostContextDeps["eventPublisher"]),
+          }
+
+          const ctx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
+          yield* Effect.tryPromise({
+            try: () => Promise.resolve(cmd.handler(args, ctx)),
+            catch: (e) => new Error(`Command "${name}" failed: ${String(e)}`),
+          }).pipe(Effect.orDie)
+        }),
 
       // -- actor --
       "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),

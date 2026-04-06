@@ -321,7 +321,7 @@ export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any
 export interface CommandContribution {
   readonly name: string
   readonly description?: string
-  readonly handler: (args: string) => void | Promise<void>
+  readonly handler: (args: string, ctx: ExtensionHostContext) => void | Promise<void>
 }
 
 // Provider Contribution — re-exported from dedicated file for backwards compatibility

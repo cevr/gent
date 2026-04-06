@@ -3,7 +3,9 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { GentRpcError } from "../errors.js"
 import {
   AskExtensionMessageInput,
+  CommandInfo,
   ExtensionHealthSnapshot,
+  InvokeCommandInput,
   ListExtensionStatusInput,
   SendExtensionMessageInput,
 } from "../transport-contract.js"
@@ -21,6 +23,14 @@ export class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("listStatus", {
     payload: ListExtensionStatusInput.fields,
     success: ExtensionHealthSnapshot,
+    error: GentRpcError,
+  }),
+  Rpc.make("listCommands", {
+    success: Schema.Array(CommandInfo),
+    error: GentRpcError,
+  }),
+  Rpc.make("invokeCommand", {
+    payload: InvokeCommandInput.fields,
     error: GentRpcError,
   }),
 ).prefix("extension.") {}

@@ -129,6 +129,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
   const clientCtx = useClient()
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
+  const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
   const [loading, setLoading] = createSignal(true)
   const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
 
@@ -282,6 +283,47 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         },
       )
       setResolved(result)
+
+      // Fetch server-side extension commands
+      clientCtx.runtime.cast(
+        clientCtx.client.extension.listCommands().pipe(
+          Effect.tap((cmds) =>
+            Effect.sync(() => {
+              setServerCommands(
+                cmds.map((c) => ({
+                  id: `server:${c.name}`,
+                  title: c.description ?? c.name,
+                  slash: c.name,
+                  category: "Extension",
+                  onSelect: () => {
+                    const sid = clientCtx.session()?.sessionId
+                    const bid = clientCtx.session()?.branchId
+                    if (sid !== undefined && bid !== undefined) {
+                      clientCtx.runtime.cast(
+                        clientCtx.client.extension
+                          .invokeCommand({ name: c.name, args: "", sessionId: sid, branchId: bid })
+                          .pipe(Effect.catchEager(() => Effect.void)),
+                      )
+                    }
+                  },
+                  onSlash: (args: string) => {
+                    const sid = clientCtx.session()?.sessionId
+                    const bid = clientCtx.session()?.branchId
+                    if (sid !== undefined && bid !== undefined) {
+                      clientCtx.runtime.cast(
+                        clientCtx.client.extension
+                          .invokeCommand({ name: c.name, args, sessionId: sid, branchId: bid })
+                          .pipe(Effect.catchEager(() => Effect.void)),
+                      )
+                    }
+                  },
+                })),
+              )
+            }),
+          ),
+          Effect.catchEager(() => Effect.void),
+        ),
+      )
     } catch (err) {
       console.log(`[tui-ext] Extension loading failed: ${err}`)
     } finally {
@@ -294,7 +336,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       value={{
         renderers: () => resolved().renderers,
         widgets: () => resolved().widgets,
-        commands: () => resolved().commands,
+        commands: () => [...resolved().commands, ...serverCommands()],
         overlays: () => resolved().overlays,
         interactionRenderers: () => resolved().interactionRenderers,
         composerSurface: () => resolved().composerSurface,

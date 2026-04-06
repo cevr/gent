@@ -254,10 +254,13 @@ export interface ExtensionBuilder {
   tool(def: SimpleToolDef | AnyToolDefinition): void
   /** Register an agent. Accepts SimpleAgentDef or full AgentDefinition. */
   agent(def: SimpleAgentDef | AgentDefinition): void
-  /** Register a slash command. */
+  /** Register a slash command. Handler receives args and ExtensionHostContext. */
   command(
     name: string,
-    options: { description?: string; handler: (args: string) => void | Promise<void> },
+    options: {
+      description?: string
+      handler: (args: string, ctx: ExtensionHostContext) => void | Promise<void>
+    },
   ): void
   /** Add a static system prompt section. */
   promptSection(section: PromptSection): void
