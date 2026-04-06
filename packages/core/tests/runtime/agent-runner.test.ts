@@ -4,7 +4,7 @@ import { FinishChunk, Provider, TextChunk, ToolCallChunk } from "@gent/core/prov
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { Session, Branch } from "@gent/core/domain/message"
+import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
   Agents,
   resolveAgentModel,
@@ -12,7 +12,7 @@ import {
   AgentRunError,
   type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -25,6 +25,7 @@ import {
 } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { rmSync } from "node:fs"
 
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -732,5 +733,243 @@ describe("AgentRunner", () => {
       expect(result.runResult.persistence).toBe("durable")
     }
     expect(result.sessions).toHaveLength(2)
+  })
+
+  test("reasoning-only assistant response surfaces reasoning as text", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+
+    // Mock AgentLoop that writes a reasoning-only assistant message
+    const mockLoop = Layer.succeed(AgentLoop, {
+      runOnce: (input) =>
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = new Date()
+          yield* storage.createMessage(
+            new Message({
+              id: `${input.sessionId}:assistant:1` as MessageId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              role: "assistant",
+              parts: [new ReasoningPart({ type: "reasoning", text: "I analyzed the repository" })],
+              createdAt: now,
+            }),
+          )
+        }),
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
+      mockLoop,
+      eventStoreLayer,
+      eventPublisherLayer,
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({
+            id: "parent-reasoning",
+            name: "P",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "branch-reasoning", sessionId: "parent-reasoning", createdAt: now }),
+        )
+
+        return yield* runner.run({
+          agent: Agents.explore,
+          prompt: "analyze",
+          parentSessionId: "parent-reasoning" as SessionId,
+          parentBranchId: "branch-reasoning" as BranchId,
+          cwd: "/tmp",
+          persistence: "durable",
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("success")
+    if (result._tag === "success") {
+      expect(result.text).toBe("I analyzed the repository")
+    }
+  })
+
+  test("mixed text+reasoning returns text, not reasoning", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+
+    const mockLoop = Layer.succeed(AgentLoop, {
+      runOnce: (input) =>
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = new Date()
+          yield* storage.createMessage(
+            new Message({
+              id: `${input.sessionId}:assistant:1` as MessageId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              role: "assistant",
+              parts: [
+                new ReasoningPart({ type: "reasoning", text: "thinking step" }),
+                new TextPart({ type: "text", text: "the actual answer" }),
+              ],
+              createdAt: now,
+            }),
+          )
+        }),
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
+      mockLoop,
+      eventStoreLayer,
+      eventPublisherLayer,
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({ id: "parent-mixed", name: "P", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "branch-mixed", sessionId: "parent-mixed", createdAt: now }),
+        )
+
+        return yield* runner.run({
+          agent: Agents.explore,
+          prompt: "analyze",
+          parentSessionId: "parent-mixed" as SessionId,
+          parentBranchId: "branch-mixed" as BranchId,
+          cwd: "/tmp",
+          persistence: "durable",
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("success")
+    if (result._tag === "success") {
+      expect(result.text).toBe("the actual answer")
+    }
+  })
+
+  test("agent run output is saved to /tmp/gent/outputs/", async () => {
+    const eventStoreLayer = EventStore.Test()
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+
+    const mockLoop = Layer.succeed(AgentLoop, {
+      runOnce: (input) =>
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const now = new Date()
+          yield* storage.createMessage(
+            new Message({
+              id: `${input.sessionId}:assistant:1` as MessageId,
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              role: "assistant",
+              parts: [
+                new ReasoningPart({ type: "reasoning", text: "internal thinking" }),
+                new TextPart({ type: "text", text: "visible answer" }),
+              ],
+              createdAt: now,
+            }),
+          )
+        }),
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      isRunning: () => Effect.succeed(false),
+    })
+
+    const deps = Layer.mergeAll(
+      Storage.Test(),
+      ExtensionRegistry.Test(),
+      Provider.Test([]),
+      ToolRunner.Test(),
+      mockLoop,
+      eventStoreLayer,
+      eventPublisherLayer,
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({ id: "parent-save", name: "P", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "branch-save", sessionId: "parent-save", createdAt: now }),
+        )
+
+        return yield* runner.run({
+          agent: Agents.explore,
+          prompt: "save test",
+          parentSessionId: "parent-save" as SessionId,
+          parentBranchId: "branch-save" as BranchId,
+          cwd: "/tmp",
+          persistence: "durable",
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("success")
+    if (result._tag === "success") {
+      expect(result.savedPath).toBeDefined()
+      expect(result.savedPath).toContain("/tmp/gent/outputs/")
+      expect(result.savedPath).toContain("explore_")
+      expect(result.savedPath).toEndWith(".md")
+
+      // Verify file contents
+      const content = await Bun.file(result.savedPath!).text()
+      expect(content).toContain("## Reasoning")
+      expect(content).toContain("internal thinking")
+      expect(content).toContain("## Response")
+      expect(content).toContain("visible answer")
+
+      // Cleanup
+      rmSync(result.savedPath!, { force: true })
+    }
   })
 })
