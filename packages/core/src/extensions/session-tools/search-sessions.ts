@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
-import { SearchStorage } from "../../storage/search-storage.js"
 
 // Search Sessions Error
 
@@ -71,9 +70,7 @@ export const SearchSessionsTool = defineTool({
   description:
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",
   params: SearchSessionsParams,
-  execute: Effect.fn("SearchSessionsTool.execute")(function* (params) {
-    const searchStore = yield* SearchStorage
-
+  execute: Effect.fn("SearchSessionsTool.execute")(function* (params, ctx) {
     if (params.query === undefined && params.file === undefined) {
       return yield* new SearchSessionsError({
         message: "Provide at least one of: query, file",
@@ -94,7 +91,7 @@ export const SearchSessionsTool = defineTool({
       }
     }
 
-    const results = yield* searchStore.searchMessages(searchQuery, {
+    const results = yield* ctx.session.search(searchQuery, {
       dateAfter,
       limit: params.limit ?? 20,
     })
