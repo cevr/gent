@@ -154,7 +154,13 @@ export function Session(props: SessionProps) {
     <SessionControllerContext.Provider value={controller}>
       <box flexDirection="column" flexGrow={1}>
         {/* Messages */}
-        <scrollbox flexGrow={1} stickyScroll stickyStart="bottom">
+        <scrollbox
+          flexGrow={1}
+          stickyScroll
+          stickyStart="bottom"
+          focusable={false}
+          verticalScrollbarOptions={{ visible: false }}
+        >
           <box flexDirection="column">
             <MessageList
               items={controller.items()}
