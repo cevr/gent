@@ -78,6 +78,43 @@ ext.agent({
 })
 ```
 
+### ext.command(name, options)
+
+Register a slash command:
+
+```ts
+ext.command("deploy", {
+  description: "Deploy the current branch",
+  handler: async (args) => {
+    const result = await ext.exec("deploy", [args])
+    console.log(result.stdout)
+  },
+})
+```
+
+### ext.exec(command, args?, options?)
+
+Execute a shell command. Returns `Promise<{ stdout, stderr, exitCode }>`:
+
+```ts
+const result = await ext.exec("git", ["status"])
+if (result.exitCode !== 0) console.error(result.stderr)
+```
+
+### ext.sendMessage(content, metadata?)
+
+Queue a follow-up message after the current turn completes. Only usable from `ext.on()` handlers:
+
+```ts
+ext.on("turn.after", (input) => {
+  ext.sendMessage("Follow-up analysis complete")
+})
+```
+
+### ext.sendUserMessage(content)
+
+Inject a user message mid-turn. Only usable from `ext.on()` handlers.
+
 ### ext.promptSection(section)
 
 Add a static system prompt section:
@@ -224,15 +261,13 @@ Stored at `~/.gent/extensions/<id>/storage/<key>.json`. Keys must be alphanumeri
 
 ### Event Observation
 
-Observe all events (including diagnostic) without actors or state:
+Subscribe to events via the channel-based event bus:
 
 ```ts
-ext.observe((event) => {
-  console.log(`[${event._tag}] session=${event.sessionId}`)
+ext.bus.on("agent:*", (envelope) => {
+  console.log(`[${envelope.channel}] payload=${JSON.stringify(envelope.payload)}`)
 })
 ```
-
-Fire-and-forget: errors caught and logged, return value ignored. Runs after reduction.
 
 ## Validation
 
@@ -321,12 +356,11 @@ const myActor = {
 }
 
 extension("my-ext", (ext) => {
-  ext.protocol(CounterProtocol)
-  ext.actor(myActor)
+  ext.actor({ ...myActor, protocols: CounterProtocol })
 })
 ```
 
-`mapCommand()` and `mapRequest()` only run for messages declared through `ext.protocol(...)`. Without a protocol definition, gent rejects the message before actor dispatch.
+`mapCommand()` and `mapRequest()` only run for messages declared through `actor.protocols`. Without a protocol definition, gent rejects the message before actor dispatch.
 
 ### ext.jobs(...jobs)
 
@@ -373,14 +407,6 @@ Register interaction handlers (permission, prompt, handoff, ask-user):
 
 ```ts
 ext.interactionHandler({ type: "permission", layer: MyPermissionHandler.Live })
-```
-
-### ext.tagInjection(injection)
-
-Register tag-conditional tool injections:
-
-```ts
-ext.tagInjection({ tag: "debug", tools: [DebugTool] })
 ```
 
 ### ext.onStartupEffect(effect) / ext.onShutdownEffect(effect)

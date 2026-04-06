@@ -212,7 +212,7 @@ export interface ExtensionHarnessResult {
 /**
  * Load an extension through the full lifecycle and return its resolved setup.
  *
- * Runs setup() via Effect.runSync, extracts tools/agents/spawn/tag injections/hooks.
+ * Runs setup() via Effect.runSync, extracts tools/agents/actor/hooks.
  */
 export const createExtensionHarness = (
   extension: GentExtension,

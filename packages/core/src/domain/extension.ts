@@ -91,7 +91,7 @@ export class ExtensionLoadError {
   ) {}
 }
 
-// Run Context — per-run metadata for tag injection and tool policy decisions
+// Run Context — per-run metadata for tool policy decisions
 
 export interface RunContext {
   readonly sessionId: SessionId
