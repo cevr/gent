@@ -36,6 +36,7 @@ const emptyInterceptors = (): InterceptorChains => ({
   "context.messages": [],
   "turn.after": [],
   "tool.result": [],
+  "message.input": [],
 })
 
 const appendHooks = (hooks: ExtensionHooks | undefined, interceptors: InterceptorChains) => {

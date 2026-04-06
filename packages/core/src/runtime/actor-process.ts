@@ -16,6 +16,7 @@ import { invokeToolPhase } from "./agent/agent-loop"
 import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, type SteerCommand } from "./agent"
 import { ExtensionRegistry } from "./extensions/registry.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -175,13 +176,27 @@ export const LocalActorProcessLive: Layer.Layer<
         Effect.gen(function* () {
           const commandId = input.commandId ?? makeCommandId()
 
+          // Run message.input interceptor — allows extensions to transform user input
+          const stubCtx = {
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            cwd: "",
+            home: "",
+          } as ExtensionHostContext
+          const content = yield* extensionRegistry.hooks.runInterceptor(
+            "message.input",
+            { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
+            (i) => Effect.succeed(i.content),
+            stubCtx,
+          )
+
           const message = new Message({
             id: userMessageIdForCommand(commandId),
             sessionId: input.sessionId,
             branchId: input.branchId,
             kind: "regular",
             role: "user",
-            parts: [new TextPart({ type: "text", text: input.content })],
+            parts: [new TextPart({ type: "text", text: content })],
             createdAt: yield* DateTime.nowAsDate,
           })
 

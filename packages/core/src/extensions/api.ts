@@ -41,6 +41,7 @@ import {
   type ContextMessagesInput,
   type TurnAfterInput,
   type ToolResultInput,
+  type MessageInputInput,
   type ExtensionDeriveContext,
   type AnyExtensionActorDefinition,
   type ExtensionReduceContext,
@@ -104,6 +105,7 @@ export {
   type ContextMessagesInput,
   type TurnAfterInput,
   type ToolResultInput,
+  type MessageInputInput,
 } from "../domain/extension.js"
 export {
   ExtensionMessage,
@@ -247,6 +249,7 @@ interface AsyncHookHandlers {
   readonly "context.messages": AsyncTransformHandler<ContextMessagesInput, ReadonlyArray<Message>>
   readonly "turn.after": AsyncFireAndForgetHandler<TurnAfterInput>
   readonly "tool.result": AsyncTransformHandler<ToolResultInput, unknown>
+  readonly "message.input": AsyncTransformHandler<MessageInputInput, string>
 }
 
 // ── Actor Result ──
@@ -443,6 +446,7 @@ const EFFECT_CAPABLE_HOOKS = new Set([
   "tool.execute",
   "tool.result",
   "context.messages",
+  "message.input",
 ])
 
 type EffectBinder = {

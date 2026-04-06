@@ -160,6 +160,12 @@ export interface ToolResultInput {
   readonly branchId: BranchId
 }
 
+export interface MessageInputInput {
+  readonly content: string
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
 // Interceptor map — only hooks that have production callers
 
 export interface ExtensionInterceptorMap {
@@ -171,6 +177,8 @@ export interface ExtensionInterceptorMap {
   readonly "turn.after": Interceptor<TurnAfterInput, void>
   /** Post-execution hook — extensions can enrich/append to tool results */
   readonly "tool.result": Interceptor<ToolResultInput, unknown>
+  /** Pre-message hook — transform user input before message construction */
+  readonly "message.input": Interceptor<MessageInputInput, string>
 }
 
 export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap
