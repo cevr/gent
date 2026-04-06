@@ -1,5 +1,5 @@
 import type { Effect } from "effect"
-import { extension, defineInterceptor, type SystemPromptInput } from "../api.js"
+import { extension, type SystemPromptInput } from "../api.js"
 import { SearchSessionsTool } from "./search-sessions.js"
 import { ReadSessionTool } from "./read-session.js"
 import { RenameSessionTool } from "./rename-session.js"
@@ -12,13 +12,11 @@ export const SessionToolsExtension = extension("@gent/session-tools", (ext) => {
   ext.tool(SearchSessionsTool)
   ext.tool(ReadSessionTool)
   ext.tool(RenameSessionTool)
-  ext.interceptor(
-    defineInterceptor(
-      "prompt.system",
-      (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>, _ctx) =>
-        input.interactive === false
-          ? next(input)
-          : next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),
-    ),
+  ext.on(
+    "prompt.system",
+    (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>, _ctx) =>
+      input.interactive === false
+        ? next(input)
+        : next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),
   )
 })

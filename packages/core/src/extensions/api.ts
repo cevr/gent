@@ -1,23 +1,23 @@
 /**
  * Unified extension authoring API.
  *
- * One builder for both external authors (no Effect) and internal builtins (full power).
+ * ext.on() takes Effect-native handlers. ext.async.on() (coming) will
+ * provide Promise-based handlers with ExtensionContext.
  *
  * @example
  * ```ts
  * import { extension } from "@gent/core/extensions/api"
  *
- * // Simple path — no Effect knowledge needed
- * export default extension("my-ext", async (ext, ctx) => {
+ * // Simple path — tools, agents, commands (no Effect needed)
+ * export default extension("my-ext", (ext) => {
  *   ext.tool({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
- *   ext.on("prompt.system", async (input, next) => (await next(input)) + "\nBe nice.")
- *   ext.actor(MyActor)
+ *   ext.command("deploy", { handler: async (args, ctx) => { ... } })
  * })
  *
- * // Full-power path — same builder, Effect-aware
+ * // Effect path — hooks, layers, providers
  * export default extension("@gent/my-builtin", (ext) => {
  *   ext.tool(MyFullToolDefinition)
- *   ext.interceptor("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
+ *   ext.on("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
  *   ext.actor(MyActor)
  *   ext.layer(MyService.Live)
  *   ext.provider(myProvider)
@@ -59,6 +59,7 @@ import {
   type AnyToolDefinition,
 } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import { toExtensionContext, type ExtensionContext } from "../domain/extension-context.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -226,22 +227,22 @@ type LegacySimpleAgentRunEvent =
 
 type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
-// ── Hook Types for ext.on() ──
+// ── Async Hook Types (used by ext.async.on()) ──
 
-type TransformHandler<I, O> = (
+type AsyncTransformHandler<I, O> = (
   input: I,
   next: (input: I) => Promise<O>,
-  ctx: ExtensionHostContext,
+  ctx: ExtensionContext,
 ) => O | Promise<O>
-type FireAndForgetHandler<I> = (input: I, ctx: ExtensionHostContext) => void | Promise<void>
+type AsyncFireAndForgetHandler<I> = (input: I, ctx: ExtensionContext) => void | Promise<void>
 
-interface SimpleHookHandlers {
-  readonly "prompt.system": TransformHandler<SystemPromptInput, string>
-  readonly "tool.execute": TransformHandler<ToolExecuteInput, unknown>
-  readonly "permission.check": TransformHandler<PermissionCheckInput, PermissionResult>
-  readonly "context.messages": TransformHandler<ContextMessagesInput, ReadonlyArray<Message>>
-  readonly "turn.after": FireAndForgetHandler<TurnAfterInput>
-  readonly "tool.result": TransformHandler<ToolResultInput, unknown>
+interface _AsyncHookHandlers {
+  readonly "prompt.system": AsyncTransformHandler<SystemPromptInput, string>
+  readonly "tool.execute": AsyncTransformHandler<ToolExecuteInput, unknown>
+  readonly "permission.check": AsyncTransformHandler<PermissionCheckInput, PermissionResult>
+  readonly "context.messages": AsyncTransformHandler<ContextMessagesInput, ReadonlyArray<Message>>
+  readonly "turn.after": AsyncFireAndForgetHandler<TurnAfterInput>
+  readonly "tool.result": AsyncTransformHandler<ToolResultInput, unknown>
 }
 
 // ── Actor Result ──
@@ -265,8 +266,8 @@ export interface ExtensionBuilder {
   ): void
   /** Add a static system prompt section. */
   promptSection(section: PromptSection): void
-  /** Register a hook using plain async handlers. */
-  on<K extends keyof SimpleHookHandlers>(key: K, handler: SimpleHookHandlers[K]): void
+  /** Register an Effect-native interceptor hook. */
+  on<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]): void
   /** Execute a shell command. Returns stdout, stderr, and exitCode. */
   exec(
     command: string,
@@ -304,9 +305,6 @@ export interface ExtensionBuilder {
 
   // ── Full-power path (Effect-aware) ──
 
-  /** Register a raw Effect interceptor. */
-  interceptor(descriptor: ExtensionInterceptorDescriptor): void
-  interceptor<K extends ExtensionInterceptorKey>(key: K, run: ExtensionInterceptorMap[K]): void
   /** Register a stateful actor. Stateless extensions can omit this. */
   actor(actor: AnyExtensionActorDefinition): void
   /** Provide a service Layer. Multiple calls merge. */
@@ -460,9 +458,9 @@ const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknow
     }
   })
 
-const wrapTransformHandler =
+const _wrapTransformHandler =
   <I, O>(
-    handler: TransformHandler<I, O>,
+    handler: AsyncTransformHandler<I, O>,
     hookKey: string,
     effectBinder: EffectBinder,
   ): ((
@@ -476,7 +474,7 @@ const wrapTransformHandler =
     return Effect.tryPromise({
       try: () => {
         const effectNext = (i: I) => Effect.runPromise(next(i))
-        return Promise.resolve(handler(input, effectNext, ctx))
+        return Promise.resolve(handler(input, effectNext, toExtensionContext(ctx)))
       },
       catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
     }).pipe(
@@ -488,9 +486,9 @@ const wrapTransformHandler =
     ) as Effect.Effect<O>
   }
 
-const wrapFireAndForgetHandler =
+const _wrapFireAndForgetHandler =
   <I>(
-    handler: FireAndForgetHandler<I>,
+    handler: AsyncFireAndForgetHandler<I>,
     hookKey: string,
     effectBinder: EffectBinder,
   ): ((
@@ -504,7 +502,7 @@ const wrapFireAndForgetHandler =
       const effects: ExtensionEffect[] = []
       effectBinder.bind(effects, hookKey)
       yield* Effect.tryPromise({
-        try: () => Promise.resolve(handler(input, ctx)),
+        try: () => Promise.resolve(handler(input, toExtensionContext(ctx))),
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
       }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))
       yield* drainEffects(effects, hookKey, input)
@@ -587,7 +585,7 @@ export const extension = (
       // Stack is necessary because interceptor chains nest via next() — an outer
       // handler's buffer must survive while inner interceptors bind their own.
       const effectStack: Array<{ effects: ExtensionEffect[]; hookKey: string }> = []
-      const effectBinder: EffectBinder = {
+      const _effectBinder: EffectBinder = {
         bind: (effects, hookKey) => {
           effectStack.push({ effects, hookKey })
         },
@@ -639,33 +637,9 @@ export const extension = (
 
         promptSection: (section) => promptSections.push(section),
 
-        on: ((key: keyof SimpleHookHandlers, handler: SimpleHookHandlers[typeof key]) => {
-          if (key === "turn.after") {
-            interceptors.push(
-              defineInterceptor(
-                key,
-                wrapFireAndForgetHandler(
-                  handler as FireAndForgetHandler<TurnAfterInput>,
-                  key,
-                  effectBinder,
-                ),
-              ),
-            )
-          } else {
-            interceptors.push(
-              defineInterceptor(
-                key,
-                wrapTransformHandler(
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  handler as TransformHandler<any, any>,
-                  key,
-                  effectBinder,
-                ) as never,
-              ),
-            )
-          }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as any,
+        on: (<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
+          interceptors.push(defineInterceptor(key, handler as never))
+        }) as ExtensionBuilder["on"],
 
         sendMessage: (content, metadata?) => {
           pushEffect("sendMessage", { _tag: "QueueFollowUp", content, metadata })
@@ -705,19 +679,6 @@ export const extension = (
         onShutdown: (fn) => shutdownFns.push(fn),
 
         // Full-power methods
-
-        interceptor: ((
-          ...args:
-            | [ExtensionInterceptorDescriptor]
-            | [ExtensionInterceptorKey, ExtensionInterceptorMap[ExtensionInterceptorKey]]
-        ) => {
-          if (args.length === 1) {
-            interceptors.push(args[0])
-          } else {
-            interceptors.push(defineInterceptor(args[0], args[1] as never))
-          }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as any,
 
         actor: (actor) => {
           if (actorResult !== undefined) {

@@ -16,7 +16,6 @@
 import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
-  defineInterceptor,
   type ExtensionActorDefinition,
   type ExtensionDeriveContext,
   type ExtensionEffect,
@@ -799,8 +798,6 @@ const journalInterceptorImpl = (
     return result
   })
 
-const journalInterceptor = defineInterceptor("tool.result", journalInterceptorImpl)
-
 // ── turn.after interceptor — auto-handoff on context fill ──
 
 const autoHandoffImpl = (
@@ -858,14 +855,12 @@ const autoHandoffImpl = (
     })
   }).pipe(Effect.catchEager(() => Effect.void))
 
-const autoHandoffInterceptor = defineInterceptor("turn.after", autoHandoffImpl)
-
 // ── Extension ──
 
 export const AutoExtension = extension("@gent/auto", (ext) => {
   ext.actor(autoActor)
   ext.tool(AutoCheckpointTool)
-  ext.interceptor(journalInterceptor)
-  ext.interceptor(autoHandoffInterceptor)
+  ext.on("tool.result", journalInterceptorImpl)
+  ext.on("turn.after", autoHandoffImpl)
   ext.layer(AutoJournal.Live)
 })

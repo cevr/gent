@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
-import { defineInterceptor } from "../domain/extension.js"
 import type { ExtensionActorDefinition, TurnAfterInput } from "../domain/extension.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { Message } from "../domain/message.js"
@@ -130,10 +129,8 @@ const autoHandoffImpl = (
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
-const autoHandoffInterceptor = defineInterceptor("turn.after", autoHandoffImpl)
-
 export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
   ext.tool(HandoffTool)
-  ext.interceptor(autoHandoffInterceptor)
+  ext.on("turn.after", autoHandoffImpl)
   ext.actor(cooldownActor)
 })

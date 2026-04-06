@@ -165,9 +165,12 @@ describe("extension api", () => {
   test("ext.on() handlers receive ExtensionHostContext", async () => {
     let receivedCtx: unknown = undefined
     const ext = extension("ctx-forward-test", (b) => {
-      b.on("turn.after", (_input, ctx) => {
-        receivedCtx = ctx
-      })
+      b.on("turn.after", (input, next, ctx) =>
+        Effect.gen(function* () {
+          yield* next(input)
+          receivedCtx = ctx
+        }),
+      )
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
@@ -192,8 +195,9 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.after",
         {
+          sessionId: "s" as SessionId,
+          branchId: "b" as BranchId,
           durationMs: 0,
-          tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 },
           agentName: "cowork" as never,
           interrupted: false,
         },
