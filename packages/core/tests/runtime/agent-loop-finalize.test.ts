@@ -2,11 +2,14 @@ import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
 import { defineAgent } from "@gent/core/domain/agent"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { finalizeTurnPhase } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+
+const stubCtx = {} as unknown as ExtensionHostContext
 
 const tinyAgent = defineAgent({
   name: "tiny",
@@ -91,6 +94,7 @@ describe("finalizeTurnPhase", () => {
         turnInterrupted: false,
         currentAgent: "tiny",
         extensionRegistry,
+        hostCtx: stubCtx,
       })
 
       yield* Deferred.await(turnCompletedDeferred)

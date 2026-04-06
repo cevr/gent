@@ -6,6 +6,7 @@ import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
+import type { ExtensionHostContext } from "./extension-host-context"
 import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -109,6 +110,7 @@ export interface RunContext {
 export type Interceptor<I, O, E = never, R = never> = (
   input: I,
   next: (input: I) => Effect.Effect<O, E, R>,
+  ctx: ExtensionHostContext,
 ) => Effect.Effect<O, E, R>
 
 // Hook input types

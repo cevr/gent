@@ -50,6 +50,7 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -212,6 +213,7 @@ const resolveTurnContext = (params: {
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
+  hostCtx: ExtensionHostContext
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
@@ -243,6 +245,7 @@ const resolveTurnContext = (params: {
         branchId: params.branchId,
       },
       (input) => Effect.succeed(input.messages),
+      params.hostCtx,
     )
 
     // Filter out hidden messages — visible in transcript but excluded from LLM context
@@ -284,6 +287,7 @@ const resolveTurnContext = (params: {
       "prompt.system",
       { basePrompt: turnPrompt, agent: effectiveAgent, interactive: params.interactive },
       (input) => Effect.succeed(input.basePrompt),
+      params.hostCtx,
     )
     const session = yield* params.storage
       .getSession(params.sessionId)
@@ -567,6 +571,7 @@ export const resolveTurnPhase = (params: {
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
+  hostCtx: ExtensionHostContext
 }) =>
   Effect.gen(function* () {
     const existing = yield* params.storage.getMessage(params.message.id)
@@ -873,6 +878,7 @@ export const finalizeTurnPhase = (params: {
   currentAgent: AgentNameType
   extensionRegistry: ExtensionRegistryService
   turnMetrics?: Ref.Ref<TurnMetrics>
+  hostCtx: ExtensionHostContext
 }) =>
   Effect.gen(function* () {
     const existingMessage = yield* params.storage.getMessage(params.messageId)
@@ -906,6 +912,7 @@ export const finalizeTurnPhase = (params: {
           interrupted: params.turnInterrupted,
         },
         () => Effect.void,
+        params.hostCtx,
       )
       .pipe(Effect.catchEager(() => Effect.void))
     yield* Effect.logDebug("finalize.turn-after.done")
@@ -1340,6 +1347,47 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               )
             const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
 
+            // Stub ExtensionHostContext for interceptor threading.
+            // Interceptors don't use ctx until B5; tools get real ctx via ToolRunner.
+            const hostDie = (label: string) => () =>
+              Effect.die(`${label} called without host context wiring`)
+            const hostCtx: ExtensionHostContext = {
+              sessionId,
+              branchId,
+              cwd: "",
+              home: "",
+              extension: {
+                send: hostDie("extension.send"),
+                ask: hostDie("extension.ask"),
+                getUiSnapshots: hostDie("extension.getUiSnapshots"),
+                getUiSnapshot: hostDie("extension.getUiSnapshot"),
+              },
+              agent: {
+                get: hostDie("agent.get"),
+                require: hostDie("agent.require"),
+                run: hostDie("agent.run"),
+                resolveDualModelPair: hostDie("agent.resolveDualModelPair"),
+              },
+              session: {
+                listMessages: hostDie("session.listMessages"),
+                getSession: hostDie("session.getSession"),
+                getDetail: hostDie("session.getDetail"),
+                renameCurrent: hostDie("session.renameCurrent"),
+                estimateContextPercent: hostDie("session.estimateContextPercent"),
+                search: hostDie("session.search"),
+              },
+              interaction: {
+                approve: hostDie("interaction.approve"),
+                present: hostDie("interaction.present"),
+                confirm: hostDie("interaction.confirm"),
+                review: hostDie("interaction.review"),
+              },
+              turn: {
+                queueFollowUp: hostDie("turn.queueFollowUp"),
+                interject: hostDie("turn.interject"),
+              },
+            }
+
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
@@ -1473,6 +1521,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   publishEvent: publishEventOrDie,
                   baseSections: config.baseSections,
                   interactive: state.interactive,
+                  hostCtx,
                 })
                 if (resolved === undefined) break
 
@@ -1583,6 +1632,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                 currentAgent: currentTurnAgent,
                 extensionRegistry,
                 turnMetrics: turnMetricsRef,
+                hostCtx,
               })
 
               return AgentLoopEvent.TurnDone

@@ -7,6 +7,7 @@ import type {
   ExtensionKind,
   LoadedExtension,
 } from "../../domain/extension.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 
 export interface CompiledHookMap {
   readonly runInterceptor: <K extends keyof ExtensionInterceptorMap>(
@@ -15,6 +16,7 @@ export interface CompiledHookMap {
     base: (
       input: Parameters<ExtensionInterceptorMap[K]>[0],
     ) => ReturnType<ExtensionInterceptorMap[K]>,
+    ctx: ExtensionHostContext,
   ) => ReturnType<ExtensionInterceptorMap[K]>
 }
 
@@ -52,6 +54,7 @@ const addInterceptor = <K extends keyof ExtensionInterceptorMap>(
 const composeInterceptors = <K extends keyof ExtensionInterceptorMap>(
   chain: ReadonlyArray<ExtensionInterceptorMap[K]>,
   base: (input: InterceptorInput<K>) => InterceptorOutput<K>,
+  ctx: ExtensionHostContext,
 ) => {
   let next: (input: InterceptorInput<K>) => InterceptorOutput<K> = base
   for (const interceptor of chain) {
@@ -59,9 +62,10 @@ const composeInterceptors = <K extends keyof ExtensionInterceptorMap>(
     const run = interceptor as unknown as (
       input: InterceptorInput<K>,
       next: (input: InterceptorInput<K>) => InterceptorOutput<K>,
+      ctx: ExtensionHostContext,
     ) => InterceptorOutput<K>
     next = (input) =>
-      Effect.suspend(() => run(input, previous) as Effect.Effect<unknown>).pipe(
+      Effect.suspend(() => run(input, previous, ctx) as Effect.Effect<unknown>).pipe(
         Effect.catchDefect((defect) =>
           Effect.logWarning("extension.interceptor.defect").pipe(
             Effect.annotateLogs({ defect: String(defect) }),
@@ -97,10 +101,11 @@ export const compileHooks = (extensions: ReadonlyArray<LoadedExtension>): Compil
     base: (
       input: Parameters<ExtensionInterceptorMap[K]>[0],
     ) => ReturnType<ExtensionInterceptorMap[K]>,
+    ctx: ExtensionHostContext,
   ): ReturnType<ExtensionInterceptorMap[K]> => {
     const chain = interceptorChains[key] as Array<ExtensionInterceptorMap[K]>
     if (chain.length === 0) return base(input)
-    return composeInterceptors(chain, base)(input)
+    return composeInterceptors(chain, base, ctx)(input)
   }
 
   return { runInterceptor }

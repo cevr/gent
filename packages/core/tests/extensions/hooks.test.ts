@@ -10,9 +10,17 @@ import type {
   TurnAfterInput,
 } from "@gent/core/domain/extension"
 import { defineInterceptor } from "@gent/core/domain/extension"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { compileHooks } from "@gent/core/runtime/extensions/hooks"
+
+const stubCtx = {
+  sessionId: "test-session",
+  branchId: "test-branch",
+  cwd: "/tmp",
+  home: "/tmp",
+} as unknown as ExtensionHostContext
 
 const makeExt = (
   id: string,
@@ -30,8 +38,11 @@ describe("compileHooks", () => {
     it.live("runs base when no interceptors registered", () => {
       const compiled = compileHooks([])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
-          Effect.succeed(input.basePrompt),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "hello", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
+          stubCtx,
         )
         .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello"))))
     })
@@ -41,16 +52,22 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-              next({ ...input, basePrompt: `[wrapped] ${input.basePrompt}` }),
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => next({ ...input, basePrompt: `[wrapped] ${input.basePrompt}` }),
           ),
         ],
       })
 
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
-          Effect.succeed(input.basePrompt),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "hello", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
+          stubCtx,
         )
         .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("[wrapped] hello"))))
     })
@@ -62,7 +79,11 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) => {
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => {
               log.push("builtin-before")
               return next(input).pipe(
                 Effect.map((r) => {
@@ -79,7 +100,11 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) => {
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => {
               log.push("project-before")
               return next(input).pipe(
                 Effect.map((r) => {
@@ -94,8 +119,11 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([builtinExt, projectExt])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
-          Effect.succeed("base"),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "test", agent: Agents.cowork },
+          () => Effect.succeed("base"),
+          stubCtx,
         )
         .pipe(
           Effect.tap(() =>
@@ -119,7 +147,11 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) => {
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => {
               log.push("b")
               return next(input)
             },
@@ -131,7 +163,11 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) => {
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => {
               log.push("a")
               return next(input)
             },
@@ -141,8 +177,11 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([extB, extA])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "test", agent: Agents.cowork }, () =>
-          Effect.succeed("base"),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "test", agent: Agents.cowork },
+          () => Effect.succeed("base"),
+          stubCtx,
         )
         .pipe(
           Effect.tap(() =>
@@ -176,7 +215,12 @@ describe("compileHooks", () => {
     it.live("passes through when no interceptors", () => {
       const compiled = compileHooks([])
       return compiled
-        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .runInterceptor(
+          "context.messages",
+          baseInput,
+          (input) => Effect.succeed(input.messages),
+          stubCtx,
+        )
         .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toHaveLength(2))))
     })
 
@@ -188,6 +232,7 @@ describe("compileHooks", () => {
             (
               input: ContextMessagesInput,
               next: (i: ContextMessagesInput) => Effect.Effect<ReadonlyArray<Message>>,
+              _ctx,
             ) => {
               const injected = makeMessage("user", "[system context] Remember: be concise")
               return next({ ...input, messages: [...input.messages, injected] })
@@ -198,7 +243,12 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .runInterceptor(
+          "context.messages",
+          baseInput,
+          (input) => Effect.succeed(input.messages),
+          stubCtx,
+        )
         .pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
@@ -223,6 +273,7 @@ describe("compileHooks", () => {
             (
               input: ContextMessagesInput,
               next: (i: ContextMessagesInput) => Effect.Effect<ReadonlyArray<Message>>,
+              _ctx,
             ) =>
               next({
                 ...input,
@@ -234,7 +285,12 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("context.messages", baseInput, (input) => Effect.succeed(input.messages))
+        .runInterceptor(
+          "context.messages",
+          baseInput,
+          (input) => Effect.succeed(input.messages),
+          stubCtx,
+        )
         .pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
@@ -261,7 +317,7 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "turn.after",
-            (input: TurnAfterInput, next: (i: TurnAfterInput) => Effect.Effect<void>) => {
+            (input: TurnAfterInput, next: (i: TurnAfterInput) => Effect.Effect<void>, _ctx) => {
               captured.push(input)
               return next(input)
             },
@@ -271,7 +327,7 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("turn.after", baseTurnInput, () => Effect.void)
+        .runInterceptor("turn.after", baseTurnInput, () => Effect.void, stubCtx)
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
@@ -301,7 +357,7 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "tool.result",
-            (input: ToolResultInput, next: (i: ToolResultInput) => Effect.Effect<unknown>) =>
+            (input: ToolResultInput, next: (i: ToolResultInput) => Effect.Effect<unknown>, _ctx) =>
               next(input).pipe(
                 Effect.map((result) => ({
                   ...(result as Record<string, unknown>),
@@ -314,7 +370,12 @@ describe("compileHooks", () => {
 
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("tool.result", baseToolResultInput, (input) => Effect.succeed(input.result))
+        .runInterceptor(
+          "tool.result",
+          baseToolResultInput,
+          (input) => Effect.succeed(input.result),
+          stubCtx,
+        )
         .pipe(
           Effect.tap((result) =>
             Effect.sync(() => expect(result).toEqual({ content: "hello", enriched: true })),
@@ -325,7 +386,12 @@ describe("compileHooks", () => {
     it.live("passes through when no interceptors", () => {
       const compiled = compileHooks([])
       return compiled
-        .runInterceptor("tool.result", baseToolResultInput, (input) => Effect.succeed(input.result))
+        .runInterceptor(
+          "tool.result",
+          baseToolResultInput,
+          (input) => Effect.succeed(input.result),
+          stubCtx,
+        )
         .pipe(
           Effect.tap((result) => Effect.sync(() => expect(result).toEqual({ content: "hello" }))),
         )
@@ -343,8 +409,11 @@ describe("compileHooks", () => {
       })
       const compiled = compileHooks([ext])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "safe", agent: Agents.cowork }, (input) =>
-          Effect.succeed(input.basePrompt),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "safe", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
+          stubCtx,
         )
         .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("safe"))))
     })
@@ -354,8 +423,11 @@ describe("compileHooks", () => {
         interceptors: [
           defineInterceptor(
             "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-              next(input).pipe(Effect.map((r) => r + " [good]")),
+            (
+              input: SystemPromptInput,
+              next: (i: SystemPromptInput) => Effect.Effect<string>,
+              _ctx,
+            ) => next(input).pipe(Effect.map((r) => r + " [good]")),
           ),
         ],
       })
@@ -368,8 +440,11 @@ describe("compileHooks", () => {
       })
       const compiled = compileHooks([good, bad])
       return compiled
-        .runInterceptor("prompt.system", { basePrompt: "hello", agent: Agents.cowork }, (input) =>
-          Effect.succeed(input.basePrompt),
+        .runInterceptor(
+          "prompt.system",
+          { basePrompt: "hello", agent: Agents.cowork },
+          (input) => Effect.succeed(input.basePrompt),
+          stubCtx,
         )
         .pipe(
           Effect.tap((result) =>

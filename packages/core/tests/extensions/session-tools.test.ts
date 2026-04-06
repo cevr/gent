@@ -3,6 +3,9 @@ import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/core/extensions/session-tools"
 import { compileHooks } from "@gent/core/runtime/extensions/hooks"
 import { Agents } from "@gent/core/domain/agent"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+
+const stubCtx = {} as unknown as ExtensionHostContext
 
 describe("SessionToolsExtension", () => {
   test("injects naming instruction for interactive prompts", async () => {
@@ -23,6 +26,7 @@ describe("SessionToolsExtension", () => {
         "prompt.system",
         { basePrompt: "base", agent: Agents.cowork, interactive: true },
         (input) => Effect.succeed(input.basePrompt),
+        stubCtx,
       ),
     )
 
@@ -47,6 +51,7 @@ describe("SessionToolsExtension", () => {
         "prompt.system",
         { basePrompt: "base", agent: Agents.summarizer, interactive: false },
         (input) => Effect.succeed(input.basePrompt),
+        stubCtx,
       ),
     )
 

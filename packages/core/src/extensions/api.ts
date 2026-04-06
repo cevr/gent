@@ -63,6 +63,7 @@ import {
   type ToolContext,
   type AnyToolDefinition,
 } from "../domain/tool.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -460,8 +461,12 @@ const wrapTransformHandler =
     handler: TransformHandler<I, O>,
     hookKey: string,
     effectBinder: EffectBinder,
-  ): ((input: I, next: (input: I) => Effect.Effect<O>) => Effect.Effect<O>) =>
-  (input, next) => {
+  ): ((
+    input: I,
+    next: (input: I) => Effect.Effect<O>,
+    _ctx: ExtensionHostContext,
+  ) => Effect.Effect<O>) =>
+  (input, next, _ctx) => {
     const effects: ExtensionEffect[] = []
     effectBinder.bind(effects, hookKey)
     return Effect.tryPromise({
@@ -484,8 +489,12 @@ const wrapFireAndForgetHandler =
     handler: FireAndForgetHandler<I>,
     hookKey: string,
     effectBinder: EffectBinder,
-  ): ((input: I, next: (input: I) => Effect.Effect<void>) => Effect.Effect<void>) =>
-  (input, next) =>
+  ): ((
+    input: I,
+    next: (input: I) => Effect.Effect<void>,
+    _ctx: ExtensionHostContext,
+  ) => Effect.Effect<void>) =>
+  (input, next, _ctx) =>
     Effect.gen(function* () {
       yield* next(input)
       const effects: ExtensionEffect[] = []

@@ -77,6 +77,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 "permission.check",
                 { toolName: toolCall.toolName, input: toolCall.input },
                 (input) => permission.check(input.toolName, input.input),
+                ctx,
               )
               .pipe(
                 Effect.catchEager((e) =>
@@ -182,6 +183,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                 },
                 () =>
                   toolDefinition.execute(decodedInput.success, richCtx) as Effect.Effect<unknown>,
+                richCtx,
               )
               .pipe(Effect.result)
 
@@ -225,6 +227,7 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
                   branchId: ctx.branchId,
                 },
                 (input) => Effect.succeed(input.result),
+                richCtx,
               )
               .pipe(
                 Effect.catchEager((e) =>
