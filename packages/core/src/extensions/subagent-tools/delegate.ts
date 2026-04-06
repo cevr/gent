@@ -6,7 +6,7 @@ import {
   type AgentRunError,
   type AgentRunResult,
 } from "../../domain/agent.js"
-import type { SessionId } from "../../domain/ids.js"
+import type { SessionId, TaskId } from "../../domain/ids.js"
 import type { Task } from "../../domain/task.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
@@ -76,6 +76,15 @@ export const DelegateTool = defineTool({
       return `${task.slice(0, 60)}…`
     }
 
+    /** Check if task is still in a non-terminal state before writing completion */
+    const isTaskStillActive = (taskId: string) =>
+      ctx.extension.ask(TaskProtocol.GetTask({ taskId: taskId as TaskId }), ctx.branchId).pipe(
+        Effect.map(
+          (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
+        ),
+        Effect.catchEager(() => Effect.succeed(false)),
+      )
+
     const spawnBackgroundTask = (task: Task, agent: { name: string }) =>
       Effect.gen(function* () {
         // Set task to in_progress
@@ -104,6 +113,10 @@ export const DelegateTool = defineTool({
           toolCallId: ctx.toolCallId,
         })
 
+        // Guard: if task was stopped/failed while running, don't overwrite terminal state
+        const active = yield* isTaskStillActive(task.id)
+        if (!active) return
+
         if (result._tag === "success") {
           yield* ctx.extension
             .ask(
@@ -111,7 +124,12 @@ export const DelegateTool = defineTool({
                 taskId: task.id,
                 status: "completed",
                 owner: result.sessionId,
-                metadata: { childSessionId: result.sessionId },
+                metadata: {
+                  ...(typeof task.metadata === "object" && task.metadata !== null
+                    ? task.metadata
+                    : {}),
+                  childSessionId: result.sessionId,
+                },
               }),
               ctx.branchId,
             )
@@ -122,7 +140,12 @@ export const DelegateTool = defineTool({
               TaskProtocol.UpdateTask({
                 taskId: task.id,
                 status: "failed",
-                metadata: { error: result.error },
+                metadata: {
+                  ...(typeof task.metadata === "object" && task.metadata !== null
+                    ? task.metadata
+                    : {}),
+                  error: result.error,
+                },
               }),
               ctx.branchId,
             )
