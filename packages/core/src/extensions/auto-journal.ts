@@ -7,7 +7,7 @@
  * Row types:
  * - config: initial goal + maxIterations
  * - checkpoint: per auto_checkpoint call
- * - counsel: per counsel tool completion
+ * - review: per delegate tool completion (peer review)
  */
 
 import { ServiceMap, Effect, Layer } from "effect"
@@ -43,12 +43,12 @@ export interface CheckpointRow {
   readonly nextIdea?: string
 }
 
-export interface CounselRow {
-  readonly type: "counsel"
+export interface ReviewRow {
+  readonly type: "review"
   readonly iteration: number
 }
 
-export type JournalRow = ConfigRow | CheckpointRow | CounselRow
+export type JournalRow = ConfigRow | CheckpointRow | ReviewRow
 
 // ── Service ──
 
@@ -64,8 +64,8 @@ export interface AutoJournalService {
   /** Append a checkpoint row to the active journal. */
   readonly appendCheckpoint: (row: Omit<CheckpointRow, "type">) => Effect.Effect<void>
 
-  /** Append a counsel row to the active journal. */
-  readonly appendCounsel: (iteration: number) => Effect.Effect<void>
+  /** Append a review row to the active journal. */
+  readonly appendReview: (iteration: number) => Effect.Effect<void>
 
   /** Mark the active journal as complete (clears the active pointer). */
   readonly finish: () => Effect.Effect<void>
@@ -91,7 +91,7 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
         return {
           start: () => Effect.succeed("") as Effect.Effect<string>,
           appendCheckpoint: () => Effect.void,
-          appendCounsel: () => Effect.void,
+          appendReview: () => Effect.void,
           finish: () => Effect.void,
           readActive: (): Effect.Effect<
             { rows: ReadonlyArray<JournalRow>; path: string; sessionId?: string } | undefined
@@ -175,11 +175,11 @@ export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalServ
             appendRow(active, { type: "checkpoint", ...params })
           }),
 
-        appendCounsel: (iteration: number) =>
+        appendReview: (iteration: number) =>
           Effect.sync(() => {
             const active = readActivePointerSync()?.path
             if (active === undefined) return
-            appendRow(active, { type: "counsel", iteration })
+            appendRow(active, { type: "review", iteration })
           }),
 
         finish: () =>

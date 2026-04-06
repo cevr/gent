@@ -233,15 +233,15 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: asToolCallId("dbg-finder"),
-        toolName: "finder",
-        input: { query: "Where is the double-border coming from?" },
+        toolCallId: asToolCallId("dbg-explore"),
+        toolName: "delegate",
+        input: { agent: "explore", task: "Where is the double-border coming from?" },
       }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: asToolCallId("dbg-counsel"),
-        toolName: "counsel",
-        input: { prompt: "Sanity-check the debug session bootstrap." },
+        toolCallId: asToolCallId("dbg-review"),
+        toolName: "delegate",
+        input: { agent: "reviewer", task: "Sanity-check the debug session bootstrap." },
       }),
       new ToolCallPart({
         type: "tool-call",
@@ -282,11 +282,11 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeJsonResult(asToolCallId("dbg-delegate"), "delegate", {
         output: "Reviewer agreed the duplicate chrome was stale message-list markup.",
       }),
-      makeJsonResult(asToolCallId("dbg-finder"), "finder", {
-        answer: "The second border was rendered by the message list, not the tool renderer.",
+      makeJsonResult(asToolCallId("dbg-explore"), "delegate", {
+        output: "The second border was rendered by the message list, not the tool renderer.",
       }),
-      makeJsonResult(asToolCallId("dbg-counsel"), "counsel", {
-        answer: "Move debug boot into core-side scenario code and keep the shell thin.",
+      makeJsonResult(asToolCallId("dbg-review"), "delegate", {
+        output: "Move debug boot into core-side scenario code and keep the shell thin.",
       }),
       makeJsonResult(asToolCallId("dbg-code-review"), "code_review", {
         summary: { critical: 0, high: 0, medium: 1, low: 0 },

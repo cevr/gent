@@ -87,24 +87,24 @@ describe("Auto extension E2E", () => {
     ),
   )
 
-  it.live("multi-iteration: continue → counsel → checkpoint(complete)", () =>
+  it.live("multi-iteration: continue → review → checkpoint(complete)", () =>
     runE2ETest(
       [
         // Step 1: initial message → text response
         textStep("OK entering auto."),
-        // Step 2: auto kickoff → checkpoint(continue) → AwaitingCounsel
+        // Step 2: auto kickoff → checkpoint(continue) → AwaitingReview
         toolCallStep("auto_checkpoint", {
           status: "continue",
           summary: "First pass done",
           learnings: "Found 3 issues",
           nextIdea: "Fix the issues",
         }),
-        // Step 3: tool continuation → text (loop stops, queued counsel follow-up dequeued)
+        // Step 3: tool continuation → text (loop stops, queued review follow-up dequeued)
         textStep("Checkpoint recorded."),
-        // Step 4: counsel follow-up → call counsel tool → Working(iteration 2)
-        toolCallStep("counsel", { prompt: "Reviewed iteration 1. Proceed." }),
+        // Step 4: review follow-up → call delegate tool → Working(iteration 2)
+        toolCallStep("delegate", { prompt: "Reviewed iteration 1. Proceed." }),
         // Step 5: tool continuation → text (loop stops, queued iteration-2 follow-up dequeued)
-        textStep("Counsel complete."),
+        textStep("Review complete."),
         // Step 6: iteration 2 → checkpoint(complete) → Inactive
         toolCallStep("auto_checkpoint", {
           status: "complete",
@@ -142,8 +142,8 @@ describe("Auto extension E2E", () => {
           nextIdea: "Fix them",
         }),
         textStep("Checkpoint recorded."),
-        toolCallStep("counsel", { prompt: "Review iteration 1." }),
-        textStep("Counsel done."),
+        toolCallStep("delegate", { prompt: "Review iteration 1." }),
+        textStep("Review done."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "All fixed",
@@ -169,10 +169,10 @@ describe("Auto extension E2E", () => {
           const envelopes = yield* Ref.get(envelopesRef)
           const toolSucceeded = envelopes.filter((e) => e.event._tag === "ToolCallSucceeded")
 
-          // Should have auto_checkpoint (x2) and counsel (x1)
+          // Should have auto_checkpoint (x2) and delegate (x1)
           const toolNames = toolSucceeded.map((e) => (e.event as { toolName: string }).toolName)
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
-          expect(toolNames.filter((n) => n === "counsel").length).toBe(1)
+          expect(toolNames.filter((n) => n === "delegate").length).toBe(1)
 
           // TurnCompleted fires once per user-initiated turn, plus once per queued follow-up turn
           // With tool continuation, each tool-call step auto-continues within the same turn
@@ -299,7 +299,7 @@ describe("Auto extension E2E", () => {
           summary: "First pass",
           nextIdea: "Keep going",
         }),
-        toolCallStep("counsel", { prompt: "Review" }),
+        toolCallStep("delegate", { prompt: "Review" }),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "Done",

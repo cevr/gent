@@ -8,8 +8,6 @@ export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
 export { DelegateToolRenderer } from "./delegate"
 export { GenericToolRenderer } from "./generic"
-export { FinderToolRenderer } from "./finder"
-export { CounselToolRenderer } from "./counsel"
 export { CodeReviewToolRenderer } from "./code-review"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
@@ -23,8 +21,6 @@ import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
 import { DelegateToolRenderer } from "./delegate"
-import { FinderToolRenderer } from "./finder"
-import { CounselToolRenderer } from "./counsel"
 import { CodeReviewToolRenderer } from "./code-review"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
@@ -38,9 +34,7 @@ export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"]
   { toolNames: ["grep"], component: GrepToolRenderer },
   { toolNames: ["glob"], component: GlobToolRenderer },
   { toolNames: ["webfetch"], component: WebfetchToolRenderer },
-  { toolNames: ["delegate", "librarian"], component: DelegateToolRenderer },
-  { toolNames: ["finder"], component: FinderToolRenderer },
-  { toolNames: ["counsel"], component: CounselToolRenderer },
+  { toolNames: ["delegate"], component: DelegateToolRenderer },
   { toolNames: ["code_review"], component: CodeReviewToolRenderer },
   { toolNames: ["search_sessions"], component: SearchSessionsToolRenderer },
   { toolNames: ["read_session"], component: ReadSessionToolRenderer },

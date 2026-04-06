@@ -136,12 +136,12 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("webfetch", {})).toBe("")
   })
 
-  test("repo_explorer: action + spec", () => {
-    expect(toolArgSummary("repo_explorer", { action: "fetch", spec: "effect-ts/effect" })).toBe(
+  test("repo: action + spec", () => {
+    expect(toolArgSummary("repo", { action: "fetch", spec: "effect-ts/effect" })).toBe(
       "fetch effect-ts/effect",
     )
-    expect(toolArgSummary("repo_explorer", { action: "path" })).toBe("path")
-    expect(toolArgSummary("repo_explorer", {})).toBe("")
+    expect(toolArgSummary("repo", { action: "path" })).toBe("path")
+    expect(toolArgSummary("repo", {})).toBe("")
   })
 
   test("delegate: single/parallel/chain modes", () => {
@@ -172,28 +172,6 @@ describe("toolArgSummary", () => {
     const longTask = "a".repeat(60)
     const result = toolArgSummary("delegate", { agent: "explore", task: longTask })
     expect(result).toBe(`explore:${"a".repeat(40)}…`)
-  })
-
-  test("finder: query with truncation", () => {
-    expect(toolArgSummary("finder", { query: "where is the auth module" })).toBe(
-      "where is the auth module",
-    )
-    const longQuery = "q".repeat(60)
-    expect(toolArgSummary("finder", { query: longQuery })).toBe("q".repeat(50) + "…")
-  })
-
-  test("counsel: prompt with truncation", () => {
-    expect(toolArgSummary("counsel", { prompt: "review this code" })).toBe("review this code")
-    const longPrompt = "p".repeat(60)
-    expect(toolArgSummary("counsel", { prompt: longPrompt })).toBe("p".repeat(50) + "…")
-  })
-
-  test("librarian: spec + question", () => {
-    expect(
-      toolArgSummary("librarian", { spec: "effect-ts/effect", question: "how does Layer work" }),
-    ).toBe("effect-ts/effect: how does Layer work")
-    expect(toolArgSummary("librarian", { spec: "effect-ts/effect" })).toBe("effect-ts/effect")
-    expect(toolArgSummary("librarian", {})).toBe("")
   })
 
   test("code_review: description", () => {

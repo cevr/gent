@@ -201,14 +201,6 @@ describe("formatToolInput", () => {
     ).toBe("2 parallel")
   })
 
-  test("formats finder query", () => {
-    expect(formatToolInput("finder", { query: "where is auth" })).toBe("where is auth")
-  })
-
-  test("formats counsel prompt", () => {
-    expect(formatToolInput("counsel", { prompt: "review this" })).toBe("review this")
-  })
-
   test("read supports file_path field", () => {
     expect(formatToolInput("read", { file_path: "/foo/bar.ts" })).toBe("/foo/bar.ts")
   })

@@ -72,7 +72,7 @@ describe("Auto pure reducer", () => {
       expect(result.state).toBe(state)
     })
 
-    test("Working + AutoSignal(continue) → AwaitingCounsel", () => {
+    test("Working + AutoSignal(continue) → AwaitingReview", () => {
       const state: AutoState = {
         _tag: "Working",
         iteration: 1,
@@ -94,8 +94,8 @@ describe("Auto pure reducer", () => {
           }),
         }),
       )
-      expect(result.state._tag).toBe("AwaitingCounsel")
-      if (result.state._tag === "AwaitingCounsel") {
+      expect(result.state._tag).toBe("AwaitingReview")
+      if (result.state._tag === "AwaitingReview") {
         expect(result.state.iteration).toBe(1) // stays at current iteration
         expect(result.state.learnings.length).toBe(1)
         expect(result.state.learnings[0]!.content).toBe("Auth module needs refactor")
@@ -144,9 +144,9 @@ describe("Auto pure reducer", () => {
       expect(result.state._tag).toBe("Inactive")
     })
 
-    test("AwaitingCounsel + CounselSignal → Working { iteration: N+1 }", () => {
+    test("AwaitingReview + ReviewSignal → Working { iteration: N+1 }", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 2,
         maxIterations: 5,
         goal: "audit",
@@ -155,7 +155,7 @@ describe("Auto pure reducer", () => {
         lastSummary: "prev summary",
         nextIdea: "try this",
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "counsel" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
       expect(result.state._tag).toBe("Working")
       if (result.state._tag === "Working") {
         expect(result.state.iteration).toBe(3)
@@ -166,16 +166,16 @@ describe("Auto pure reducer", () => {
       }
     })
 
-    test("AwaitingCounsel at maxIterations + CounselSignal → Inactive", () => {
+    test("AwaitingReview at maxIterations + ReviewSignal → Inactive", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 5,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "counsel" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
       expect(result.state._tag).toBe("Inactive")
     })
 
@@ -193,9 +193,9 @@ describe("Auto pure reducer", () => {
       expect(result.state._tag).toBe("Inactive")
     })
 
-    test("AwaitingCounsel + CancelAuto → Inactive", () => {
+    test("AwaitingReview + CancelAuto → Inactive", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 2,
         maxIterations: 5,
         goal: "test",
@@ -267,12 +267,12 @@ describe("Auto pure reducer", () => {
           output: JSON.stringify({ status: "continue", summary: "ok" }),
         }),
       )
-      expect(result.state._tag).toBe("AwaitingCounsel")
+      expect(result.state._tag).toBe("AwaitingReview")
     })
 
-    test("auto_checkpoint while AwaitingCounsel → ignored (must counsel first)", () => {
+    test("auto_checkpoint while AwaitingReview → ignored (must review first)", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 1,
         maxIterations: 5,
         goal: "test",
@@ -286,24 +286,24 @@ describe("Auto pure reducer", () => {
           output: JSON.stringify({ status: "continue", summary: "trying again" }),
         }),
       )
-      // AwaitingCounsel doesn't handle AutoSignal — stays unchanged
+      // AwaitingReview doesn't handle AutoSignal — stays unchanged
       expect(result.state).toBe(state)
     })
 
-    test("counsel while AwaitingCounsel → CounselSignal", () => {
+    test("delegate while AwaitingReview → ReviewSignal", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 1,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "counsel" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
       expect(result.state._tag).toBe("Working")
     })
 
-    test("counsel while Working → ignored (CounselSignal not handled in Working)", () => {
+    test("delegate while Working → ignored (ReviewSignal not handled in Working)", () => {
       const state: AutoState = {
         _tag: "Working",
         iteration: 1,
@@ -313,7 +313,7 @@ describe("Auto pure reducer", () => {
         metrics: [],
         turnsSinceCheckpoint: 0,
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "counsel" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
       expect(result.state).toBe(state)
     })
 
@@ -370,7 +370,7 @@ describe("Auto pure reducer", () => {
           }),
         }),
       )
-      if (result.state._tag === "AwaitingCounsel") {
+      if (result.state._tag === "AwaitingReview") {
         expect(result.state.learnings.length).toBe(2)
         expect(result.state.learnings[0]!.content).toBe("first insight")
         expect(result.state.learnings[1]!.content).toBe("second insight")
@@ -395,7 +395,7 @@ describe("Auto pure reducer", () => {
           output: JSON.stringify({ status: "continue", summary: "no new learnings" }),
         }),
       )
-      if (result.state._tag === "AwaitingCounsel") {
+      if (result.state._tag === "AwaitingReview") {
         expect(result.state.learnings.length).toBe(1)
         expect(result.state.learnings[0]!.content).toBe("existing")
       }
@@ -422,7 +422,7 @@ describe("Auto pure reducer", () => {
           }),
         }),
       )
-      if (result.state._tag === "AwaitingCounsel") {
+      if (result.state._tag === "AwaitingReview") {
         expect(result.state.metrics.length).toBe(2)
         expect(result.state.metrics[1]!.values).toEqual({ findings: 5, coverage: 80 })
       }
@@ -492,9 +492,9 @@ describe("Auto pure reducer", () => {
       expect(ui.learningsCount).toBe(2)
     })
 
-    test("AwaitingCounsel — injects counsel requirement prompt", () => {
+    test("AwaitingReview — injects review requirement prompt", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 2,
         maxIterations: 5,
         goal: "audit",
@@ -504,13 +504,13 @@ describe("Auto pure reducer", () => {
       const projection = derive(state)
       expect(projection.promptSections).toBeDefined()
       const section = projection.promptSections![0]!
-      expect(section.content).toContain("counsel")
+      expect(section.content).toContain("delegate")
       expect(section.content).toContain("MUST call")
     })
 
-    test("AwaitingCounsel — ui model shows awaiting-counsel phase", () => {
+    test("AwaitingReview — ui model shows awaiting-review phase", () => {
       const state: AutoState = {
-        _tag: "AwaitingCounsel",
+        _tag: "AwaitingReview",
         iteration: 2,
         maxIterations: 5,
         goal: "test",
@@ -520,7 +520,7 @@ describe("Auto pure reducer", () => {
       const projection = derive(state)
       const ui = projection.uiModel as AutoUiModel
       expect(ui.active).toBe(true)
-      expect(ui.phase).toBe("awaiting-counsel")
+      expect(ui.phase).toBe("awaiting-review")
       expect(ui.learningsCount).toBe(1)
     })
   })
@@ -587,18 +587,18 @@ const checkpointSignal = (output: Record<string, unknown>) =>
     output: JSON.stringify(output),
   })
 
-const counselSignal = () =>
+const reviewSignal = () =>
   new ToolCallSucceeded({
     sessionId,
     branchId,
-    toolCallId: "tc-counsel" as ToolCallId,
-    toolName: "counsel",
+    toolCallId: "tc-review" as ToolCallId,
+    toolName: "delegate",
   })
 
 const turnCompleted = () => new TurnCompleted({ sessionId, branchId, durationMs: 100 })
 
 describe("Auto runtime integration", () => {
-  it.live("full lifecycle: start → checkpoint → counsel → iterate → complete", () =>
+  it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -615,7 +615,7 @@ describe("Auto runtime integration", () => {
       expect(ui1.phase).toBe("working")
       expect(ui1.iteration).toBe(1)
 
-      // Checkpoint with continue → AwaitingCounsel
+      // Checkpoint with continue → AwaitingReview
       yield* runtime.publish(
         checkpointSignal({ status: "continue", summary: "Found issues", learnings: "auth bad" }),
         { sessionId, branchId },
@@ -623,11 +623,11 @@ describe("Auto runtime integration", () => {
 
       const snap2 = yield* getSnapshot(runtime)
       const ui2 = snap2!.model as AutoUiModel
-      expect(ui2.phase).toBe("awaiting-counsel")
+      expect(ui2.phase).toBe("awaiting-review")
       expect(ui2.learningsCount).toBe(1)
 
       // Counsel → Working (iteration 2)
-      yield* runtime.publish(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
 
       const snap3 = yield* getSnapshot(runtime)
       const ui3 = snap3!.model as AutoUiModel
@@ -681,7 +681,7 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
-  it.live("cancel from AwaitingCounsel returns to Inactive", () =>
+  it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -691,12 +691,12 @@ describe("Auto runtime integration", () => {
 
       yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
 
-      // Move to AwaitingCounsel
+      // Move to AwaitingReview
       yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
         sessionId,
         branchId,
       })
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-counsel" })
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
       yield* sendAuto(runtime, { _tag: "CancelAuto" })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
@@ -724,7 +724,7 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
-  it.live("maxIterations reached after counsel → Inactive", () =>
+  it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -739,10 +739,10 @@ describe("Auto runtime integration", () => {
         sessionId,
         branchId,
       })
-      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-counsel" })
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
       // Counsel at max → should go Inactive, not Working
-      yield* runtime.publish(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
 
       const snap = yield* getSnapshot(runtime)
       const ui = snap!.model as AutoUiModel
@@ -811,7 +811,7 @@ describe("Auto runtime integration", () => {
       )
 
       // Move to next iteration
-      yield* runtime.publish(counselSignal(), { sessionId, branchId })
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
 
       // Check prompt sections have the learning
       const projections = yield* runtime.deriveAll(sessionId, {
@@ -837,7 +837,7 @@ describe("Auto JSONL replay via onInit", () => {
     Layer.succeed(AutoJournal, {
       start: () => Effect.succeed("/tmp/test.jsonl"),
       appendCheckpoint: () => Effect.void,
-      appendCounsel: () => Effect.void,
+      appendReview: () => Effect.void,
       finish: () => Effect.void,
       readActive: () =>
         Effect.succeed({
@@ -864,7 +864,7 @@ describe("Auto JSONL replay via onInit", () => {
       return snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
     })
 
-  it.live("replays config + checkpoint + counsel → correct iteration", () =>
+  it.live("replays config + checkpoint + review → correct iteration", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
 
@@ -884,8 +884,8 @@ describe("Auto JSONL replay via onInit", () => {
       const snap = yield* getAutoSnapshot(runtime)
       expect(snap).toBeDefined()
       const ui = snap!.model as AutoUiModel
-      // After replay: config → Working(1), checkpoint(continue) → AwaitingCounsel(1),
-      // counsel → Working(2)
+      // After replay: config → Working(1), checkpoint(continue) → AwaitingReview(1),
+      // review → Working(2)
       expect(ui.active).toBe(true)
       expect(ui.phase).toBe("working")
       expect(ui.iteration).toBe(2)
@@ -903,7 +903,7 @@ describe("Auto JSONL replay via onInit", () => {
               summary: "Found 3 issues",
               learnings: "Auth needs refactor",
             },
-            { type: "counsel", iteration: 1 },
+            { type: "review", iteration: 1 },
           ],
           parentId,
         ),

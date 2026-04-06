@@ -5,9 +5,9 @@
  * audit runLoop, plan runLoop) with a single extension that drives
  * any iterative workflow.
  *
- * State: Inactive | Working | AwaitingCounsel
+ * State: Inactive | Working | AwaitingReview
  * Signal: auto_checkpoint tool
- * Gate: counsel review is hardcoded (AwaitingCounsel blocks until counsel called)
+ * Gate: peer review via delegate is hardcoded (AwaitingReview blocks until delegate called)
  * Safety: maxIterations ceiling + turnsSinceCheckpoint watchdog
  *
  * Uses effect-machine directly for state transitions and actor runtime.
@@ -43,7 +43,7 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 export { AUTO_EXTENSION_ID } from "./auto-protocol.js"
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
-const COUNSEL_TOOL = "counsel"
+const REVIEW_TOOL = "delegate"
 const DEFAULT_MAX_ITERATIONS = 10
 const MAX_TURNS_WITHOUT_CHECKPOINT = 5
 
@@ -81,7 +81,7 @@ const MachineState = MState({
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
   },
-  AwaitingCounsel: {
+  AwaitingReview: {
     iteration: Schema.Number,
     maxIterations: Schema.Number,
     goal: Schema.String,
@@ -112,7 +112,7 @@ const MachineEvent = MEvent({
     metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
     nextIdea: Schema.optional(Schema.String),
   },
-  CounselSignal: {},
+  ReviewSignal: {},
   TurnTick: {},
 })
 type MachineEvent = typeof MachineEvent.Type
@@ -138,7 +138,7 @@ export type AutoIntent = typeof AutoIntent.Type
 
 export const AutoUiModel = Schema.Struct({
   active: Schema.Boolean,
-  phase: Schema.optional(Schema.Literals(["working", "awaiting-counsel"])),
+  phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),
   iteration: Schema.optional(Schema.Number),
   maxIterations: Schema.optional(Schema.Number),
   goal: Schema.optional(Schema.String),
@@ -156,15 +156,15 @@ const ReplayCheckpoint = Schema.Struct({
   nextIdea: Schema.optional(Schema.String),
 })
 
-const ReplayCounsel = Schema.Struct({
-  type: Schema.Literal("counsel"),
+const ReplayReview = Schema.Struct({
+  type: Schema.Literal("review"),
   iteration: Schema.Number,
 })
 
 const ReplaySeed = Schema.Struct({
   goal: Schema.String,
   maxIterations: Schema.Number,
-  rows: Schema.Array(Schema.Union([ReplayCheckpoint, ReplayCounsel])),
+  rows: Schema.Array(Schema.Union([ReplayCheckpoint, ReplayReview])),
 })
 
 const AutoMachineSlots = Slot.define({
@@ -210,17 +210,17 @@ const workingPromptSection = (state: Extract<MachineState, { _tag: "Working" }>)
   }
 }
 
-const counselPromptSection = (
-  state: Extract<MachineState, { _tag: "AwaitingCounsel" }>,
+const reviewPromptSection = (
+  state: Extract<MachineState, { _tag: "AwaitingReview" }>,
 ): PromptSection => ({
   id: "auto-loop-context",
   content: [
-    `## Auto Loop — Counsel Review Required`,
+    `## Auto Loop — Peer Review Required`,
     "",
     `Iteration ${state.iteration}/${state.maxIterations} is complete.`,
     "",
-    "You MUST call the `counsel` tool to review this iteration before continuing.",
-    "The loop cannot proceed until counsel review is done.",
+    "You MUST call the `delegate` tool to spawn a reviewer agent for this iteration before continuing.",
+    "The loop cannot proceed until the review is done.",
   ].join("\n"),
   priority: 91,
 })
@@ -244,7 +244,7 @@ const autoMachine = Machine.make({
       turnsSinceCheckpoint: 0,
     }),
   )
-  // Working + AutoSignal → AwaitingCounsel or Inactive (complete/abandon)
+  // Working + AutoSignal → AwaitingReview or Inactive (complete/abandon)
   .on(MachineState.Working, MachineEvent.AutoSignal, ({ state, event }) => {
     const newLearnings =
       event.learnings !== undefined
@@ -270,8 +270,8 @@ const autoMachine = Machine.make({
       })
     }
 
-    // continue → mandate counsel review
-    return MachineState.AwaitingCounsel({
+    // continue → mandate peer review via delegate
+    return MachineState.AwaitingReview({
       iteration: state.iteration,
       maxIterations: state.maxIterations,
       goal: state.goal,
@@ -281,8 +281,8 @@ const autoMachine = Machine.make({
       nextIdea: event.nextIdea,
     })
   })
-  // AwaitingCounsel + CounselSignal → Working (next iteration) or Inactive (max reached)
-  .on(MachineState.AwaitingCounsel, MachineEvent.CounselSignal, ({ state }) => {
+  // AwaitingReview + ReviewSignal → Working (next iteration) or Inactive (max reached)
+  .on(MachineState.AwaitingReview, MachineEvent.ReviewSignal, ({ state }) => {
     if (state.iteration >= state.maxIterations) {
       return MachineState.Inactive({
         reason: "completed",
@@ -316,7 +316,7 @@ const autoMachine = Machine.make({
   .on(MachineState.Working, MachineEvent.CancelAuto, () =>
     MachineState.Inactive({ reason: "cancelled" }),
   )
-  .on(MachineState.AwaitingCounsel, MachineEvent.CancelAuto, () =>
+  .on(MachineState.AwaitingReview, MachineEvent.CancelAuto, () =>
     MachineState.Inactive({ reason: "cancelled" }),
   )
 
@@ -343,17 +343,17 @@ const derive = (state: MachineState, _ctx?: ExtensionDeriveContext) => {
     }
   }
 
-  // AwaitingCounsel
+  // AwaitingReview
   const uiModel: AutoUiModel = {
     active: true,
-    phase: "awaiting-counsel",
+    phase: "awaiting-review",
     iteration: state.iteration,
     maxIterations: state.maxIterations,
     goal: state.goal,
     learningsCount: state.learnings.length,
   }
   return {
-    promptSections: [counselPromptSection(state)],
+    promptSections: [reviewPromptSection(state)],
     uiModel,
   }
 }
@@ -402,11 +402,11 @@ const afterTransition = (
     }
   }
 
-  // → AwaitingCounsel: queue counsel instruction
-  if (after._tag === "AwaitingCounsel") {
+  // → AwaitingReview: queue review instruction
+  if (after._tag === "AwaitingReview") {
     effects.push({
       _tag: "QueueFollowUp",
-      content: "Run `counsel` to review this iteration before continuing.",
+      content: "Run `delegate` to spawn a reviewer agent for this iteration before continuing.",
       metadata: { extensionId: "auto", hidden: true },
     })
   }
@@ -436,8 +436,8 @@ const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
         })
       }
     }
-    if (event.toolName === COUNSEL_TOOL) {
-      return MachineEvent.CounselSignal
+    if (event.toolName === REVIEW_TOOL) {
+      return MachineEvent.ReviewSignal
     }
   }
 
@@ -531,7 +531,7 @@ export const AutoActorConfig = {
         }
         return {
           state: {
-            _tag: "AwaitingCounsel",
+            _tag: "AwaitingReview",
             iteration: state.iteration,
             maxIterations: state.maxIterations,
             goal: state.goal,
@@ -555,8 +555,8 @@ export const AutoActorConfig = {
       return { state }
     }
 
-    if (state._tag === "AwaitingCounsel") {
-      if (mapped._tag === "CounselSignal") {
+    if (state._tag === "AwaitingReview") {
+      if (mapped._tag === "ReviewSignal") {
         if (state.iteration >= state.maxIterations) {
           return {
             state: {
@@ -676,8 +676,8 @@ const autoActor: ExtensionActorDefinition<
               goal: config.goal,
               maxIterations: config.maxIterations,
               rows: active.rows.filter(
-                (row): row is typeof ReplayCheckpoint.Type | typeof ReplayCounsel.Type =>
-                  row.type === "checkpoint" || row.type === "counsel",
+                (row): row is typeof ReplayCheckpoint.Type | typeof ReplayReview.Type =>
+                  row.type === "checkpoint" || row.type === "review",
               ),
             }
           }),
@@ -714,7 +714,7 @@ const autoActor: ExtensionActorDefinition<
         }),
       )
 
-      // Replay checkpoints and counsel signals in order
+      // Replay checkpoints and review signals in order
       for (const row of replaySeed.rows) {
         if (row.type === "checkpoint") {
           yield* ctx.send(
@@ -727,8 +727,8 @@ const autoActor: ExtensionActorDefinition<
             }),
           )
         }
-        if (row.type === "counsel") {
-          yield* ctx.send(MachineEvent.CounselSignal)
+        if (row.type === "review") {
+          yield* ctx.send(MachineEvent.ReviewSignal)
         }
       }
 
@@ -741,7 +741,7 @@ const autoActor: ExtensionActorDefinition<
   protocols: AutoProtocol,
 }
 
-// ── tool.result interceptor — JSONL append on checkpoint/counsel ──
+// ── tool.result interceptor — JSONL append on checkpoint/review ──
 
 const EXTENSION_ID = AUTO_EXTENSION_ID
 
@@ -797,8 +797,8 @@ const journalInterceptorImpl = (
         }
       }
 
-      if (input.toolName === "counsel") {
-        yield* journal.value.appendCounsel(uiModel.iteration ?? 1)
+      if (input.toolName === "delegate") {
+        yield* journal.value.appendReview(uiModel.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))
 

@@ -105,13 +105,6 @@ function summarizeDelegate(args: Record<string, unknown>): string {
   return `${agent}:${truncateText(task, 40)}`
 }
 
-function summarizeSpecQuestion(args: Record<string, unknown>): string {
-  const spec = getStringArg(args, "spec")
-  const question = getStringArg(args, "question")
-  if (spec.length > 0 && question.length > 0) return `${spec}: ${truncateText(question, 40)}`
-  return spec || question
-}
-
 type ToolArgFormatter = (args: Record<string, unknown>) => string
 
 const toolArgFormatters: Record<string, ToolArgFormatter> = {
@@ -129,16 +122,13 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   grep: (args) => summarizeScopedPattern(args, "/", "/"),
   glob: (args) => summarizeScopedPattern(args),
   webfetch: (args) => getStringArg(args, "url"),
-  repo_explorer: (args) => {
+  repo: (args) => {
     const spec = getStringArg(args, "spec")
     const action = getStringArg(args, "action")
     if (spec.length === 0) return action
     return `${action} ${spec}`.trim()
   },
   delegate: summarizeDelegate,
-  finder: (args) => truncateText(getStringArg(args, "query"), 50),
-  counsel: (args) => truncateText(getStringArg(args, "prompt"), 50),
-  librarian: summarizeSpecQuestion,
   code_review: (args) => truncateText(getStringArg(args, "description"), 50),
   search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),

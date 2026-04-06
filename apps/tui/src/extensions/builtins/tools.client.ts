@@ -7,20 +7,20 @@ export default defineClientExtension({
     tools: BUILTIN_TOOL_RENDERERS,
     commands: [
       {
-        id: "tools.counsel",
-        title: "Counsel",
-        description: "Opposite-vendor peer review",
+        id: "tools.review",
+        title: "Review",
+        description: "Delegate peer review to reviewer agent",
         category: "Tools",
-        slash: "counsel",
+        slash: "review",
         onSelect: () =>
           ctx.sendMessage(
-            "Use the counsel tool to get a peer review from the opposite vendor model. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
+            "Use the delegate tool with agent='reviewer' to get a peer review. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
           ),
         onSlash: (args) =>
           ctx.sendMessage(
             args.trim().length > 0
-              ? `Use the counsel tool with this prompt: ${args.trim()}`
-              : "Use the counsel tool to get a peer review from the opposite vendor model. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
+              ? `Use the delegate tool with agent='reviewer' for this review: ${args.trim()}`
+              : "Use the delegate tool with agent='reviewer' to get a peer review. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
           ),
       },
       {

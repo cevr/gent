@@ -73,13 +73,7 @@ export function DelegateToolRenderer(props: ToolRendererProps) {
   const delegateInput = () => parseDelegateInput(props.toolCall.input)
   const delegateOutput = () => parseDelegateOutput(props.toolCall.output)
 
-  const isLibrarian = () => props.toolCall.toolName === "librarian"
-
   const title = () => {
-    if (isLibrarian()) {
-      const inp = props.toolCall.input as { spec?: string } | undefined
-      return inp?.spec !== undefined ? `librarian → ${inp.spec}` : "librarian"
-    }
     const inp = delegateInput()
     if (inp?.agent !== undefined) return `delegate → ${inp.agent}`
     if (inp?.tasks !== undefined) return `delegate → ${inp.tasks.length} parallel`
@@ -88,12 +82,6 @@ export function DelegateToolRenderer(props: ToolRendererProps) {
   }
 
   const subtitle = () => {
-    if (isLibrarian()) {
-      const inp = props.toolCall.input as { question?: string } | undefined
-      if (inp?.question !== undefined)
-        return inp.question.length > 60 ? inp.question.slice(0, 60) + "…" : inp.question
-      return undefined
-    }
     const inp = delegateInput()
     if (inp?.task !== undefined)
       return inp.task.length > 60 ? inp.task.slice(0, 60) + "…" : inp.task

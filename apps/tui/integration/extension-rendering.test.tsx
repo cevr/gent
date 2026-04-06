@@ -133,7 +133,7 @@ describe("extension snapshot rendering", () => {
     destroyRenderSetup(setup)
   })
 
-  test("auto counsel phase renders counsel label", async () => {
+  test("auto review phase renders review label", async () => {
     let inject: ((s: ExtensionSnapshot) => void) | undefined
     const setup = await renderWithProviders(
       () => (
@@ -159,14 +159,14 @@ describe("extension snapshot rendering", () => {
     inject?.(
       snap("@gent/auto", {
         active: true,
-        phase: "awaiting-counsel",
+        phase: "awaiting-review",
         iteration: 2,
         maxIterations: 10,
       }),
     )
 
-    const frame = await waitForRenderedFrame(setup, (f) => f.includes("counsel"), "counsel label")
-    expect(frame).toContain("counsel")
+    const frame = await waitForRenderedFrame(setup, (f) => f.includes("review"), "review label")
+    expect(frame).toContain("review")
     expect(frame).toContain("2/10")
     destroyRenderSetup(setup)
   })

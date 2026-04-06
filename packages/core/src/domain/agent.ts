@@ -163,7 +163,7 @@ export const Agents = {
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
     model: "openai/gpt-5.4-mini" as ModelId,
-    allowedTools: ["grep", "glob", "read", "memory_search"],
+    allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
     persistence: "ephemeral",
   }),

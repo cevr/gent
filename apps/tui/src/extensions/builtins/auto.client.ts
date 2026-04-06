@@ -16,13 +16,13 @@ export default defineClientExtension({
             | { active?: boolean; phase?: string; iteration?: number; maxIterations?: number }
             | undefined
           if (!model?.active) return []
-          const phase = model.phase === "awaiting-counsel" ? "counsel" : "auto"
+          const phase = model.phase === "awaiting-review" ? "review" : "auto"
           const iter =
             model.iteration !== undefined ? ` ${model.iteration}/${model.maxIterations ?? "?"}` : ""
           return [
             {
               text: `${phase}${iter}`,
-              color: model.phase === "awaiting-counsel" ? "warning" : "info",
+              color: model.phase === "awaiting-review" ? "warning" : "info",
             },
           ]
         },
