@@ -2,14 +2,9 @@ import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineInterceptor } from "../domain/extension.js"
 import type { ExtensionActorDefinition, TurnAfterInput } from "../domain/extension.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { Message } from "../domain/message.js"
-import { ApprovalService } from "../runtime/approval-service.js"
 import { HandoffTool } from "./handoff-tool.js"
-import { Storage } from "../storage/sqlite-storage.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
-import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
-import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
 import { extension } from "./api.js"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
@@ -82,10 +77,11 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-// Auto-handoff interceptor — runs in agent loop scope where services are ambient
+// Auto-handoff interceptor — triggers when context fills past threshold
 const autoHandoffImpl = (
   input: TurnAfterInput,
   next: (input: TurnAfterInput) => Effect.Effect<void>,
+  ctx: ExtensionHostContext,
 ) =>
   Effect.gen(function* () {
     yield* next(input)
@@ -93,9 +89,8 @@ const autoHandoffImpl = (
     if (input.interrupted) return
 
     // Read cooldown + epoch from actor state, and check if auto is active
-    const stateRuntime = yield* ExtensionStateRuntime
-    const snapshots = yield* stateRuntime
-      .getUiSnapshots(input.sessionId, input.branchId)
+    const snapshots = yield* ctx.extension
+      .getUiSnapshots()
       .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
@@ -107,16 +102,7 @@ const autoHandoffImpl = (
     const cooldown = (handoffSnap?.model as CooldownState | undefined)?.cooldown ?? 0
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
-    const storage = yield* Storage
-    const registry = yield* ExtensionRegistry
-
-    const allMessages = yield* storage.listMessages(input.branchId)
-    const currentAgentDef = yield* registry.getAgent(input.agentName)
-    const coworkDef = yield* registry.getAgent("cowork")
-    const agentForModel = currentAgentDef ?? coworkDef
-    const modelId =
-      agentForModel !== undefined ? resolveAgentModel(agentForModel) : DEFAULT_MODEL_ID
-    const contextPercent = estimateContextPercent(allMessages, modelId)
+    const contextPercent = yield* ctx.session.estimateContextPercent()
     if (contextPercent < DEFAULTS.handoffThresholdPercent) return
 
     yield* Effect.logInfo("auto-handoff.threshold").pipe(
@@ -126,35 +112,25 @@ const autoHandoffImpl = (
       }),
     )
 
-    const approvalService = yield* ApprovalService
-    const decision = yield* approvalService
-      .present(
-        {
-          text: summarizeRecentMessages(allMessages),
-          metadata: {
-            type: "handoff",
-            reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
-          },
+    const allMessages = yield* ctx.session.listMessages()
+    const decision = yield* ctx.interaction
+      .approve({
+        text: summarizeRecentMessages(allMessages),
+        metadata: {
+          type: "handoff",
+          reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
         },
-        { sessionId: input.sessionId, branchId: input.branchId },
-      )
+      })
       .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))
 
     if (!decision.approved) {
-      yield* stateRuntime
-        .send(input.sessionId, HandoffProtocol.Suppress({ count: 5 }))
+      yield* ctx.extension
+        .send(HandoffProtocol.Suppress({ count: 5 }))
         .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
-// Cast: interceptor runs in agent loop fiber where these services exist in scope
-const autoHandoffInterceptor = defineInterceptor(
-  "turn.after",
-  autoHandoffImpl as unknown as (
-    input: TurnAfterInput,
-    next: (input: TurnAfterInput) => Effect.Effect<void>,
-  ) => Effect.Effect<void>,
-)
+const autoHandoffInterceptor = defineInterceptor("turn.after", autoHandoffImpl)
 
 export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
   ext.tool(HandoffTool)

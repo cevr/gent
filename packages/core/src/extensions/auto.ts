@@ -31,13 +31,9 @@ import { extension } from "./api.js"
 import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { resolveAgentModel, DEFAULT_MODEL_ID } from "../domain/agent.js"
-import { estimateContextPercent } from "../runtime/context-estimation.js"
 import { DEFAULTS } from "../domain/defaults.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 
 // ── Constants ──
 
@@ -748,6 +744,7 @@ const EXTENSION_ID = AUTO_EXTENSION_ID
 const journalInterceptorImpl = (
   input: ToolResultInput,
   next: (input: ToolResultInput) => Effect.Effect<unknown>,
+  ctx: ExtensionHostContext,
 ) =>
   Effect.gen(function* () {
     const result = yield* next(input)
@@ -757,12 +754,9 @@ const journalInterceptorImpl = (
       const journal = yield* Effect.serviceOption(AutoJournal)
       if (journal._tag === "None") return
 
-      const stateRuntime = yield* ExtensionStateRuntime
-      const snapshots = yield* stateRuntime
-        .getUiSnapshots(input.sessionId, input.branchId)
-        .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-      const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-      const uiModel = autoSnap?.model as AutoUiModel | undefined
+      const uiModel = yield* ctx.extension
+        .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
+        .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
       if (uiModel === undefined || !uiModel.active) return
 
       if (input.toolName === "auto_checkpoint") {
@@ -805,20 +799,14 @@ const journalInterceptorImpl = (
     return result
   })
 
-// Cast: interceptor runs in agent loop fiber where services are ambient
-const journalInterceptor = defineInterceptor(
-  "tool.result",
-  journalInterceptorImpl as unknown as (
-    input: ToolResultInput,
-    next: (input: ToolResultInput) => Effect.Effect<unknown>,
-  ) => Effect.Effect<unknown>,
-)
+const journalInterceptor = defineInterceptor("tool.result", journalInterceptorImpl)
 
 // ── turn.after interceptor — auto-handoff on context fill ──
 
 const autoHandoffImpl = (
   input: TurnAfterInput,
   next: (input: TurnAfterInput) => Effect.Effect<void>,
+  ctx: ExtensionHostContext,
 ) =>
   Effect.gen(function* () {
     yield* next(input)
@@ -826,25 +814,13 @@ const autoHandoffImpl = (
     if (input.interrupted) return
 
     // Check if auto is active
-    const stateRuntime = yield* ExtensionStateRuntime
-    const snapshots = yield* stateRuntime
-      .getUiSnapshots(input.sessionId, input.branchId)
-      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-    const autoSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-    const uiModel = autoSnap?.model as AutoUiModel | undefined
+    const uiModel = yield* ctx.extension
+      .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
     if (uiModel === undefined || !uiModel.active) return
 
     // Estimate context fill
-    const storage = yield* Storage
-    const registry = yield* ExtensionRegistry
-
-    const allMessages = yield* storage.listMessages(input.branchId)
-    const agentDef = yield* registry.getAgent(input.agentName)
-    const coworkDef = yield* registry.getAgent("cowork")
-    let modelId = DEFAULT_MODEL_ID
-    if (agentDef !== undefined) modelId = resolveAgentModel(agentDef)
-    else if (coworkDef !== undefined) modelId = resolveAgentModel(coworkDef)
-    const contextPercent = estimateContextPercent(allMessages, modelId)
+    const contextPercent = yield* ctx.session.estimateContextPercent()
     if (contextPercent < DEFAULTS.handoffThresholdPercent) return
 
     yield* Effect.logInfo("auto.handoff.threshold").pipe(
@@ -868,10 +844,7 @@ const autoHandoffImpl = (
 
     // Queue follow-up telling model to call the handoff tool.
     // @gent/handoff owns presentation — auto just requests the handoff.
-    const turnControl = yield* ExtensionTurnControl
-    yield* turnControl.queueFollowUp({
-      sessionId: input.sessionId,
-      branchId: input.branchId,
+    yield* ctx.turn.queueFollowUp({
       content: [
         `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
         `Include this context:`,
@@ -885,14 +858,7 @@ const autoHandoffImpl = (
     })
   }).pipe(Effect.catchEager(() => Effect.void))
 
-// Cast: interceptor runs in agent loop fiber where services are ambient
-const autoHandoffInterceptor = defineInterceptor(
-  "turn.after",
-  autoHandoffImpl as unknown as (
-    input: TurnAfterInput,
-    next: (input: TurnAfterInput) => Effect.Effect<void>,
-  ) => Effect.Effect<void>,
-)
+const autoHandoffInterceptor = defineInterceptor("turn.after", autoHandoffImpl)
 
 // ── Extension ──
 
