@@ -49,6 +49,7 @@ import { ExtensionEventBus } from "../extensions/event-bus.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, writeFileSync } from "node:fs"
 import type { PromptSection } from "../../server/system-prompt.js"
 

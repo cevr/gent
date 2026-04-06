@@ -2,6 +2,18 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { type Question, QuestionSchema, QuestionOptionSchema } from "../../domain/event.js"
 
+const parseAnswers = (notes: string): string[][] => {
+  try {
+    const parsed = JSON.parse(notes) as unknown
+    if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
+      return parsed as string[][]
+    }
+    return [[notes]]
+  } catch {
+    return [[notes]]
+  }
+}
+
 // AskUser Params — canonical questions[] input
 // Reuses QuestionSchema from event.ts with tool-specific length constraints.
 
@@ -68,16 +80,7 @@ export const AskUserTool = defineTool({
     // Parse structured answers from notes (JSON-encoded string[][])
     let answers: string[][] = [[]]
     if (decision.notes !== undefined) {
-      try {
-        const parsed = JSON.parse(decision.notes) as unknown
-        if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
-          answers = parsed as string[][]
-        } else {
-          answers = [[decision.notes]]
-        }
-      } catch {
-        answers = [[decision.notes]]
-      }
+      answers = parseAnswers(decision.notes)
     }
     return { answers }
   }),

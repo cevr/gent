@@ -756,7 +756,7 @@ const journalInterceptorImpl = (
 
       const uiModel = yield* ctx.extension
         .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
-        .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+        .pipe(Effect.catchEager(() => Effect.void))
       if (uiModel === undefined || !uiModel.active) return
 
       if (input.toolName === "auto_checkpoint") {
@@ -816,7 +816,7 @@ const autoHandoffImpl = (
     // Check if auto is active
     const uiModel = yield* ctx.extension
       .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+      .pipe(Effect.catchEager(() => Effect.void))
     if (uiModel === undefined || !uiModel.active) return
 
     // Estimate context fill

@@ -386,10 +386,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           }
 
           const ctx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
-          yield* Effect.tryPromise({
-            try: () => Promise.resolve(cmd.handler(args, ctx)),
-            catch: (e) => new Error(`Command "${name}" failed: ${String(e)}`),
-          }).pipe(Effect.orDie)
+          yield* Effect.promise(() => Promise.resolve(cmd.handler(args, ctx)))
         }),
 
       // -- actor --
