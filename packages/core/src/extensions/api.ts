@@ -259,6 +259,12 @@ export interface ExtensionBuilder {
   promptSection(section: PromptSection): void
   /** Register a hook using plain async handlers. */
   on<K extends keyof SimpleHookHandlers>(key: K, handler: SimpleHookHandlers[K]): void
+  /** Execute a shell command. Returns stdout, stderr, and exitCode. */
+  exec(
+    command: string,
+    args?: ReadonlyArray<string>,
+    options?: { cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>
   /** Register a startup hook. Multiple calls compose in order. */
   onStartup(fn: () => void | Promise<void>): void
   /** Register a shutdown hook. Multiple calls compose in order. */
@@ -671,6 +677,20 @@ export const extension = (
         },
         send: (message) => {
           pushEffect("send", { _tag: "Send", message })
+        },
+
+        exec: async (command, args, options) => {
+          const proc = Bun.spawn([command, ...(args ?? [])], {
+            cwd: options?.cwd ?? ctx.cwd,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+          ])
+          const exitCode = await proc.exited
+          return { stdout, stderr, exitCode }
         },
 
         onStartup: (fn) => startupFns.push(fn),
