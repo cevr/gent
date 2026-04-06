@@ -1,18 +1,6 @@
 import type { Effect, Schema } from "effect"
-import type { AgentName } from "./agent"
-import type { EventStoreError } from "./event"
-import type {
-  AnyExtensionCommandMessage,
-  AnyExtensionRequestMessage,
-  ExtensionProtocolError,
-  ExtractExtensionReply,
-} from "./extension-protocol"
-import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  InteractionPendingError,
-} from "./interaction-request"
+import type { ToolCallId } from "./ids"
+import type { ExtensionHostContext } from "./extension-host-context"
 
 // Tool Action — classifies what a tool does for agent filtering
 
@@ -49,35 +37,18 @@ export interface ToolDefinition<
   ) => Effect.Effect<Result, Error, Deps>
 }
 
-export interface ToolContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly toolCallId: ToolCallId
-  readonly agentName?: AgentName
-  /** Working directory — replaces direct RuntimePlatform access in tools */
-  readonly cwd: string
-  /** Home directory — replaces direct RuntimePlatform access in tools */
-  readonly home: string
-  /** Extension actor RPC — replaces direct ExtensionStateRuntime access in tools */
-  readonly extensions: ToolContextExtensions
-  /** Request human approval. Cold — throws InteractionPendingError, machine parks, survives restarts.
-   *  Wired by ToolRunner.Live — available in all tool execute() calls. */
-  readonly approve: (
-    params: ApprovalRequest,
-  ) => Effect.Effect<ApprovalDecision, EventStoreError | InteractionPendingError>
+/** @deprecated Use `ctx.extension` instead — kept for backward compatibility */
+export interface ToolContextExtensions {
+  readonly send: ExtensionHostContext.Extension["send"]
+  readonly ask: ExtensionHostContext.Extension["ask"]
 }
 
-export interface ToolContextExtensions {
-  /** Fire-and-forget message to an extension actor */
-  readonly send: (
-    message: AnyExtensionCommandMessage,
-    branchId?: BranchId,
-  ) => Effect.Effect<void, ExtensionProtocolError>
-  /** Request/reply with an extension actor */
-  readonly ask: <M extends AnyExtensionRequestMessage>(
-    message: M,
-    branchId?: BranchId,
-  ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
+export interface ToolContext extends ExtensionHostContext {
+  readonly toolCallId: ToolCallId
+  /** @deprecated Use `ctx.extension` — kept for backward compat during migration */
+  readonly extensions: ToolContextExtensions
+  /** @deprecated Use `ctx.interaction.approve` — kept for backward compat during migration */
+  readonly approve: ExtensionHostContext.Interaction["approve"]
 }
 
 // Tool Factory

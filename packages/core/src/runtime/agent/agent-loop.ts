@@ -251,6 +251,7 @@ const resolveTurnContext = (params: {
     // Derive extension projections from state machines
     const allTools = yield* params.extensionRegistry.listTools()
     const extensionResults = yield* params.extensionStateRuntime.deriveAll(params.sessionId, {
+      sessionId: params.sessionId,
       agent,
       allTools,
     })
@@ -474,6 +475,7 @@ const executeToolCalls = (params: {
           }),
         )
 
+        const die = (label: string) => () => Effect.die(`${label} called without ToolRunner wiring`)
         const ctx: ToolContext = {
           sessionId: params.sessionId,
           branchId: params.branchId,
@@ -482,11 +484,41 @@ const executeToolCalls = (params: {
           // Overridden by ToolRunner.Live with real values
           cwd: "",
           home: "",
-          extensions: {
-            send: () => Effect.die("extensions.send() called without ToolRunner wiring"),
-            ask: () => Effect.die("extensions.ask() called without ToolRunner wiring"),
+          extension: {
+            send: die("extension.send"),
+            ask: die("extension.ask"),
+            getUiSnapshots: die("extension.getUiSnapshots"),
+            getUiSnapshot: die("extension.getUiSnapshot"),
           },
-          approve: () => Effect.die("approve() called without ToolRunner wiring"),
+          agent: {
+            get: die("agent.get"),
+            require: die("agent.require"),
+            run: die("agent.run"),
+            resolveDualModelPair: die("agent.resolveDualModelPair"),
+          },
+          session: {
+            listMessages: die("session.listMessages"),
+            getSession: die("session.getSession"),
+            getDetail: die("session.getDetail"),
+            renameCurrent: die("session.renameCurrent"),
+            estimateContextPercent: die("session.estimateContextPercent"),
+            search: die("session.search"),
+          },
+          interaction: {
+            approve: die("interaction.approve"),
+            present: die("interaction.present"),
+            confirm: die("interaction.confirm"),
+            review: die("interaction.review"),
+          },
+          turn: {
+            queueFollowUp: die("turn.queueFollowUp"),
+            interject: die("turn.interject"),
+          },
+          extensions: {
+            send: die("extensions.send"),
+            ask: die("extensions.ask"),
+          },
+          approve: die("approve"),
         }
         const run = params.toolRunner
           .run(toolCall, ctx)

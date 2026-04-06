@@ -192,6 +192,7 @@ export interface ExtensionReduceContext {
 }
 
 export interface ExtensionDeriveContext {
+  readonly sessionId: SessionId
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<AnyToolDefinition>
 }

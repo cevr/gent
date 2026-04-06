@@ -139,6 +139,23 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               ...ctx,
               cwd: platform.cwd,
               home: platform.home,
+              extension: {
+                send: (message, branchId) =>
+                  extensionStateRuntime.send(ctx.sessionId, message, branchId ?? ctx.branchId),
+                ask: (message, branchId) =>
+                  extensionStateRuntime.ask(ctx.sessionId, message, branchId ?? ctx.branchId),
+                getUiSnapshots: (branchId) =>
+                  extensionStateRuntime.getUiSnapshots(ctx.sessionId, branchId ?? ctx.branchId),
+                getUiSnapshot: <T>(extensionId: string, branchId?: typeof ctx.branchId) =>
+                  extensionStateRuntime
+                    .getUiSnapshots(ctx.sessionId, branchId ?? ctx.branchId)
+                    .pipe(
+                      Effect.map((snapshots) => {
+                        const match = snapshots.find((s) => s.extensionId === extensionId)
+                        return match?.model as T | undefined
+                      }),
+                    ),
+              },
               extensions: {
                 send: (message, branchId) =>
                   extensionStateRuntime.send(ctx.sessionId, message, branchId ?? ctx.branchId),

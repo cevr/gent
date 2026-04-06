@@ -163,6 +163,7 @@ export function createActorHarness<State, Message = void>(
   }
 
   const deriveCtx: ExtensionDeriveContext = {
+    sessionId: ctx.sessionId,
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
   }
@@ -344,6 +345,8 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
   ).pipe(Layer.provide(BunServices.layer))
 }
 
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+
 /** Default ToolContext for tests — overridable via spread */
 export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext => ({
   sessionId: "test-session" as SessionId,
@@ -351,10 +354,41 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   toolCallId: "test-call" as ToolCallId,
   cwd: "/tmp",
   home: "/tmp",
-  extensions: {
-    send: () => Effect.die("extensions.send() not wired in test"),
-    ask: () => Effect.die("extensions.ask() not wired in test"),
+  extension: {
+    send: dieStub("extension.send"),
+    ask: dieStub("extension.ask"),
+    getUiSnapshots: dieStub("extension.getUiSnapshots"),
+    getUiSnapshot: dieStub("extension.getUiSnapshot"),
   },
-  approve: () => Effect.die("approve() not wired in test"),
+  agent: {
+    get: dieStub("agent.get"),
+    require: dieStub("agent.require"),
+    run: dieStub("agent.run"),
+    resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
+  },
+  session: {
+    listMessages: dieStub("session.listMessages"),
+    getSession: dieStub("session.getSession"),
+    getDetail: dieStub("session.getDetail"),
+    renameCurrent: dieStub("session.renameCurrent"),
+    estimateContextPercent: dieStub("session.estimateContextPercent"),
+    search: dieStub("session.search"),
+  },
+  interaction: {
+    approve: dieStub("interaction.approve"),
+    present: dieStub("interaction.present"),
+    confirm: dieStub("interaction.confirm"),
+    review: dieStub("interaction.review"),
+  },
+  turn: {
+    queueFollowUp: dieStub("turn.queueFollowUp"),
+    interject: dieStub("turn.interject"),
+  },
+  // Backward-compat aliases
+  extensions: {
+    send: dieStub("extensions.send"),
+    ask: dieStub("extensions.ask"),
+  },
+  approve: dieStub("approve"),
   ...overrides,
 })
