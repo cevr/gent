@@ -2,6 +2,7 @@ import { ServiceMap, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
+  CommandContribution,
   ExtensionStatusInfo,
   FailedExtension,
   TurnProjection,
@@ -23,6 +24,7 @@ export interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
+  readonly commands: ReadonlyArray<CommandContribution>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
@@ -83,6 +85,13 @@ export const resolveExtensions = (
     (p) => p.id,
   )
 
+  const commands: CommandContribution[] = []
+  for (const ext of sorted) {
+    for (const cmd of ext.setup.commands ?? []) {
+      commands.push(cmd)
+    }
+  }
+
   const hooks = compileHooks(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
@@ -108,6 +117,7 @@ export const resolveExtensions = (
     agents,
     providers,
     promptSections: promptSectionsMap,
+    commands,
     hooks,
     extensions: sorted,
     failedExtensions: mergedFailures,
@@ -205,6 +215,9 @@ export interface ExtensionRegistryService {
     extensionProjections: ReadonlyArray<TurnProjection>,
   ) => Effect.Effect<CompiledToolPolicy>
 
+  // Command resolution
+  readonly listCommands: () => Effect.Effect<ReadonlyArray<CommandContribution>>
+
   // Agent resolution
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
@@ -246,6 +259,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
         Effect.succeed(
           compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
+      listCommands: () => Effect.succeed(resolved.commands),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       getProvider: (id) => Effect.succeed(resolved.providers.get(id)),

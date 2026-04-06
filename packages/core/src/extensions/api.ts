@@ -48,6 +48,7 @@ import {
   type ExtensionEffect,
   type ProviderContribution,
   type ScheduledJobContribution,
+  type CommandContribution,
 } from "../domain/extension.js"
 import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js"
 import {
@@ -91,6 +92,7 @@ export {
   type ExtensionInterceptorMap,
   type ProviderContribution,
   type ScheduledJobContribution,
+  type CommandContribution,
   type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -248,6 +250,11 @@ export interface ExtensionBuilder {
   tool(def: SimpleToolDef | AnyToolDefinition): void
   /** Register an agent. Accepts SimpleAgentDef or full AgentDefinition. */
   agent(def: SimpleAgentDef | AgentDefinition): void
+  /** Register a slash command. */
+  command(
+    name: string,
+    options: { description?: string; handler: (args: string) => void | Promise<void> },
+  ): void
   /** Add a static system prompt section. */
   promptSection(section: PromptSection): void
   /** Register a hook using plain async handlers. */
@@ -545,6 +552,7 @@ export const extension = (
     Effect.gen(function* () {
       const tools: AnyToolDefinition[] = []
       const agents: AgentDefinition[] = []
+      const commands: CommandContribution[] = []
       const promptSections: PromptSection[] = []
       const interceptors: ExtensionInterceptorDescriptor[] = []
       const startupFns: Array<() => void | Promise<void>> = []
@@ -590,6 +598,9 @@ export const extension = (
             agents.push(convertSimpleAgent(def as SimpleAgentDef))
           }
         },
+
+        command: (name, options) =>
+          commands.push({ name, description: options.description, handler: options.handler }),
 
         promptSection: (section) => promptSections.push(section),
 
@@ -754,6 +765,7 @@ export const extension = (
       return {
         ...(tools.length > 0 ? { tools } : {}),
         ...(agents.length > 0 ? { agents } : {}),
+        ...(commands.length > 0 ? { commands } : {}),
         ...(promptSections.length > 0 ? { promptSections } : {}),
         ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
