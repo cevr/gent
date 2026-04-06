@@ -50,6 +50,7 @@ import {
   type ProviderContribution,
   type ScheduledJobContribution,
   type CommandContribution,
+  type ExtensionSetupContext,
 } from "../domain/extension.js"
 import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js"
 import {
@@ -541,12 +542,8 @@ const wrapFireAndForgetHandler =
 
 // ── Public API ──
 
-/** Setup context passed to the factory function. */
-export interface ExtensionSetupContext {
-  readonly cwd: string
-  readonly source: string
-  readonly home: string
-}
+// ExtensionSetupContext re-exported from domain — single source of truth
+export type { ExtensionSetupContext } from "../domain/extension.js"
 
 type BusSubscriptionEntry = NonNullable<ExtensionSetup["busSubscriptions"]>[number]
 
@@ -644,6 +641,14 @@ export const extension = (
         top.effects.push(effect)
       }
 
+      const registerCommand = (
+        name: string,
+        options: {
+          description?: string
+          handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+        },
+      ) => commands.push({ name, description: options.description, handler: options.handler })
+
       const builder: ExtensionBuilder = {
         storage: extensionStorage,
 
@@ -663,8 +668,7 @@ export const extension = (
           }
         },
 
-        command: (name, options) =>
-          commands.push({ name, description: options.description, handler: options.handler }),
+        command: (name, options) => registerCommand(name, options),
 
         promptSection: (section) => promptSections.push(section),
 
@@ -753,13 +757,7 @@ export const extension = (
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           }) as any,
-          command: (
-            name: string,
-            options: {
-              description?: string
-              handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
-            },
-          ) => commands.push({ name, description: options.description, handler: options.handler }),
+          command: (name, options) => registerCommand(name, options),
         },
         bus: {
           on: (pattern, handler) => busSubscriptions.push({ pattern, handler }),
