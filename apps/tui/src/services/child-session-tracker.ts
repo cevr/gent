@@ -163,10 +163,10 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             }
             yield* Ref.update(entries, (m) => new Map(m).set(childId, entry))
             yield* publish({ _tag: "added", entry })
-            // Only subscribe to live events for running children — skip for terminal entries on replay
-            if (entry.status === "running") {
-              yield* subscribeChild(childId)
-            }
+            // Subscribe to child events for tool call hydration.
+            // On replay, the subscription replays child history then gets interrupted
+            // when AgentRunSucceeded/Failed fires interruptChild.
+            yield* subscribeChild(childId)
             break
           }
 
