@@ -1,5 +1,5 @@
 import { Cause, ServiceMap, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
-import { AgentName } from "../domain/agent.js"
+import { AgentName, AgentRunnerService } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
@@ -16,7 +16,16 @@ import { invokeToolPhase } from "./agent/agent-loop"
 import { ToolRunner } from "./agent/tool-runner"
 import { AgentLoop, type SteerCommand } from "./agent"
 import { ExtensionRegistry } from "./extensions/registry.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import {
+  makeExtensionHostContext,
+  type MakeExtensionHostContextDeps,
+} from "./make-extension-host-context.js"
+import { RuntimePlatform } from "./runtime-platform.js"
+import { ApprovalService } from "./approval-service.js"
+import { PromptPresenter } from "../domain/prompt-presenter.js"
+import { ExtensionTurnControl } from "./extensions/turn-control.js"
+import { SearchStorage } from "../storage/search-storage.js"
+import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -177,17 +186,57 @@ export const LocalActorProcessLive: Layer.Layer<
           const commandId = input.commandId ?? makeCommandId()
 
           // Run message.input interceptor — allows extensions to transform user input
-          const stubCtx = {
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            cwd: "",
-            home: "",
-          } as ExtensionHostContext
+          const die = (label: string) => () => Effect.die(`${label} not available in message.input`)
+          const opt = <T>(
+            svc: { _tag: "Some"; value: T } | { _tag: "None" },
+            fallback: Record<string, unknown>,
+          ) => (svc._tag === "Some" ? svc.value : (fallback as unknown as T))
+          const hostDeps: MakeExtensionHostContextDeps = {
+            platform: opt(yield* Effect.serviceOption(RuntimePlatform), {
+              cwd: "",
+              home: "",
+              platform: "unknown",
+            }),
+            extensionStateRuntime: opt(yield* Effect.serviceOption(ExtensionStateRuntime), {
+              send: die("ExtensionStateRuntime"),
+              ask: die("ExtensionStateRuntime"),
+              getUiSnapshots: die("ExtensionStateRuntime"),
+            }),
+            approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
+              present: die("ApprovalService"),
+              storeResolution: die("ApprovalService"),
+              respond: die("ApprovalService"),
+              rehydrate: die("ApprovalService"),
+            }),
+            promptPresenter: opt(yield* Effect.serviceOption(PromptPresenter), {
+              present: die("PromptPresenter"),
+              confirm: die("PromptPresenter"),
+              review: die("PromptPresenter"),
+            }),
+            extensionRegistry,
+            turnControl: opt(yield* Effect.serviceOption(ExtensionTurnControl), {
+              queueFollowUp: die("TurnControl"),
+              interject: die("TurnControl"),
+              bind: die("TurnControl"),
+            }),
+            storage,
+            searchStorage: opt(yield* Effect.serviceOption(SearchStorage), {
+              searchMessages: () => Effect.succeed([]),
+            }),
+            agentRunner: opt(yield* Effect.serviceOption(AgentRunnerService), {
+              run: die("AgentRunnerService"),
+            }),
+            eventPublisher,
+          }
+          const hostCtx = makeExtensionHostContext(
+            { sessionId: input.sessionId, branchId: input.branchId },
+            hostDeps,
+          )
           const content = yield* extensionRegistry.hooks.runInterceptor(
             "message.input",
             { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
             (i) => Effect.succeed(i.content),
-            stubCtx,
+            hostCtx,
           )
 
           const message = new Message({
