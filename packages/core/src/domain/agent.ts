@@ -296,6 +296,7 @@ export type AgentRunResult =
       persistence?: AgentPersistence
       usage?: { input: number; output: number; cost?: number }
       toolCalls?: ReadonlyArray<AgentRunToolCall>
+      savedPath?: string
     }
   | {
       _tag: "error"

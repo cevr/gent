@@ -13,7 +13,7 @@ import { DateTime, Effect, FileSystem, Path } from "effect"
 
 const DEFAULT_HEAD_LINES = 50
 const DEFAULT_TAIL_LINES = 50
-const OUTPUT_DIR = "/tmp/gent-output"
+const OUTPUT_DIR = "/tmp/gent/outputs"
 
 /**
  * Truncate an array to head + tail. Simpler than OutputBuffer — for when
@@ -82,7 +82,7 @@ export interface OutputBufferResult {
 }
 
 /**
- * Save full output to /tmp/gent-output/ and return the path.
+ * Save full output to /tmp/gent/outputs/ and return the path.
  */
 export const saveFullOutput = (output: string, label: string) =>
   Effect.gen(function* () {

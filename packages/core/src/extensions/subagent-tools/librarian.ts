@@ -2,6 +2,7 @@ import { Effect, FileSystem, Path, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { AgentRunnerService, getDurableAgentRunSessionId } from "../../domain/agent.js"
 import { requireAgent } from "../../runtime/extensions/registry.js"
+import { headTailChars } from "../../domain/output-buffer.js"
 import { $ } from "bun"
 import { RuntimePlatform } from "../../runtime/runtime-platform.js"
 
@@ -163,12 +164,21 @@ Use read, grep, and glob tools to explore the code at ${cachePath} and answer th
     }
 
     const sessionId = getDurableAgentRunSessionId(result)
+    const { text, truncated } = headTailChars(result.text, 16_000)
+    const parts = [text]
+    if (result.savedPath !== undefined) {
+      parts.push(
+        truncated
+          ? `\n\nFull output saved to: ${result.savedPath}`
+          : `\n\nFull output: ${result.savedPath}`,
+      )
+    }
+    if (sessionId !== undefined) {
+      parts.push(`\n\nFull session: session://${sessionId}`)
+    }
 
     return {
-      output:
-        sessionId !== undefined
-          ? `${result.text}\n\nFull session: session://${sessionId}`
-          : result.text,
+      output: parts.join(""),
       metadata: { spec: params.spec, cachePath, sessionId },
     }
   }),

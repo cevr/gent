@@ -108,11 +108,12 @@ Instructions:
 
     const sessionId = getDurableAgentRunSessionId(result)
 
+    const parts = [result.text]
+    if (result.savedPath !== undefined) parts.push(`\n\nFull output: ${result.savedPath}`)
+    if (sessionId !== undefined) parts.push(`\n\nFull session: session://${sessionId}`)
+
     return {
-      review:
-        sessionId !== undefined
-          ? `${result.text}\n\nFull session: session://${sessionId}`
-          : result.text,
+      review: parts.join(""),
       reviewer: reviewer.name,
       metadata: {
         sessionId,

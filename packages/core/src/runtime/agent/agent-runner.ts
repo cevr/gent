@@ -49,6 +49,7 @@ import { ExtensionEventBus } from "../extensions/event-bus.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
+import { mkdirSync, writeFileSync } from "node:fs"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -121,14 +122,18 @@ export interface AgentRunnerConfig {
   readonly baseSections?: ReadonlyArray<PromptSection>
 }
 
-const latestAssistantText = (messages: ReadonlyArray<Message>) => {
+const latestAssistantContent = (messages: ReadonlyArray<Message>) => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg === undefined || msg.role !== "assistant") continue
-    const part = msg.parts.find((p) => p.type === "text")
-    return part?.text ?? ""
+    const text = msg.parts.find((p) => p.type === "text")?.text ?? ""
+    const reasoning = msg.parts
+      .filter((p) => p.type === "reasoning")
+      .map((p) => (p as { text: string }).text)
+      .join("\n")
+    return { text, reasoning }
   }
-  return ""
+  return { text: "", reasoning: "" }
 }
 
 const buildAgentRunSuccess = (params: {
@@ -243,15 +248,48 @@ const loadAgentRunSuccessData = (params: {
 }) =>
   Effect.gen(function* () {
     const messages = yield* params.storage.listMessages(params.branchId)
-    const text = latestAssistantText(messages)
+    const { text, reasoning } = latestAssistantContent(messages)
     const meta = yield* collectChildMetadata(params.storage, params.sessionId)
-    return buildAgentRunSuccess({
-      text,
-      sessionId: params.sessionId,
-      agentName: params.agentName,
-      meta,
-      persistence: params.persistence,
-    })
+    return {
+      ...buildAgentRunSuccess({
+        text: text.length > 0 ? text : reasoning,
+        sessionId: params.sessionId,
+        agentName: params.agentName,
+        meta,
+        persistence: params.persistence,
+      }),
+      reasoning,
+    }
+  })
+
+const saveAgentRunOutput = (result: {
+  text: string
+  reasoning: string
+  agentName: string
+  sessionId: SessionId
+}) =>
+  Effect.sync(() => {
+    const fullContent = [
+      result.reasoning.length > 0 ? `## Reasoning\n\n${result.reasoning}\n\n` : "",
+      `## Response\n\n${result.text}`,
+    ]
+      .filter(Boolean)
+      .join("")
+
+    if (fullContent.length === 0) return undefined
+
+    try {
+      const dir = "/tmp/gent/outputs"
+      mkdirSync(dir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, "-")
+      const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
+      const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
+      const header = `# ${result.agentName} — ${result.sessionId}\n\n`
+      writeFileSync(filepath, header + fullContent, "utf-8")
+      return filepath
+    } catch {
+      return undefined
+    }
   })
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */
@@ -583,6 +621,14 @@ const runEphemeralAgent = (params: {
       (runtime) => Effect.promise(() => runtime.dispose()).pipe(Effect.orDie),
     )
 
+    // Save full output to disk (runs in parent context where FileSystem is available)
+    const savedPath = yield* saveAgentRunOutput({
+      text: result.text,
+      reasoning: result.reasoning,
+      agentName: params.agentName,
+      sessionId,
+    })
+
     yield* params.shared.publishAgentRunSucceeded({
       parentSessionId: params.parentSessionId,
       parentBranchId: params.parentBranchId,
@@ -596,7 +642,7 @@ const runEphemeralAgent = (params: {
       toolCallCount: result.toolCalls?.length ?? 0,
     })
 
-    return result
+    return { ...result, savedPath }
   }).pipe(withWideEvent(agentRunBoundary(params.agentName, params.parentSessionId)))
 
   return withAgentRunFailureHandling(
@@ -764,6 +810,12 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                   persistence,
                 })
+                const savedPath = yield* saveAgentRunOutput({
+                  text: result.text,
+                  reasoning: result.reasoning,
+                  agentName: params.agent.name,
+                  sessionId,
+                })
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -777,7 +829,7 @@ export const InProcessRunner = (
                   toolCallCount: result.toolCalls?.length ?? 0,
                 })
 
-                return result
+                return { ...result, savedPath }
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return withAgentRunFailureHandling(
@@ -967,6 +1019,12 @@ export const SubprocessRunner = (
                   agentName: params.agent.name,
                   persistence,
                 })
+                const savedPath = yield* saveAgentRunOutput({
+                  text: result.text,
+                  reasoning: result.reasoning,
+                  agentName: params.agent.name,
+                  sessionId,
+                })
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
@@ -980,7 +1038,7 @@ export const SubprocessRunner = (
                   toolCallCount: result.toolCalls?.length ?? 0,
                 })
 
-                return result
+                return { ...result, savedPath }
               }).pipe(withWideEvent(agentRunBoundary(params.agent.name, params.parentSessionId)))
 
               return withAgentRunFailureHandling(

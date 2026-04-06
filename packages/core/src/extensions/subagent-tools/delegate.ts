@@ -270,11 +270,11 @@ export const DelegateTool = defineTool({
       }
 
       const sessionId = getDurableAgentRunSessionId(result)
+      const parts = [result.text]
+      if (result.savedPath !== undefined) parts.push(`\n\nFull output: ${result.savedPath}`)
+      if (sessionId !== undefined) parts.push(`\n\nFull session: session://${sessionId}`)
       return {
-        output:
-          sessionId !== undefined
-            ? `${result.text}\n\nFull session: session://${sessionId}`
-            : result.text,
+        output: parts.join(""),
         metadata: {
           mode: "single" as const,
           sessionId,

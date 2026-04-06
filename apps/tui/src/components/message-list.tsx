@@ -161,7 +161,7 @@ function AssistantMessage(props: {
                 return (
                   <markdown
                     syntaxStyle={props.syntaxStyle()}
-                    streaming={props.streaming}
+                    streaming
                     content={
                       props.streaming
                         ? segment.content
@@ -228,7 +228,7 @@ function AssistantMessageLegacy(props: {
       <Show when={props.content.length > 0}>
         <markdown
           syntaxStyle={props.syntaxStyle()}
-          streaming={props.streaming}
+          streaming
           content={props.processedContent}
           conceal
         />
