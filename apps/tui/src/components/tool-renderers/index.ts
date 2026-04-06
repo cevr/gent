@@ -6,7 +6,7 @@ export { WriteToolRenderer } from "./write"
 export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
-export { DelegateToolRenderer } from "./delegate"
+export { SubagentToolRenderer } from "./subagent"
 export { GenericToolRenderer } from "./generic"
 export { CodeReviewToolRenderer } from "./code-review"
 export { SearchSessionsToolRenderer } from "./search-sessions"
@@ -20,7 +20,7 @@ import { WriteToolRenderer } from "./write"
 import { GrepToolRenderer } from "./grep"
 import { GlobToolRenderer } from "./glob"
 import { WebfetchToolRenderer } from "./webfetch"
-import { DelegateToolRenderer } from "./delegate"
+import { SubagentToolRenderer } from "./subagent"
 import { CodeReviewToolRenderer } from "./code-review"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
@@ -34,7 +34,7 @@ export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"]
   { toolNames: ["grep"], component: GrepToolRenderer },
   { toolNames: ["glob"], component: GlobToolRenderer },
   { toolNames: ["webfetch"], component: WebfetchToolRenderer },
-  { toolNames: ["delegate"], component: DelegateToolRenderer },
+  { toolNames: ["delegate"], component: SubagentToolRenderer },
   { toolNames: ["code_review"], component: CodeReviewToolRenderer },
   { toolNames: ["search_sessions"], component: SearchSessionsToolRenderer },
   { toolNames: ["read_session"], component: ReadSessionToolRenderer },
