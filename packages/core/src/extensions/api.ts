@@ -123,6 +123,7 @@ export {
 export type { PromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
+export { type ExtensionContext, toExtensionContext } from "../domain/extension-context.js"
 
 // ── Simple Parameter Types ──
 
@@ -512,7 +513,7 @@ const wrapFireAndForgetHandler =
 // ── Public API ──
 
 /** Setup context passed to the factory function. */
-export interface ExtensionContext {
+export interface ExtensionSetupContext {
   readonly cwd: string
   readonly source: string
   readonly home: string
@@ -562,7 +563,7 @@ const mergeShutdownHooks = (
  */
 export const extension = (
   id: string,
-  factory: (ext: ExtensionBuilder, ctx: ExtensionContext) => void | Promise<void>,
+  factory: (ext: ExtensionBuilder, ctx: ExtensionSetupContext) => void | Promise<void>,
 ): GentExtension => ({
   manifest: { id },
   setup: (ctx) =>
