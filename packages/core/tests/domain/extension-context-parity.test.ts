@@ -79,6 +79,15 @@ describe("ExtensionContext parity", () => {
         renameCurrent: () => Effect.succeed({ renamed: false }),
         estimateContextPercent: () => Effect.succeed(0),
         search: () => Effect.succeed([]),
+        listBranches: () => Effect.succeed([]),
+        createBranch: () => Effect.succeed({ branchId: "b" }),
+        forkBranch: () => Effect.succeed({ branchId: "b" }),
+        switchBranch: () => Effect.void,
+        createChildSession: () => Effect.succeed({ sessionId: "s", branchId: "b" }),
+        getChildSessions: () => Effect.succeed([]),
+        deleteSession: () => Effect.void,
+        deleteBranch: () => Effect.void,
+        deleteMessages: () => Effect.void,
       },
       interaction: {
         approve: () => Effect.die("stub"),
@@ -110,6 +119,15 @@ describe("ExtensionContext parity", () => {
     expect(ctx.session.renameCurrent("x")).toBeInstanceOf(Promise)
     expect(ctx.session.estimateContextPercent()).toBeInstanceOf(Promise)
     expect(ctx.session.search("x")).toBeInstanceOf(Promise)
+    expect(ctx.session.listBranches()).toBeInstanceOf(Promise)
+    expect(ctx.session.createBranch({})).toBeInstanceOf(Promise)
+    expect(ctx.session.forkBranch({ atMessageId: "m" as never })).toBeInstanceOf(Promise)
+    expect(ctx.session.switchBranch({ toBranchId: "b" as never })).toBeInstanceOf(Promise)
+    expect(ctx.session.createChildSession({})).toBeInstanceOf(Promise)
+    expect(ctx.session.getChildSessions()).toBeInstanceOf(Promise)
+    expect(ctx.session.deleteSession("s" as never)).toBeInstanceOf(Promise)
+    expect(ctx.session.deleteBranch("b" as never)).toBeInstanceOf(Promise)
+    expect(ctx.session.deleteMessages({})).toBeInstanceOf(Promise)
     expect(ctx.turn.queueFollowUp({ content: "x" })).toBeInstanceOf(Promise)
     expect(ctx.turn.interject({ content: "x" })).toBeInstanceOf(Promise)
   })
