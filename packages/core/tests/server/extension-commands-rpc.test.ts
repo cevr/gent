@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Agents } from "@gent/core/domain/agent"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { type ExtensionContext, toExtensionContext } from "@gent/core/domain/extension-context"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import {
@@ -30,7 +30,7 @@ describe("extension command RPCs", () => {
           {
             name: "greet",
             description: "Say hello",
-            handler: async (args: string, ctx: ExtensionHostContext) => {
+            handler: async (args: string, ctx: ExtensionContext) => {
               invoked.push({ args, sessionId: ctx.sessionId })
             },
           },
@@ -108,10 +108,11 @@ describe("extension command RPCs", () => {
           } as MakeExtensionHostContextDeps["eventPublisher"],
         }
 
-        const ctx = makeExtensionHostContext(
+        const hostCtx = makeExtensionHostContext(
           { sessionId: "test-session" as SessionId, branchId: "test-branch" as BranchId },
           hostDeps,
         )
+        const ctx = toExtensionContext(hostCtx)
         yield* Effect.promise(() => Promise.resolve(cmd.handler("world", ctx)))
       }).pipe(Effect.provide(deps)),
     )

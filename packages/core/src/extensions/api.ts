@@ -234,9 +234,13 @@ type AsyncTransformHandler<I, O> = (
   next: (input: I) => Promise<O>,
   ctx: ExtensionContext,
 ) => O | Promise<O>
-type AsyncFireAndForgetHandler<I> = (input: I, ctx: ExtensionContext) => void | Promise<void>
+type AsyncFireAndForgetHandler<I> = (
+  input: I,
+  next: (input: I) => Promise<void>,
+  ctx: ExtensionContext,
+) => void | Promise<void>
 
-interface _AsyncHookHandlers {
+interface AsyncHookHandlers {
   readonly "prompt.system": AsyncTransformHandler<SystemPromptInput, string>
   readonly "tool.execute": AsyncTransformHandler<ToolExecuteInput, unknown>
   readonly "permission.check": AsyncTransformHandler<PermissionCheckInput, PermissionResult>
@@ -256,12 +260,12 @@ export interface ExtensionBuilder {
   tool(def: SimpleToolDef | AnyToolDefinition): void
   /** Register an agent. Accepts SimpleAgentDef or full AgentDefinition. */
   agent(def: SimpleAgentDef | AgentDefinition): void
-  /** Register a slash command. Handler receives args and ExtensionHostContext. */
+  /** Register a slash command. Handler receives args and ExtensionContext (Promise-based). */
   command(
     name: string,
     options: {
       description?: string
-      handler: (args: string, ctx: ExtensionHostContext) => void | Promise<void>
+      handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
     },
   ): void
   /** Add a static system prompt section. */
@@ -279,13 +283,13 @@ export interface ExtensionBuilder {
   /** Register a shutdown hook. Multiple calls compose in order. */
   onShutdown(fn: () => void | Promise<void>): void
 
-  // ── Imperative side effects (usable from ext.on() handlers) ──
+  // ── Imperative side effects (usable from ext.async.on() handlers) ──
 
   /** Send a follow-up message after the current turn completes.
-   *  Only usable from ext.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+   *  Only usable from ext.async.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
   sendMessage(content: string, metadata?: MessageMetadata): void
   /** Inject a user message mid-turn (interrupts the current turn).
-   *  Only usable from ext.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+   *  Only usable from ext.async.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
   sendUserMessage(content: string): void
   /** @deprecated Use sendMessage() instead. */
   queueFollowUp(content: string, metadata?: MessageMetadata): void
@@ -318,6 +322,12 @@ export interface ExtensionBuilder {
   /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
   onShutdownEffect(effect: Effect.Effect<void>): void
 
+  // ── Async surface (Promise-based handlers with ExtensionContext) ──
+
+  /** Promise-based counterpart to Effect-native methods.
+   *  Same capabilities, async/Promise ergonomics. */
+  readonly async: AsyncExtensionBuilder
+
   // ── Event bus ──
 
   /** Channel-based event bus for extension communication. */
@@ -335,6 +345,19 @@ export interface ExtensionBuilder {
       }) => void | Promise<void> | Effect.Effect<void>,
     ): void
   }
+}
+
+export interface AsyncExtensionBuilder {
+  /** Register an async interceptor hook. Handler receives ExtensionContext (Promise-based). */
+  on<K extends keyof AsyncHookHandlers>(key: K, handler: AsyncHookHandlers[K]): void
+  /** Register a slash command. Handler receives ExtensionContext (Promise-based). */
+  command(
+    name: string,
+    options: {
+      description?: string
+      handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+    },
+  ): void
 }
 
 // ── Internal Helpers ──
@@ -458,7 +481,7 @@ const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknow
     }
   })
 
-const _wrapTransformHandler =
+const wrapTransformHandler =
   <I, O>(
     handler: AsyncTransformHandler<I, O>,
     hookKey: string,
@@ -486,7 +509,7 @@ const _wrapTransformHandler =
     ) as Effect.Effect<O>
   }
 
-const _wrapFireAndForgetHandler =
+const wrapFireAndForgetHandler =
   <I>(
     handler: AsyncFireAndForgetHandler<I>,
     hookKey: string,
@@ -498,11 +521,15 @@ const _wrapFireAndForgetHandler =
   ) => Effect.Effect<void>) =>
   (input, next, ctx) =>
     Effect.gen(function* () {
-      yield* next(input)
       const effects: ExtensionEffect[] = []
       effectBinder.bind(effects, hookKey)
+      // Bridge Effect→Promise for async handler — intentional runPromise inside Effect
+      // @effect-diagnostics-next-line runEffectInsideEffect:off
       yield* Effect.tryPromise({
-        try: () => Promise.resolve(handler(input, toExtensionContext(ctx))),
+        try: () => {
+          const effectNext = (i: I) => Effect.runPromise(next(i))
+          return Promise.resolve(handler(input, effectNext, toExtensionContext(ctx)))
+        },
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
       }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))
       yield* drainEffects(effects, hookKey, input)
@@ -585,7 +612,7 @@ export const extension = (
       // Stack is necessary because interceptor chains nest via next() — an outer
       // handler's buffer must survive while inner interceptors bind their own.
       const effectStack: Array<{ effects: ExtensionEffect[]; hookKey: string }> = []
-      const _effectBinder: EffectBinder = {
+      const effectBinder: EffectBinder = {
         bind: (effects, hookKey) => {
           effectStack.push({ effects, hookKey })
         },
@@ -694,6 +721,42 @@ export const extension = (
         jobs: (...entries) => jobs.push(...entries),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
+        async: {
+          on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
+            if (key === "turn.after") {
+              interceptors.push(
+                defineInterceptor(
+                  key,
+                  wrapFireAndForgetHandler(
+                    handler as AsyncFireAndForgetHandler<TurnAfterInput>,
+                    key,
+                    effectBinder,
+                  ),
+                ),
+              )
+            } else {
+              interceptors.push(
+                defineInterceptor(
+                  key,
+                  wrapTransformHandler(
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    handler as AsyncTransformHandler<any, any>,
+                    key,
+                    effectBinder,
+                  ) as never,
+                ),
+              )
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+          command: (
+            name: string,
+            options: {
+              description?: string
+              handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+            },
+          ) => commands.push({ name, description: options.description, handler: options.handler }),
+        },
         bus: {
           on: (pattern, handler) => busSubscriptions.push({ pattern, handler }),
         },

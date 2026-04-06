@@ -7,6 +7,7 @@ import type { Message, MessageMetadata } from "./message"
 import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
+import type { ExtensionContext } from "./extension-context"
 import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -321,7 +322,7 @@ export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any
 export interface CommandContribution {
   readonly name: string
   readonly description?: string
-  readonly handler: (args: string, ctx: ExtensionHostContext) => void | Promise<void>
+  readonly handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
 }
 
 // Provider Contribution — re-exported from dedicated file for backwards compatibility
