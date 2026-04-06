@@ -15,6 +15,16 @@ import {
   ToolError,
   ToolWarning,
 } from "../wide-event-boundary"
+import {
+  makeExtensionHostContext,
+  type MakeExtensionHostContextDeps,
+} from "../make-extension-host-context.js"
+import { AgentRunnerService } from "../../domain/agent.js"
+import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import { ExtensionTurnControl } from "../extensions/turn-control.js"
+import { Storage } from "../../storage/sqlite-storage.js"
+import { SearchStorage } from "../../storage/search-storage.js"
+import { EventPublisher } from "../../domain/event-publisher.js"
 
 export interface ToolRunnerService {
   readonly run: (
@@ -135,39 +145,69 @@ export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService
               return errorResult(toolCall, message)
             }
 
-            // Enrich context with platform, extension RPC, and approval primitive
-            const richCtx: ToolContext = {
-              ...ctx,
-              cwd: platform.cwd,
-              home: platform.home,
-              extension: {
-                send: (message, branchId) =>
-                  extensionStateRuntime.send(ctx.sessionId, message, branchId ?? ctx.branchId),
-                ask: (message, branchId) =>
-                  extensionStateRuntime.ask(ctx.sessionId, message, branchId ?? ctx.branchId),
-                getUiSnapshots: (branchId) =>
-                  extensionStateRuntime.getUiSnapshots(ctx.sessionId, branchId ?? ctx.branchId),
-                getUiSnapshot: <T>(extensionId: string, branchId?: typeof ctx.branchId) =>
-                  extensionStateRuntime
-                    .getUiSnapshots(ctx.sessionId, branchId ?? ctx.branchId)
-                    .pipe(
-                      Effect.map((snapshots) => {
-                        const match = snapshots.find((s) => s.extensionId === extensionId)
-                        return match?.model as T | undefined
-                      }),
-                    ),
-              },
-              interaction: {
-                approve: (params) =>
-                  approvalService.present(params, {
-                    sessionId: ctx.sessionId,
-                    branchId: ctx.branchId,
-                  }),
-                present: () => Effect.die("interaction.present not wired in ToolRunner"),
-                confirm: () => Effect.die("interaction.confirm not wired in ToolRunner"),
-                review: () => Effect.die("interaction.review not wired in ToolRunner"),
-              },
+            // Resolve services lazily to avoid circular Layer deps
+            // (AgentRunnerService depends on AgentLoop which depends on ToolRunner)
+            const lazyDeps = yield* Effect.all({
+              agentRunner: Effect.serviceOption(AgentRunnerService),
+              promptPresenter: Effect.serviceOption(PromptPresenter),
+              turnControl: Effect.serviceOption(ExtensionTurnControl),
+              storage: Effect.serviceOption(Storage),
+              searchStorage: Effect.serviceOption(SearchStorage),
+              eventPublisherSvc: Effect.serviceOption(EventPublisher),
+            })
+
+            const die = (label: string) => () => Effect.die(`${label} not available in ToolRunner`)
+            const hostDeps: MakeExtensionHostContextDeps = {
+              platform,
+              extensionStateRuntime,
+              approvalService,
+              promptPresenter:
+                lazyDeps.promptPresenter._tag === "Some"
+                  ? lazyDeps.promptPresenter.value
+                  : ({
+                      present: die("PromptPresenter"),
+                      confirm: die("PromptPresenter"),
+                      review: die("PromptPresenter"),
+                    } as MakeExtensionHostContextDeps["promptPresenter"]),
+              extensionRegistry,
+              turnControl:
+                lazyDeps.turnControl._tag === "Some"
+                  ? lazyDeps.turnControl.value
+                  : ({
+                      queueFollowUp: die("TurnControl"),
+                      interject: die("TurnControl"),
+                      bind: die("TurnControl"),
+                    } as MakeExtensionHostContextDeps["turnControl"]),
+              storage:
+                lazyDeps.storage._tag === "Some"
+                  ? lazyDeps.storage.value
+                  : ({} as MakeExtensionHostContextDeps["storage"]),
+              searchStorage:
+                lazyDeps.searchStorage._tag === "Some"
+                  ? lazyDeps.searchStorage.value
+                  : ({
+                      searchMessages: () => Effect.succeed([]),
+                    } as MakeExtensionHostContextDeps["searchStorage"]),
+              agentRunner:
+                lazyDeps.agentRunner._tag === "Some"
+                  ? lazyDeps.agentRunner.value
+                  : ({
+                      run: die("AgentRunnerService"),
+                    } as MakeExtensionHostContextDeps["agentRunner"]),
+              eventPublisher:
+                lazyDeps.eventPublisherSvc._tag === "Some"
+                  ? lazyDeps.eventPublisherSvc.value
+                  : ({
+                      publish: () => Effect.void,
+                      terminateSession: die("EventPublisher"),
+                    } as MakeExtensionHostContextDeps["eventPublisher"]),
             }
+
+            const hostCtx = makeExtensionHostContext(
+              { sessionId: ctx.sessionId, branchId: ctx.branchId, agentName: ctx.agentName },
+              hostDeps,
+            )
+            const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
 
             // Run tool.execute interceptor, falling back to direct tool execution
             const executeResult = yield* hooks

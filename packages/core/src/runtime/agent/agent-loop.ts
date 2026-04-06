@@ -25,6 +25,7 @@ import {
   AgentDefinition,
   AgentName,
   AgentRunError,
+  AgentRunnerService,
   resolveAgentModel,
   type AgentExecutionOverrides,
   type AgentName as AgentNameType,
@@ -51,6 +52,14 @@ import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/mes
 import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import {
+  makeExtensionHostContext,
+  type MakeExtensionHostContextDeps,
+} from "../make-extension-host-context.js"
+import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import { SearchStorage } from "../../storage/search-storage.js"
+import { RuntimePlatform } from "../runtime-platform.js"
+import { ApprovalService } from "../approval-service.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -479,45 +488,19 @@ const executeToolCalls = (params: {
           }),
         )
 
-        const die = (label: string) => () => Effect.die(`${label} called without ToolRunner wiring`)
+        // Thin context — ToolRunner.run() enriches this via makeExtensionHostContext
         const ctx: ToolContext = {
           sessionId: params.sessionId,
           branchId: params.branchId,
           toolCallId: toolCall.toolCallId,
           agentName: params.currentTurnAgent,
-          // Overridden by ToolRunner.Live with real values
           cwd: "",
           home: "",
-          extension: {
-            send: die("extension.send"),
-            ask: die("extension.ask"),
-            getUiSnapshots: die("extension.getUiSnapshots"),
-            getUiSnapshot: die("extension.getUiSnapshot"),
-          },
-          agent: {
-            get: die("agent.get"),
-            require: die("agent.require"),
-            run: die("agent.run"),
-            resolveDualModelPair: die("agent.resolveDualModelPair"),
-          },
-          session: {
-            listMessages: die("session.listMessages"),
-            getSession: die("session.getSession"),
-            getDetail: die("session.getDetail"),
-            renameCurrent: die("session.renameCurrent"),
-            estimateContextPercent: die("session.estimateContextPercent"),
-            search: die("session.search"),
-          },
-          interaction: {
-            approve: die("interaction.approve"),
-            present: die("interaction.present"),
-            confirm: die("interaction.confirm"),
-            review: die("interaction.review"),
-          },
-          turn: {
-            queueFollowUp: die("turn.queueFollowUp"),
-            interject: die("turn.interject"),
-          },
+          extension: {} as ToolContext["extension"],
+          agent: {} as ToolContext["agent"],
+          session: {} as ToolContext["session"],
+          interaction: {} as ToolContext["interaction"],
+          turn: {} as ToolContext["turn"],
         }
         const run = params.toolRunner
           .run(toolCall, ctx)
@@ -1342,46 +1325,60 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               )
             const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
 
-            // Stub ExtensionHostContext for interceptor threading.
-            // Interceptors don't use ctx until B5; tools get real ctx via ToolRunner.
-            const hostDie = (label: string) => () =>
-              Effect.die(`${label} called without host context wiring`)
-            const hostCtx: ExtensionHostContext = {
-              sessionId,
-              branchId,
-              cwd: "",
-              home: "",
-              extension: {
-                send: hostDie("extension.send"),
-                ask: hostDie("extension.ask"),
-                getUiSnapshots: hostDie("extension.getUiSnapshots"),
-                getUiSnapshot: hostDie("extension.getUiSnapshot"),
-              },
-              agent: {
-                get: hostDie("agent.get"),
-                require: hostDie("agent.require"),
-                run: hostDie("agent.run"),
-                resolveDualModelPair: hostDie("agent.resolveDualModelPair"),
-              },
-              session: {
-                listMessages: hostDie("session.listMessages"),
-                getSession: hostDie("session.getSession"),
-                getDetail: hostDie("session.getDetail"),
-                renameCurrent: hostDie("session.renameCurrent"),
-                estimateContextPercent: hostDie("session.estimateContextPercent"),
-                search: hostDie("session.search"),
-              },
-              interaction: {
-                approve: hostDie("interaction.approve"),
-                present: hostDie("interaction.present"),
-                confirm: hostDie("interaction.confirm"),
-                review: hostDie("interaction.review"),
-              },
-              turn: {
-                queueFollowUp: hostDie("turn.queueFollowUp"),
-                interject: hostDie("turn.interject"),
-              },
+            // Resolve services lazily — by the time makeLoop runs, all services
+            // exist in the ambient scope (including AgentRunnerService, which
+            // depends on AgentLoop and would create a circular Layer dep)
+            const hostDie = (label: string) => () => Effect.die(`${label} not available`)
+            const lazyDeps = yield* Effect.all({
+              platform: Effect.serviceOption(RuntimePlatform),
+              approvalService: Effect.serviceOption(ApprovalService),
+              promptPresenter: Effect.serviceOption(PromptPresenter),
+              searchStorage: Effect.serviceOption(SearchStorage),
+              agentRunner: Effect.serviceOption(AgentRunnerService),
+            })
+
+            const hostDeps: MakeExtensionHostContextDeps = {
+              platform:
+                lazyDeps.platform._tag === "Some"
+                  ? lazyDeps.platform.value
+                  : ({ cwd: "", home: "" } as MakeExtensionHostContextDeps["platform"]),
+              extensionStateRuntime,
+              approvalService:
+                lazyDeps.approvalService._tag === "Some"
+                  ? lazyDeps.approvalService.value
+                  : ({
+                      present: hostDie("ApprovalService"),
+                      storeResolution: () => {},
+                      respond: hostDie("ApprovalService"),
+                      rehydrate: hostDie("ApprovalService"),
+                    } as MakeExtensionHostContextDeps["approvalService"]),
+              promptPresenter:
+                lazyDeps.promptPresenter._tag === "Some"
+                  ? lazyDeps.promptPresenter.value
+                  : ({
+                      present: hostDie("PromptPresenter"),
+                      confirm: hostDie("PromptPresenter"),
+                      review: hostDie("PromptPresenter"),
+                    } as MakeExtensionHostContextDeps["promptPresenter"]),
+              extensionRegistry,
+              turnControl: extensionTurnControl,
+              storage,
+              searchStorage:
+                lazyDeps.searchStorage._tag === "Some"
+                  ? lazyDeps.searchStorage.value
+                  : ({
+                      searchMessages: () => Effect.succeed([]),
+                    } as MakeExtensionHostContextDeps["searchStorage"]),
+              agentRunner:
+                lazyDeps.agentRunner._tag === "Some"
+                  ? lazyDeps.agentRunner.value
+                  : ({
+                      run: hostDie("AgentRunnerService"),
+                    } as MakeExtensionHostContextDeps["agentRunner"]),
+              eventPublisher,
             }
+
+            const hostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
 
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
