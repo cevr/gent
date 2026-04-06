@@ -206,7 +206,6 @@ export interface ExtensionHarnessResult {
   readonly tools: Map<string, AnyToolDefinition>
   readonly agents: Map<string, AgentDefinition>
   readonly actor: AnyExtensionActorDefinition | undefined
-  readonly tagInjections: ExtensionSetup["tagInjections"]
   readonly hooks: ExtensionSetup["hooks"]
 }
 
@@ -238,7 +237,6 @@ export const createExtensionHarness = (
     tools,
     agents,
     actor: setup.actor,
-    tagInjections: setup.tagInjections,
     hooks: setup.hooks,
   }
 }

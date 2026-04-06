@@ -413,33 +413,7 @@ describe("ExtensionRegistry", () => {
     expect(names).not.toContain("write")
   })
 
-  test("tagInjections inject tools when tag matches", async () => {
-    const readTool = makeTool("read", "read")
-    const signalTool = makeTool("test_signal", "state")
-    const agent = new AgentDefinition({ name: "cowork" as never })
-
-    const registry = await buildRegistry([
-      makeExt("core", "builtin", { tools: [readTool] }),
-      {
-        ...makeExt("workflow", "builtin"),
-        setup: { tagInjections: [{ tag: "test-signal", tools: [signalTool] }] },
-      },
-    ])
-
-    // Without tag — signal tool not included
-    const { tools: toolsWithout } = await Effect.runPromise(
-      registry.resolveToolPolicy(agent, runCtx, []),
-    )
-    expect(toolsWithout.map((t) => t.name)).not.toContain("test_signal")
-
-    // With tag — signal tool injected
-    const { tools: toolsWith } = await Effect.runPromise(
-      registry.resolveToolPolicy(agent, { ...runCtx, tags: ["test-signal"] }, []),
-    )
-    expect(toolsWith.map((t) => t.name)).toContain("test_signal")
-  })
-
-  test("denied tools cannot be injected via tag or projection", async () => {
+  test("denied tools cannot be injected via projection", async () => {
     const readTool = makeTool("read", "read")
     const secretTool = makeTool("secret", "read")
     const agent = new AgentDefinition({

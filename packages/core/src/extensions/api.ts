@@ -48,7 +48,6 @@ import {
   type ExtensionEffect,
   type ProviderContribution,
   type ScheduledJobContribution,
-  type TagInjection,
 } from "../domain/extension.js"
 import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js"
 import {
@@ -92,7 +91,6 @@ export {
   type ExtensionInterceptorMap,
   type ProviderContribution,
   type ScheduledJobContribution,
-  type TagInjection,
   type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -292,8 +290,6 @@ export interface ExtensionBuilder {
   provider(provider: ProviderContribution): void
   /** Register durable host-owned scheduled jobs. */
   jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): void
-  /** Register a tag-conditional tool injection. */
-  tagInjection(injection: TagInjection): void
   /** Register an Effect-based startup hook. Composes with onStartup(). */
   onStartupEffect(effect: Effect.Effect<void>): void
   /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
@@ -557,7 +553,6 @@ export const extension = (
       const shutdownEffects: Array<Effect.Effect<void>> = []
       const providers: ProviderContribution[] = []
       const jobs: ScheduledJobContribution[] = []
-      const tagInjections: TagInjection[] = []
       const busSubscriptions: BusSubscriptionEntry[] = []
       const layers: Array<Layer.Layer<never, never, object>> = []
       let actorResult: AnyExtensionActorDefinition | undefined
@@ -724,7 +719,6 @@ export const extension = (
         },
         provider: (p) => providers.push(p),
         jobs: (...entries) => jobs.push(...entries),
-        tagInjection: (t) => tagInjections.push(t),
         onStartupEffect: (e) => startupEffects.push(e),
         onShutdownEffect: (e) => shutdownEffects.push(e),
         bus: {
@@ -765,7 +759,6 @@ export const extension = (
         ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
         ...(providers.length > 0 ? { providers } : {}),
         ...(jobs.length > 0 ? { jobs } : {}),
-        ...(tagInjections.length > 0 ? { tagInjections } : {}),
         ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
         ...(actorResult !== undefined ? { actor: actorResult } : {}),
         onStartup,

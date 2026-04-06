@@ -316,12 +316,6 @@ export interface ExtensionActorDefinition<
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any, any>
 
-/** Tag-conditional tool injection — declarative replacement for old tools.visible interceptor */
-export interface TagInjection {
-  readonly tag: string
-  readonly tools: ReadonlyArray<AnyToolDefinition>
-}
-
 // Provider Contribution — re-exported from dedicated file for backwards compatibility
 
 export type {
@@ -360,8 +354,6 @@ export interface ExtensionSetup {
   readonly layer?: Layer.Layer<never, never, object>
   /** Session-scoped stateful actor. Omit for stateless extensions. */
   readonly actor?: AnyExtensionActorDefinition
-  /** Declarative tag-conditional tool injections */
-  readonly tagInjections?: ReadonlyArray<TagInjection>
   /** Provider contributions — register AI provider implementations */
   readonly providers?: ReadonlyArray<ProviderContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */

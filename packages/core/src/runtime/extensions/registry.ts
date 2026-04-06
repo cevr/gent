@@ -10,7 +10,6 @@ import type {
   ProviderContribution,
   RunContext,
   ScheduledJobFailureInfo,
-  TagInjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
@@ -24,7 +23,6 @@ export interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
-  readonly tagInjections: ReadonlyArray<TagInjection>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
@@ -85,13 +83,6 @@ export const resolveExtensions = (
     (p) => p.id,
   )
 
-  const tagInjections: TagInjection[] = []
-  for (const ext of sorted) {
-    for (const injection of ext.setup.tagInjections ?? []) {
-      tagInjections.push(injection)
-    }
-  }
-
   const hooks = compileHooks(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
@@ -117,7 +108,6 @@ export const resolveExtensions = (
     agents,
     providers,
     promptSections: promptSectionsMap,
-    tagInjections,
     hooks,
     extensions: sorted,
     failedExtensions: mergedFailures,
@@ -137,46 +127,22 @@ export interface CompiledToolPolicy {
  *
  * Pipeline:
  * 1. Agent allow/deny filtering
- * 2. Tag-conditional injection
- * 3. Extension projection fragments (include/exclude/overrideSet)
- * 4. Re-apply agent deny list (extensions can't escape denials)
- * 5. Collect extension-contributed prompt sections
+ * 2. Extension projection fragments (include/exclude/overrideSet)
+ * 3. Re-apply agent deny list (extensions can't escape denials)
+ * 4. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
   allTools: ReadonlyArray<AnyToolDefinition>,
   agent: AgentDefinition,
   runContext: RunContext,
-  tagInjections: ReadonlyArray<TagInjection>,
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  // Build the tool universe — includes base tools plus any tag-injected tools
   const allToolsByName = new Map(allTools.map((t) => [t.name, t]))
 
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
 
-  // 2. Tag-conditional injection
-  const tags = runContext.tags
-  if (tags !== undefined && tags.length > 0) {
-    const tagSet = new Set(tags)
-    const existing = new Set(tools.map((t) => t.name))
-    for (const injection of tagInjections) {
-      if (tagSet.has(injection.tag)) {
-        for (const tool of injection.tools) {
-          if (!existing.has(tool.name)) {
-            tools.push(tool)
-            existing.add(tool.name)
-          }
-          // Expand the universe so projections can reference injected tools
-          if (!allToolsByName.has(tool.name)) {
-            allToolsByName.set(tool.name, tool)
-          }
-        }
-      }
-    }
-  }
-
-  // 3. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
+  // 2. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
   for (const projection of extensionProjections) {
     const policy = projection.toolPolicy
     if (policy === undefined) continue
@@ -232,7 +198,7 @@ export interface ExtensionRegistryService {
   // Tool resolution
   readonly getTool: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
   readonly listTools: () => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
-  /** Resolve tools + prompt sections for an agent turn, applying tag injections and extension projections. */
+  /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
     agent: AgentDefinition,
     runContext: RunContext,
@@ -278,13 +244,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
       listTools: () => Effect.succeed([...resolved.tools.values()]),
       resolveToolPolicy: (agent, runContext, extensionProjections) =>
         Effect.succeed(
-          compileToolPolicy(
-            [...resolved.tools.values()],
-            agent,
-            runContext,
-            resolved.tagInjections,
-            extensionProjections,
-          ),
+          compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
