@@ -280,9 +280,10 @@ const turnCounterActor = {
     state: TurnState,
     event: TurnEvent,
     initial: TurnState.Active({ turns: 0 }),
-  }).on(TurnState.Active, TurnEvent.Published, ({ state, event }) =>
-    event.event._tag === "TurnCompleted" ? TurnState.Active({ turns: state.turns + 1 }) : state,
-  ),
+  }).on(TurnState.Active, TurnEvent.Published, ({ state, event }) => {
+    const raw = event.event as { _tag?: string }
+    return raw._tag === "TurnCompleted" ? TurnState.Active({ turns: state.turns + 1 }) : state
+  }),
   mapEvent: (event) => TurnEvent.Published({ event }),
   snapshot: {
     schema: Schema.Struct({ turns: Schema.Number }),
