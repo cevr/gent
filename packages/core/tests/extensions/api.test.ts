@@ -11,6 +11,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { reducerActor } from "./helpers/reducer-actor"
 
 describe("extension api", () => {
@@ -127,6 +128,96 @@ describe("extension api", () => {
         expect(sections.some((section) => section.id === "test-section")).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
+  })
+
+  test("ext.command() stores commands discoverable via listCommands", async () => {
+    const ext = extension("cmd-test", (b) => {
+      b.command("deploy", {
+        description: "Deploy the app",
+        handler: async (_args, _ctx) => {},
+      })
+      b.command("rollback", { handler: async () => {} })
+    })
+
+    const loaded = {
+      manifest: ext.manifest,
+      kind: "user" as const,
+      sourcePath: "test",
+      setup: await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+    }
+
+    const resolved = resolveExtensions([loaded])
+    const layer = ExtensionRegistry.fromResolved(resolved)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* ExtensionRegistry
+        const cmds = yield* registry.listCommands()
+        expect(cmds).toHaveLength(2)
+        expect(cmds[0]?.name).toBe("deploy")
+        expect(cmds[0]?.description).toBe("Deploy the app")
+        expect(cmds[1]?.name).toBe("rollback")
+        expect(cmds[1]?.description).toBeUndefined()
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("ext.on() handlers receive ExtensionHostContext", async () => {
+    let receivedCtx: unknown = undefined
+    const ext = extension("ctx-forward-test", (b) => {
+      b.on("turn.after", (_input, ctx) => {
+        receivedCtx = ctx
+      })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const loaded = {
+      manifest: ext.manifest,
+      kind: "user" as const,
+      sourcePath: "test",
+      setup,
+    }
+
+    const resolved = resolveExtensions([loaded])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    await Effect.runPromise(
+      compiled.runInterceptor(
+        "turn.after",
+        {
+          durationMs: 0,
+          tokenUsage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 },
+          agentName: "cowork" as never,
+          interrupted: false,
+        },
+        () => Effect.void,
+        stubCtx,
+      ),
+    )
+
+    expect(receivedCtx).toBeDefined()
+    expect((receivedCtx as { sessionId: string }).sessionId).toBe("s")
+  })
+
+  test("ext.exec() runs shell commands", async () => {
+    const ext = extension("exec-test", (b) => {
+      b.onStartup(async () => {
+        const result = await b.exec("echo", ["hello"])
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout.trim()).toBe("hello")
+        expect(result.stderr).toBe("")
+      })
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    await Effect.runPromise(setup.onStartup!)
   })
 })
 
