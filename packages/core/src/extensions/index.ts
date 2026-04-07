@@ -19,6 +19,7 @@ import { MistralExtension } from "./mistral/index.js"
 import { HandoffExtension } from "./handoff.js"
 import { PrinciplesExtension } from "./principles/index.js"
 import { ReviewExtension } from "./review/index.js"
+import { CounselExtension } from "./counsel/index.js"
 
 export {
   FsToolsExtension,
@@ -36,6 +37,7 @@ export {
   HandoffExtension,
   PrinciplesExtension,
   ReviewExtension,
+  CounselExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -54,6 +56,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   MemoryExtension,
   PrinciplesExtension,
   ReviewExtension,
+  CounselExtension,
   AnthropicExtension,
   OpenAIExtension,
   BedrockExtension,
