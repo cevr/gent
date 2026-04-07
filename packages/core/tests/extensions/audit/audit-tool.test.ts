@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { AuditTool } from "@gent/core/extensions/workflow-tools/audit"
+import { AuditTool } from "@gent/core/extensions/audit/audit-tool"
 import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"

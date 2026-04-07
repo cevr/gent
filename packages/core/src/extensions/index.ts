@@ -2,11 +2,11 @@ import type { GentExtension } from "../domain/extension.js"
 import { FsToolsExtension } from "./fs-tools/index.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { NetworkToolsExtension } from "./network-tools/index.js"
-import { SubagentToolsExtension } from "./subagent-tools/index.js"
+import { DelegateExtension } from "./delegate/index.js"
 import { InteractionToolsExtension } from "./interaction-tools/index.js"
 import { SessionToolsExtension } from "./session-tools/index.js"
 import { TaskExtension } from "./task-tools/index.js"
-import { WorkflowToolsExtension } from "./workflow-tools/index.js"
+import { AuditExtension } from "./audit/index.js"
 import { AgentsExtension } from "./agents.js"
 import { PlanExtension } from "./plan.js"
 import { AutoExtension } from "./auto.js"
@@ -26,11 +26,11 @@ export {
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
-  SubagentToolsExtension,
+  DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
   TaskExtension,
-  WorkflowToolsExtension,
+  AuditExtension,
   AgentsExtension,
   PlanExtension,
   AutoExtension,
@@ -47,11 +47,11 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
-  SubagentToolsExtension,
+  DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
   TaskExtension,
-  WorkflowToolsExtension,
+  AuditExtension,
   AgentsExtension,
   PlanExtension,
   AutoExtension,
