@@ -126,7 +126,7 @@ export const Agents = {
 
   deepwork: defineAgent({
     name: "deepwork",
-    description: "Adversarial reviewer — used by counsel tool for cross-vendor review",
+    description: "Deep analysis with thorough reasoning — alternative model perspective",
     model: "openai/gpt-5.4" as ModelId,
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
