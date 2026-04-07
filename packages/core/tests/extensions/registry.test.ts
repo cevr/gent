@@ -8,6 +8,7 @@ import type {
   RunContext,
 } from "@gent/core/domain/extension"
 import type { AnyToolDefinition, ToolAction } from "@gent/core/domain/tool"
+import type { PromptSectionInput } from "@gent/core/domain/prompt"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
@@ -36,6 +37,7 @@ const makeExt = (
     agents?: AgentDefinition[]
     hooks?: ExtensionHooks
     providers?: ProviderContribution[]
+    promptSections?: PromptSectionInput[]
   },
 ): LoadedExtension => ({
   manifest: { id },
@@ -46,6 +48,7 @@ const makeExt = (
     agents: opts?.agents,
     hooks: opts?.hooks,
     providers: opts?.providers,
+    promptSections: opts?.promptSections,
   },
 })
 
@@ -471,5 +474,49 @@ describe("ExtensionRegistry", () => {
 
     const providers = await Effect.runPromise(registry.listProviders())
     expect(providers.length).toBe(0)
+  })
+
+  test("static prompt sections are returned as-is", async () => {
+    const registry = await buildRegistry([
+      makeExt("@gent/test", "builtin", {
+        promptSections: [{ id: "test", content: "Hello", priority: 50 }],
+      }),
+    ])
+    const sections = await Effect.runPromise(registry.listPromptSections())
+    expect(sections.length).toBe(1)
+    expect(sections[0]?.id).toBe("test")
+    expect(sections[0]?.content).toBe("Hello")
+    expect(sections[0]?.priority).toBe(50)
+  })
+
+  test("dynamic prompt sections are resolved", async () => {
+    const registry = await buildRegistry([
+      makeExt("@gent/test", "builtin", {
+        promptSections: [
+          { id: "dynamic", priority: 80, resolve: Effect.succeed("Dynamic content") },
+        ],
+      }),
+    ])
+    const sections = await Effect.runPromise(registry.listPromptSections())
+    expect(sections.length).toBe(1)
+    expect(sections[0]?.id).toBe("dynamic")
+    expect(sections[0]?.content).toBe("Dynamic content")
+    expect(sections[0]?.priority).toBe(80)
+  })
+
+  test("mixed static and dynamic sections", async () => {
+    const registry = await buildRegistry([
+      makeExt("@gent/test", "builtin", {
+        promptSections: [
+          { id: "static", content: "Static", priority: 10 },
+          { id: "dynamic", priority: 20, resolve: Effect.succeed("Resolved") },
+        ],
+      }),
+    ])
+    const sections = await Effect.runPromise(registry.listPromptSections())
+    expect(sections.length).toBe(2)
+    const ids = sections.map((s) => s.id)
+    expect(ids).toContain("static")
+    expect(ids).toContain("dynamic")
   })
 })

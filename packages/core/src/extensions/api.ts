@@ -63,7 +63,7 @@ import {
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { toExtensionContext, type ExtensionContext } from "../domain/extension-context.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
-import type { PromptSection } from "../domain/prompt.js"
+import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
 import type { PermissionResult } from "../domain/permission.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
@@ -124,7 +124,7 @@ export {
   type AnyExtensionRequestMessage,
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
-export type { PromptSection } from "../domain/prompt.js"
+export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 export { type ExtensionContext, toExtensionContext } from "../domain/extension-context.js"
@@ -272,8 +272,8 @@ export interface ExtensionBuilder {
       handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
     },
   ): void
-  /** Add a static system prompt section. */
-  promptSection(section: PromptSection): void
+  /** Add a prompt section. Static or dynamic (Effect<PromptSection> for service access). */
+  promptSection(section: PromptSectionInput): void
   /** Register an Effect-native interceptor hook. */
   on<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]): void
   /** Execute a shell command. Returns stdout, stderr, and exitCode. */
@@ -597,7 +597,7 @@ export const extension = (
       const tools: AnyToolDefinition[] = []
       const agents: AgentDefinition[] = []
       const commands: CommandContribution[] = []
-      const promptSections: PromptSection[] = []
+      const promptSections: PromptSectionInput[] = []
       const interceptors: ExtensionInterceptorDescriptor[] = []
       const startupFns: Array<() => void | Promise<void>> = []
       const shutdownFns: Array<() => void | Promise<void>> = []

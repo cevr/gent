@@ -12,7 +12,11 @@ import type {
   RunContext,
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import {
+  isDynamicPromptSection,
+  type PromptSection,
+  type PromptSectionInput,
+} from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
@@ -23,7 +27,7 @@ export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
-  readonly promptSections: ReadonlyMap<string, PromptSection>
+  readonly promptSections: ReadonlyMap<string, PromptSectionInput>
   readonly commands: ReadonlyArray<CommandContribution>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -310,7 +314,16 @@ export class ExtensionRegistry extends ServiceMap.Service<
             "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
-      listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
+      listPromptSections: () =>
+        Effect.forEach([...resolved.promptSections.values()], (section) =>
+          isDynamicPromptSection(section)
+            ? Effect.map(section.resolve, (content) => ({
+                id: section.id,
+                content,
+                priority: section.priority,
+              }))
+            : Effect.succeed(section),
+        ),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       hooks: resolved.hooks,

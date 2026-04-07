@@ -8,7 +8,7 @@ import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
 import type { ExtensionContext } from "./extension-context"
-import type { PromptSection } from "./prompt.js"
+import type { PromptSection, PromptSectionInput } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -377,8 +377,9 @@ export interface ExtensionSetup {
   readonly providers?: ReadonlyArray<ProviderContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
-  /** Static prompt sections — merged into the base system prompt. Later scope shadows by section id. */
-  readonly promptSections?: ReadonlyArray<PromptSection>
+  /** Prompt sections — merged into the base system prompt. Later scope shadows by section id.
+   *  Can be static PromptSection or Effect<PromptSection> for sections needing service access. */
+  readonly promptSections?: ReadonlyArray<PromptSectionInput>
   /** Bus channel subscriptions — registered at startup time.
    *  Each entry: { pattern, handler } where handler receives BusEnvelope.
    *  Handler can return void, Promise<void>, or Effect<void>. */
