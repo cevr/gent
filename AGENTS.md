@@ -52,6 +52,7 @@ bun run --cwd apps/tui dev sessions
 - **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal provider for lifecycle assertions** - Use `createSignalProvider(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **DebugProvider({ delayMs })** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
+- **Ephemeral runtime service capture** - `buildEphemeralLayer` in `agent-runner.ts` uses `Effect.services()` + `Layer.succeedServices()` to forward the full parent ServiceMap. When building local services on top, use `Layer.merge(parentLayer, localDeps)` — **last wins** in Effect v4, so local overrides must come second. Getting this backwards causes ephemeral runs to silently use parent storage/events.
 
 ## Architecture
 
