@@ -1,13 +1,27 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Ref, Schema } from "effect"
 import { ExtensionMessage, ExtensionProtocolError } from "@gent/core/domain/extension-protocol"
-import { EventStore, SessionStarted } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
+import {
+  BaseEventStore,
+  EventStore,
+  SessionStarted,
+  TaskCompleted,
+  TurnCompleted,
+} from "@gent/core/domain/event"
+import type { AgentEvent, EventStoreService } from "@gent/core/domain/event"
+import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
+import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import { reducerActor } from "./helpers/reducer-actor"
+
+// ============================================================================
+// Shared fixtures
+// ============================================================================
 
 const sessionId = "test-session" as SessionId
 const branchId = "test-branch" as BranchId
@@ -25,12 +39,23 @@ const makeCounterActor = (id: string) =>
     derive: (state) => ({ uiModel: state }),
   })
 
+const makeCounterExtension = (id: string): LoadedExtension => ({
+  manifest: { id },
+  kind: "builtin",
+  sourcePath: "builtin",
+  setup: { actor: makeCounterActor(id) },
+})
+
 const makeRuntimeLayer = (extensions: LoadedExtension[]) =>
   Layer.mergeAll(
     ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
     EventStore.Memory,
     testLayer,
   )
+
+// ============================================================================
+// spawnMachineExtensionRef — actor boundary
+// ============================================================================
 
 describe("spawnMachineExtensionRef", () => {
   it.live("publish advances state and epoch", () =>
@@ -148,6 +173,10 @@ describe("spawnMachineExtensionRef", () => {
     }),
   )
 })
+
+// ============================================================================
+// ExtensionStateRuntime — supervisor behavior
+// ============================================================================
 
 describe("ExtensionStateRuntime", () => {
   it.live("healthy actor still runs when another actor fails during spawn", () => {
@@ -458,5 +487,289 @@ describe("ExtensionStateRuntime", () => {
         }
       }
     }).pipe(Effect.provide(layer))
+  })
+
+  it.live("multiple extensions receive same event", () => {
+    const layer = makeRuntimeLayer([
+      makeCounterExtension("counter-a"),
+      makeCounterExtension("counter-b"),
+    ])
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+        sessionId,
+        branchId,
+      })
+
+      const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+      expect(snapshots.length).toBe(2)
+
+      const a = snapshots.find((s) => s.extensionId === "counter-a")
+      const b = snapshots.find((s) => s.extensionId === "counter-b")
+      expect(a).toBeDefined()
+      expect(b).toBeDefined()
+      expect((a!.model as { count: number }).count).toBe(1)
+      expect((b!.model as { count: number }).count).toBe(1)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("terminated actor restarts fresh on next event", () => {
+    const layer = makeRuntimeLayer([makeCounterExtension("ephemeral")])
+
+    return Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+      const snap1 = yield* runtime.getUiSnapshots(sessionId, branchId)
+      expect(snap1.length).toBe(1)
+
+      yield* runtime.terminateAll(sessionId)
+
+      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+        sessionId,
+        branchId,
+      })
+      const snap2 = yield* runtime.getUiSnapshots(sessionId, branchId)
+      expect((snap2[0]!.model as { count: number }).count).toBe(1)
+    }).pipe(Effect.provide(layer))
+  })
+})
+
+// ============================================================================
+// EventPublisher — event routing
+// ============================================================================
+
+describe("event routing", () => {
+  interface RecorderState {
+    readonly seen: ReadonlyArray<string>
+  }
+
+  const RecorderSchema = Schema.Struct({ seen: Schema.Array(Schema.String) })
+
+  const recorderReducer = reducerActor<RecorderState>({
+    id: "test-recorder",
+    initial: { seen: [] },
+    stateSchema: RecorderSchema,
+    uiModelSchema: RecorderSchema,
+    reduce: (state, event): ReduceResult<RecorderState> => ({
+      state: { seen: [...state.seen, event._tag] },
+    }),
+    derive: (state) => ({ uiModel: state }),
+  })
+
+  const recorderExtension: LoadedExtension = {
+    manifest: { id: "test-recorder" },
+    kind: "builtin",
+    sourcePath: "builtin",
+    setup: { actor: recorderReducer },
+  }
+
+  interface SnapshotCounterState {
+    readonly snapshotsSeen: number
+  }
+
+  const SnapshotCounterSchema = Schema.Struct({ snapshotsSeen: Schema.Number })
+
+  const snapshotCounterReducer = reducerActor<SnapshotCounterState>({
+    id: "snapshot-counter",
+    initial: { snapshotsSeen: 0 },
+    stateSchema: SnapshotCounterSchema,
+    uiModelSchema: SnapshotCounterSchema,
+    reduce: (state, event): ReduceResult<SnapshotCounterState> => {
+      if (event._tag === "ExtensionUiSnapshot") {
+        return { state: { snapshotsSeen: state.snapshotsSeen + 1 } }
+      }
+      if (event._tag === "TurnCompleted") {
+        return { state: { snapshotsSeen: state.snapshotsSeen } }
+      }
+      return { state }
+    },
+    derive: (state) => ({ uiModel: state }),
+  })
+
+  const snapshotCounterExtension: LoadedExtension = {
+    manifest: { id: "snapshot-counter" },
+    kind: "builtin",
+    sourcePath: "builtin",
+    setup: { actor: snapshotCounterReducer },
+  }
+
+  const makeRoutingLayer = (extensions: LoadedExtension[]) => {
+    const published = Effect.runSync(Ref.make<AgentEvent[]>([]))
+    const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions).pipe(
+      Layer.provideMerge(ExtensionTurnControl.Test()),
+    )
+    const baseService: EventStoreService = {
+      publish: (event) => Ref.update(published, (events) => [...events, event]).pipe(Effect.asVoid),
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
+    }
+    const baseLayer = Layer.merge(
+      Layer.succeed(BaseEventStore, baseService),
+      Layer.succeed(EventStore, baseService),
+    )
+    const servicesLayer = Storage.Test()
+    const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
+    const fullLayer = Layer.mergeAll(combinedBase, eventPublisherLayer)
+    return { published, fullLayer }
+  }
+
+  it.live("events reach extension reduce — recorder sees every event _tag", () => {
+    const { fullLayer } = makeRoutingLayer([recorderExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+      yield* eventPublisher.publish(
+        new TaskCompleted({ sessionId, branchId, taskId: "t-1" as TaskId }),
+      )
+      yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 100 }))
+
+      const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+      const recorderSnapshot = snapshots.find((s) => s.extensionId === "test-recorder")
+      expect(recorderSnapshot).toBeDefined()
+      const model = recorderSnapshot!.model as RecorderState
+
+      expect(model.seen).toContain("SessionStarted")
+      expect(model.seen).toContain("TaskCompleted")
+      expect(model.seen).toContain("TurnCompleted")
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("UI snapshots are published when state changes", () => {
+    const { published, fullLayer } = makeRoutingLayer([recorderExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+
+      const events = yield* Ref.get(published)
+      const snapshots = events.filter((e) => e._tag === "ExtensionUiSnapshot")
+      expect(snapshots.length).toBeGreaterThan(0)
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("ExtensionUiSnapshot does not recurse", () => {
+    const { published, fullLayer } = makeRoutingLayer([snapshotCounterExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }))
+
+      const events = yield* Ref.get(published)
+      const snapshotCount = events.filter((e) => e._tag === "ExtensionUiSnapshot").length
+
+      const actorSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+      const counter = actorSnapshots.find((s) => s.extensionId === "snapshot-counter")
+      expect(counter).toBeDefined()
+      const model = counter!.model as SnapshotCounterState
+      expect(model.snapshotsSeen).toBe(0)
+      expect(snapshotCount).toBe(1)
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("invalid uiModel is dropped when schema validation fails", () => {
+    const strictSchema = Schema.Struct({ count: Schema.Number, label: Schema.String })
+    const badModelActor = reducerActor({
+      id: "bad-model",
+      initial: { count: 0 },
+      reduce: (state: { count: number }, event): ReduceResult<{ count: number }> => {
+        if (event._tag === "TurnCompleted") return { state: { count: state.count + 1 } }
+        return { state }
+      },
+      derive: (state: { count: number }) => ({ uiModel: { count: state.count } }),
+      uiModelSchema: strictSchema,
+    })
+
+    const badModelExtension: LoadedExtension = {
+      manifest: { id: "bad-model" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { actor: badModelActor },
+    }
+
+    const { fullLayer } = makeRoutingLayer([badModelExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }))
+
+      const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+      const badSnapshot = snapshots.find((s) => s.extensionId === "bad-model")
+      expect(badSnapshot).toBeUndefined()
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("valid uiModel passes schema validation and appears in snapshots", () => {
+    const { fullLayer } = makeRoutingLayer([recorderExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+
+      const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+      const recorder = snapshots.find((s) => s.extensionId === "test-recorder")
+      expect(recorder).toBeDefined()
+      expect((recorder!.model as RecorderState).seen).toContain("SessionStarted")
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("crashing derive is isolated from other extensions", () => {
+    const crashingDerive = reducerActor({
+      id: "crashing-derive",
+      initial: { value: 0 },
+      reduce: (state: { value: number }) => ({ state: { value: state.value + 1 } }),
+      derive: (state: { value: number }, ctx?) => {
+        if (ctx === undefined) throw new Error("ctx.agent required")
+        return { uiModel: { value: state.value } }
+      },
+    })
+    const crashingExtension: LoadedExtension = {
+      manifest: { id: "crashing-derive" },
+      kind: "builtin",
+      sourcePath: "test",
+      setup: { actor: crashingDerive },
+    }
+    const { fullLayer } = makeRoutingLayer([recorderExtension, crashingExtension])
+
+    return Effect.gen(function* () {
+      const eventPublisher = yield* EventPublisher
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+
+      const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
+      const recorder = snapshots.find((s) => s.extensionId === "test-recorder")
+      expect(recorder).toBeDefined()
+      const crashing = snapshots.find((s) => s.extensionId === "crashing-derive")
+      expect(crashing).toBeUndefined()
+    }).pipe(Effect.provide(fullLayer))
+  })
+
+  it.live("events without branchId skip snapshot publication but still reduce", () => {
+    const { fullLayer } = makeRoutingLayer([recorderExtension])
+
+    return Effect.gen(function* () {
+      const stateRuntime = yield* ExtensionStateRuntime
+
+      const changed = yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId: undefined,
+      })
+      expect(changed).toBe(true)
+    }).pipe(Effect.provide(fullLayer))
   })
 })
