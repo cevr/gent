@@ -73,6 +73,20 @@ export class ApprovalService extends ServiceMap.Service<ApprovalService, Approva
       }),
     )
 
+  /** Auto-resolves all approval requests without human interaction.
+   *  - ask-user requests → cancelled (don't fabricate user answers)
+   *  - all other requests (approval, confirm, review) → approved */
+  static LiveAutoResolve: Layer.Layer<ApprovalService> = Layer.succeed(ApprovalService, {
+    present: (params) => {
+      const meta = params.metadata as { type?: string } | undefined
+      const isAskUser = meta?.type === "ask-user"
+      return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
+    },
+    storeResolution: () => {},
+    respond: () => Effect.void,
+    rehydrate: () => Effect.void,
+  })
+
   static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
     const queue = [...(decisions ?? [{ approved: true }])]
     return Layer.succeed(ApprovalService, {
