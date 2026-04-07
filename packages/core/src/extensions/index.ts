@@ -17,6 +17,7 @@ import { BedrockExtension } from "./bedrock/index.js"
 import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
 import { HandoffExtension } from "./handoff.js"
+import { PrinciplesExtension } from "./principles/index.js"
 
 export {
   FsToolsExtension,
@@ -32,6 +33,7 @@ export {
   AutoExtension,
   MemoryExtension,
   HandoffExtension,
+  PrinciplesExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -48,6 +50,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   PlanExtension,
   AutoExtension,
   MemoryExtension,
+  PrinciplesExtension,
   AnthropicExtension,
   OpenAIExtension,
   BedrockExtension,
