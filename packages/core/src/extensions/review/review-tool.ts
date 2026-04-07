@@ -1,10 +1,14 @@
 import { Effect, Schema } from "effect"
-import { getDurableAgentRunSessionId, type AgentDefinition } from "../../domain/agent.js"
+import {
+  defineAgent,
+  getDurableAgentRunSessionId,
+  type AgentDefinition,
+} from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { requireText, runCommand as runCommandBase } from "../../runtime/workflow-helpers.js"
 
-export class CodeReviewError extends Schema.TaggedErrorClass<CodeReviewError>()("CodeReviewError", {
+export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -21,7 +25,7 @@ export type ReviewComment = typeof ReviewComment.Type
 
 export const ReviewOutput = Schema.Array(ReviewComment)
 
-export const CodeReviewParams = Schema.Struct({
+export const ReviewParams = Schema.Struct({
   description: Schema.optional(
     Schema.String.annotate({
       description: "What changed and why — guides the review focus",
@@ -49,6 +53,38 @@ export const CodeReviewParams = Schema.Struct({
   ),
 })
 
+const REVIEW_AGENT_PROMPT = `
+Reviewer agent. Examine code changes for bugs, security issues, and improvements.
+Run git diff or read specified files, then produce a structured review.
+
+Output format: JSON array of comments. Each comment:
+- file: path to file
+- line: line number (optional)
+- severity: critical | high | medium | low
+- type: bug | suggestion | style
+- text: description of the issue
+- fix: suggested fix (optional)
+
+Severity definitions:
+- critical: will cause data loss, security breach, or crash in production
+- high: likely bug or regression that affects correctness
+- medium: code smell, missed edge case, or maintainability concern
+- low: style, naming, or minor improvement
+
+Ground every finding in a specific file and line.
+Prioritize root cause over symptoms.
+Flag backwards compat / legacy shims as architectural issues.
+
+Only output the JSON array, no other text.
+`.trim()
+
+const reviewAgent = defineAgent({
+  name: "review-worker",
+  allowedTools: ["grep", "glob", "read", "memory_search"],
+  systemPromptAddendum: REVIEW_AGENT_PROMPT,
+  persistence: "ephemeral",
+})
+
 const decodeReviewComments = (text: string) =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewOutput))(text).pipe(
     Effect.catchEager(() => Effect.succeed([])),
@@ -66,7 +102,7 @@ const runShellCommand = (cmd: string[], cwd: string) =>
   runCommandBase(cmd, cwd).pipe(
     Effect.filterOrFail(
       (out) => out !== "",
-      () => new CodeReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
+      () => new ReviewError({ message: `Failed to run command: ${cmd.join(" ")}` }),
     ),
   )
 
@@ -174,7 +210,7 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
 
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   ctx: ExtensionHostContext
-  reviewer: AgentDefinition
+  worker: AgentDefinition
   toolCallId?: string
   reviewInput: string
   description?: string
@@ -189,7 +225,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
   const runAgent = (prompt: string, modelId: typeof modelA) =>
     ctx.agent.run({
-      agent: params.reviewer,
+      agent: params.worker,
       prompt,
       toolCallId: params.toolCallId as never,
       overrides: { ...reviewOverrides, modelId },
@@ -234,8 +270,8 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   }
 })
 
-export const CodeReviewTool = defineTool({
-  name: "code_review",
+export const ReviewTool = defineTool({
+  name: "review",
   action: "delegate" as const,
   concurrency: "serial" as const,
   description:
@@ -244,14 +280,13 @@ export const CodeReviewTool = defineTool({
   promptGuidelines: [
     "report mode for read-only review, fix mode for single-cycle review+apply",
     "Use report mode as a per-batch gate: after implementation, before commit",
-    "For iterative review loops, start @gent/auto then call code_review each iteration",
+    "For iterative review loops, start @gent/auto then call review each iteration",
     "Pass description to guide review focus",
   ],
-  params: CodeReviewParams,
-  execute: Effect.fn("CodeReviewTool.execute")(function* (params, ctx: ToolContext) {
+  params: ReviewParams,
+  execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolContext) {
     const mode = params.mode ?? "report"
 
-    const reviewer = yield* ctx.agent.require("reviewer")
     const callerAgentName = ctx.agentName ?? "cowork"
     const executor = yield* ctx.agent.require(callerAgentName)
 
@@ -267,7 +302,7 @@ export const CodeReviewTool = defineTool({
     // Adversarial review cycle (always runs)
     const report = yield* runReviewCycle({
       ctx,
-      reviewer,
+      worker: reviewAgent,
       toolCallId: ctx.toolCallId,
       reviewInput,
       description: params.description,

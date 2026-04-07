@@ -194,7 +194,7 @@ describe("loadTuiExtensions integration", () => {
     expect(resolved.renderers.has("glob")).toBe(true)
     expect(resolved.renderers.has("webfetch")).toBe(true)
     expect(resolved.renderers.has("delegate")).toBe(true)
-    expect(resolved.renderers.has("code_review")).toBe(true)
+    expect(resolved.renderers.has("review")).toBe(true)
     expect(resolved.renderers.has("search_sessions")).toBe(true)
     expect(resolved.renderers.has("read_session")).toBe(true)
 

@@ -106,31 +106,6 @@ Finder agent. Multi-step codebase search specialist. Chain grep/read/glob to ans
 Report file paths and line numbers. Be exhaustive but concise.
 `.trim()
 
-export const REVIEWER_PROMPT = `
-Reviewer agent. Examine code changes for bugs, security issues, and improvements.
-Run git diff or read specified files, then produce a structured review.
-
-Output format: JSON array of comments. Each comment:
-- file: path to file
-- line: line number (optional)
-- severity: critical | high | medium | low
-- type: bug | suggestion | style
-- text: description of the issue
-- fix: suggested fix (optional)
-
-Severity definitions:
-- critical: will cause data loss, security breach, or crash in production
-- high: likely bug or regression that affects correctness
-- medium: code smell, missed edge case, or maintainability concern
-- low: style, naming, or minor improvement
-
-Ground every finding in a specific file and line.
-Prioritize root cause over symptoms.
-Flag backwards compat / legacy shims as architectural issues.
-
-Only output the JSON array, no other text.
-`.trim()
-
 export const AUDITOR_PROMPT = `
 Auditor agent. Audit code for a specific concern category.
 Read files, identify issues, produce concrete findings.
@@ -209,15 +184,6 @@ export const Agents = {
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: FINDER_PROMPT,
-    persistence: "ephemeral",
-  }),
-
-  reviewer: defineAgent({
-    name: "reviewer",
-    description: "Structured code review with severity-graded comments",
-    model: "openai/gpt-5.4-mini" as ModelId,
-    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
-    systemPromptAddendum: REVIEWER_PROMPT,
     persistence: "ephemeral",
   }),
 

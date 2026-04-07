@@ -51,7 +51,7 @@ const createParentTurnMessages = (
   params: DebugScenarioParams,
   iteration: number,
   delegateToolCallId: ToolCallId,
-  codeReviewToolCallId: ToolCallId,
+  reviewToolCallId: ToolCallId,
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
 ) => {
@@ -72,12 +72,12 @@ const createParentTurnMessages = (
         type: "tool-call",
         toolCallId: delegateToolCallId,
         toolName: "delegate",
-        input: { tasks: [{ agent: "reviewer", task: "Inspect the TUI tool chrome" }] },
+        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
       }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: codeReviewToolCallId,
-        toolName: "code_review",
+        toolCallId: reviewToolCallId,
+        toolName: "review",
         input: { description: `Review debug cycle ${iteration}` },
       }),
       new ToolCallPart({
@@ -107,13 +107,13 @@ const createParentTurnMessages = (
     role: "tool",
     parts: [
       makeJsonResult(delegateToolCallId, "delegate", {
-        output: "Reviewer finished.",
+        output: "Explorer finished.",
         metadata: {
           mode: "parallel",
           results: [
             {
               _tag: "success",
-              agentName: "reviewer",
+              agentName: "explore",
               text: "Live child session completed read + grep before reporting back.",
               usage: { input: 181, output: 64, cost: 0.01 },
               toolCalls: [
@@ -133,7 +133,7 @@ const createParentTurnMessages = (
           usage: { input: 181, output: 64, cost: 0.01 },
         },
       }),
-      makeJsonResult(codeReviewToolCallId, "code_review", {
+      makeJsonResult(reviewToolCallId, "review", {
         summary: { critical: 0, high: 0, medium: 1, low: 0 },
         comments: [
           {
@@ -241,7 +241,7 @@ const runDelegateScenario = (
       new AgentRunSpawned({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: "reviewer",
+        agentName: "explore",
         prompt: "Inspect the TUI tool chrome",
         toolCallId,
         branchId: params.branchId,
@@ -310,7 +310,7 @@ const runDelegateScenario = (
       new AgentRunSucceeded({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
-        agentName: "reviewer",
+        agentName: "explore",
         toolCallId,
         branchId: params.branchId,
       }),
@@ -321,7 +321,7 @@ const persistDebugTurn = (
   params: DebugScenarioParams,
   iteration: number,
   delegateToolCallId: ToolCallId,
-  codeReviewToolCallId: ToolCallId,
+  reviewToolCallId: ToolCallId,
   searchSessionsToolCallId: ToolCallId,
   readSessionToolCallId: ToolCallId,
 ) =>
@@ -332,7 +332,7 @@ const persistDebugTurn = (
       params,
       iteration,
       delegateToolCallId,
-      codeReviewToolCallId,
+      reviewToolCallId,
       searchSessionsToolCallId,
       readSessionToolCallId,
     )
@@ -361,7 +361,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const eventStore = yield* EventStore
     const delegateToolCallId = asToolCallId(`dbg-live-delegate-${iteration}`)
-    const codeReviewToolCallId = asToolCallId(`dbg-live-code-review-${iteration}`)
+    const reviewToolCallId = asToolCallId(`dbg-live-review-${iteration}`)
     const searchSessionsToolCallId = asToolCallId(`dbg-live-search-sessions-${iteration}`)
     const readSessionToolCallId = asToolCallId(`dbg-live-read-session-${iteration}`)
     const agent = "cowork"
@@ -409,7 +409,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         branchId: params.branchId,
         toolCallId: delegateToolCallId,
         toolName: "delegate",
-        input: { tasks: [{ agent: "reviewer", task: "Inspect the TUI tool chrome" }] },
+        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
       }),
     )
     yield* runDelegateScenario(params, iteration, delegateToolCallId)
@@ -421,13 +421,13 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
         toolName: "delegate",
         summary: "1 sub-agent completed",
         output: encodeDebugJson({
-          output: "Reviewer finished.",
+          output: "Explorer finished.",
           metadata: {
             mode: "parallel",
             results: [
               {
                 _tag: "success",
-                agentName: "reviewer",
+                agentName: "explore",
                 text: "Live child session completed read + grep before reporting back.",
                 usage: { input: 181, output: 64, cost: 0.01 },
               },
@@ -442,8 +442,8 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       new ToolCallStarted({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        toolCallId: codeReviewToolCallId,
-        toolName: "code_review",
+        toolCallId: reviewToolCallId,
+        toolName: "review",
         input: { description: `Review debug cycle ${iteration}` },
       }),
     )
@@ -452,8 +452,8 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       new ToolCallSucceeded({
         sessionId: params.sessionId,
         branchId: params.branchId,
-        toolCallId: codeReviewToolCallId,
-        toolName: "code_review",
+        toolCallId: reviewToolCallId,
+        toolName: "review",
         summary: "1 comment",
         output: encodeDebugJson({
           summary: { critical: 0, high: 0, medium: 1, low: 0 },
@@ -557,7 +557,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
       params,
       iteration,
       delegateToolCallId,
-      codeReviewToolCallId,
+      reviewToolCallId,
       searchSessionsToolCallId,
       readSessionToolCallId,
     )

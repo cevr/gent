@@ -41,7 +41,7 @@ const SEVERITY_COLORS: Record<string, string> = {
   low: "#6272a4",
 }
 
-export function CodeReviewToolRenderer(props: ToolRendererProps) {
+export function ReviewToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const input = () => parseInput(props.toolCall.input)
@@ -67,7 +67,7 @@ export function CodeReviewToolRenderer(props: ToolRendererProps) {
 
   return (
     <ToolFrame
-      title="code_review"
+      title="review"
       subtitle={subtitle()}
       status={props.toolCall.status}
       expanded={props.expanded}

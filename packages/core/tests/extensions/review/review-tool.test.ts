@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { CodeReviewTool } from "@gent/core/extensions/subagent-tools/code-review"
+import { ReviewTool } from "@gent/core/extensions/review/review-tool"
 import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -40,7 +40,7 @@ const runtimePlatformLayer = RuntimePlatform.Test({
   platform: "test",
 })
 
-describe("CodeReviewTool", () => {
+describe("ReviewTool", () => {
   it.live("passes description to runner", () => {
     let capturedPrompt = ""
     const capturedOverrides: Array<Record<string, unknown> | undefined> = []
@@ -53,13 +53,12 @@ describe("CodeReviewTool", () => {
           text: "[]",
           sessionId: "child" as SessionId,
           agentName: params.agent.name,
-          persistence:
-            params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
+          persistence: "ephemeral" as const,
         })
       },
     })
 
-    return CodeReviewTool.execute(
+    return ReviewTool.execute(
       { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
       ctx,
     ).pipe(
@@ -91,12 +90,12 @@ describe("CodeReviewTool", () => {
           _tag: "success" as const,
           text: jsonOutput,
           sessionId: "child" as SessionId,
-          agentName: "reviewer",
+          agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
     })
 
-    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.comments.length).toBe(1)
         expect(result.comments[0]!.severity).toBe("high")
@@ -113,12 +112,12 @@ describe("CodeReviewTool", () => {
           _tag: "success" as const,
           text: "not valid json",
           sessionId: "child" as SessionId,
-          agentName: "reviewer",
+          agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
     })
 
-    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.comments.length).toBe(0)
         expect(result.raw).toBe("not valid json")
@@ -146,8 +145,7 @@ describe("CodeReviewTool", () => {
               ]),
               sessionId: "synth" as SessionId,
               agentName: params.agent.name,
-              persistence:
-                params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
+              persistence: "ephemeral" as const,
             }
           }
           if (params.prompt.includes("Fix the issues identified")) {
@@ -164,16 +162,12 @@ describe("CodeReviewTool", () => {
             text: "[]",
             sessionId: "child" as SessionId,
             agentName: params.agent.name,
-            persistence:
-              params.agent.name === "reviewer" ? ("ephemeral" as const) : ("durable" as const),
+            persistence: "ephemeral" as const,
           }
         }),
     })
 
-    return CodeReviewTool.execute(
-      { description: "test", content: "fake diff", mode: "fix" },
-      ctx,
-    ).pipe(
+    return ReviewTool.execute({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.output).toBe("Applied fixes.")
         expect(
@@ -190,7 +184,7 @@ describe("CodeReviewTool", () => {
     )
   })
 
-  it.live("omits session ref for ephemeral reviewer output", () => {
+  it.live("omits session ref for ephemeral review-worker output", () => {
     const jsonOutput = JSON.stringify([
       { file: "a.ts", severity: "low", type: "style", text: "minor" },
     ])
@@ -200,12 +194,12 @@ describe("CodeReviewTool", () => {
           _tag: "success" as const,
           text: jsonOutput,
           sessionId: "child" as SessionId,
-          agentName: "reviewer",
+          agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
     })
 
-    return CodeReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.session).toBeUndefined()
       }),

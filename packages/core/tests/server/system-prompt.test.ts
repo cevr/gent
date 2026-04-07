@@ -300,13 +300,13 @@ describe("buildTurnPrompt", () => {
     ]
     const targets = [
       new AgentDefinition({ name: "explore", description: "Fast codebase search" }),
-      new AgentDefinition({ name: "reviewer", description: "Code review" }),
+      new AgentDefinition({ name: "explore-2", description: "Code review" }),
       new AgentDefinition({ name: "no-desc" }), // no description — should be excluded
     ]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("## Delegation Targets")
     expect(result).toContain("**explore**: Fast codebase search")
-    expect(result).toContain("**reviewer**: Code review")
+    expect(result).toContain("**explore-2**: Code review")
     expect(result).not.toContain("no-desc")
   })
 

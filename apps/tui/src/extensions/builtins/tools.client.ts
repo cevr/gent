@@ -9,18 +9,18 @@ export default defineClientExtension({
       {
         id: "tools.review",
         title: "Review",
-        description: "Delegate peer review to reviewer agent",
+        description: "Run adversarial dual-model code review",
         category: "Tools",
         slash: "review",
         onSelect: () =>
           ctx.sendMessage(
-            "Use the delegate tool with agent='reviewer' to get a peer review. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
+            "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
           ),
         onSlash: (args) =>
           ctx.sendMessage(
             args.trim().length > 0
-              ? `Use the delegate tool with agent='reviewer' for this review: ${args.trim()}`
-              : "Use the delegate tool with agent='reviewer' to get a peer review. Review the most recent changes or topic of discussion. Focus on correctness, edge cases, and architectural issues.",
+              ? `Use the review tool in report mode: ${args.trim()}`
+              : "Use the review tool in report mode on the most recent changes. Focus on correctness, edge cases, and architectural issues.",
           ),
       },
       {

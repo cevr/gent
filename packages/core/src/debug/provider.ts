@@ -31,7 +31,7 @@ const retryBudgetFor = (text: string): number => {
 
 const buildReply = (request: ProviderRequest, latestUserText: string): string => {
   const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
-  const modelLabel = request.model.startsWith("openai/") ? "reviewer" : "cowork"
+  const modelLabel = request.model.startsWith("openai/") ? "deepwork" : "cowork"
 
   if (lineCount > 1) {
     return [

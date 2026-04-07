@@ -62,7 +62,7 @@ const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(
 )
 
 describe("AuthGuard", () => {
-  it.live("requiredProviders include cowork + reviewer (deepwork) providers", () => {
+  it.live("requiredProviders include cowork + deepwork providers", () => {
     const layer = AuthGuard.Live.pipe(
       Layer.provide(AuthStore.Live),
       Layer.provide(AuthStorage.Test()),

@@ -174,8 +174,8 @@ describe("toolArgSummary", () => {
     expect(result).toBe(`explore:${"a".repeat(40)}…`)
   })
 
-  test("code_review: description", () => {
-    expect(toolArgSummary("code_review", { description: "review auth changes" })).toBe(
+  test("review: description", () => {
+    expect(toolArgSummary("review", { description: "review auth changes" })).toBe(
       "review auth changes",
     )
   })

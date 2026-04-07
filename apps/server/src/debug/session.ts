@@ -229,7 +229,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         type: "tool-call",
         toolCallId: asToolCallId("dbg-delegate"),
         toolName: "delegate",
-        input: { tasks: [{ agent: "reviewer", task: "Inspect the TUI tool chrome" }] },
+        input: { tasks: [{ agent: "explore", task: "Inspect the TUI tool chrome" }] },
       }),
       new ToolCallPart({
         type: "tool-call",
@@ -241,12 +241,12 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         type: "tool-call",
         toolCallId: asToolCallId("dbg-review"),
         toolName: "delegate",
-        input: { agent: "reviewer", task: "Sanity-check the debug session bootstrap." },
+        input: { agent: "explore", task: "Sanity-check the debug session bootstrap." },
       }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: asToolCallId("dbg-code-review"),
-        toolName: "code_review",
+        toolCallId: asToolCallId("dbg-review"),
+        toolName: "review",
         input: { description: "Review the debug bootstrap" },
       }),
       new ToolCallPart({
@@ -280,7 +280,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
         excerpt: "Use ToolFrame once and let specialized renderers own body layout.",
       }),
       makeJsonResult(asToolCallId("dbg-delegate"), "delegate", {
-        output: "Reviewer agreed the duplicate chrome was stale message-list markup.",
+        output: "Explorer agreed the duplicate chrome was stale message-list markup.",
       }),
       makeJsonResult(asToolCallId("dbg-explore"), "delegate", {
         output: "The second border was rendered by the message list, not the tool renderer.",
@@ -288,7 +288,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeJsonResult(asToolCallId("dbg-review"), "delegate", {
         output: "Move debug boot into core-side scenario code and keep the shell thin.",
       }),
-      makeJsonResult(asToolCallId("dbg-code-review"), "code_review", {
+      makeJsonResult(asToolCallId("dbg-review"), "review", {
         summary: { critical: 0, high: 0, medium: 1, low: 0 },
       }),
       makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {

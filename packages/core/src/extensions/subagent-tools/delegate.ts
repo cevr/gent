@@ -45,7 +45,7 @@ export const DelegateTool = defineTool({
     "Do NOT delegate simple reads, searches, or single-file edits — do those directly",
     "Each task prompt must be self-contained — delegated agents have no conversation history",
     "For parallel exploration: don't share preliminary findings between agents — let each form independent conclusions",
-    "For reviews: use the code_review tool per batch, not per file",
+    "For reviews: use the review tool per batch, not per file",
   ],
   params: DelegateParams,
   execute: Effect.fn("DelegateTool.execute")(function* (params, ctx) {
