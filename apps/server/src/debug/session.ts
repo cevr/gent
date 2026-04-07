@@ -245,7 +245,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       }),
       new ToolCallPart({
         type: "tool-call",
-        toolCallId: asToolCallId("dbg-review"),
+        toolCallId: asToolCallId("dbg-review-tool"),
         toolName: "review",
         input: { description: "Review the debug bootstrap" },
       }),
@@ -288,7 +288,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
       makeJsonResult(asToolCallId("dbg-review"), "delegate", {
         output: "Move debug boot into core-side scenario code and keep the shell thin.",
       }),
-      makeJsonResult(asToolCallId("dbg-review"), "review", {
+      makeJsonResult(asToolCallId("dbg-review-tool"), "review", {
         summary: { critical: 0, high: 0, medium: 1, low: 0 },
       }),
       makeJsonResult(asToolCallId("dbg-search-sessions"), "search_sessions", {
