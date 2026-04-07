@@ -1693,14 +1693,17 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   const mergedQueue = yield* consumeQueueWithPending(pendingQueueRef, state.queue)
                   const { queue, nextItem } = takeNextQueuedTurn(mergedQueue)
                   if (nextItem !== undefined) {
+                    yield* Ref.set(interruptedRef, false)
                     return buildRunningState({ queue, currentAgent: state.currentAgent }, nextItem)
                   }
+                  yield* Ref.set(interruptedRef, false)
                   return buildIdleState({ queue, currentAgent: state.currentAgent })
                 }),
               )
               .on(AgentLoopState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
                 Effect.gen(function* () {
                   const mergedQueue = yield* consumeQueueWithPending(pendingQueueRef, state.queue)
+                  yield* Ref.set(interruptedRef, false)
                   return buildIdleState({ queue: mergedQueue, currentAgent: state.currentAgent })
                 }),
               )

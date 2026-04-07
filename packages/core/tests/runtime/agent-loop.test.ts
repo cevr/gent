@@ -1056,6 +1056,67 @@ describe("continuation", () => {
         expect(new Set([t1!.id, t2!.id]).size).toBe(2)
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }).pipe(Effect.runPromise))
+
+  test("queued follow-up executes normally after interrupt", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+        toolCallStep("echo", { text: "step 1" }),
+        { ...textStep("gated response"), gated: true },
+        textStep("follow-up response"),
+      ])
+
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+
+        const first = makeContMessage("first message")
+        const followUp = makeContMessage("follow-up after interrupt")
+
+        // Start first turn — tool call auto-continues to gated step
+        yield* Effect.forkChild(agentLoop.run(first))
+
+        // Wait for the gated step (second stream call) to start
+        yield* controls.waitForCall(1)
+
+        // Queue a follow-up while step 1 is gated
+        yield* agentLoop.run(followUp)
+
+        // Interrupt the current turn
+        yield* agentLoop.steer({
+          _tag: "Interrupt",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+        })
+
+        // Let the machine process the interrupt (sets interruptedRef + signals stream)
+        yield* Effect.sleep("10 millis")
+
+        // Release the gated step so the interrupted turn can finalize
+        yield* controls.emitAll(1)
+
+        // Wait for the follow-up to complete
+        yield* waitForPhase(
+          agentLoop,
+          { sessionId: contSessionId, branchId: contBranchId },
+          "idle",
+          200,
+        )
+
+        const events = yield* Ref.get(eventsRef)
+        const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
+
+        // Both turns should have completed
+        expect(turnCompleted.length).toBe(2)
+        const interruptedTurns = turnCompleted.filter(
+          (e) => (e as { interrupted?: boolean }).interrupted === true,
+        )
+        // First turn was interrupted, second (follow-up) was not
+        expect(interruptedTurns.length).toBe(1)
+        // Follow-up used the third provider step
+        expect(yield* controls.callCount).toBe(3)
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.runPromise))
 })
 
 // ============================================================================
