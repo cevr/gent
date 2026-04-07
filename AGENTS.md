@@ -99,15 +99,34 @@ bun run test:e2e          # PTY + supervisor + worker-http (slow)
 bun run gate              # typecheck + lint + fmt + build + test
 ```
 
-Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/tools/`, etc. One file per source owner, no god tests.
+Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/tools/`, etc. One file per feature area, no fix-shaped files or god tests.
+
+### Test philosophy
+
+- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `createSequenceProvider` for LLM responses.
+- **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
+- **Mock at system boundaries**: only the LLM provider (via `createSequenceProvider` / `Provider.Test`). Use real services inside the boundary.
+- **`Provider.Test()` and `EventStore.Test()` are banned for new tests** — use `createSequenceProvider` or `EventStore.Memory` / `EventStoreLive` instead.
+- **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
+- **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
+- **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
+
+### Test layers
 
 ```typescript
-// Use createTestLayer for mocked services
-const layer = createTestLayer({ providerResponses: [...] })
+// Sequence provider for deterministic LLM responses
+const { layer: providerLayer, controls } =
+  yield * createSequenceProvider([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
-// Use createRecordingTestLayer for sequence assertions
-const layer = createRecordingTestLayer({ ... })
-assertSequence(calls, [{ service: "Provider", method: "stream" }])
+// Full in-process stack (AppServicesLive + real event store + real storage)
+import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
+const layer = baseLocalLayer()
+
+// Sequence recording for event assertions
+import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+assertSequence(calls, [
+  { service: "EventStore", method: "publish", match: { _tag: "TurnCompleted" } },
+])
 ```
 
 ## Key Files
