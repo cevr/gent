@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
-import { defineAgent, getDurableAgentRunSessionId } from "../../domain/agent.js"
+import { defineAgent } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import { requireText } from "../../runtime/workflow-helpers.js"
 import { $ } from "bun"
@@ -77,25 +77,27 @@ const resolveCachePath = (pathSvc: Path.Path, home: string, spec: string): strin
 const ensureRepo = (spec: string, cachePath: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const exists = yield* fs.exists(cachePath)
     if (exists) return
 
-    yield* fs.makeDirectory(cachePath, { recursive: true }).pipe(Effect.ignore)
-
     // Only auto-fetch GitHub repos
-    if (!spec.startsWith("npm:") && !spec.startsWith("pypi:") && !spec.startsWith("crates:")) {
-      const atIdx = spec.lastIndexOf("@")
-      const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
-      const version = atIdx > 0 ? spec.slice(atIdx + 1) : undefined
-      const url = `https://github.com/${name}.git`
-      const args = ["git", "clone", "--depth", "100"]
-      if (version !== undefined) args.push("--branch", version)
-      args.push(url, cachePath)
-      yield* Effect.tryPromise({
-        try: () => $`${args}`.quiet().then(() => void 0),
-        catch: (e) => new ResearchFetchError({ message: `Failed to clone ${spec}`, cause: e }),
-      })
-    }
+    if (spec.startsWith("npm:") || spec.startsWith("pypi:") || spec.startsWith("crates:")) return
+
+    // Create parent dir — let git clone create the final directory
+    yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true }).pipe(Effect.ignore)
+
+    const atIdx = spec.lastIndexOf("@")
+    const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
+    const version = atIdx > 0 ? spec.slice(atIdx + 1) : undefined
+    const url = `https://github.com/${name}.git`
+    const args = ["git", "clone", "--depth", "100"]
+    if (version !== undefined) args.push("--branch", version)
+    args.push(url, cachePath)
+    yield* Effect.tryPromise({
+      try: () => $`${args}`.quiet().then(() => void 0),
+      catch: (e) => new ResearchFetchError({ message: `Failed to clone ${spec}`, cause: e }),
+    })
   })
 
 const buildResearchPrompt = (question: string, repoPath: string, spec: string, focus?: string) =>
@@ -195,18 +197,15 @@ export const ResearchTool = defineTool({
       return { error: "No findings from any repository" }
     }
 
-    // Single repo with single finding — return directly
-    if (findings.length === 1 && params.repos.length === 1) {
-      const first = results[0]
-      const sessionId = first !== undefined ? getDurableAgentRunSessionId(first) : undefined
+    // Single finding — return directly (no synthesis needed)
+    if (findings.length === 1) {
       return {
         response: findings[0]?.text ?? "",
         repos: params.repos,
-        ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
       }
     }
 
-    // Multiple findings — synthesize
+    // Multiple findings — synthesize with cross-vendor model
     const [, modelB] = yield* ctx.agent.resolveDualModelPair()
     const synthesisResult = yield* ctx.agent.run({
       agent: researchAgent,
@@ -216,13 +215,11 @@ export const ResearchTool = defineTool({
     })
 
     const synthesis = yield* requireText(synthesisResult, "synthesis")
-    const sessionId = getDurableAgentRunSessionId(synthesisResult)
 
     return {
       response: synthesis,
       repos: params.repos,
       repoCount: findings.length,
-      ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
     }
   }),
 })
