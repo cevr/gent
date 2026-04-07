@@ -1,9 +1,13 @@
 import { describe, test, expect } from "bun:test"
+import { Effect } from "effect"
 import {
   splitCdCommand,
   injectGitTrailers,
   stripBackground,
+  BashTool,
 } from "@gent/core/extensions/exec-tools/bash"
+import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import type { ToolContext } from "@gent/core/domain/tool"
 
 describe("splitCdCommand", () => {
   test("cd /foo && ls → { cwd: '/foo', command: 'ls' }", () => {
@@ -55,5 +59,48 @@ describe("stripBackground", () => {
 
   test('"cmd" → "cmd"', () => {
     expect(stripBackground("cmd")).toBe("cmd")
+  })
+})
+
+// ============================================================================
+// Integration — real command execution
+// ============================================================================
+
+const stubCtx = {
+  sessionId: "test-session" as SessionId,
+  branchId: "test-branch" as BranchId,
+  toolCallId: "tc-1" as ToolCallId,
+  cwd: process.cwd(),
+  home: "/tmp",
+  interaction: {
+    approve: () => Effect.succeed({ approved: true }),
+  },
+} as unknown as ToolContext
+
+describe("BashTool execution", () => {
+  test("runs a command and returns stdout", async () => {
+    const result = await Effect.runPromise(BashTool.execute({ command: "echo hello" }, stubCtx))
+    expect(result.stdout.trim()).toBe("hello")
+    expect(result.exitCode).toBe(0)
+  })
+
+  test("captures nonzero exit code", async () => {
+    const result = await Effect.runPromise(BashTool.execute({ command: "exit 2" }, stubCtx))
+    expect(result.exitCode).toBe(2)
+  })
+
+  test("respects cwd parameter", async () => {
+    const result = await Effect.runPromise(
+      BashTool.execute({ command: "pwd", cwd: "/tmp" }, stubCtx),
+    )
+    // /tmp may resolve to /private/tmp on macOS
+    expect(result.stdout.trim()).toMatch(/\/tmp$/)
+    expect(result.exitCode).toBe(0)
+  })
+
+  test("splits cd + command into cwd and executes", async () => {
+    const result = await Effect.runPromise(BashTool.execute({ command: "cd /tmp && pwd" }, stubCtx))
+    expect(result.stdout.trim()).toMatch(/\/tmp$/)
+    expect(result.exitCode).toBe(0)
   })
 })

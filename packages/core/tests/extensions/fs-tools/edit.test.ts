@@ -1,10 +1,18 @@
 import { describe, test, expect } from "bun:test"
+import { Effect, Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
 import {
   detectRedaction,
   unescapeStr,
   normalizeWhitespace,
   findMatch,
+  EditTool,
 } from "@gent/core/extensions/fs-tools/edit"
+import { FileLockService } from "@gent/core/domain/file-lock"
+import type { ToolContext } from "@gent/core/domain/tool"
 
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
@@ -106,5 +114,126 @@ describe("findMatch", () => {
 
   test("no match → undefined", () => {
     expect(findMatch("hello world", "xyz")).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// Integration — real file editing
+// ============================================================================
+
+const editLayer = Layer.mergeAll(
+  BunServices.layer,
+  Layer.provide(FileLockService.layer, BunServices.layer),
+)
+
+const stubCtx = {} as unknown as ToolContext
+
+describe("EditTool execution", () => {
+  test("applies edit to a real file and reads back the result", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+    const filePath = path.join(dir, "test.txt")
+    fs.writeFileSync(filePath, "hello world\ngoodbye world\n")
+
+    try {
+      const result = await Effect.runPromise(
+        EditTool.execute(
+          { path: filePath, oldString: "hello world", newString: "hi there" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
+      )
+
+      expect(result.replacements).toBe(1)
+      expect(result.path).toBe(filePath)
+
+      const content = fs.readFileSync(filePath, "utf8")
+      expect(content).toBe("hi there\ngoodbye world\n")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("replaceAll replaces every occurrence", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+    const filePath = path.join(dir, "test.txt")
+    fs.writeFileSync(filePath, "foo bar foo baz foo\n")
+
+    try {
+      const result = await Effect.runPromise(
+        EditTool.execute(
+          { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
+      )
+
+      expect(result.replacements).toBe(3)
+
+      const content = fs.readFileSync(filePath, "utf8")
+      expect(content).toBe("qux bar qux baz qux\n")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fails when oldString not found", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+    const filePath = path.join(dir, "test.txt")
+    fs.writeFileSync(filePath, "hello world\n")
+
+    try {
+      const exit = await Effect.runPromise(
+        Effect.exit(
+          EditTool.execute(
+            { path: filePath, oldString: "not here", newString: "replaced" },
+            stubCtx,
+          ).pipe(Effect.provide(editLayer)),
+        ),
+      )
+
+      expect(exit._tag).toBe("Failure")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fails on ambiguous match without replaceAll", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+    const filePath = path.join(dir, "test.txt")
+    fs.writeFileSync(filePath, "foo bar foo\n")
+
+    try {
+      const exit = await Effect.runPromise(
+        Effect.exit(
+          EditTool.execute({ path: filePath, oldString: "foo", newString: "baz" }, stubCtx).pipe(
+            Effect.provide(editLayer),
+          ),
+        ),
+      )
+
+      expect(exit._tag).toBe("Failure")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fuzzy match handles literal backslash-n in oldString", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-edit-"))
+    const filePath = path.join(dir, "test.txt")
+    fs.writeFileSync(filePath, "line1\nline2\n")
+
+    try {
+      const result = await Effect.runPromise(
+        EditTool.execute(
+          { path: filePath, oldString: "line1\\nline2", newString: "merged" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
+      )
+
+      expect(result.replacements).toBe(1)
+
+      const content = fs.readFileSync(filePath, "utf8")
+      expect(content).toBe("merged\n")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
