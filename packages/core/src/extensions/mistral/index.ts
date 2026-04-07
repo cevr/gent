@@ -8,7 +8,7 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-export const MistralExtension = extension("@gent/provider-mistral", (ext) => {
+export const MistralExtension = extension("@gent/provider-mistral", ({ ext }) => {
   const mistralProvider: ProviderContribution = {
     id: "mistral",
     name: "Mistral",
@@ -25,5 +25,5 @@ export const MistralExtension = extension("@gent/provider-mistral", (ext) => {
     },
   }
 
-  ext.provider(mistralProvider)
+  return ext.provider(mistralProvider)
 })

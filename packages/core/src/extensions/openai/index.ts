@@ -71,7 +71,7 @@ type OAuthCallback = (code?: string) => Promise<{
   accountId?: string
 }>
 
-export const OpenAIExtension = extension("@gent/provider-openai", (ext) => {
+export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
   // Pending OAuth callbacks keyed by authorizationId (closure state)
   const pendingCallbacks = new Map<string, OAuthCallback>()
   const openaiProvider: ProviderContribution = {
@@ -170,5 +170,5 @@ export const OpenAIExtension = extension("@gent/provider-openai", (ext) => {
     },
   }
 
-  ext.provider(openaiProvider)
+  return ext.provider(openaiProvider)
 })

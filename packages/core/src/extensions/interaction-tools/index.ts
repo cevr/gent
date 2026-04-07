@@ -84,8 +84,6 @@ export const interactionActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-export const InteractionToolsExtension = extension(INTERACTION_TOOLS_EXTENSION_ID, (ext) => {
-  ext.tool(AskUserTool)
-  ext.tool(PromptTool)
-  ext.actor(interactionActor)
-})
+export const InteractionToolsExtension = extension(INTERACTION_TOOLS_EXTENSION_ID, ({ ext }) =>
+  ext.tools(AskUserTool, PromptTool).actor(interactionActor),
+)

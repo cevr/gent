@@ -857,10 +857,11 @@ const autoHandoffImpl = (
 
 // ── Extension ──
 
-export const AutoExtension = extension("@gent/auto", (ext) => {
-  ext.actor(autoActor)
-  ext.tool(AutoCheckpointTool)
-  ext.on("tool.result", journalInterceptorImpl)
-  ext.on("turn.after", autoHandoffImpl)
-  ext.layer(AutoJournal.Live)
-})
+export const AutoExtension = extension("@gent/auto", ({ ext }) =>
+  ext
+    .actor(autoActor)
+    .tools(AutoCheckpointTool)
+    .on("tool.result", journalInterceptorImpl)
+    .on("turn.after", autoHandoffImpl)
+    .layer(AutoJournal.Live),
+)

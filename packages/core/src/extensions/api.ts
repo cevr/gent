@@ -26,7 +26,7 @@
  *
  * @module
  */
-import { Effect, Layer, Schema, Data } from "effect"
+import { Effect, Schema, Data, type Layer } from "effect"
 import {
   defineInterceptor,
   ExtensionLoadError,
@@ -257,25 +257,40 @@ interface AsyncHookHandlers {
 
 // ── Extension Builder ──
 
-export interface ExtensionBuilder {
-  // ── Simple path (no Effect) ──
+/** Opaque brand carried by all builder chain results. Used as the factory return type
+ *  so that `Omit<ExtensionBuilder<P>, ...>` is assignable to it. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface ExtensionBuilderResult<_Provides = never> {}
 
-  /** Register a tool. Accepts SimpleToolDef or full AnyToolDefinition. */
-  tool(def: SimpleToolDef | AnyToolDefinition): void
-  /** Register an agent. Accepts SimpleAgentDef or full AgentDefinition. */
-  agent(def: SimpleAgentDef | AgentDefinition): void
-  /** Register a slash command. Handler receives args and ExtensionContext (Promise-based). */
+export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResult<Provides> {
+  // ── Registration (single-call, variadic where applicable) ──
+
+  /** Register tools. Accepts SimpleToolDef or full AnyToolDefinition. Single call. */
+  tools(
+    ...defs: ReadonlyArray<SimpleToolDef | AnyToolDefinition>
+  ): Omit<ExtensionBuilder<Provides>, "tools">
+  /** Register agents. Accepts SimpleAgentDef or full AgentDefinition. Single call. */
+  agents(
+    ...defs: ReadonlyArray<SimpleAgentDef | AgentDefinition>
+  ): Omit<ExtensionBuilder<Provides>, "agents">
+  /** Register a slash command. Multiple calls ok. */
   command(
     name: string,
     options: {
       description?: string
       handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
     },
-  ): void
-  /** Add a prompt section. Static or dynamic (Effect<PromptSection> for service access). */
-  promptSection(section: PromptSectionInput): void
-  /** Register an Effect-native interceptor hook. */
-  on<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]): void
+  ): ExtensionBuilder<Provides>
+  /** Register prompt sections. Static or dynamic. Single call.
+   *  Dynamic sections' R is constrained to Provides — services must come from .layer(). */
+  promptSections(
+    ...sections: ReadonlyArray<PromptSection | DynamicPromptSection<Provides>>
+  ): Omit<ExtensionBuilder<Provides>, "promptSections">
+  /** Register an Effect-native interceptor hook. Multiple calls ok. */
+  on<K extends ExtensionInterceptorKey>(
+    key: K,
+    handler: ExtensionInterceptorMap[K],
+  ): ExtensionBuilder<Provides>
   /** Execute a shell command. Returns stdout, stderr, and exitCode. */
   exec(
     command: string,
@@ -283,72 +298,58 @@ export interface ExtensionBuilder {
     options?: { cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>
   /** Register a startup hook. Multiple calls compose in order. */
-  onStartup(fn: () => void | Promise<void>): void
+  onStartup(fn: () => void | Promise<void>): ExtensionBuilder<Provides>
   /** Register a shutdown hook. Multiple calls compose in order. */
-  onShutdown(fn: () => void | Promise<void>): void
+  onShutdown(fn: () => void | Promise<void>): ExtensionBuilder<Provides>
 
   // ── Imperative side effects (usable from ext.async.on() handlers) ──
 
-  /** Send a follow-up message after the current turn completes.
-   *  Only usable from ext.async.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+  /** Send a follow-up message after the current turn completes. */
   sendMessage(content: string, metadata?: MessageMetadata): void
-  /** Inject a user message mid-turn (interrupts the current turn).
-   *  Only usable from ext.async.on() handlers (turn.after, tool.execute, tool.result, context.messages). */
+  /** Inject a user message mid-turn (interrupts the current turn). */
   sendUserMessage(content: string): void
   /** @deprecated Use sendMessage() instead. */
   queueFollowUp(content: string, metadata?: MessageMetadata): void
   /** @deprecated Use sendUserMessage() instead. */
   interject(content: string): void
-  /** Publish a message to the event bus.
-   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  /** Publish a message to the event bus. */
   busEmit(channel: string, payload: unknown): void
-  /** Send a command message to another extension's actor (fire-and-forget).
-   *  Only usable from turn.after, tool.execute, tool.result, context.messages handlers. */
+  /** Send a command message to another extension's actor (fire-and-forget). */
   send(message: AnyExtensionCommandMessage): void
 
-  /** File-backed key-value storage, namespaced by extension ID.
-   *  Stored at ~/.gent/extensions/<id>/storage/<key>.json.
-   *  Available at setup time and in hook handlers. */
+  /** File-backed key-value storage, namespaced by extension ID. */
   readonly storage: ExtensionStorage
 
   // ── Full-power path (Effect-aware) ──
 
-  /** Register a stateful actor. Stateless extensions can omit this. */
-  actor(actor: AnyExtensionActorDefinition): void
-  /** Provide a service Layer. Multiple calls merge. */
-  layer(layer: Layer.Layer<never, never, object>): void
-  /** Register an AI model provider. */
-  provider(provider: ProviderContribution): void
-  /** Register durable host-owned scheduled jobs. */
-  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): void
+  /** Register a stateful actor. Single call. */
+  actor(actor: AnyExtensionActorDefinition): Omit<ExtensionBuilder<Provides>, "actor">
+  /** Provide a service Layer. Single call — compose with Layer.merge before passing. Widens Provides.
+   *  Layers with unsatisfied requirements (R) are accepted — the runtime provides them (e.g. SqlClient). */
+  layer<A, R>(layer: Layer.Layer<A, never, R>): Omit<ExtensionBuilder<Provides | A>, "layer">
+  /** Register an AI model provider. Single call. */
+  provider(provider: ProviderContribution): Omit<ExtensionBuilder<Provides>, "provider">
+  /** Register durable host-owned scheduled jobs. Single call. */
+  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): Omit<ExtensionBuilder<Provides>, "jobs">
   /** Register an Effect-based startup hook. Composes with onStartup(). */
-  onStartupEffect(effect: Effect.Effect<void>): void
+  onStartupEffect(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
   /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
-  onShutdownEffect(effect: Effect.Effect<void>): void
+  onShutdownEffect(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
+  /** Subscribe to a bus channel. Multiple calls ok. */
+  bus(
+    pattern: string,
+    handler: (envelope: {
+      channel: string
+      payload: unknown
+      sessionId?: string
+      branchId?: string
+    }) => void | Promise<void> | Effect.Effect<void>,
+  ): ExtensionBuilder<Provides>
 
   // ── Async surface (Promise-based handlers with ExtensionContext) ──
 
-  /** Promise-based counterpart to Effect-native methods.
-   *  Same capabilities, async/Promise ergonomics. */
+  /** Promise-based counterpart to Effect-native methods. */
   readonly async: AsyncExtensionBuilder
-
-  // ── Event bus ──
-
-  /** Channel-based event bus for extension communication. */
-  readonly bus: {
-    /** Subscribe to a bus channel.
-     *  Pattern: exact match (e.g. `"@gent/task-tools:StopTask"`) or wildcard (`"agent:*"`).
-     *  Handler can return void, Promise<void>, or Effect<void>. */
-    on(
-      pattern: string,
-      handler: (envelope: {
-        channel: string
-        payload: unknown
-        sessionId?: string
-        branchId?: string
-      }) => void | Promise<void> | Effect.Effect<void>,
-    ): void
-  }
 }
 
 export interface AsyncExtensionBuilder {
@@ -584,34 +585,58 @@ const mergeShutdownHooks = (
 /**
  * Create an extension. One API for both simple and full-power extensions.
  *
- * Factory runs at setup time (not import time), receives setup context.
+ * The callback receives `{ ext, ctx }` and must return the builder (for fluent chaining).
  * Sync factories work — async/Promise is optional.
+ *
+ * @example
+ * ```ts
+ * // Simple
+ * export const MyExt = extension("my-ext", ({ ext }) =>
+ *   ext.tools(MyTool, OtherTool)
+ * )
+ *
+ * // With layer + dynamic prompt section (Provides tracking)
+ * export const MyExt = extension("my-ext", ({ ext, ctx }) =>
+ *   ext
+ *     .layer(MyService.Live)
+ *     .tools(MyTool)
+ *     .promptSections({ id: "x", priority: 80, resolve: Effect.gen(...) })
+ * )
+ * ```
  */
-export const extension = (
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const extension = <P = never>(
   id: string,
-  factory: (ext: ExtensionBuilder, ctx: ExtensionSetupContext) => void | Promise<void>,
+  factory: (args: {
+    ext: ExtensionBuilder<never>
+    ctx: ExtensionSetupContext
+  }) => ExtensionBuilderResult<P> | Promise<ExtensionBuilderResult<P>>,
 ): GentExtension => ({
   manifest: { id },
   setup: (ctx) =>
     Effect.gen(function* () {
-      const tools: AnyToolDefinition[] = []
-      const agents: AgentDefinition[] = []
-      const commands: CommandContribution[] = []
-      const promptSections: PromptSectionInput[] = []
-      const interceptors: ExtensionInterceptorDescriptor[] = []
-      const startupFns: Array<() => void | Promise<void>> = []
-      const shutdownFns: Array<() => void | Promise<void>> = []
-      const startupEffects: Array<Effect.Effect<void>> = []
-      const shutdownEffects: Array<Effect.Effect<void>> = []
-      const providers: ProviderContribution[] = []
-      const jobs: ScheduledJobContribution[] = []
-      const busSubscriptions: BusSubscriptionEntry[] = []
-      const layers: Array<Layer.Layer<never, never, object>> = []
-      let actorResult: AnyExtensionActorDefinition | undefined
+      let _tools: AnyToolDefinition[] | undefined
+      let _agents: AgentDefinition[] | undefined
+      const _commands: CommandContribution[] = []
+      let _promptSections: PromptSectionInput[] | undefined
+      const _interceptors: ExtensionInterceptorDescriptor[] = []
+      const _startupFns: Array<() => void | Promise<void>> = []
+      const _shutdownFns: Array<() => void | Promise<void>> = []
+      const _startupEffects: Array<Effect.Effect<void>> = []
+      const _shutdownEffects: Array<Effect.Effect<void>> = []
+      let _provider: ProviderContribution | undefined
+      let _jobs: ScheduledJobContribution[] | undefined
+      const _busSubscriptions: BusSubscriptionEntry[] = []
+      let _layer: Layer.Layer<never, never, object> | undefined
+      let _actorResult: AnyExtensionActorDefinition | undefined
+
+      const guardSingle = (name: string, current: unknown) => {
+        if (current !== undefined) {
+          throw new Error(`extension "${id}": ${name}() can only be called once`)
+        }
+      }
 
       // Stack-based effect buffer for imperative side effects.
-      // Stack is necessary because interceptor chains nest via next() — an outer
-      // handler's buffer must survive while inner interceptors bind their own.
       const effectStack: Array<{ effects: ExtensionEffect[]; hookKey: string }> = []
       const effectBinder: EffectBinder = {
         bind: (effects, hookKey) => {
@@ -647,34 +672,54 @@ export const extension = (
           description?: string
           handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
         },
-      ) => commands.push({ name, description: options.description, handler: options.handler })
+      ) => _commands.push({ name, description: options.description, handler: options.handler })
 
-      const builder: ExtensionBuilder = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const builder: ExtensionBuilder<any> = {
         storage: extensionStorage,
 
-        tool: (def) => {
-          if (isFullToolDef(def)) {
-            tools.push(def)
-          } else {
-            tools.push(convertSimpleTool(def as SimpleToolDef))
+        tools: (...defs) => {
+          guardSingle("tools", _tools)
+          _tools = []
+          for (const def of defs) {
+            if (isFullToolDef(def)) {
+              _tools.push(def)
+            } else {
+              _tools.push(convertSimpleTool(def as SimpleToolDef))
+            }
           }
+          return builder
         },
 
-        agent: (def) => {
-          if (AgentDefinitionBrand in def || "_tag" in def) {
-            agents.push(def as AgentDefinition)
-          } else {
-            agents.push(convertSimpleAgent(def as SimpleAgentDef))
+        agents: (...defs) => {
+          guardSingle("agents", _agents)
+          _agents = []
+          for (const def of defs) {
+            if (AgentDefinitionBrand in def || "_tag" in def) {
+              _agents.push(def as AgentDefinition)
+            } else {
+              _agents.push(convertSimpleAgent(def as SimpleAgentDef))
+            }
           }
+          return builder
         },
 
-        command: (name, options) => registerCommand(name, options),
+        command: (name, options) => {
+          registerCommand(name, options)
+          return builder
+        },
 
-        promptSection: (section) => promptSections.push(section),
+        promptSections: (...sections) => {
+          guardSingle("promptSections", _promptSections)
+          _promptSections = sections.map((s) => s as PromptSectionInput)
+          return builder
+        },
 
         on: (<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
-          interceptors.push(defineInterceptor(key, handler as never))
-        }) as ExtensionBuilder["on"],
+          _interceptors.push(defineInterceptor(key, handler as never))
+          return builder
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
 
         sendMessage: (content, metadata?) => {
           pushEffect("sendMessage", { _tag: "QueueFollowUp", content, metadata })
@@ -710,29 +755,54 @@ export const extension = (
           return { stdout, stderr, exitCode }
         },
 
-        onStartup: (fn) => startupFns.push(fn),
-        onShutdown: (fn) => shutdownFns.push(fn),
+        onStartup: (fn) => {
+          _startupFns.push(fn)
+          return builder
+        },
+        onShutdown: (fn) => {
+          _shutdownFns.push(fn)
+          return builder
+        },
 
         // Full-power methods
 
         actor: (actor) => {
-          if (actorResult !== undefined) {
-            throw new Error(`extension "${id}": actor() can only be called once`)
-          }
-          actorResult = actor
+          guardSingle("actor", _actorResult)
+          _actorResult = actor
+          return builder
         },
 
         layer: (l) => {
-          layers.push(l)
+          guardSingle("layer", _layer)
+          _layer = l as Layer.Layer<never, never, object>
+          return builder
         },
-        provider: (p) => providers.push(p),
-        jobs: (...entries) => jobs.push(...entries),
-        onStartupEffect: (e) => startupEffects.push(e),
-        onShutdownEffect: (e) => shutdownEffects.push(e),
+        provider: (p) => {
+          guardSingle("provider", _provider)
+          _provider = p
+          return builder
+        },
+        jobs: (...entries) => {
+          guardSingle("jobs", _jobs)
+          _jobs = [...entries]
+          return builder
+        },
+        onStartupEffect: (e) => {
+          _startupEffects.push(e)
+          return builder
+        },
+        onShutdownEffect: (e) => {
+          _shutdownEffects.push(e)
+          return builder
+        },
+        bus: (pattern, handler) => {
+          _busSubscriptions.push({ pattern, handler })
+          return builder
+        },
         async: {
           on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
             if (key === "turn.after") {
-              interceptors.push(
+              _interceptors.push(
                 defineInterceptor(
                   key,
                   wrapFireAndForgetHandler(
@@ -743,7 +813,7 @@ export const extension = (
                 ),
               )
             } else {
-              interceptors.push(
+              _interceptors.push(
                 defineInterceptor(
                   key,
                   wrapTransformHandler(
@@ -759,47 +829,37 @@ export const extension = (
           }) as any,
           command: (name, options) => registerCommand(name, options),
         },
-        bus: {
-          on: (pattern, handler) => busSubscriptions.push({ pattern, handler }),
-        },
       }
 
       // Run factory — sync factories stay sync (no Promise.resolve tick)
       const factoryResult = Effect.try({
-        try: () => factory(builder, ctx),
+        try: () => factory({ ext: builder as ExtensionBuilder<never>, ctx }),
         catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
       })
       const result = yield* factoryResult
       // If factory returned a Promise, await it
-      if (result !== undefined && typeof (result as Promise<void>).then === "function") {
+      if (result !== undefined && typeof (result as Promise<unknown>).then === "function") {
         yield* Effect.tryPromise({
-          try: () => result as Promise<void>,
+          try: () => result as Promise<unknown>,
           catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
         })
       }
 
-      let mergedLayer: Layer.Layer<never, never, object> | undefined
-      const [firstLayer, ...remainingLayers] = layers
-      if (firstLayer !== undefined) {
-        mergedLayer = remainingLayers.reduce<Layer.Layer<never, never, object>>(
-          (current, layer) => Layer.merge(current, layer),
-          firstLayer,
-        )
-      }
-
-      const onStartup = mergeStartupHooks(startupFns, startupEffects)
-      const onShutdown = mergeShutdownHooks(shutdownFns, shutdownEffects)
+      const onStartup = mergeStartupHooks(_startupFns, _startupEffects)
+      const onShutdown = mergeShutdownHooks(_shutdownFns, _shutdownEffects)
       return {
-        ...(tools.length > 0 ? { tools } : {}),
-        ...(agents.length > 0 ? { agents } : {}),
-        ...(commands.length > 0 ? { commands } : {}),
-        ...(promptSections.length > 0 ? { promptSections } : {}),
-        ...(interceptors.length > 0 ? { hooks: { interceptors } } : {}),
-        ...(mergedLayer !== undefined ? { layer: mergedLayer } : {}),
-        ...(providers.length > 0 ? { providers } : {}),
-        ...(jobs.length > 0 ? { jobs } : {}),
-        ...(busSubscriptions.length > 0 ? { busSubscriptions } : {}),
-        ...(actorResult !== undefined ? { actor: actorResult } : {}),
+        ...(_tools !== undefined && _tools.length > 0 ? { tools: _tools } : {}),
+        ...(_agents !== undefined && _agents.length > 0 ? { agents: _agents } : {}),
+        ...(_commands.length > 0 ? { commands: _commands } : {}),
+        ...(_promptSections !== undefined && _promptSections.length > 0
+          ? { promptSections: _promptSections }
+          : {}),
+        ...(_interceptors.length > 0 ? { hooks: { interceptors: _interceptors } } : {}),
+        ...(_layer !== undefined ? { layer: _layer } : {}),
+        ...(_provider !== undefined ? { providers: [_provider] } : {}),
+        ...(_jobs !== undefined && _jobs.length > 0 ? { jobs: _jobs } : {}),
+        ...(_busSubscriptions.length > 0 ? { busSubscriptions: _busSubscriptions } : {}),
+        ...(_actorResult !== undefined ? { actor: _actorResult } : {}),
         onStartup,
         onShutdown,
       } satisfies ExtensionSetup

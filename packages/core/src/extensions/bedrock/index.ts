@@ -8,7 +8,7 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-export const BedrockExtension = extension("@gent/provider-bedrock", (ext) => {
+export const BedrockExtension = extension("@gent/provider-bedrock", ({ ext }) => {
   const bedrockProvider: ProviderContribution = {
     id: "bedrock",
     name: "AWS Bedrock",
@@ -30,5 +30,5 @@ export const BedrockExtension = extension("@gent/provider-bedrock", (ext) => {
     // No auth methods — Bedrock uses IAM credentials from AWS config/profiles
   }
 
-  ext.provider(bedrockProvider)
+  return ext.provider(bedrockProvider)
 })

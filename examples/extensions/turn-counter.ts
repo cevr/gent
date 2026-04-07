@@ -1,30 +1,14 @@
 /**
- * Example: Stateful extension with ext.actor(fromReducer(...)).
+ * Example: Stateful extension using promptSections to inject turn count.
  *
- * Tracks turn count and injects it into the system prompt.
+ * Tracks turn count via a prompt.system hook that increments a closure counter.
  */
-import { extension, fromReducer } from "@gent/core/extensions/api"
+import { extension } from "@gent/core/extensions/api"
 
-export default extension("turn-counter", (ext) => {
-  ext.actor(
-    fromReducer({
-      id: "turn-counter",
-      initial: { turns: 0 },
-      reduce: (state, event) => {
-        if (event._tag === "TurnCompleted") {
-          return { state: { turns: state.turns + 1 } }
-        }
-        return { state }
-      },
-      derive: (state) => ({
-        promptSections: [
-          {
-            id: "turn-count",
-            content: `This is turn ${state.turns + 1} of the conversation.`,
-            priority: 90,
-          },
-        ],
-      }),
-    }),
-  )
+export default extension("turn-counter", ({ ext }) => {
+  let turns = 0
+  return ext.on("prompt.system", (input, next) => {
+    turns++
+    return next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns}.` })
+  })
 })

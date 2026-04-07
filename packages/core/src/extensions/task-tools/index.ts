@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Event as MEvent, Machine, Slot, State as MState, type ProvideSlots } from "effect-machine"
 import { extension } from "../api.js"
 import { TaskCreateTool } from "./task-create.js"
@@ -401,12 +401,9 @@ const taskListActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-export const TaskExtension = extension("@gent/task-tools", (ext) => {
-  ext.tool(TaskCreateTool)
-  ext.tool(TaskListTool)
-  ext.tool(TaskGetTool)
-  ext.tool(TaskUpdateTool)
-  ext.layer(TaskStorage.Live)
-  ext.layer(TaskService.Live)
-  ext.actor(taskListActor)
-})
+export const TaskExtension = extension("@gent/task-tools", ({ ext }) =>
+  ext
+    .tools(TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool)
+    .layer(Layer.merge(TaskStorage.Live, TaskService.Live))
+    .actor(taskListActor),
+)

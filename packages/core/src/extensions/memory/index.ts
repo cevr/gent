@@ -197,14 +197,11 @@ const memoryActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-export const MemoryExtension = extension("@gent/memory", (ext) => {
-  for (const tool of MemoryTools as ReadonlyArray<AnyToolDefinition>) {
-    ext.tool(tool)
-  }
-  for (const agent of MemoryAgents) {
-    ext.agent(agent)
-  }
-  ext.actor(memoryActor)
-  ext.layer(MemoryVaultLive())
-  ext.jobs(...MemoryDreamJobs())
-})
+export const MemoryExtension = extension("@gent/memory", ({ ext }) =>
+  ext
+    .tools(...(MemoryTools as ReadonlyArray<AnyToolDefinition>))
+    .agents(...MemoryAgents)
+    .actor(memoryActor)
+    .layer(MemoryVaultLive())
+    .jobs(...MemoryDreamJobs()),
+)

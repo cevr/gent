@@ -8,7 +8,7 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-export const GoogleExtension = extension("@gent/provider-google", (ext) => {
+export const GoogleExtension = extension("@gent/provider-google", ({ ext }) => {
   const googleProvider: ProviderContribution = {
     id: "google",
     name: "Google",
@@ -25,5 +25,5 @@ export const GoogleExtension = extension("@gent/provider-google", (ext) => {
     },
   }
 
-  ext.provider(googleProvider)
+  return ext.provider(googleProvider)
 })

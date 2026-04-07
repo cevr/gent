@@ -9,11 +9,8 @@ Use the \`principles\` tool to read specific principles before making decisions.
 
 ${PRINCIPLE_NAMES.map((name) => `- ${name}`).join("\n")}`
 
-export const PrinciplesExtension = extension("@gent/principles", (ext) => {
-  ext.promptSection({
-    id: "principles",
-    content: PRINCIPLES_LIST,
-    priority: 55,
-  })
-  ext.tool(PrinciplesTool)
-})
+export const PrinciplesExtension = extension("@gent/principles", ({ ext }) =>
+  ext
+    .promptSections({ id: "principles", content: PRINCIPLES_LIST, priority: 55 })
+    .tools(PrinciplesTool),
+)

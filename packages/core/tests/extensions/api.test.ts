@@ -16,20 +16,21 @@ import { reducerActor } from "./helpers/reducer-actor"
 
 describe("extension api", () => {
   test("setup exposes declared tools, prompt sections, and agents", async () => {
-    const ext = extension("test-simple", (b) => {
-      b.tool({
-        name: "greet",
-        description: "Say hello",
-        parameters: { name: { type: "string" } },
-        execute: async (params) => `Hello, ${params.name}!`,
-      })
-      b.promptSection({ id: "custom-rules", content: "Be nice.", priority: 50 })
-      b.agent({
-        name: "helper",
-        model: "test/model",
-        description: "A helper agent",
-      })
-    })
+    const ext = extension("test-simple", ({ ext }) =>
+      ext
+        .tools({
+          name: "greet",
+          description: "Say hello",
+          parameters: { name: { type: "string" } },
+          execute: async (params) => `Hello, ${params.name}!`,
+        })
+        .promptSections({ id: "custom-rules", content: "Be nice.", priority: 50 })
+        .agents({
+          name: "helper",
+          model: "test/model",
+          description: "A helper agent",
+        }),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.tools?.map((tool) => tool.name)).toEqual(["greet"])
@@ -40,10 +41,11 @@ describe("extension api", () => {
   test("factory receives setup context and can be async", async () => {
     let receivedCwd = ""
     let receivedSource = ""
-    const ext = extension("ctx-test", async (_b, ctx) => {
+    const ext = extension("ctx-test", async ({ ext, ctx }) => {
       await Promise.resolve()
       receivedCwd = ctx.cwd
       receivedSource = ctx.source
+      return ext
     })
 
     await Effect.runPromise(
@@ -65,13 +67,14 @@ describe("extension api", () => {
   })
 
   test("interceptors register through the extension setup", async () => {
-    const ext = extension("hook-test", (b) => {
-      b.on("prompt.system", async (input, next) => {
-        const result = await next(input)
-        return `${result}\n-- Added by extension`
-      })
-      b.on("turn.after", async () => {})
-    })
+    const ext = extension("hook-test", ({ ext }) =>
+      ext
+        .on("prompt.system", async (input, next) => {
+          const result = await next(input)
+          return `${result}\n-- Added by extension`
+        })
+        .on("turn.after", async () => {}),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.hooks?.interceptors?.map((interceptor) => interceptor.key)).toEqual([
@@ -82,15 +85,16 @@ describe("extension api", () => {
 
   test("startup and shutdown hooks compose in registration order", async () => {
     const order: string[] = []
-    const ext = extension("lifecycle-test", (b) => {
-      b.onStartup(() => {
-        order.push("startup:sync")
-      })
-      b.onStartupEffect(Effect.sync(() => order.push("startup:effect")))
-      b.onShutdown(() => {
-        order.push("shutdown")
-      })
-    })
+    const ext = extension("lifecycle-test", ({ ext }) =>
+      ext
+        .onStartup(() => {
+          order.push("startup:sync")
+        })
+        .onStartupEffect(Effect.sync(() => order.push("startup:effect")))
+        .onShutdown(() => {
+          order.push("shutdown")
+        }),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
@@ -99,14 +103,15 @@ describe("extension api", () => {
   })
 
   test("integrates with extension registry", async () => {
-    const ext = extension("registry-test", (b) => {
-      b.tool({
-        name: "my_tool",
-        description: "test tool",
-        execute: async () => "ok",
-      })
-      b.promptSection({ id: "test-section", content: "test content", priority: 90 })
-    })
+    const ext = extension("registry-test", ({ ext }) =>
+      ext
+        .tools({
+          name: "my_tool",
+          description: "test tool",
+          execute: async () => "ok",
+        })
+        .promptSections({ id: "test-section", content: "test content", priority: 90 }),
+    )
 
     const loaded = {
       manifest: ext.manifest,
@@ -131,13 +136,14 @@ describe("extension api", () => {
   })
 
   test("ext.command() stores commands discoverable via listCommands", async () => {
-    const ext = extension("cmd-test", (b) => {
-      b.command("deploy", {
-        description: "Deploy the app",
-        handler: async (_args, _ctx) => {},
-      })
-      b.command("rollback", { handler: async () => {} })
-    })
+    const ext = extension("cmd-test", ({ ext }) =>
+      ext
+        .command("deploy", {
+          description: "Deploy the app",
+          handler: async (_args, _ctx) => {},
+        })
+        .command("rollback", { handler: async () => {} }),
+    )
 
     const loaded = {
       manifest: ext.manifest,
@@ -164,14 +170,14 @@ describe("extension api", () => {
 
   test("ext.on() handlers receive ExtensionHostContext", async () => {
     let receivedCtx: unknown = undefined
-    const ext = extension("ctx-forward-test", (b) => {
-      b.on("turn.after", (input, next, ctx) =>
+    const ext = extension("ctx-forward-test", ({ ext }) =>
+      ext.on("turn.after", (input, next, ctx) =>
         Effect.gen(function* () {
           yield* next(input)
           receivedCtx = ctx
         }),
-      )
-    })
+      ),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const loaded = {
@@ -211,25 +217,26 @@ describe("extension api", () => {
   })
 
   test("ext.exec() runs shell commands", async () => {
-    const ext = extension("exec-test", (b) => {
-      b.onStartup(async () => {
-        const result = await b.exec("echo", ["hello"])
+    const ext = extension("exec-test", ({ ext }) =>
+      ext.onStartup(async () => {
+        const result = await ext.exec("echo", ["hello"])
         expect(result.exitCode).toBe(0)
         expect(result.stdout.trim()).toBe("hello")
         expect(result.stderr).toBe("")
-      })
-    })
+      }),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
   })
   test("ext.async.on() handlers receive ExtensionContext with Promise methods", async () => {
     let receivedCtx: unknown = undefined
-    const ext = extension("async-ctx-test", (b) => {
-      b.async.on("turn.after", async (input, next, ctx) => {
+    const ext = extension("async-ctx-test", ({ ext }) => {
+      ext.async.on("turn.after", async (input, next, ctx) => {
         await next(input)
         receivedCtx = ctx
       })
+      return ext
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
@@ -278,10 +285,11 @@ describe("extension api", () => {
 
   test("ext.async.on() turn.after handler can skip next", async () => {
     let nextCalled = false
-    const ext = extension("async-skip-test", (b) => {
-      b.async.on("turn.after", async (_input, _next) => {
+    const ext = extension("async-skip-test", ({ ext }) => {
+      ext.async.on("turn.after", async (_input, _next) => {
         // intentionally not calling next
       })
+      return ext
     })
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
@@ -319,11 +327,11 @@ describe("extension api", () => {
   })
 
   test("message.input interceptor transforms user input", async () => {
-    const ext = extension("input-transform-test", (b) => {
-      b.on("message.input", (input, next) =>
+    const ext = extension("input-transform-test", ({ ext }) =>
+      ext.on("message.input", (input, next) =>
         next({ ...input, content: input.content.toUpperCase() }),
-      )
-    })
+      ),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     const resolved = resolveExtensions([
@@ -351,12 +359,16 @@ describe("extension api", () => {
   })
 
   test("message.input chain composes multiple interceptors", async () => {
-    const ext1 = extension("input-chain-1", (b) => {
-      b.on("message.input", (input, next) => next({ ...input, content: input.content + " [ext1]" }))
-    })
-    const ext2 = extension("input-chain-2", (b) => {
-      b.on("message.input", (input, next) => next({ ...input, content: input.content + " [ext2]" }))
-    })
+    const ext1 = extension("input-chain-1", ({ ext }) =>
+      ext.on("message.input", (input, next) =>
+        next({ ...input, content: input.content + " [ext1]" }),
+      ),
+    )
+    const ext2 = extension("input-chain-2", ({ ext }) =>
+      ext.on("message.input", (input, next) =>
+        next({ ...input, content: input.content + " [ext2]" }),
+      ),
+    )
 
     const setup1 = await Effect.runPromise(
       ext1.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
@@ -393,8 +405,8 @@ describe("extension api", () => {
 })
 
 describe("extension tools through ToolRunner.run", () => {
-  const ext = extension("runner-test", (b) => {
-    b.tool({
+  const ext = extension("runner-test", ({ ext }) =>
+    ext.tools({
       name: "format",
       description: "Formats a greeting",
       parameters: {
@@ -405,8 +417,8 @@ describe("extension tools through ToolRunner.run", () => {
         const count = (params.count as number | undefined) ?? 1
         return `Hello, ${params.name}! (x${String(count)})`
       },
-    })
-  })
+    }),
+  )
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let layer: Layer.Layer<any>
@@ -472,8 +484,8 @@ describe("extension tools through ToolRunner.run", () => {
 
 describe("state-backed extension api", () => {
   test("stateful actor extensions expose the actor surface only", async () => {
-    const ext = extension("state-agent-run-alias", (b) => {
-      b.actor(
+    const ext = extension("state-agent-run-alias", ({ ext }) =>
+      ext.actor(
         reducerActor({
           initial: { seenType: false, seenTag: false, seenRawTag: false },
           stateSchema: Schema.Struct({
@@ -500,8 +512,8 @@ describe("state-backed extension api", () => {
               : undefined,
           }),
         }),
-      )
-    })
+      ),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.actor).toBeDefined()
@@ -538,8 +550,8 @@ describe("state-backed extension api", () => {
   })
 
   test("jobs register through the minimal surface", async () => {
-    const ext = extension("jobs-test", (b) => {
-      b.jobs({
+    const ext = extension("jobs-test", ({ ext }) =>
+      ext.jobs({
         id: "reflect",
         schedule: "0 9 * * *",
         target: {
@@ -547,8 +559,8 @@ describe("state-backed extension api", () => {
           agent: "explore",
           prompt: "hello",
         },
-      })
-    })
+      }),
+    )
 
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     expect(setup.jobs?.map((job) => job.id)).toEqual(["reflect"])

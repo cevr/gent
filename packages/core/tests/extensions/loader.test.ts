@@ -194,7 +194,7 @@ describe("isClientFile", () => {
 
 describe("isGentExtension shape check", () => {
   test("extension() produces valid shape", () => {
-    const ext = extension("test-ext", () => {})
+    const ext = extension("test-ext", ({ ext }) => ext)
     expect(ext.manifest.id).toBe("test-ext")
     expect(typeof ext.setup).toBe("function")
   })

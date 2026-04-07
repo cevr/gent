@@ -129,8 +129,6 @@ const autoHandoffImpl = (
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
-export const HandoffExtension = extension(EXTENSION_ID, (ext) => {
-  ext.tool(HandoffTool)
-  ext.on("turn.after", autoHandoffImpl)
-  ext.actor(cooldownActor)
-})
+export const HandoffExtension = extension(EXTENSION_ID, ({ ext }) =>
+  ext.tools(HandoffTool).on("turn.after", autoHandoffImpl).actor(cooldownActor),
+)

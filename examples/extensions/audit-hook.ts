@@ -5,10 +5,10 @@
  */
 import { extension } from "@gent/core/extensions/api"
 
-export default extension("audit-hook", async (ext, ctx) => {
+export default extension("audit-hook", async ({ ext, ctx }) => {
   const logPrefix = `[audit:${ctx.cwd}]`
 
-  ext.on("turn.after", (input) => {
+  return ext.on("turn.after", (input) => {
     console.log(
       `${logPrefix} Turn completed: agent=${input.agentName}, duration=${input.durationMs}ms, interrupted=${String(input.interrupted)}`,
     )

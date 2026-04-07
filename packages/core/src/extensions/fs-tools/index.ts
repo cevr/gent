@@ -5,10 +5,6 @@ import { EditTool } from "./edit.js"
 import { GlobTool } from "./glob.js"
 import { GrepTool } from "./grep.js"
 
-export const FsToolsExtension = extension("@gent/fs-tools", (ext) => {
-  ext.tool(ReadTool)
-  ext.tool(WriteTool)
-  ext.tool(EditTool)
-  ext.tool(GlobTool)
-  ext.tool(GrepTool)
-})
+export const FsToolsExtension = extension("@gent/fs-tools", ({ ext }) =>
+  ext.tools(ReadTool, WriteTool, EditTool, GlobTool, GrepTool),
+)

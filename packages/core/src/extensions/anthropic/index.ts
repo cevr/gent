@@ -97,7 +97,7 @@ const loadCredentialsEffect = (
 const buildCredentialLoader = (cache: CredentialCache, authInfo?: ProviderAuthInfo) => () =>
   Effect.runPromise(loadCredentialsEffect(cache, authInfo))
 
-export const AnthropicExtension = extension("@gent/provider-anthropic", (ext) => {
+export const AnthropicExtension = extension("@gent/provider-anthropic", ({ ext }) => {
   const env: AnthropicKeychainEnv = {
     betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
     cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
@@ -181,5 +181,5 @@ export const AnthropicExtension = extension("@gent/provider-anthropic", (ext) =>
     },
   }
 
-  ext.provider(anthropicProvider)
+  return ext.provider(anthropicProvider)
 })
