@@ -243,6 +243,7 @@ export const CodeReviewTool = defineTool({
   promptSnippet: "Adversarial dual-model code review",
   promptGuidelines: [
     "report mode for read-only review, fix mode for single-cycle review+apply",
+    "Use report mode as a per-batch gate: after implementation, before commit",
     "For iterative review loops, start @gent/auto then call code_review each iteration",
     "Pass description to guide review focus",
   ],
