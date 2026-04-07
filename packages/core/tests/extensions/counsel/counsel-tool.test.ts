@@ -50,6 +50,7 @@ describe("CounselTool", () => {
           "read",
           "memory_search",
         ])
+        expect(capturedOverrides?.["systemPromptAddendum"]).toContain("focused second opinion")
         expect(result.mode).toBe("standard")
         expect(result.response).toBe("Looks good, minor concern about error handling.")
       }),
@@ -83,6 +84,7 @@ describe("CounselTool", () => {
           "websearch",
           "webfetch",
         ])
+        expect(capturedOverrides?.["systemPromptAddendum"]).toContain("thorough second opinion")
         expect(result.mode).toBe("deep")
         expect(result.response).toBe("After thorough analysis...")
       }),
@@ -132,21 +134,25 @@ describe("CounselTool", () => {
     )
   })
 
-  it.live("omits session ref for ephemeral results", () => {
+  it.live("uses counsel-worker agent with ephemeral persistence", () => {
+    let capturedAgent: { name: string; persistence?: string } | undefined
     const ctx = makeCtx({
-      agentRun: (params) =>
-        Effect.succeed({
+      agentRun: (params) => {
+        capturedAgent = { name: params.agent.name, persistence: params.agent.persistence }
+        return Effect.succeed({
           _tag: "success" as const,
           text: "Opinion here.",
           sessionId: "ephemeral-session" as SessionId,
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
-        }),
+        })
+      },
     })
 
     return CounselTool.execute({ prompt: "thoughts?" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.session).toBeUndefined()
+      Effect.map(() => {
+        expect(capturedAgent?.name).toBe("counsel-worker")
+        expect(capturedAgent?.persistence).toBe("ephemeral")
       }),
     )
   })

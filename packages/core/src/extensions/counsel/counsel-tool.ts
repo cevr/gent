@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, getDurableAgentRunSessionId } from "../../domain/agent.js"
+import { defineAgent } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
-import { requireText } from "../../runtime/workflow-helpers.js"
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,
@@ -47,7 +46,7 @@ const buildCounselPrompt = (prompt: string, context?: string) =>
 export const CounselTool = defineTool({
   name: "counsel",
   action: "delegate" as const,
-  concurrency: "serial" as const,
+  concurrency: "parallel" as const,
   description:
     "Get a cross-vendor second opinion. Deep mode for thorough analysis with exploration tools. Standard mode for quick focused opinions.",
   promptSnippet: "Cross-vendor second opinion",
@@ -89,20 +88,9 @@ export const CounselTool = defineTool({
     })
 
     if (result._tag === "error") {
-      const sessionId = getDurableAgentRunSessionId(result)
-      return {
-        error: result.error,
-        ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
-      }
+      return { error: result.error }
     }
 
-    const text = yield* requireText(result, "counsel")
-    const sessionId = getDurableAgentRunSessionId(result)
-
-    return {
-      mode,
-      response: text,
-      ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
-    }
+    return { mode, response: result.text }
   }),
 })
