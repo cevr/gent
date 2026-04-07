@@ -77,20 +77,6 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("# Project Instructions")
   })
 
-  test("includes skills when provided", () => {
-    const result = buildSystemPrompt({
-      ...base,
-      skills: [{ name: "effect-v4", path: "/skills/effect-v4.md", content: "Effect patterns" }],
-    })
-    expect(result).toContain("effect-v4")
-  })
-
-  test("omits skills section when empty array", () => {
-    const result = buildSystemPrompt({ ...base, skills: [] })
-    const withoutSkills = buildSystemPrompt(base)
-    expect(result).toBe(withoutSkills)
-  })
-
   test("includes date in ISO format", () => {
     const result = buildSystemPrompt(base)
     expect(result).toMatch(/Date: \d{4}-\d{2}-\d{2}/)

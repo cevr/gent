@@ -3,22 +3,22 @@ import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect
 
 // Skill Schema
 
-export const SkillScope = Schema.Literals(["project", "global"])
-export type SkillScope = typeof SkillScope.Type
+export const SkillLevel = Schema.Literals(["local", "global"])
+export type SkillLevel = typeof SkillLevel.Type
 
 export class Skill extends Schema.Class<Skill>("Skill")({
   name: Schema.String,
   description: Schema.String,
   filePath: Schema.String,
   content: Schema.String,
-  scope: SkillScope,
+  level: SkillLevel,
 }) {}
 
 // Skills Service Interface
 
 export interface SkillsService {
   readonly list: () => Effect.Effect<ReadonlyArray<Skill>>
-  readonly get: (name: string) => Effect.Effect<Skill | undefined>
+  readonly get: (name: string, level?: SkillLevel) => Effect.Effect<Skill | undefined>
   readonly reload: () => Effect.Effect<void, PlatformError.PlatformError>
 }
 
@@ -29,9 +29,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
 ) {
   static Live = (options: {
     cwd: string
-    globalDir: string
-    claudeSkillsDir?: string
-    extraDirs?: ReadonlyArray<string>
+    home: string
     ignored?: ReadonlyArray<string>
   }): Layer.Layer<Skills, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> =>
     Layer.effect(
@@ -44,7 +42,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
 
         const loadSkillsFromDir = (
           dir: string,
-          scope: SkillScope,
+          level: SkillLevel,
         ): Effect.Effect<Skill[], PlatformError.PlatformError> =>
           Effect.gen(function* () {
             const exists = yield* fs.exists(dir)
@@ -65,7 +63,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
                     new Skill({
                       ...parsed,
                       filePath,
-                      scope,
+                      level,
                     }),
                   )
                 }
@@ -81,7 +79,7 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
                       new Skill({
                         ...parsed,
                         filePath: skillPath,
-                        scope,
+                        level,
                       }),
                     )
                   }
@@ -92,35 +90,68 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
             return result
           })
 
-        const loadAllSkills = Effect.gen(function* () {
-          const dirs: Array<{ path: string; scope: SkillScope }> = [
-            { path: path.join(options.cwd, ".gent", "skills"), scope: "project" as SkillScope },
-            { path: options.globalDir, scope: "global" as SkillScope },
-            ...(options.extraDirs ?? []).map((d) => ({
-              path: d,
-              scope: "global" as SkillScope,
-            })),
-          ]
-
-          if (options.claudeSkillsDir !== undefined) {
-            dirs.push({ path: options.claudeSkillsDir, scope: "global" as SkillScope })
+        // Find git root by walking up from cwd
+        const findGitRoot = Effect.gen(function* () {
+          let dir = options.cwd
+          while (true) {
+            const gitDir = path.join(dir, ".git")
+            const exists = yield* fs.exists(gitDir)
+            if (exists) return dir
+            const parent = path.dirname(dir)
+            if (parent === dir) return undefined
+            dir = parent
           }
+        })
 
-          const allSkills: Skill[] = []
-          const seenNames = new Set<string>()
+        const SKILL_DIRS = [".gent/skills", ".claude/skills", ".codex/skills", ".agents/skills"]
 
-          // Load from all dirs, project takes precedence
-          for (const entry of dirs) {
-            const dirSkills = yield* loadSkillsFromDir(entry.path, entry.scope)
+        const loadAllSkills = Effect.gen(function* () {
+          // ── Global sources ──
+          const globalDirs = SKILL_DIRS.map((d) => path.join(options.home, d))
+
+          const globalSkills: Skill[] = []
+          const globalSeen = new Set<string>()
+          for (const dir of globalDirs) {
+            const dirSkills = yield* loadSkillsFromDir(dir, "global")
             for (const skill of dirSkills) {
-              if (!seenNames.has(skill.name)) {
-                seenNames.add(skill.name)
-                allSkills.push(skill)
+              if (!globalSeen.has(skill.name)) {
+                globalSeen.add(skill.name)
+                globalSkills.push(skill)
               }
             }
           }
 
-          return allSkills
+          // ── Local sources ──
+          // Walk from cwd up to git root, collecting skill dirs at each ancestor.
+          // Closest to cwd wins dedup within local level.
+          const gitRoot = yield* findGitRoot
+          const stopAt = gitRoot ?? options.cwd
+
+          const localDirs: string[] = []
+          let current = options.cwd
+          while (true) {
+            for (const d of SKILL_DIRS) {
+              localDirs.push(path.join(current, d))
+            }
+            if (current === stopAt) break
+            const parent = path.dirname(current)
+            if (parent === current) break
+            current = parent
+          }
+
+          const localSkills: Skill[] = []
+          const localSeen = new Set<string>()
+          for (const dir of localDirs) {
+            const dirSkills = yield* loadSkillsFromDir(dir, "local")
+            for (const skill of dirSkills) {
+              if (!localSeen.has(skill.name)) {
+                localSeen.add(skill.name)
+                localSkills.push(skill)
+              }
+            }
+          }
+
+          return [...localSkills, ...globalSkills]
         })
 
         // Initial load
@@ -128,8 +159,8 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
 
         return {
           list: () => Ref.get(skillsRef),
-          get: (name) =>
-            Ref.get(skillsRef).pipe(Effect.map((skills) => skills.find((s) => s.name === name))),
+          get: (name, level) =>
+            Ref.get(skillsRef).pipe(Effect.map((skills) => resolveSkillName(skills, name, level))),
           reload: () => loadAllSkills.pipe(Effect.flatMap((loaded) => Ref.set(skillsRef, loaded))),
         }
       }),
@@ -138,14 +169,49 @@ export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
   static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
     Layer.succeed(Skills, {
       list: () => Effect.succeed(testSkills),
-      get: (name) => Effect.succeed(testSkills.find((s) => s.name === name)),
+      get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
       reload: () => Effect.void as Effect.Effect<void, PlatformError.PlatformError>,
     })
 }
 
+// Resolve a skill name with optional level qualifier
+
+export function resolveSkillName(
+  skills: ReadonlyArray<Skill>,
+  name: string,
+  level?: SkillLevel,
+): Skill | undefined {
+  // Parse "$skill:level" syntax
+  const colonIdx = name.lastIndexOf(":")
+  let parsedName = name
+  let parsedLevel = level
+  if (colonIdx > 0) {
+    const suffix = name.slice(colonIdx + 1)
+    if (suffix === "local" || suffix === "global") {
+      parsedName = name.slice(0, colonIdx)
+      parsedLevel = suffix
+    }
+  }
+
+  // Strip leading $ if present
+  if (parsedName.startsWith("$")) {
+    parsedName = parsedName.slice(1)
+  }
+
+  if (parsedLevel !== undefined) {
+    return skills.find((s) => s.name === parsedName && s.level === parsedLevel)
+  }
+
+  // No level specified: local first, then global
+  return (
+    skills.find((s) => s.name === parsedName && s.level === "local") ??
+    skills.find((s) => s.name === parsedName && s.level === "global")
+  )
+}
+
 // Parse skill file with frontmatter
 
-function parseSkillFile(
+export function parseSkillFile(
   content: string,
   filename: string,
 ): { name: string; description: string; content: string } | null {
@@ -198,22 +264,25 @@ function parseSkillFile(
 export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
   if (skills.length === 0) return ""
 
-  // Detect name collisions across scopes
-  const nameCounts = new Map<string, number>()
-  for (const s of skills) {
-    nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1)
+  const globalSkills = skills.filter((s) => s.level === "global")
+  const localSkills = skills.filter((s) => s.level === "local")
+
+  const formatList = (list: ReadonlyArray<Skill>): string =>
+    list.map((s) => `- **${s.name}**: ${s.description}`).join("\n")
+
+  const sections: string[] = []
+
+  if (localSkills.length > 0) {
+    sections.push(`## Local\n${formatList(localSkills)}`)
+  }
+  if (globalSkills.length > 0) {
+    sections.push(`## Global\n${formatList(globalSkills)}`)
   }
 
-  const skillsList = skills
-    .map((s) => {
-      const displayName = (nameCounts.get(s.name) ?? 0) > 1 ? `${s.name} (${s.scope})` : s.name
-      return `- **${displayName}**: ${s.description}`
-    })
-    .join("\n")
-
   return `<available_skills>
-${skillsList}
+${sections.join("\n\n")}
 
-To use a skill, ask the user to invoke it with: /skill <skill-name>
+Use the \`skills\` tool to load skill content. Use \`search_skills\` to find skills by context.
+When you see \`$skill-name\`, load it with the skills tool. Use \`$skill:local\` or \`$skill:global\` to specify level.
 </available_skills>`
 }

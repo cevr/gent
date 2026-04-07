@@ -2,7 +2,6 @@
  * System prompt construction via ordered sections
  */
 
-import { formatSkillsForPrompt, type Skill } from "../domain/skills.js"
 import type { PromptSection } from "../domain/prompt.js"
 
 export type { PromptSection } from "../domain/prompt.js"
@@ -63,9 +62,8 @@ export function buildBasePromptSections(options: {
   shell?: string
   osVersion?: string
   customInstructions?: string
-  skills?: ReadonlyArray<Skill>
 }): ReadonlyArray<PromptSection> {
-  const { cwd, platform, isGitRepo, shell, osVersion, customInstructions, skills } = options
+  const { cwd, platform, isGitRepo, shell, osVersion, customInstructions } = options
   const date = new Date().toISOString().split("T")[0]
   const platformDisplay = osVersion !== undefined ? `${platform} (${osVersion})` : platform
 
@@ -95,11 +93,6 @@ export function buildBasePromptSections(options: {
     })
   }
 
-  const skillsBlock = skills !== undefined ? formatSkillsForPrompt(skills) : ""
-  if (skillsBlock !== "") {
-    sections.push({ id: "skills", content: skillsBlock, priority: 80 })
-  }
-
   return sections
 }
 
@@ -114,7 +107,6 @@ export function buildSystemPrompt(options: {
   shell?: string
   osVersion?: string
   customInstructions?: string
-  skills?: ReadonlyArray<Skill>
 }): string {
   return compileSystemPrompt(buildBasePromptSections(options))
 }

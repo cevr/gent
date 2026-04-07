@@ -68,4 +68,4 @@ export {
   type ExtractedToolCall,
 } from "./client.js"
 
-export type { SkillScope } from "./client.js"
+export type { SkillLevel } from "./client.js"

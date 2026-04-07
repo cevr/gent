@@ -50,7 +50,7 @@ export const SearchSkillsTool = defineTool({
         name: skill.name,
         description: skill.description,
         filePath: skill.filePath,
-        scope: skill.scope,
+        level: skill.level,
         ...(params.includeContent === true ? { content: skill.content } : {}),
       })),
     }

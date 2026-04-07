@@ -260,7 +260,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             list.map((s) => ({
               name: s.name,
               description: s.description,
-              scope: s.scope,
+              level: s.level,
               filePath: s.filePath,
               content: s.content,
             })),
@@ -274,7 +274,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               ? {
                   name: s.name,
                   description: s.description,
-                  scope: s.scope,
+                  level: s.level,
                   filePath: s.filePath,
                   content: s.content,
                 }

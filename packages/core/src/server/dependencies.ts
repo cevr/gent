@@ -53,7 +53,6 @@ export interface DependenciesConfig {
   dbPath?: string
   authFilePath?: string
   authKeyPath?: string
-  skillsDirs?: ReadonlyArray<string>
   persistenceMode?: "disk" | "memory"
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
@@ -214,9 +213,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
   const skillsLive = Skills.Live({
     cwd: config.cwd,
-    globalDir: `${config.home}/.gent/skills`,
-    claudeSkillsDir: `${config.home}/.claude/skills`,
-    extraDirs: config.skillsDirs,
+    home: config.home,
   })
   // Extension registry needs storageLive for SqlClient (extension task layers use it)
   const extensionRegistryLive = Layer.provide(makeExtensionLayers(config), storageLive)
@@ -347,13 +344,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
-        const skills = yield* Skills
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const configService = yield* ConfigService
 
         const customInstructions = yield* configService.loadInstructions(config.cwd)
-        const availableSkills = yield* skills.list()
         const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
         const registry = yield* ExtensionRegistry
         const extensionSections = yield* registry.listPromptSections()
@@ -366,7 +361,6 @@ export const createDependencies = (config: DependenciesConfig) => {
           osVersion: config.osVersion,
           isGitRepo,
           customInstructions,
-          skills: availableSkills,
         })
         const sectionMap = new Map(coreSections.map((s) => [s.id, s]))
         for (const s of extensionSections) {

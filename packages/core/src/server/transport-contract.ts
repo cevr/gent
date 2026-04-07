@@ -9,7 +9,7 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
-import { SkillScope } from "../domain/skills.js"
+import { SkillLevel } from "../domain/skills.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -464,7 +464,7 @@ export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 export const SkillInfo = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
-  scope: SkillScope,
+  level: SkillLevel,
   filePath: Schema.String,
 })
 export type SkillInfo = typeof SkillInfo.Type
@@ -472,7 +472,7 @@ export type SkillInfo = typeof SkillInfo.Type
 export const SkillContent = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
-  scope: SkillScope,
+  level: SkillLevel,
   filePath: Schema.String,
   content: Schema.String,
 })

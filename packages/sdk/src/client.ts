@@ -42,7 +42,7 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
-import type { SkillScope } from "@gent/core/domain/skills.js"
+import type { SkillLevel } from "@gent/core/domain/skills.js"
 import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
 import { startLocalSupervisor } from "./local-supervisor.js"
 import {
@@ -88,7 +88,7 @@ export type { GentNamespacedClient, GentRuntime }
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
-export type { SkillScope }
+export type { SkillLevel }
 
 // RPC client type alias
 export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
