@@ -68,10 +68,14 @@ export const buildTurnPrompt = (
   }
 
   // Delegation targets — synthesized from registered agents when delegate is available
+  // Internal agents are hidden — only user-facing agents appear as delegation targets
+  const INTERNAL_AGENTS = new Set(["auditor", "architect", "summarizer", "title", "librarian"])
   const hasDelegate = tools.some((t) => t.name === "delegate")
   if (hasDelegate && delegationTargets !== undefined && delegationTargets.length > 0) {
     const targets = delegationTargets
-      .filter((a) => a.name !== agent.name && a.description !== undefined)
+      .filter(
+        (a) => a.name !== agent.name && a.description !== undefined && !INTERNAL_AGENTS.has(a.name),
+      )
       .map((a) => `- **${a.name}**: ${a.description}`)
     if (targets.length > 0) {
       sections.push({

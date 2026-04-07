@@ -75,7 +75,8 @@ Deepwork agent. Thorough analysis, careful tradeoffs, explicit assumptions.
 `.trim()
 
 export const EXPLORE_PROMPT = `
-Explore agent. Rapid codebase scanning.
+Explore agent. Rapid codebase scanning and multi-step search.
+- Chain grep/read/glob to answer precisely. Be exhaustive.
 - Report: file paths, line numbers, brief context.
 - End with next steps or open questions.
 `.trim()
@@ -99,11 +100,6 @@ Use read, grep, and glob tools to explore the code. Be precise — cite file pat
 - Comparative architecture: compare 2-3 implementations before recommending.
 - Pattern: fetch → explore → cite → compare.
 - Always ground conclusions in specific file paths and line numbers.
-`.trim()
-
-export const FINDER_PROMPT = `
-Finder agent. Multi-step codebase search specialist. Chain grep/read/glob to answer precisely.
-Report file paths and line numbers. Be exhaustive but concise.
 `.trim()
 
 export const AUDITOR_PROMPT = `
@@ -175,15 +171,6 @@ export const Agents = {
     model: "openai/gpt-5.4-mini" as ModelId,
     allowedTools: [],
     temperature: 0.5,
-    persistence: "ephemeral",
-  }),
-
-  finder: defineAgent({
-    name: "finder",
-    description: "Fast multi-step codebase search via cheap model",
-    model: "openai/gpt-5.4-mini" as ModelId,
-    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
-    systemPromptAddendum: FINDER_PROMPT,
     persistence: "ephemeral",
   }),
 
