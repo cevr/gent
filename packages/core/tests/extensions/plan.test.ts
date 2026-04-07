@@ -221,7 +221,7 @@ describe("Plan actor", () => {
   })
 
   describe("send", () => {
-    it.live("togglePlan — normal → plan", () =>
+    it.live("toggling from normal enters plan mode", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -238,7 +238,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("togglePlan — plan → normal", () =>
+    it.live("toggling from plan returns to normal", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -255,7 +255,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("executePlan — plan with no steps → no-op", () =>
+    it.live("executing plan without steps stays in plan mode", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -272,7 +272,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("executePlan — normal mode → no-op", () =>
+    it.live("executing plan from normal mode does nothing", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -288,7 +288,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("refinePlan — plan mode → resets steps", () =>
+    it.live("refining in plan mode clears steps", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -306,7 +306,7 @@ describe("Plan actor", () => {
       }).pipe(Effect.provide(makeLayer())),
     )
 
-    it.live("refinePlan — normal mode → no-op", () =>
+    it.live("refining from normal mode does nothing", () =>
       Effect.gen(function* () {
         const runtime = yield* ExtensionStateRuntime
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -390,7 +390,7 @@ describe("Plan pure reducer — executing behavior", () => {
     expect(result.state).toBe(state)
   })
 
-  test("executePlan intent — plan with steps → executing", () => {
+  test("executing plan with steps enters executing mode", () => {
     const state: PlanState = {
       mode: "plan",
       steps: [{ id: 1, text: "A", status: "pending" }],
@@ -399,7 +399,7 @@ describe("Plan pure reducer — executing behavior", () => {
     expect(result.state.mode).toBe("executing")
   })
 
-  test("togglePlan — executing → normal", () => {
+  test("toggling from executing returns to normal", () => {
     const state: PlanState = {
       mode: "executing",
       steps: [{ id: 1, text: "A", status: "pending" }],
@@ -408,7 +408,7 @@ describe("Plan pure reducer — executing behavior", () => {
     expect(result.state.mode).toBe("normal")
   })
 
-  test("refinePlan — executing → plan with cleared steps", () => {
+  test("refining from executing returns to plan with cleared steps", () => {
     const state: PlanState = {
       mode: "executing",
       steps: [

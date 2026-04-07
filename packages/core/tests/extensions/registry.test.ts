@@ -262,19 +262,19 @@ describe("ExtensionRegistry", () => {
     )
   }
 
-  test("getTool returns tool by name", async () => {
+  test("registered tool is findable by name", async () => {
     const registry = await buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })])
     const tool = await Effect.runPromise(registry.getTool("read"))
     expect(tool?.name).toBe("read")
   })
 
-  test("getTool returns undefined for missing tool", async () => {
+  test("unregistered tool name returns undefined", async () => {
     const registry = await buildRegistry([])
     const tool = await Effect.runPromise(registry.getTool("nonexistent"))
     expect(tool).toBeUndefined()
   })
 
-  test("listTools returns all tools", async () => {
+  test("lists all registered tools across extensions", async () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
     ])
@@ -328,7 +328,7 @@ describe("ExtensionRegistry", () => {
     ])
   })
 
-  test("getAgent returns agent by name", async () => {
+  test("registered agent is findable by name", async () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", { agents: [makeAgent("explore")] }),
     ])
@@ -336,7 +336,7 @@ describe("ExtensionRegistry", () => {
     expect(agent?.name).toBe("explore")
   })
 
-  test("listAgents returns all registered agents", async () => {
+  test("lists all agents including override winners", async () => {
     const cowork = new AgentDefinition({
       name: "cowork" as never,
       model: "anthropic/claude-opus-4-6" as never,
@@ -432,7 +432,7 @@ describe("ExtensionRegistry", () => {
     expect(tools.map((t) => t.name)).not.toContain("secret")
   })
 
-  test("getProvider returns provider by id", async () => {
+  test("registered provider is findable by ID", async () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", { providers: [makeProvider("anthropic")] }),
     ])
@@ -440,13 +440,13 @@ describe("ExtensionRegistry", () => {
     expect(provider?.id).toBe("anthropic")
   })
 
-  test("getProvider returns undefined for missing provider", async () => {
+  test("unregistered provider ID returns undefined", async () => {
     const registry = await buildRegistry([])
     const provider = await Effect.runPromise(registry.getProvider("nonexistent"))
     expect(provider).toBeUndefined()
   })
 
-  test("listProviders returns all providers", async () => {
+  test("lists all registered providers", async () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", {
         providers: [makeProvider("anthropic"), makeProvider("openai")],
@@ -456,7 +456,7 @@ describe("ExtensionRegistry", () => {
     expect(providers.length).toBe(2)
   })
 
-  test("Test layer provides empty registry", async () => {
+  test("test layer starts with empty registry", async () => {
     const registry = await ManagedRuntime.make(ExtensionRegistry.Test()).runPromise(
       Effect.gen(function* () {
         return yield* ExtensionRegistry

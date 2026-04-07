@@ -43,7 +43,7 @@ const withEventPublisher = (
 ) => Layer.provide(EventPublisherLive, Layer.merge(baseEventStoreLayer, stateRuntimeLayer))
 
 describe("AgentExecutionOverrides", () => {
-  test("resolveDualModelPair returns cowork/deepwork models from registry", () => {
+  test("dual model pair resolves to cowork and deepwork models", () => {
     const registry = resolveExtensions([
       {
         manifest: { id: "agents" },
@@ -62,7 +62,7 @@ describe("AgentExecutionOverrides", () => {
     }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
-  test("overrides thread through AgentRunner to AgentLoop.runOnce", async () => {
+  test("execution overrides reach the agent loop", async () => {
     let capturedInput:
       | {
           sessionId: SessionId

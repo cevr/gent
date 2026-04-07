@@ -11,21 +11,21 @@ describe("AuthStore", () => {
   const storeLayer = (initial: Record<string, string> = {}) =>
     Layer.provide(AuthStore.Live, AuthStorage.Test(initial))
 
-  it.live("get returns undefined for missing key", () =>
+  it.live("missing auth key returns undefined", () =>
     AuthStore.use((auth) => auth.get("anthropic")).pipe(
       Effect.tap((result) => Effect.sync(() => expect(result).toBeUndefined())),
       Effect.provide(storeLayer()),
     ),
   )
 
-  it.live("get returns stored api auth", () =>
+  it.live("stored API key is retrievable", () =>
     AuthStore.use((auth) => auth.get("anthropic")).pipe(
       Effect.tap((result) => Effect.sync(() => expect(result?.type).toBe("api"))),
       Effect.provide(storeLayer({ anthropic: "sk-test-key" })),
     ),
   )
 
-  it.live("set stores api auth for retrieval", () =>
+  it.live("API key persists across reads", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("openai", new AuthApi({ type: "api", key: "sk-openai-key" }))
@@ -34,7 +34,7 @@ describe("AuthStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   )
 
-  it.live("set stores oauth auth for retrieval", () =>
+  it.live("OAuth token persists across reads", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set(
@@ -51,7 +51,7 @@ describe("AuthStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   )
 
-  it.live("listInfo returns auth info for all providers", () =>
+  it.live("lists auth info for all configured providers", () =>
     AuthStore.use((auth) => auth.listInfo()).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
@@ -63,7 +63,7 @@ describe("AuthStore", () => {
     ),
   )
 
-  it.live("remove deletes keys", () =>
+  it.live("removed key is no longer retrievable", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("openai", new AuthApi({ type: "api", key: "key" }))
@@ -73,7 +73,7 @@ describe("AuthStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   )
 
-  it.live("list returns stored provider ids", () =>
+  it.live("lists all stored provider IDs", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
       yield* auth.set("anthropic", new AuthApi({ type: "api", key: "k1" }))
