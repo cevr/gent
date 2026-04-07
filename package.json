@@ -15,7 +15,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "test:e2e": "turbo run test:e2e",
-    "gate": "concurrently -n type,lint,fmt,build,test -c blue,yellow,magenta,cyan,green \"bun run typecheck\" \"bun run lint\" \"bun run fmt\" \"bun run build\" \"bun run test\"",
+    "gate": "concurrently -n type,style,build,test -c blue,yellow,cyan,green \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"
