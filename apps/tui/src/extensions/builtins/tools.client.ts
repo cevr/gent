@@ -24,6 +24,40 @@ export default defineClientExtension({
           ),
       },
       {
+        id: "tools.counsel",
+        title: "Counsel",
+        description: "Get a cross-vendor second opinion",
+        category: "Tools",
+        slash: "counsel",
+        onSelect: () =>
+          ctx.sendMessage(
+            "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+          ),
+        onSlash: (args) =>
+          ctx.sendMessage(
+            args.trim().length > 0
+              ? `Use the counsel tool: ${args.trim()}`
+              : "Use the counsel tool in standard mode to get a second opinion on the current approach.",
+          ),
+      },
+      {
+        id: "tools.research",
+        title: "Research",
+        description: "Research external repositories",
+        category: "Tools",
+        slash: "research",
+        onSelect: () =>
+          ctx.sendMessage(
+            "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+          ),
+        onSlash: (args) =>
+          ctx.sendMessage(
+            args.trim().length > 0
+              ? `Use the research tool: ${args.trim()}`
+              : "Use the research tool to understand how an external library or framework works. Ask me which repo to research.",
+          ),
+      },
+      {
         id: "tools.loop",
         title: "Loop",
         description: "Iterate until condition met",

@@ -195,6 +195,8 @@ describe("loadTuiExtensions integration", () => {
     expect(resolved.renderers.has("webfetch")).toBe(true)
     expect(resolved.renderers.has("delegate")).toBe(true)
     expect(resolved.renderers.has("review")).toBe(true)
+    expect(resolved.renderers.has("counsel")).toBe(true)
+    expect(resolved.renderers.has("research")).toBe(true)
     expect(resolved.renderers.has("search_sessions")).toBe(true)
     expect(resolved.renderers.has("read_session")).toBe(true)
 

@@ -130,6 +130,12 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
   },
   delegate: summarizeDelegate,
   review: (args) => truncateText(getStringArg(args, "description"), 50),
+  counsel: (args) => {
+    const mode = getStringArg(args, "mode")
+    const prompt = truncateText(getStringArg(args, "prompt"), 40)
+    return mode.length > 0 ? `${mode}: ${prompt}` : prompt
+  },
+  research: (args) => truncateText(getStringArg(args, "question"), 50),
   search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
   handoff: (args) => truncateText(getStringArg(args, "reason"), 50),
