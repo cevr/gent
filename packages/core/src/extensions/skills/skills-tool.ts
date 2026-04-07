@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { Skills, resolveSkillName, type SkillLevel } from "../../domain/skills.js"
+import { Skills, resolveSkillName } from "../../domain/skills.js"
 import { defineTool } from "../../domain/tool.js"
 
 export const SkillsParams = Schema.Struct({
@@ -43,7 +43,7 @@ export const SkillsTool = defineTool({
     const notFound: string[] = []
 
     for (const name of params.names) {
-      const skill = resolveSkillName(allSkills, name, params.level as SkillLevel | undefined)
+      const skill = resolveSkillName(allSkills, name, params.level)
       if (skill !== undefined) {
         results.push(`## ${skill.name} (${skill.level})\n\n${skill.content}`)
       } else {
