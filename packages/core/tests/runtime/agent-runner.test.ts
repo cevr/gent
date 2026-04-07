@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { FinishChunk, Provider, TextChunk, ToolCallChunk } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
@@ -18,6 +18,7 @@ import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { defineTool } from "@gent/core/domain/tool"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import {
@@ -25,7 +26,17 @@ import {
   type ExtensionStateRuntimeService,
 } from "@gent/core/runtime/extensions/state-runtime"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { Permission } from "@gent/core/domain/permission"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
+
+const bashStubTool = defineTool({
+  name: "bash",
+  description: "Stub bash tool for tests",
+  params: Schema.Struct({ command: Schema.String }),
+  execute: (params) => Effect.succeed({ output: params.command }),
+})
 
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -33,7 +44,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
       manifest: { id: "agents" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { agents: Object.values(Agents) },
+      setup: { agents: Object.values(Agents), tools: [bashStubTool] },
     },
   ]),
 )
@@ -42,6 +53,13 @@ const withEventPublisher = (
   baseEventStoreLayer: Layer.Layer<EventStore>,
   stateRuntimeLayer: Layer.Layer<ExtensionStateRuntime> = ExtensionStateRuntime.Test(),
 ) => Layer.provide(EventPublisherLive, Layer.merge(baseEventStoreLayer, stateRuntimeLayer))
+
+// Extra services the parent context needs for ephemeral child runtime
+const ephemeralParentDeps = Layer.mergeAll(
+  BunServices.layer,
+  Permission.Live([], "allow"),
+  RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+)
 
 describe("AgentExecutionOverrides", () => {
   test("dual model pair resolves to cowork and deepwork models", () => {
@@ -99,7 +117,9 @@ describe("AgentExecutionOverrides", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -166,7 +186,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -249,7 +271,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -309,7 +333,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({ timeoutMs: 5 }).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -371,7 +397,9 @@ describe("AgentRunner", () => {
         isRunning: () => Effect.succeed(false),
       }),
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -448,7 +476,9 @@ describe("AgentRunner", () => {
         isRunning: () => Effect.succeed(false),
       }),
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -546,7 +576,9 @@ describe("AgentRunner", () => {
         isRunning: () => Effect.succeed(false),
       }),
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     await Effect.runPromise(
@@ -605,7 +637,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -689,7 +723,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -768,7 +804,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(
@@ -842,7 +880,9 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
     )
-    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
     const layer = Layer.mergeAll(deps, runnerLayer)
 
     const result = await Effect.runPromise(

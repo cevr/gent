@@ -245,6 +245,9 @@ export interface ExtensionRegistryService {
 
   // Hooks
   readonly hooks: CompiledHookMap
+
+  // Raw resolved data — needed for rebuilding extension services in child runtimes
+  readonly getResolved: () => ResolvedExtensions
 }
 
 export class ExtensionRegistry extends ServiceMap.Service<
@@ -311,6 +314,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       hooks: resolved.hooks,
+      getResolved: () => resolved,
     })
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>

@@ -9,6 +9,7 @@ import {
   ManagedRuntime,
   Stream,
 } from "effect"
+import type { ServiceMap } from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -39,14 +40,13 @@ import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { ToolRunner, type ToolRunnerService } from "./tool-runner.js"
-import { Provider, type ProviderService } from "../../providers/provider.js"
-import {
-  ExtensionStateRuntime,
-  type ExtensionStateRuntimeService,
-} from "../extensions/state-runtime.js"
+import { ToolRunner } from "./tool-runner.js"
+import type { Provider } from "../../providers/provider.js"
+import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { ExtensionEventBus } from "../extensions/event-bus.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
+import { PromptPresenter } from "../../domain/prompt-presenter.js"
+import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -424,43 +424,92 @@ const makeSharedRunnerHelpers = (
   }
 }
 
-const NoopExtensionStateRuntime: ExtensionStateRuntimeService = {
-  publish: () => Effect.succeed(false),
-  deriveAll: () => Effect.succeed([]),
-  send: () => Effect.die("ephemeral agent runs do not support extension command sends"),
-  ask: () => Effect.die("ephemeral agent runs do not support extension requests"),
-  getUiSnapshots: () => Effect.succeed([]),
-  getActorStatuses: () => Effect.succeed([]),
-  terminateAll: () => Effect.void,
-}
-
-const buildEphemeralLoopLayer = (params: {
+const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
+  parentServices: ServiceMap.ServiceMap<never>
   extensionRegistry: ExtensionRegistryService
-  provider: ProviderService
-  toolRunner: ToolRunnerService
 }) => {
+  const parentLayer = Layer.succeedServices(params.parentServices)
+
+  const resolved = params.extensionRegistry.getResolved()
+
+  // Ephemeral storage (in-memory SQLite — discarded after run)
   const storageLayer = Storage.MemoryWithSql()
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-  const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, NoopExtensionStateRuntime)
+
+  // Extension runtime — rebuilt locally to avoid cross-wiring parent's TurnControl
+  const extensionTurnControlLayer = ExtensionTurnControl.Live
+  const extensionStateRuntimeLayer = ExtensionStateRuntime.Live(resolved.extensions).pipe(
+    Layer.provide(extensionTurnControlLayer),
+  )
+
+  // Bus subscriptions for local extension actor routing
+  const busSubscriptions = resolved.extensions.flatMap((ext) =>
+    (ext.setup.busSubscriptions ?? []).map((sub) => ({
+      pattern: sub.pattern,
+      handler: sub.handler as (envelope: {
+        channel: string
+        payload: unknown
+        sessionId?: string
+        branchId?: string
+      }) => void | Promise<void>,
+    })),
+  )
+  const extensionEventBusLayer = ExtensionEventBus.withSubscriptions(busSubscriptions)
+
+  // Non-interactive approval (auto-approve all, cancel ask-user)
+  const approvalLayer = ApprovalService.LiveAutoResolve
+
+  // Event publisher on ephemeral storage — must include bus so extension subscriptions fire
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
-    Layer.merge(eventStoreLayer, stateRuntimeLayer),
+    Layer.mergeAll(eventStoreLayer, extensionStateRuntimeLayer, extensionEventBusLayer),
   )
-  const deps = Layer.mergeAll(
+
+  // PromptPresenter built on auto-resolve ApprovalService — parent first so local approval wins
+  const promptPresenterLayer = Layer.provide(
+    PromptPresenter.Live,
+    Layer.mergeAll(parentLayer, approvalLayer),
+  )
+
+  // Extension-contributed layers (forwarded from parent — these are startup-built, typically read-only)
+  const extensionLayers = resolved.extensions
+    .filter((ext) => ext.setup.layer !== undefined)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((ext) => ext.setup.layer as Layer.Layer<any>)
+
+  // Registry (forwarded from parent — read-only resolved data)
+  const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
+
+  // Core deps for AgentLoop + ToolRunner
+  const coreDeps = Layer.mergeAll(
     storageLayer,
     eventStoreLayer,
     eventPublisherLayer,
-    Layer.succeed(ExtensionRegistry, params.extensionRegistry),
-    stateRuntimeLayer,
-    ExtensionTurnControl.Live,
-    Layer.succeed(Provider, params.provider),
-    Layer.succeed(ToolRunner, params.toolRunner),
+    registryLayer,
+    extensionStateRuntimeLayer,
+    extensionTurnControlLayer,
+    extensionEventBusLayer,
+    approvalLayer,
+    promptPresenterLayer,
   )
+
+  // ToolRunner rebuilt locally — parent first so local coreDeps (ApprovalService, Storage, etc.) win
+  const toolRunnerLayer = Layer.provide(ToolRunner.Live, Layer.merge(parentLayer, coreDeps))
+
+  const allDeps = Layer.mergeAll(coreDeps, toolRunnerLayer)
   const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
-    Layer.provide(deps),
+    Layer.provide(Layer.merge(parentLayer, allDeps)),
   )
-  return Layer.mergeAll(deps, loopLayer)
+
+  // Parent first — local overrides (storage, events, approval, loop) take precedence
+  const base = Layer.mergeAll(parentLayer, allDeps, loopLayer)
+  if (extensionLayers.length === 0) return base
+  let result = base
+  for (const extLayer of extensionLayers) {
+    result = Layer.provideMerge(extLayer, result)
+  }
+  return result
 }
 
 const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
@@ -480,8 +529,7 @@ const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
   shared: ReturnType<typeof makeSharedRunnerHelpers>
   extensionRegistry: ExtensionRegistryService
-  provider: ProviderService
-  toolRunner: ToolRunnerService
+  parentServices: ServiceMap.ServiceMap<never>
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId
@@ -496,13 +544,13 @@ const runEphemeralAgent = (params: {
   const sessionId = Bun.randomUUIDv7() as SessionId
   const branchId = Bun.randomUUIDv7() as BranchId
   const normalizedOverrides = normalizeOverrides(params.overrides)
-  const ephemeralLayer = buildEphemeralLoopLayer({
+  const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
+    parentServices: params.parentServices,
     extensionRegistry: params.extensionRegistry,
-    provider: params.provider,
-    toolRunner: params.toolRunner,
   })
-  const ephemeralRuntime = ManagedRuntime.make(ephemeralLayer)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ephemeralRuntime = ManagedRuntime.make(ephemeralLayer as Layer.Layer<any>)
 
   const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
     params.runnerConfig.timeoutMs === undefined
@@ -673,14 +721,7 @@ export const InProcessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  | Storage
-  | BaseEventStore
-  | EventStore
-  | EventPublisher
-  | AgentLoop
-  | ExtensionRegistry
-  | Provider
-  | ToolRunner
+  Storage | BaseEventStore | EventStore | EventPublisher | AgentLoop | ExtensionRegistry | Provider
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -690,9 +731,11 @@ export const InProcessRunner = (
       const eventPublisher = yield* EventPublisher
       const loop = yield* AgentLoop
       const extensionRegistry = yield* ExtensionRegistry
-      const provider = yield* Provider
-      const toolRunner = yield* ToolRunner
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+
+      // Capture full parent service map — no manual enumeration needed
+      const parentServices = yield* Effect.services()
+
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {
         const sessionId = getEventSessionId(event)
@@ -760,8 +803,7 @@ export const InProcessRunner = (
               runnerConfig,
               shared,
               extensionRegistry,
-              provider,
-              toolRunner,
+              parentServices,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               toolCallId: params.toolCallId,
@@ -867,7 +909,7 @@ export const SubprocessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | BaseEventStore | EventStore | EventPublisher | ExtensionRegistry | Provider | ToolRunner
+  Storage | BaseEventStore | EventStore | EventPublisher | ExtensionRegistry | Provider
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -876,9 +918,11 @@ export const SubprocessRunner = (
       const baseEventStore = yield* BaseEventStore
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
-      const provider = yield* Provider
-      const toolRunner = yield* ToolRunner
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+
+      // Capture full parent service map — no manual enumeration needed
+      const parentServices = yield* Effect.services()
+
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {
         const sessionId = getEventSessionId(event)
@@ -906,8 +950,7 @@ export const SubprocessRunner = (
               runnerConfig: config,
               shared,
               extensionRegistry,
-              provider,
-              toolRunner,
+              parentServices,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               toolCallId: params.toolCallId,
