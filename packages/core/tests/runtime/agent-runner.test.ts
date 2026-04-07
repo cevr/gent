@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FinishChunk, Provider, TextChunk, ToolCallChunk } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { InProcessRunner } from "@gent/core/runtime/agent/agent-runner"
+import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
@@ -10,12 +10,13 @@ import {
   resolveAgentModel,
   AgentRunnerService,
   AgentRunError,
+  DEFAULT_MAX_AGENT_RUN_DEPTH,
   type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
 import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import type { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
@@ -885,5 +886,124 @@ describe("AgentRunner", () => {
       // Cleanup
       rmSync(result.savedPath!, { force: true })
     }
+  })
+})
+
+// ============================================================================
+// Session depth guard
+// ============================================================================
+
+describe("session depth guard", () => {
+  const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
+    Effect.runPromise(Effect.provide(effect, Storage.Test()))
+
+  const makeSession = (id: string, parentSessionId?: string) =>
+    new Session({
+      id: id as SessionId,
+      name: `session-${id}`,
+      parentSessionId: parentSessionId as SessionId | undefined,
+      parentBranchId: parentSessionId ? (`branch-${parentSessionId}` as BranchId) : undefined,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+  const makeBranch = (sessionId: string) =>
+    new Branch({
+      id: `branch-${sessionId}` as BranchId,
+      sessionId: sessionId as SessionId,
+      createdAt: new Date(),
+    })
+
+  const buildSessionChain = (storage: StorageService, depth: number) =>
+    Effect.gen(function* () {
+      yield* storage.createSession(makeSession("s0"))
+      yield* storage.createBranch(makeBranch("s0"))
+      for (let i = 1; i <= depth; i++) {
+        yield* storage.createSession(makeSession(`s${i}`, `s${i - 1}`))
+        yield* storage.createBranch(makeBranch(`s${i}`))
+      }
+    })
+
+  test("root session has depth 0", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(makeSession("root"))
+        yield* storage.createBranch(makeBranch("root"))
+        expect(yield* getSessionDepth("root" as SessionId, storage)).toBe(0)
+      }),
+    )
+  })
+
+  test("child of root has depth 1", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(makeSession("root"))
+        yield* storage.createBranch(makeBranch("root"))
+        yield* storage.createSession(makeSession("child", "root"))
+        yield* storage.createBranch(makeBranch("child"))
+        expect(yield* getSessionDepth("child" as SessionId, storage)).toBe(1)
+      }),
+    )
+  })
+
+  test("grandchild has depth 2", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* storage.createSession(makeSession("root"))
+        yield* storage.createBranch(makeBranch("root"))
+        yield* storage.createSession(makeSession("child", "root"))
+        yield* storage.createBranch(makeBranch("child"))
+        yield* storage.createSession(makeSession("grandchild", "child"))
+        yield* storage.createBranch(makeBranch("grandchild"))
+        expect(yield* getSessionDepth("grandchild" as SessionId, storage)).toBe(2)
+      }),
+    )
+  })
+
+  test("chain at max depth reports correct depth", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
+        const deepest = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
+        expect(yield* getSessionDepth(deepest, storage)).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH)
+      }),
+    )
+  })
+
+  test("parent at max depth blocks child spawn", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
+        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
+        const parentDepth = yield* getSessionDepth(parentId, storage)
+        expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+      }),
+    )
+  })
+
+  test("parent below max depth allows child spawn", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}` as SessionId
+        const parentDepth = yield* getSessionDepth(parentId, storage)
+        expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
+      }),
+    )
+  })
+
+  test("nonexistent session returns depth 0", async () => {
+    await run(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        expect(yield* getSessionDepth("nonexistent" as SessionId, storage)).toBe(0)
+      }),
+    )
   })
 })
