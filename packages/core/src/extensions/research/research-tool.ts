@@ -1,0 +1,228 @@
+import { Effect, FileSystem, Path, Schema } from "effect"
+import { defineAgent, getDurableAgentRunSessionId } from "../../domain/agent.js"
+import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { requireText } from "../../runtime/workflow-helpers.js"
+import { $ } from "bun"
+
+class ResearchFetchError extends Schema.TaggedErrorClass<ResearchFetchError>()(
+  "ResearchFetchError",
+  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
+) {}
+
+const MAX_REPOS = 5
+const MAX_CONCURRENCY = 3
+
+const RESEARCHER_PROMPT = `
+You are researching an external repository to answer a specific question.
+You have access to a local clone at the path specified in the prompt.
+Use read, grep, and glob tools to explore the code. Be precise — cite file paths and line numbers.
+Structure your findings clearly. Focus on the specific question asked.
+When comparing implementations, note patterns, tradeoffs, and design decisions.
+`.trim()
+
+const researchAgent = defineAgent({
+  name: "research-worker",
+  allowedTools: ["grep", "glob", "read", "memory_search"],
+  systemPromptAddendum: RESEARCHER_PROMPT,
+  persistence: "ephemeral",
+})
+
+export const ResearchParams = Schema.Struct({
+  question: Schema.String.annotate({
+    description: "What you want to understand — drives the research focus",
+  }),
+  repos: Schema.Array(Schema.String).annotate({
+    description:
+      "Repository specs to research: owner/repo, owner/repo@tag, npm:package. Single = focused explanation, multiple = comparative analysis.",
+  }),
+  focus: Schema.optional(
+    Schema.String.annotate({
+      description: "Narrow the search: specific file paths, modules, or patterns to examine",
+    }),
+  ),
+})
+
+/** Parse spec → cache path (mirrors repo-explorer logic) */
+const resolveCachePath = (pathSvc: Path.Path, home: string, spec: string): string => {
+  const cacheDir = pathSvc.join(home, ".cache", "repo")
+  if (spec.startsWith("npm:")) {
+    const rest = spec.slice(4)
+    const atIdx = rest.lastIndexOf("@")
+    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
+    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
+    return pathSvc.join(cacheDir, "npm", name, version)
+  }
+  if (spec.startsWith("pypi:")) {
+    const rest = spec.slice(5)
+    const atIdx = rest.lastIndexOf("@")
+    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
+    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
+    return pathSvc.join(cacheDir, "pypi", name, version)
+  }
+  if (spec.startsWith("crates:")) {
+    const rest = spec.slice(7)
+    const atIdx = rest.lastIndexOf("@")
+    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
+    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
+    return pathSvc.join(cacheDir, "crates", name, version)
+  }
+  // GitHub
+  const atIdx = spec.lastIndexOf("@")
+  const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
+  const parts = name.split("/")
+  return pathSvc.join(cacheDir, ...parts)
+}
+
+/** Ensure a GitHub repo is cloned/updated */
+const ensureRepo = (spec: string, cachePath: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const exists = yield* fs.exists(cachePath)
+    if (exists) return
+
+    yield* fs.makeDirectory(cachePath, { recursive: true }).pipe(Effect.ignore)
+
+    // Only auto-fetch GitHub repos
+    if (!spec.startsWith("npm:") && !spec.startsWith("pypi:") && !spec.startsWith("crates:")) {
+      const atIdx = spec.lastIndexOf("@")
+      const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
+      const version = atIdx > 0 ? spec.slice(atIdx + 1) : undefined
+      const url = `https://github.com/${name}.git`
+      const args = ["git", "clone", "--depth", "100"]
+      if (version !== undefined) args.push("--branch", version)
+      args.push(url, cachePath)
+      yield* Effect.tryPromise({
+        try: () => $`${args}`.quiet().then(() => void 0),
+        catch: (e) => new ResearchFetchError({ message: `Failed to clone ${spec}`, cause: e }),
+      })
+    }
+  })
+
+const buildResearchPrompt = (question: string, repoPath: string, spec: string, focus?: string) =>
+  [
+    `Research the repository at ${repoPath} (${spec}).`,
+    "",
+    "## Question",
+    question,
+    ...(focus !== undefined && focus.trim() !== ""
+      ? ["", "## Focus", `Narrow your search to: ${focus}`]
+      : []),
+    "",
+    "## Instructions",
+    "Read the code to answer the question. Cite specific file paths and line numbers.",
+    "Report patterns, design decisions, and implementation details relevant to the question.",
+  ].join("\n")
+
+const buildSynthesisPrompt = (
+  question: string,
+  findings: ReadonlyArray<{ spec: string; text: string }>,
+  focus?: string,
+) =>
+  [
+    findings.length === 1
+      ? "Summarize these research findings into a clear, actionable answer."
+      : "Synthesize these research findings into a comparative analysis.",
+    "",
+    "## Question",
+    question,
+    ...(focus !== undefined && focus.trim() !== "" ? ["", "## Focus", focus] : []),
+    "",
+    ...findings.flatMap((f) => [`## ${f.spec}`, f.text, ""]),
+    "## Instructions",
+    findings.length === 1
+      ? "Produce a clear answer grounded in the specific files and patterns found."
+      : "Compare approaches across repos. Note patterns, tradeoffs, and design decisions. Recommend based on evidence.",
+  ].join("\n")
+
+export const ResearchTool = defineTool({
+  name: "research",
+  action: "delegate" as const,
+  concurrency: "serial" as const,
+  description:
+    "Research external repositories to understand how they work. Single repo for focused explanation, multiple repos for comparative analysis.",
+  promptSnippet: "Research external repositories",
+  promptGuidelines: [
+    "Use to understand how a library or framework works internally",
+    "Use to compare implementations across repos before choosing an approach",
+    "Single repo: focused explanation of patterns and design decisions",
+    "Multiple repos: comparative analysis with tradeoffs",
+    "Include focus to narrow search to specific modules or patterns",
+  ],
+  params: ResearchParams,
+  execute: Effect.fn("ResearchTool.execute")(function* (params, ctx: ToolContext) {
+    if (params.repos.length === 0) {
+      return { error: "At least one repository spec required" }
+    }
+    if (params.repos.length > MAX_REPOS) {
+      return { error: `Too many repos (max ${MAX_REPOS})` }
+    }
+
+    const pathSvc = yield* Path.Path
+
+    // Resolve cache paths and ensure repos are fetched
+    const repoPaths = params.repos.map((spec) => ({
+      spec,
+      path: resolveCachePath(pathSvc, ctx.home, spec),
+    }))
+
+    yield* Effect.forEach(
+      repoPaths,
+      ({ spec, path }) => ensureRepo(spec, path).pipe(Effect.catchEager(() => Effect.void)),
+      { concurrency: MAX_CONCURRENCY },
+    )
+
+    // Dispatch research agent per repo
+    const results = yield* Effect.forEach(
+      repoPaths,
+      ({ spec, path }) =>
+        ctx.agent.run({
+          agent: researchAgent,
+          prompt: buildResearchPrompt(params.question, path, spec, params.focus),
+          toolCallId: ctx.toolCallId,
+        }),
+      { concurrency: MAX_CONCURRENCY },
+    )
+
+    const findings: Array<{ spec: string; text: string }> = []
+    for (const [i, result] of results.entries()) {
+      const spec = repoPaths[i]?.spec ?? "unknown"
+      if (result._tag === "success" && result.text.trim() !== "") {
+        findings.push({ spec, text: result.text })
+      }
+    }
+
+    if (findings.length === 0) {
+      return { error: "No findings from any repository" }
+    }
+
+    // Single repo with single finding — return directly
+    if (findings.length === 1 && params.repos.length === 1) {
+      const first = results[0]
+      const sessionId = first !== undefined ? getDurableAgentRunSessionId(first) : undefined
+      return {
+        response: findings[0]?.text ?? "",
+        repos: params.repos,
+        ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
+      }
+    }
+
+    // Multiple findings — synthesize
+    const [, modelB] = yield* ctx.agent.resolveDualModelPair()
+    const synthesisResult = yield* ctx.agent.run({
+      agent: researchAgent,
+      prompt: buildSynthesisPrompt(params.question, findings, params.focus),
+      toolCallId: ctx.toolCallId,
+      overrides: { modelId: modelB },
+    })
+
+    const synthesis = yield* requireText(synthesisResult, "synthesis")
+    const sessionId = getDurableAgentRunSessionId(synthesisResult)
+
+    return {
+      response: synthesis,
+      repos: params.repos,
+      repoCount: findings.length,
+      ...(sessionId !== undefined ? { session: `session://${sessionId}` } : {}),
+    }
+  }),
+})

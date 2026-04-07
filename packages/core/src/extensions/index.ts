@@ -20,6 +20,7 @@ import { HandoffExtension } from "./handoff.js"
 import { PrinciplesExtension } from "./principles/index.js"
 import { ReviewExtension } from "./review/index.js"
 import { CounselExtension } from "./counsel/index.js"
+import { ResearchExtension } from "./research/index.js"
 
 export {
   FsToolsExtension,
@@ -38,6 +39,7 @@ export {
   PrinciplesExtension,
   ReviewExtension,
   CounselExtension,
+  ResearchExtension,
 }
 
 export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
@@ -57,6 +59,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   PrinciplesExtension,
   ReviewExtension,
   CounselExtension,
+  ResearchExtension,
   AnthropicExtension,
   OpenAIExtension,
   BedrockExtension,
