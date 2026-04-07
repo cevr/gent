@@ -104,7 +104,7 @@ describe("buildBasePromptSections", () => {
     isGitRepo: false,
   }
 
-  test("returns ordered sections", () => {
+  test("produces identity, character, tools, and environment sections", () => {
     const sections = buildBasePromptSections(base)
     expect(sections.length).toBeGreaterThanOrEqual(6)
     const ids = sections.map((s) => s.id)
@@ -114,7 +114,7 @@ describe("buildBasePromptSections", () => {
     expect(ids).toContain("environment")
   })
 
-  test("compileSystemPrompt sorts by priority", () => {
+  test("lower priority sections appear first in compiled output", () => {
     const result = compileSystemPrompt([
       { id: "b", content: "second", priority: 20 },
       { id: "a", content: "first", priority: 10 },
@@ -172,7 +172,7 @@ describe("buildTurnPrompt", () => {
     expect(result).toContain("Use instead of bash cat")
   })
 
-  test("deduplicates guidelines", () => {
+  test("duplicate guidelines appear only once", () => {
     const tools = [
       {
         name: "read",
@@ -217,7 +217,7 @@ describe("buildTurnPrompt", () => {
     expect(result).not.toContain("## Tool Guidelines")
   })
 
-  test("injects prefer-dedicated-tools guideline naming only active tools", () => {
+  test("prefer-dedicated-tools guideline names only active tools", () => {
     const tools = [
       {
         name: "bash",

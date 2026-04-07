@@ -186,6 +186,22 @@ const makeLayerWithEvents = (
   )
 }
 
+/** Poll `getState` until the phase matches, with a short sleep between attempts. */
+const waitForPhase = (
+  agentLoop: AgentLoop,
+  params: { sessionId: string; branchId: string },
+  phase: string,
+  attempts = 50,
+) =>
+  Effect.gen(function* () {
+    for (let i = 0; i < attempts; i++) {
+      const state = yield* agentLoop.getState(params)
+      if (state.phase === phase) return state
+      yield* Effect.sleep("10 millis")
+    }
+    throw new Error(`Timed out waiting for phase "${phase}"`)
+  })
+
 // ============================================================================
 // streaming
 // ============================================================================
@@ -1080,27 +1096,29 @@ describe("interaction", () => {
         }),
     })
 
+  const interactionProviderLayer = Layer.succeed(Provider, {
+    stream: () =>
+      Effect.succeed(
+        Stream.fromIterable([
+          new ToolCallChunk({
+            toolCallId: "tc-1" as ToolCallId,
+            toolName: "interaction-tool",
+            input: { value: "test" },
+          }),
+          new FinishChunk({ finishReason: "tool_calls" }),
+          new TextChunk({ text: "done" }),
+          new FinishChunk({ finishReason: "stop" }),
+        ] satisfies StreamChunk[]),
+      ),
+    generate: () => Effect.succeed("test"),
+  })
+
   const makeInteractionRecordingLayer = (tools: AnyToolDefinition[]) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
       Storage.TestWithSql(),
-      Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromIterable([
-              new ToolCallChunk({
-                toolCallId: "tc-1" as ToolCallId,
-                toolName: "interaction-tool",
-                input: { value: "test" },
-              }),
-              new FinishChunk({ finishReason: "tool_calls" }),
-              new TextChunk({ text: "done" }),
-              new FinishChunk({ finishReason: "stop" }),
-            ] satisfies StreamChunk[]),
-          ),
-        generate: () => Effect.succeed("test"),
-      }),
+      interactionProviderLayer,
       makeExtRegistry(tools),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
@@ -1136,13 +1154,11 @@ describe("interaction", () => {
             agentLoop.run(makeIntMessage("trigger interaction")),
           )
 
-          yield* Effect.sleep("200 millis")
-
-          const state = yield* agentLoop.getState({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-          })
-          expect(state.phase).toBe("waiting-for-interaction")
+          const state = yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "waiting-for-interaction",
+          )
           expect(state.status).toBe("running")
           expect(Ref.getUnsafe(callCount)).toBe(1)
 
@@ -1172,25 +1188,7 @@ describe("interaction", () => {
     const resolution = Deferred.makeUnsafe<void>()
     const tool = makeInteractionTool(callCount, resolution)
 
-    const layer = makeLiveToolLayer(
-      Layer.succeed(Provider, {
-        stream: () =>
-          Effect.succeed(
-            Stream.fromIterable([
-              new ToolCallChunk({
-                toolCallId: "tc-1" as ToolCallId,
-                toolName: "interaction-tool",
-                input: { value: "test" },
-              }),
-              new FinishChunk({ finishReason: "tool_calls" }),
-              new TextChunk({ text: "done" }),
-              new FinishChunk({ finishReason: "stop" }),
-            ] satisfies StreamChunk[]),
-          ),
-        generate: () => Effect.succeed("test"),
-      }),
-      [tool],
-    )
+    const layer = makeLiveToolLayer(interactionProviderLayer, [tool])
 
     await Effect.runPromise(
       Effect.scoped(
@@ -1198,13 +1196,12 @@ describe("interaction", () => {
           const agentLoop = yield* AgentLoop
 
           const fiber = yield* Effect.forkChild(agentLoop.run(makeIntMessage("interrupt test")))
-          yield* Effect.sleep("200 millis")
 
-          const stateBefore = yield* agentLoop.getState({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-          })
-          expect(stateBefore.phase).toBe("waiting-for-interaction")
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "waiting-for-interaction",
+          )
 
           yield* agentLoop.steer({
             _tag: "Interrupt",
@@ -1314,12 +1311,11 @@ describe("interaction", () => {
 
           const fiber = yield* Effect.forkChild(agentLoop.run(makeIntMessage("guard interaction")))
 
-          yield* Effect.sleep("200 millis")
-          const parked = yield* agentLoop.getState({
-            sessionId: intSessionId,
-            branchId: intBranchId,
-          })
-          expect(parked.phase).toBe("waiting-for-interaction")
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "waiting-for-interaction",
+          )
           expect(Ref.getUnsafe(providerCallsRef)).toBe(1)
 
           yield* agentLoop.respondInteraction({

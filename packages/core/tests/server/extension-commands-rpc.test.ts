@@ -1,31 +1,28 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { Agents } from "@gent/core/domain/agent"
 import { type ExtensionContext, toExtensionContext } from "@gent/core/domain/extension-context"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import type { GentExtension } from "@gent/core/domain/extension"
+import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "@gent/core/runtime/make-extension-host-context"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []
 
-  const resolved = resolveExtensions([
-    {
-      manifest: { id: "test-agents" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { agents: Object.values(Agents), tools: [] },
-    },
-    {
-      manifest: { id: "test-cmds" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: {
+  const TestCommandsExtension: GentExtension = {
+    manifest: { id: "@test/commands" },
+    setup: () =>
+      Effect.succeed({
         commands: [
           {
             name: "greet",
@@ -36,85 +33,68 @@ describe("extension command RPCs", () => {
           },
           { name: "noop", handler: async () => {} },
         ],
-      },
-    },
-  ])
+      }),
+  }
 
-  const registryLayer = ExtensionRegistry.fromResolved(resolved)
+  const layer = createToolTestLayer({ extensions: [TestCommandsExtension] }).pipe(
+    Layer.provideMerge(ApprovalService.Test()),
+  )
 
   test("listCommands returns registered commands", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
         const cmds = yield* registry.listCommands()
-        expect(cmds).toHaveLength(2)
-        expect(cmds[0]!.name).toBe("greet")
-        expect(cmds[0]!.description).toBe("Say hello")
-        expect(cmds[1]!.name).toBe("noop")
-        expect(cmds[1]!.description).toBeUndefined()
-      }).pipe(Effect.provide(registryLayer)),
+        const testCmds = cmds.filter((c) => c.name === "greet" || c.name === "noop")
+        expect(testCmds).toHaveLength(2)
+        expect(testCmds.find((c) => c.name === "greet")?.description).toBe("Say hello")
+        expect(testCmds.find((c) => c.name === "noop")?.description).toBeUndefined()
+      }).pipe(Effect.provide(layer)),
     )
   })
 
-  test("invokeCommand calls handler with ExtensionHostContext", async () => {
+  test("invokeCommand calls handler with ExtensionContext", async () => {
     invoked.length = 0
-
-    const die = (label: string) => () => Effect.die(`${label} not available`)
-    const deps = Layer.mergeAll(
-      registryLayer,
-      ExtensionStateRuntime.Test(),
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
         const stateRuntime = yield* ExtensionStateRuntime
         const platform = yield* RuntimePlatform
+        const eventPublisher = yield* EventPublisher
+        const approval = yield* ApprovalService
+        const turnControl = yield* ExtensionTurnControl
+        const storage = yield* Storage
 
         const cmds = yield* registry.listCommands()
         const cmd = cmds.find((c) => c.name === "greet")!
 
-        const hostDeps: MakeExtensionHostContextDeps = {
-          platform,
-          extensionStateRuntime: stateRuntime,
-          approvalService: {
-            present: die("ApprovalService"),
-            storeResolution: die("ApprovalService"),
-            respond: die("ApprovalService"),
-            rehydrate: die("ApprovalService"),
-          } as MakeExtensionHostContextDeps["approvalService"],
-          promptPresenter: {
-            present: die("PromptPresenter"),
-            confirm: die("PromptPresenter"),
-            review: die("PromptPresenter"),
-          } as MakeExtensionHostContextDeps["promptPresenter"],
-          extensionRegistry: registry,
-          turnControl: {
-            queueFollowUp: die("TurnControl"),
-            interject: die("TurnControl"),
-            bind: die("TurnControl"),
-          } as MakeExtensionHostContextDeps["turnControl"],
-          storage: {} as MakeExtensionHostContextDeps["storage"],
-          searchStorage: {
-            searchMessages: () => Effect.succeed([]),
-          } as MakeExtensionHostContextDeps["searchStorage"],
-          agentRunner: {
-            run: die("AgentRunnerService"),
-          } as MakeExtensionHostContextDeps["agentRunner"],
-          eventPublisher: {
-            publish: () => Effect.void,
-            terminateSession: die("EventPublisher"),
-          } as MakeExtensionHostContextDeps["eventPublisher"],
-        }
-
         const hostCtx = makeExtensionHostContext(
           { sessionId: "test-session" as SessionId, branchId: "test-branch" as BranchId },
-          hostDeps,
+          {
+            platform,
+            extensionStateRuntime: stateRuntime,
+            approvalService: approval,
+            promptPresenter: {
+              present: () => Effect.void,
+              confirm: () => Effect.succeed("yes" as const),
+              review: () => Effect.succeed({ decision: "yes" as const, path: "", content: "" }),
+            } as MakeExtensionHostContextDeps["promptPresenter"],
+            extensionRegistry: registry,
+            turnControl: turnControl as MakeExtensionHostContextDeps["turnControl"],
+            storage,
+            searchStorage: {
+              searchMessages: () => Effect.succeed([]),
+            } as MakeExtensionHostContextDeps["searchStorage"],
+            agentRunner: {
+              run: () => Effect.die("not used in this test"),
+            } as MakeExtensionHostContextDeps["agentRunner"],
+            eventPublisher,
+          },
         )
         const ctx = toExtensionContext(hostCtx)
         yield* Effect.promise(() => Promise.resolve(cmd.handler("world", ctx)))
-      }).pipe(Effect.provide(deps)),
+      }).pipe(Effect.provide(layer)),
     )
 
     expect(invoked).toHaveLength(1)
