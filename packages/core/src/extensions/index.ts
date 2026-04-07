@@ -18,6 +18,7 @@ import { GoogleExtension } from "./google/index.js"
 import { MistralExtension } from "./mistral/index.js"
 import { HandoffExtension } from "./handoff.js"
 import { PrinciplesExtension } from "./principles/index.js"
+import { SkillsExtension } from "./skills/index.js"
 import { ReviewExtension } from "./review/index.js"
 import { CounselExtension } from "./counsel/index.js"
 import { ResearchExtension } from "./research/index.js"
@@ -37,6 +38,7 @@ export {
   MemoryExtension,
   HandoffExtension,
   PrinciplesExtension,
+  SkillsExtension,
   ReviewExtension,
   CounselExtension,
   ResearchExtension,
@@ -57,6 +59,7 @@ export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   AutoExtension,
   MemoryExtension,
   PrinciplesExtension,
+  SkillsExtension,
   ReviewExtension,
   CounselExtension,
   ResearchExtension,

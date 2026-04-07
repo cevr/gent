@@ -135,6 +135,12 @@ const toolArgFormatters: Record<string, ToolArgFormatter> = {
     const prompt = truncateText(getStringArg(args, "prompt"), 40)
     return mode.length > 0 ? `${mode}: ${prompt}` : prompt
   },
+  skills: (args) => {
+    const names = args["names"]
+    if (names === "all") return "all"
+    if (Array.isArray(names)) return names.join(", ")
+    return ""
+  },
   research: (args) => truncateText(getStringArg(args, "question"), 50),
   search_sessions: (args) => truncateText(getStringArg(args, "query"), 50),
   read_session: (args) => truncateText(getStringArg(args, "goal"), 50),
