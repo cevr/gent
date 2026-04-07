@@ -7,7 +7,6 @@ import { useClient } from "../client/index"
 import { useEnv } from "../env/context"
 import { useRuntime } from "../hooks/use-runtime"
 import { usePromptHistory } from "../hooks/use-prompt-history"
-import { useSkills } from "../hooks/use-skills"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useWorkspace } from "../workspace/index"
 import { useSessionController } from "../routes/session-controller"
@@ -15,7 +14,6 @@ import { executeSlashCommand, parseSlashCommand } from "../commands/slash-comman
 import { ClientError, formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
-import { expandSkillMentions } from "../utils/skill-expansion"
 import { executeShell } from "../utils/shell"
 import type { AutocompleteState } from "./autocomplete-popup"
 import type { ApprovalResult } from "@gent/core/domain/event.js"
@@ -88,7 +86,6 @@ export function useComposerController(): ComposerController {
   const env = useEnv()
   const { cast } = useRuntime()
   const history = usePromptHistory()
-  const skillsHook = useSkills()
   const paste = createPasteManager()
 
   let inputRef: TextareaRenderable | null = null
@@ -239,15 +236,6 @@ export function useComposerController(): ComposerController {
     history.add(text)
     cast(
       expandFileRefs(text, workspace.cwd).pipe(
-        Effect.map((expanded) => {
-          if (!expanded.includes("$")) return expanded
-          const skills = skillsHook.skills()
-          return expandSkillMentions(
-            expanded,
-            (name) => skillsHook.getContent(name),
-            (name) => skills.find((skill) => skill.name === name)?.filePath ?? null,
-          )
-        }),
         Effect.tap((expanded) =>
           Effect.sync(() => {
             clearInput()
