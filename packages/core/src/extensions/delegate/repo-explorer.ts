@@ -45,14 +45,17 @@ export const RepoExplorerResult = Schema.Struct({
   message: Schema.optional(Schema.String),
 })
 
-// Parse spec into type and parts
-interface ParsedSpec {
+// ---------------------------------------------------------------------------
+// Shared helpers — used by research-tool.ts
+// ---------------------------------------------------------------------------
+
+export interface ParsedSpec {
   type: "github" | "npm" | "pypi" | "crates"
   name: string
   version: string | undefined
 }
 
-function parseSpec(spec: string): ParsedSpec {
+export function parseSpec(spec: string): ParsedSpec {
   if (spec.startsWith("npm:")) {
     const rest = spec.slice(4)
     const atIdx = rest.lastIndexOf("@")
@@ -85,8 +88,7 @@ function parseSpec(spec: string): ParsedSpec {
   return { type: "github", name: spec, version: undefined }
 }
 
-// Get cache path for spec
-function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
+export function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
   const parsed = parseSpec(spec)
   switch (parsed.type) {
     case "github":
@@ -99,6 +101,52 @@ function getCachePath(path: Path.Path, cacheDir: string, spec: string): string {
       return path.join(cacheDir, "crates", parsed.name, parsed.version ?? "latest")
   }
 }
+
+/** Resolve cache path for a spec without needing the Path service */
+export const getRepoCachePath = (home: string, spec: string): string => {
+  const cacheDir = `${home}/.cache/repo`
+  const parsed = parseSpec(spec)
+  switch (parsed.type) {
+    case "github":
+      return `${cacheDir}/${parsed.name}`
+    case "npm":
+      return `${cacheDir}/npm/${parsed.name}/${parsed.version ?? "latest"}`
+    case "pypi":
+      return `${cacheDir}/pypi/${parsed.name}/${parsed.version ?? "latest"}`
+    case "crates":
+      return `${cacheDir}/crates/${parsed.name}/${parsed.version ?? "latest"}`
+  }
+}
+
+/** Ensure a repo is cloned/fetched. Returns the cache path. */
+export const fetchRepo = (spec: string, home: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const cachePath = getRepoCachePath(home, spec)
+    const parsed = parseSpec(spec)
+
+    const exists = yield* fs.exists(cachePath)
+    if (exists) return cachePath
+
+    // Only auto-fetch GitHub repos — npm/pypi/crates need the full repo tool
+    if (parsed.type !== "github") return cachePath
+
+    // Create parent dir — let git clone create the final directory
+    yield* fs
+      .makeDirectory(cachePath.slice(0, cachePath.lastIndexOf("/")), { recursive: true })
+      .pipe(Effect.ignore)
+
+    const url = `https://github.com/${parsed.name}.git`
+    const args = ["git", "clone", "--depth", "100"]
+    if (parsed.version !== undefined) args.push("--branch", parsed.version)
+    args.push(url, cachePath)
+    yield* Effect.tryPromise({
+      try: () => $`${args}`.quiet().then(() => void 0),
+      catch: (e) => new RepoExplorerError({ message: `Failed to fetch: ${e}`, spec, cause: e }),
+    })
+
+    return cachePath
+  })
 
 // RepoExplorer Tool
 

@@ -1,13 +1,8 @@
-import { Effect, FileSystem, Path, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { defineAgent } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import { requireText } from "../../runtime/workflow-helpers.js"
-import { $ } from "bun"
-
-class ResearchFetchError extends Schema.TaggedErrorClass<ResearchFetchError>()(
-  "ResearchFetchError",
-  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
-) {}
+import { fetchRepo, getRepoCachePath } from "../delegate/repo-explorer.js"
 
 const MAX_REPOS = 5
 const MAX_CONCURRENCY = 3
@@ -41,64 +36,6 @@ export const ResearchParams = Schema.Struct({
     }),
   ),
 })
-
-/** Parse spec → cache path (mirrors repo-explorer logic) */
-const resolveCachePath = (pathSvc: Path.Path, home: string, spec: string): string => {
-  const cacheDir = pathSvc.join(home, ".cache", "repo")
-  if (spec.startsWith("npm:")) {
-    const rest = spec.slice(4)
-    const atIdx = rest.lastIndexOf("@")
-    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
-    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
-    return pathSvc.join(cacheDir, "npm", name, version)
-  }
-  if (spec.startsWith("pypi:")) {
-    const rest = spec.slice(5)
-    const atIdx = rest.lastIndexOf("@")
-    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
-    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
-    return pathSvc.join(cacheDir, "pypi", name, version)
-  }
-  if (spec.startsWith("crates:")) {
-    const rest = spec.slice(7)
-    const atIdx = rest.lastIndexOf("@")
-    const name = atIdx > 0 ? rest.slice(0, atIdx) : rest
-    const version = atIdx > 0 ? rest.slice(atIdx + 1) : "latest"
-    return pathSvc.join(cacheDir, "crates", name, version)
-  }
-  // GitHub
-  const atIdx = spec.lastIndexOf("@")
-  const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
-  const parts = name.split("/")
-  return pathSvc.join(cacheDir, ...parts)
-}
-
-/** Ensure a GitHub repo is cloned/updated */
-const ensureRepo = (spec: string, cachePath: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const exists = yield* fs.exists(cachePath)
-    if (exists) return
-
-    // Only auto-fetch GitHub repos
-    if (spec.startsWith("npm:") || spec.startsWith("pypi:") || spec.startsWith("crates:")) return
-
-    // Create parent dir — let git clone create the final directory
-    yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true }).pipe(Effect.ignore)
-
-    const atIdx = spec.lastIndexOf("@")
-    const name = atIdx > 0 ? spec.slice(0, atIdx) : spec
-    const version = atIdx > 0 ? spec.slice(atIdx + 1) : undefined
-    const url = `https://github.com/${name}.git`
-    const args = ["git", "clone", "--depth", "100"]
-    if (version !== undefined) args.push("--branch", version)
-    args.push(url, cachePath)
-    yield* Effect.tryPromise({
-      try: () => $`${args}`.quiet().then(() => void 0),
-      catch: (e) => new ResearchFetchError({ message: `Failed to clone ${spec}`, cause: e }),
-    })
-  })
 
 const buildResearchPrompt = (question: string, repoPath: string, spec: string, focus?: string) =>
   [
@@ -159,17 +96,14 @@ export const ResearchTool = defineTool({
       return { error: `Too many repos (max ${MAX_REPOS})` }
     }
 
-    const pathSvc = yield* Path.Path
-
-    // Resolve cache paths and ensure repos are fetched
-    const repoPaths = params.repos.map((spec) => ({
-      spec,
-      path: resolveCachePath(pathSvc, ctx.home, spec),
-    }))
-
-    yield* Effect.forEach(
-      repoPaths,
-      ({ spec, path }) => ensureRepo(spec, path).pipe(Effect.catchEager(() => Effect.void)),
+    // Fetch repos and resolve cache paths
+    const repoPaths = yield* Effect.forEach(
+      params.repos,
+      (spec) =>
+        fetchRepo(spec, ctx.home).pipe(
+          Effect.map((path) => ({ spec, path })),
+          Effect.catchEager(() => Effect.succeed({ spec, path: getRepoCachePath(ctx.home, spec) })),
+        ),
       { concurrency: MAX_CONCURRENCY },
     )
 
