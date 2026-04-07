@@ -124,7 +124,13 @@ describe("Plan actor", () => {
         })
         const pm = projections.find((p) => p.extensionId === PLAN_EXTENSION_ID)
         expect(pm!.projection.toolPolicy).toBeDefined()
-        expect(pm!.projection.toolPolicy!.overrideSet).toEqual(["read", "bash", "grep", "glob"])
+        expect(pm!.projection.toolPolicy!.overrideSet).toEqual([
+          "read",
+          "bash",
+          "grep",
+          "glob",
+          "principles",
+        ])
       }).pipe(Effect.provide(makeLayer())),
     )
 

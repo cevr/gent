@@ -138,7 +138,7 @@ export const extractSteps = (text: string): PlanStep[] => {
 
 // ── Plan restricted tools ──
 
-const PLAN_TOOLS = ["read", "bash", "grep", "glob"] as const
+const PLAN_TOOLS = ["read", "bash", "grep", "glob", "principles"] as const
 
 // ── Prompt sections for plan ──
 
@@ -149,19 +149,31 @@ const PLAN_RESTRICTIONS_SECTION: PromptSection = {
 You are in **plan mode**. Your job is to analyze, plan, and organize — not execute.
 
 ### Restrictions
-- Only use read-only tools: read, bash (read-only commands), grep, glob
+- Only use read-only tools: read, bash (read-only commands), grep, glob, principles
 - Do NOT edit, write, or delete files
 - Do NOT run destructive commands
 
 ### Format
-Present your plan as a markdown checklist:
+Plans are **batched by commit** — each batch is one shippable unit, one commit.
+
 \`\`\`
-## Plan
-- [ ] Step 1 description
-- [ ] Step 2 description
+## Batch N — [Title]
+
+**Goal:** one sentence
+**Why:** why this batch exists
+**Justification:** principle names that govern this batch
+**Files:** absolute paths to affected files
+**Changes:** bullet list of what changes
+**Verification:** gate sequence + specific coverage
+
+Commit rule: one batch, one commit.
 \`\`\`
 
-Each item should be a concrete, actionable step with file paths where relevant.`,
+### Rules
+- Use the \`principles\` tool to ground justifications in specific principles
+- No addendums — plans must be cohesive, not main + appendix
+- Gate per batch: typecheck, lint, test
+- Do not defer or skip items without explicit user consent`,
   priority: 92,
 }
 
@@ -184,7 +196,8 @@ Work through the remaining items in order:
 
 ${checklist}
 
-Mark items complete as you finish them. Stay focused on the current item.`,
+Mark items complete as you finish them. Stay focused on the current item.
+After each batch: run typecheck, lint, and tests before moving to the next.`,
     priority: 92,
   }
 }
