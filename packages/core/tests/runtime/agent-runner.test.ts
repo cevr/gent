@@ -21,6 +21,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { defineTool } from "@gent/core/domain/tool"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
+import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
@@ -1046,4 +1047,150 @@ describe("session depth guard", () => {
       }),
     )
   })
+})
+
+describe("ephemeral service propagation", () => {
+  const makeEphemeralLayer = (providerLayer: Layer.Layer<Provider>) => {
+    const storageLayer = Storage.TestWithSql()
+    const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+    const deps = Layer.mergeAll(
+      storageLayer,
+      eventStoreLayer,
+      eventPublisherLayer,
+      testRegistryLayer,
+      providerLayer,
+      Layer.succeed(AgentLoop, {
+        runOnce: () => Effect.void,
+        submit: () => Effect.void,
+        run: () => Effect.void,
+        steer: () => Effect.void,
+        followUp: () => Effect.void,
+        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+        isRunning: () => Effect.succeed(false),
+      }),
+      ephemeralParentDeps,
+    )
+    const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+    return Layer.mergeAll(deps, runnerLayer)
+  }
+
+  const setupParentSession = (storage: StorageService, id: string) =>
+    Effect.gen(function* () {
+      const now = new Date()
+      yield* storage.createSession(
+        new Session({ id, name: "Parent", createdAt: now, updatedAt: now }),
+      )
+      yield* storage.createBranch(new Branch({ id: `${id}-branch`, sessionId: id, createdAt: now }))
+    })
+
+  test("ephemeral agent writes to ephemeral storage, not parent", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        textStep("ephemeral text output"),
+      ])
+      const layer = makeEphemeralLayer(providerLayer)
+
+      yield* Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        yield* setupParentSession(storage, "parent-svc-prop")
+
+        const result = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "test service propagation",
+          parentSessionId: "parent-svc-prop" as SessionId,
+          parentBranchId: "parent-svc-prop-branch" as BranchId,
+          cwd: process.cwd(),
+        })
+
+        expect(result._tag).toBe("success")
+        if (result._tag === "success") {
+          expect(result.text).toContain("ephemeral text output")
+        }
+
+        // Parent storage should only have the parent session
+        const sessions = yield* storage.listSessions()
+        expect(sessions.map((s) => s.id)).toEqual(["parent-svc-prop"])
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.runPromise))
+
+  test("ephemeral agent auto-approves interactions", () =>
+    Effect.gen(function* () {
+      const approveTool = defineTool({
+        name: "approve_test",
+        description: "Tests approval",
+        params: Schema.Struct({ text: Schema.String }),
+        execute: Effect.fn("approve_test")(function* (_params, ctx) {
+          const decision = yield* ctx.interaction.approve({
+            text: "approve this?",
+            metadata: { type: "prompt", mode: "confirm" },
+          })
+          return { approved: decision.approved }
+        }),
+      })
+
+      const toolRegistry = ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "agents" },
+            kind: "builtin" as const,
+            sourcePath: "test",
+            setup: { agents: Object.values(Agents), tools: [approveTool] },
+          },
+        ]),
+      )
+
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        toolCallStep("approve_test", { text: "test" }),
+        textStep("approved"),
+      ])
+
+      const storageLayer = Storage.TestWithSql()
+      const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+      const eventPublisherLayer = withEventPublisher(eventStoreLayer)
+      const deps = Layer.mergeAll(
+        storageLayer,
+        eventStoreLayer,
+        eventPublisherLayer,
+        toolRegistry,
+        providerLayer,
+        Layer.succeed(AgentLoop, {
+          runOnce: () => Effect.void,
+          submit: () => Effect.void,
+          run: () => Effect.void,
+          steer: () => Effect.void,
+          followUp: () => Effect.void,
+          drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+          getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+          isRunning: () => Effect.succeed(false),
+        }),
+        ephemeralParentDeps,
+      )
+      const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+      const layer = Layer.mergeAll(deps, runnerLayer)
+
+      yield* Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        yield* setupParentSession(storage, "parent-approve")
+
+        const result = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "test auto-approve",
+          parentSessionId: "parent-approve" as SessionId,
+          parentBranchId: "parent-approve-branch" as BranchId,
+          cwd: process.cwd(),
+        })
+
+        // Should succeed — approval was auto-resolved, tool ran, text followed
+        expect(result._tag).toBe("success")
+        if (result._tag === "success") {
+          expect(result.text).toContain("approved")
+        }
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.runPromise))
 })
