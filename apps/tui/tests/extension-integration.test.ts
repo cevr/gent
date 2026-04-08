@@ -1209,3 +1209,73 @@ describe("composerState contract", () => {
     rmSync(composerDir, { recursive: true, force: true })
   })
 })
+
+describe("autocompleteItems resolution", () => {
+  test("extension with autocompleteItems contributes to resolved output", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/ac",
+        kind: "builtin",
+        filePath: "builtin:@test/ac",
+        setup: {
+          autocompleteItems: [
+            {
+              prefix: "#",
+              title: "Tags",
+              trigger: "inline",
+              items: () => [{ id: "tag1", label: "tag1" }],
+            },
+          ],
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    expect(resolved.autocompleteItems).toHaveLength(1)
+    expect(resolved.autocompleteItems[0]!.prefix).toBe("#")
+    expect(resolved.autocompleteItems[0]!.title).toBe("Tags")
+  })
+
+  test("multiple contributions for same prefix are collected", () => {
+    const resolved = resolveTuiExtensions([
+      {
+        id: "@test/a",
+        kind: "builtin",
+        filePath: "builtin:@test/a",
+        setup: {
+          autocompleteItems: [
+            { prefix: "$", title: "Skills A", trigger: "inline", items: () => [] },
+          ],
+        },
+      } satisfies LoadedTuiExtension,
+      {
+        id: "@test/b",
+        kind: "user",
+        filePath: "/test/b",
+        setup: {
+          autocompleteItems: [
+            { prefix: "$", title: "Skills B", trigger: "inline", items: () => [] },
+          ],
+        },
+      } satisfies LoadedTuiExtension,
+    ])
+
+    const dollarContribs = resolved.autocompleteItems.filter((c) => c.prefix === "$")
+    expect(dollarContribs).toHaveLength(2)
+  })
+
+  test("builtin skills, files, and commands contribute correct prefixes", async () => {
+    const resolved = await loadTuiExtensions(
+      {
+        builtins: builtinClientModules,
+        userDir: join(TEST_DIR, "empty-user-ac"),
+        projectDir: join(TEST_DIR, "empty-project-ac"),
+      },
+      noopCtx,
+    )
+
+    const prefixes = new Set(resolved.autocompleteItems.map((c) => c.prefix))
+    expect(prefixes.has("$")).toBe(true)
+    expect(prefixes.has("@")).toBe(true)
+    expect(prefixes.has("/")).toBe(true)
+  })
+})
