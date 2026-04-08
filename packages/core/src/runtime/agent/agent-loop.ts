@@ -434,7 +434,19 @@ export const persistAssistantTurn = (params: {
     }
     assistantParts.push(...params.draft.toolCalls)
 
-    // Fire message.output hook before persistence
+    const assistantMessage = new Message({
+      id: params.messageId,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      role: "assistant",
+      parts: assistantParts,
+      createdAt: yield* DateTime.nowAsDate,
+    })
+
+    const existing = yield* params.storage.getMessage(assistantMessage.id)
+    if (existing !== undefined) return
+
+    // Fire message.output hook — only for new messages (idempotent)
     if (params.extensionRegistry !== undefined && params.hostCtx !== undefined) {
       yield* params.extensionRegistry.hooks
         .runInterceptor(
@@ -450,18 +462,6 @@ export const persistAssistantTurn = (params: {
         )
         .pipe(Effect.catchEager(() => Effect.void))
     }
-
-    const assistantMessage = new Message({
-      id: params.messageId,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      role: "assistant",
-      parts: assistantParts,
-      createdAt: yield* DateTime.nowAsDate,
-    })
-
-    const existing = yield* params.storage.getMessage(assistantMessage.id)
-    if (existing !== undefined) return
 
     yield* params.storage.createMessageIfAbsent(assistantMessage)
     yield* params
