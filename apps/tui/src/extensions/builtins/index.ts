@@ -1,8 +1,3 @@
-/**
- * AUTO-GENERATED — do not edit manually.
- * Run: bun scripts/generate-builtin-imports.ts
- */
-
 import type { ExtensionClientModule } from "@gent/core/domain/extension-client.js"
 
 import builtinAuto from "./auto.client"

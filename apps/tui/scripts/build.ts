@@ -10,15 +10,6 @@ const rootDir = join(__dirname, "..")
 
 console.log("Building gent...")
 
-// Generate static builtin import registry
-console.log("Generating builtin imports...")
-const codegen = Bun.spawnSync(["bun", join(__dirname, "generate-builtin-imports.ts")])
-if (codegen.exitCode !== 0) {
-  console.error("Codegen failed:", codegen.stderr.toString())
-  process.exit(1)
-}
-console.log(codegen.stdout.toString().trim())
-
 const binDir = join(rootDir, "bin")
 mkdirSync(binDir, { recursive: true })
 
