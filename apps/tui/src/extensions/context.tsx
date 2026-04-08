@@ -267,6 +267,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (snap === undefined) return undefined
             return { model: snap.model }
           },
+          useTypedSnapshot: (extensionId, schema) => {
+            const snap = snapshots().get(extensionId)
+            if (snap === undefined) return undefined
+            try {
+              return Schema.decodeUnknownSync(schema)(snap.model)
+            } catch {
+              return undefined
+            }
+          },
           sendMessage: (content) => clientCtx.sendMessage(content),
           composerState: () => {
             const provider = composerStateProvider()

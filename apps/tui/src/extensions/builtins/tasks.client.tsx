@@ -2,10 +2,12 @@ import type { ExtensionClientModule } from "@gent/core/domain/extension-client.j
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createMemo } from "solid-js"
-import type { Task } from "@gent/core/domain/task.js"
-import { TASK_TOOLS_EXTENSION_ID } from "@gent/core/extensions/task-tools-protocol.js"
+import {
+  TASK_TOOLS_EXTENSION_ID,
+  TaskUiModel,
+  type TaskEntry,
+} from "@gent/core/extensions/task-tools-protocol.js"
 import { useScopedKeyboard } from "../../keyboard/context"
-import { useExtensionUI } from "../context"
 
 const EXTENSION_ID = TASK_TOOLS_EXTENSION_ID
 
@@ -13,19 +15,17 @@ export default {
   id: "@gent/tasks",
   setup: (ctx) => {
     /** Read task list from extension snapshot (populated by server-side task-tools actor). */
-    function useTasksFromSnapshot(): () => Task[] {
-      const ext = useExtensionUI()
+    function useTasksFromSnapshot(): () => readonly TaskEntry[] {
       return createMemo(() => {
-        const snapshot = ext.snapshots().get(EXTENSION_ID)
-        if (snapshot === undefined) return []
-        const model = snapshot.model as { tasks?: unknown[] } | undefined
-        if (model?.tasks === undefined) return []
-        return model.tasks as Task[]
+        const model = ctx.useTypedSnapshot(EXTENSION_ID, TaskUiModel)
+        return model?.tasks ?? []
       })
     }
 
     // Shared task state sourced from extension snapshots
-    const [overrideTasks, setOverrideTasks] = createSignal<Task[] | undefined>(undefined)
+    const [overrideTasks, setOverrideTasks] = createSignal<readonly TaskEntry[] | undefined>(
+      undefined,
+    )
 
     /** Invisible widget that reads tasks from extension snapshot and maintains shared state. */
     function TaskTracker() {

@@ -11,9 +11,8 @@
 import { createSignal, createEffect, Show, For } from "solid-js"
 import { Effect } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
-import type { Task } from "@gent/core/domain/task.js"
 import type { TaskId } from "@gent/core/domain/ids.js"
-import { TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
+import { TaskProtocol, type TaskEntry } from "@gent/core/extensions/task-tools-protocol.js"
 import { ChromePanel } from "./chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useClient } from "../client/context"
@@ -37,7 +36,7 @@ const PANEL_HEIGHT = 20
 export function BackgroundTasksDialog(props: {
   open: boolean
   onClose: () => void
-  tasks: readonly Task[]
+  tasks: readonly TaskEntry[]
 }) {
   const clientCtx = useClient()
   const { cast } = useRuntime()
@@ -115,12 +114,12 @@ export function BackgroundTasksDialog(props: {
     { when: () => props.open },
   )
 
-  const statusIcon = (status: Task["status"]) => {
+  const statusIcon = (status: TaskEntry["status"]) => {
     if (status !== "in_progress") return STATUS_ICONS[status] ?? "?"
     return IN_PROGRESS_SPINNER[tick() % IN_PROGRESS_SPINNER.length] ?? "◰"
   }
 
-  const statusColor = (status: Task["status"]) => {
+  const statusColor = (status: TaskEntry["status"]) => {
     switch (status) {
       case "in_progress":
         return theme.warning
@@ -168,18 +167,6 @@ export function BackgroundTasksDialog(props: {
                     {detailTask()?.status}
                   </span>
                 </text>
-                <Show when={detailTask()?.agentType !== undefined}>
-                  <text>
-                    <span style={{ fg: theme.textMuted }}>Agent: </span>
-                    <span style={{ fg: theme.text }}>{detailTask()?.agentType}</span>
-                  </text>
-                </Show>
-                <Show when={detailTask()?.description !== undefined}>
-                  <text>
-                    <span style={{ fg: theme.textMuted }}>Description: </span>
-                    <span style={{ fg: theme.text }}>{detailTask()?.description}</span>
-                  </text>
-                </Show>
               </box>
             }
           >

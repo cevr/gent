@@ -1,10 +1,24 @@
 import { Schema } from "effect"
 import { ExtensionMessage } from "../domain/extension-protocol.js"
-import { Task } from "../domain/task.js"
+import { Task, TaskStatus } from "../domain/task.js"
 import { TaskId, SessionId, BranchId } from "../domain/ids.js"
 import { AgentName } from "../domain/agent.js"
 
 export const TASK_TOOLS_EXTENSION_ID = "@gent/task-tools"
+
+/** Schema for individual task entries in the UI snapshot (subset of full Task). */
+export const TaskEntrySchema = Schema.Struct({
+  id: TaskId,
+  subject: Schema.String,
+  status: TaskStatus,
+})
+export type TaskEntry = typeof TaskEntrySchema.Type
+
+/** Schema for the task-tools extension UI snapshot model. */
+export const TaskUiModel = Schema.Struct({
+  tasks: Schema.Array(TaskEntrySchema),
+})
+export type TaskUiModel = typeof TaskUiModel.Type
 
 export const TaskProtocol = {
   DeleteTask: ExtensionMessage.reply(

@@ -4,6 +4,7 @@
 // The TUI discovers *.client.{tsx,ts,js,mjs} files from extension directories,
 // imports them, and resolves contributions with scope precedence (project > user > builtin).
 
+import type { Schema } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
 import type {
   AnyExtensionCommandMessage,
@@ -104,6 +105,8 @@ export interface ExtensionClientContext {
   ) => Promise<ExtractExtensionReply<M>>
   /** Read the current server-projected snapshot for an extension */
   readonly getSnapshot: (extensionId: string) => { model: unknown } | undefined
+  /** Read and decode a snapshot model against a Schema. Returns undefined if missing or decode fails. */
+  readonly useTypedSnapshot: <A>(extensionId: string, schema: Schema.Decoder<A>) => A | undefined
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
   /** Reactive composer state */

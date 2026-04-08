@@ -1,5 +1,5 @@
 import { defineClientExtension } from "@gent/core/domain/extension-client.js"
-import { PLAN_EXTENSION_ID } from "@gent/core/extensions/plan.js"
+import { PLAN_EXTENSION_ID, PlanUiModel } from "@gent/core/extensions/plan.js"
 import { PlanProtocol } from "@gent/core/extensions/plan-protocol.js"
 import { PlanWidget } from "../plan-widget"
 
@@ -11,10 +11,7 @@ export default defineClientExtension({
         position: "top-left" as const,
         priority: 30,
         produce: () => {
-          const snap = ctx.getSnapshot(PLAN_EXTENSION_ID)
-          const model = snap?.model as
-            | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
-            | undefined
+          const model = ctx.useTypedSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress
@@ -28,10 +25,7 @@ export default defineClientExtension({
         position: "bottom-left" as const,
         priority: 40,
         produce: () => {
-          const snap = ctx.getSnapshot(PLAN_EXTENSION_ID)
-          const model = snap?.model as
-            | { mode?: string; progress?: { total: number; completed: number; inProgress: number } }
-            | undefined
+          const model = ctx.useTypedSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress

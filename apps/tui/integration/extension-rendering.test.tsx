@@ -52,7 +52,13 @@ describe("extension snapshot rendering", () => {
       },
     )
 
-    inject?.(snap("@gent/plan", { mode: "plan", steps: [{ text: "step 1", done: false }] }))
+    inject?.(
+      snap("@gent/plan", {
+        mode: "plan",
+        steps: [{ id: 0, text: "step 1", status: "pending" }],
+        progress: { total: 1, completed: 0, inProgress: 0 },
+      }),
+    )
 
     const frame = await waitForRenderedFrame(setup, (f) => f.includes("plan"), "plan label")
     expect(frame).toContain("plan")
@@ -85,6 +91,7 @@ describe("extension snapshot rendering", () => {
     inject?.(
       snap("@gent/plan", {
         mode: "executing",
+        steps: [],
         progress: { total: 5, completed: 2, inProgress: 1 },
       }),
     )
@@ -124,6 +131,7 @@ describe("extension snapshot rendering", () => {
         phase: "working",
         iteration: 3,
         maxIterations: 10,
+        learningsCount: 0,
       }),
     )
 
@@ -162,6 +170,7 @@ describe("extension snapshot rendering", () => {
         phase: "awaiting-review",
         iteration: 2,
         maxIterations: 10,
+        learningsCount: 0,
       }),
     )
 

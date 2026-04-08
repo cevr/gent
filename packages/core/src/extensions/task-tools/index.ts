@@ -15,30 +15,19 @@ import type {
   ExtensionReduceContext,
   ReduceResult,
 } from "../../domain/extension.js"
-import { TASK_TOOLS_EXTENSION_ID, TaskProtocol } from "../task-tools-protocol.js"
+import { TASK_TOOLS_EXTENSION_ID, TaskProtocol, TaskUiModel } from "../task-tools-protocol.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 
-export interface TaskEntry {
-  readonly id: TaskId
-  readonly subject: string
-  readonly status: typeof TaskStatus.Type
-}
+export type { TaskEntry } from "../task-tools-protocol.js"
+import type { TaskEntry } from "../task-tools-protocol.js"
 
 export interface TaskListState {
   readonly tasks: ReadonlyArray<TaskEntry>
 }
 
-const TaskEntrySchema = Schema.Struct({
-  id: TaskId,
-  subject: Schema.String,
-  status: TaskStatus,
-})
-
-const TaskListStateSchema = Schema.Struct({
-  tasks: Schema.Array(TaskEntrySchema),
-})
+const TaskListStateSchema = TaskUiModel
 
 const taskEntry = (id: TaskId, subject: string, status: TaskEntry["status"]): TaskEntry => ({
   id,
