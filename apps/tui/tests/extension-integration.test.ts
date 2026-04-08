@@ -15,6 +15,13 @@ import { applyExtensionSnapshot, decodeExtensionAskReply } from "../src/extensio
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
+import { defineExtensionPackage } from "@gent/core/domain/extension-package.js"
+import type { GentExtension } from "@gent/core/domain/extension.js"
+import { AutoPackage } from "@gent/core/extensions/auto-package.js"
+import { PlanPackage } from "@gent/core/extensions/plan-package.js"
+import { TaskToolsPackage } from "@gent/core/extensions/task-tools-package.js"
+import { HandoffPackage } from "@gent/core/extensions/handoff-package.js"
+import { InteractionToolsPackage } from "@gent/core/extensions/interaction-tools-package.js"
 
 const TEST_DIR = join(import.meta.dir, ".tmp-ext-integration")
 const USER_DIR = join(TEST_DIR, "user")
@@ -1010,6 +1017,135 @@ describe("resolution semantics", () => {
     const level = cmd!.paletteLevel!()
     expect(level.id).toBe("custom-level")
     expect(level.source()).toHaveLength(1)
+  })
+})
+
+describe("ExtensionPackage.tui()", () => {
+  // Minimal stub server extension for test packages
+  const stubServer = (id: string) =>
+    ({
+      manifest: { id },
+      setup: () => Effect.succeed({}),
+    }) as GentExtension
+
+  const TestSnapshot = Schema.Struct({ value: Schema.Number })
+
+  test(".tui() derives ID from package", () => {
+    const pkg = defineExtensionPackage({
+      id: "@test/derived-id",
+      server: stubServer("@test/derived-id"),
+      snapshot: TestSnapshot,
+    })
+
+    const clientModule = pkg.tui(() => ({}))
+    expect(clientModule.id).toBe("@test/derived-id")
+  })
+
+  test("zero-arg getSnapshot calls through with package ID + schema", () => {
+    const calls: Array<{ extensionId: string; schema: unknown }> = []
+    const mockCtx: ExtensionClientContext = {
+      ...noopCtx,
+      getSnapshot: (extensionId: string, schema: unknown) => {
+        calls.push({ extensionId, schema })
+        return { value: 42 }
+      },
+    }
+
+    const pkg = defineExtensionPackage({
+      id: "@test/snapshot-bind",
+      server: stubServer("@test/snapshot-bind"),
+      snapshot: TestSnapshot,
+    })
+
+    const clientModule = pkg.tui((ctx) => {
+      // Exercise zero-arg getSnapshot during setup
+      const result = ctx.getSnapshot()
+      expect(result).toEqual({ value: 42 })
+      return {}
+    })
+
+    clientModule.setup(mockCtx)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.extensionId).toBe("@test/snapshot-bind")
+    expect(calls[0]!.schema).toBe(TestSnapshot)
+  })
+
+  test("two-arg getSnapshot delegates for cross-extension reads", () => {
+    const OtherSchema = Schema.Struct({ other: Schema.String })
+    const calls: Array<{ extensionId: string; schema: unknown }> = []
+    const mockCtx: ExtensionClientContext = {
+      ...noopCtx,
+      getSnapshot: (extensionId: string, schema: unknown) => {
+        calls.push({ extensionId, schema })
+        return { other: "cross" }
+      },
+    }
+
+    const pkg = defineExtensionPackage({
+      id: "@test/cross-read",
+      server: stubServer("@test/cross-read"),
+      snapshot: TestSnapshot,
+    })
+
+    const clientModule = pkg.tui((ctx) => {
+      const result = ctx.getSnapshot("@other/ext", OtherSchema)
+      expect(result).toEqual({ other: "cross" })
+      return {}
+    })
+
+    clientModule.setup(mockCtx)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.extensionId).toBe("@other/ext")
+    expect(calls[0]!.schema).toBe(OtherSchema)
+  })
+
+  test("package without snapshot: zero-arg returns undefined", () => {
+    const pkg = defineExtensionPackage({
+      id: "@test/no-snapshot",
+      server: stubServer("@test/no-snapshot"),
+    })
+
+    let result: unknown = "sentinel"
+    const clientModule = pkg.tui((ctx) => {
+      result = ctx.getSnapshot()
+      return {}
+    })
+
+    clientModule.setup(noopCtx)
+    expect(result).toBeUndefined()
+  })
+
+  test("paired builtin IDs match their package IDs", () => {
+    const pairedPackages = [
+      AutoPackage,
+      PlanPackage,
+      TaskToolsPackage,
+      HandoffPackage,
+      InteractionToolsPackage,
+    ]
+
+    for (const pkg of pairedPackages) {
+      const clientModule = pkg.tui(() => ({}))
+      expect(clientModule.id).toBe(pkg.id)
+    }
+  })
+
+  test("all paired builtins derive ID from package (no manual id)", () => {
+    // Verify actual builtin modules match their package IDs
+    const expectedIds = new Map([
+      ["@gent/auto", AutoPackage.id],
+      ["@gent/plan", PlanPackage.id],
+      ["@gent/task-tools", TaskToolsPackage.id],
+      ["@gent/handoff", HandoffPackage.id],
+      ["@gent/interaction-tools", InteractionToolsPackage.id],
+    ])
+
+    for (const mod of builtinClientModules) {
+      const expected = expectedIds.get(mod.id)
+      if (expected !== undefined) {
+        expect(mod.id).toBe(expected)
+      }
+    }
   })
 })
 
