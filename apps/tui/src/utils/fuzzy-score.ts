@@ -1,12 +1,24 @@
 /**
  * Simple fuzzy match scoring.
  * Returns 0 if no match, higher = better match.
+ *
+ * Scoring tiers:
+ *  1000  — exact full match
+ *   800  — query exactly matches a directory segment in the path
+ *   500+ — substring match (shorter paths score higher)
+ *   0+   — fuzzy character match with boundary bonuses
  */
 export function fuzzyScore(query: string, target: string): number {
   const q = query.toLowerCase()
   const t = target.toLowerCase()
 
   if (t === q) return 1000
+
+  // Exact directory segment match: "utils" matches "src/utils/foo.ts"
+  const segments = t.split("/")
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (segments[i] === q) return 800 + (100 - target.length)
+  }
 
   if (t.includes(q)) return 500 + (100 - target.length)
 

@@ -89,6 +89,39 @@ describe("fuzzyScore", () => {
     })
   })
 
+  describe("directory segment matches", () => {
+    test("exact directory name scores higher than substring", () => {
+      const dirScore = fuzzyScore("utils", "src/utils/fuzzy-score.ts")
+      const substrScore = fuzzyScore("utils", "src/my-utils-lib/foo.ts")
+      expect(dirScore).toBeGreaterThan(substrScore)
+    })
+
+    test("exact directory match scores below exact full match", () => {
+      const fullMatch = fuzzyScore("utils", "utils")
+      const dirMatch = fuzzyScore("utils", "src/utils/foo.ts")
+      expect(fullMatch).toBeGreaterThan(dirMatch)
+    })
+
+    test("does not boost filename segment as directory", () => {
+      // "foo.ts" is the last segment (filename), not a directory
+      const score = fuzzyScore("foo.ts", "src/foo.ts")
+      // Should be substring match tier, not directory match tier
+      expect(score).toBeLessThan(800)
+      expect(score).toBeGreaterThan(0)
+    })
+
+    test("shorter paths rank higher for same directory match", () => {
+      const short = fuzzyScore("utils", "src/utils/foo.ts")
+      const long = fuzzyScore("utils", "packages/core/src/utils/deep/nested/foo.ts")
+      expect(short).toBeGreaterThan(long)
+    })
+
+    test("case insensitive directory match", () => {
+      const score = fuzzyScore("Utils", "src/utils/foo.ts")
+      expect(score).toBeGreaterThan(700) // directory tier
+    })
+  })
+
   describe("common file patterns", () => {
     test("matches common abbreviations", () => {
       expect(fuzzyScore("sv", "session-view.tsx")).toBeGreaterThan(0)
