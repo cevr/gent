@@ -248,8 +248,12 @@ export function CommandPalette() {
         category: cmd.category ?? "ext",
         shortcut: cmd.keybind,
         onSelect: () => {
-          cmd.onSelect()
-          closePalette()
+          if (cmd.paletteLevel !== undefined) {
+            pushLevel(cmd.paletteLevel())
+          } else {
+            cmd.onSelect()
+            closePalette()
+          }
         },
       })),
     ],

@@ -432,11 +432,20 @@ export function createSessionController(props: {
 
   // Build extension slash commands from resolved commands
   const extensionSlashCommands = createMemo(() => {
-    const result: Array<{ slash: string; onSelect: () => void; onSlash?: (args: string) => void }> =
-      []
+    const result: Array<{
+      slash: string
+      priority?: number
+      onSelect: () => void
+      onSlash?: (args: string) => void
+    }> = []
     for (const c of ext.commands()) {
       if (c.slash !== undefined) {
-        result.push({ slash: c.slash, onSelect: c.onSelect, onSlash: c.onSlash })
+        result.push({
+          slash: c.slash,
+          priority: c.slashPriority,
+          onSelect: c.onSelect,
+          onSlash: c.onSlash,
+        })
       }
     }
     return result

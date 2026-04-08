@@ -1,3 +1,5 @@
+import type { PaletteLevel } from "../components/command-palette-state"
+
 export interface Command {
   id: string
   title: string
@@ -6,9 +8,13 @@ export interface Command {
   keybind?: string
   /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
   slash?: string
+  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
+  slashPriority?: number
   onSelect: () => void
   /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
   onSlash?: (args: string) => void
+  /** When set, selecting this command in the palette pushes a sub-level instead of calling onSelect. */
+  paletteLevel?: () => PaletteLevel
 }
 
 export interface Keybind {

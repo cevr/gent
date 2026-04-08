@@ -156,7 +156,10 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
         category: entry.category,
         keybind: entry.keybind,
         slash: entry.slash,
+        slashPriority: entry.slashPriority,
         onSelect: entry.onSelect,
+        onSlash: entry.onSlash,
+        paletteLevel: entry.paletteLevel,
       })
       idScopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
     }

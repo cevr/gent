@@ -42,6 +42,8 @@ const runCommandEffect = (
 
 export interface ExtensionSlashCommand {
   readonly slash: string
+  /** Slash command priority. Lower wins. Builtins are 0, default is 10. Set < 0 to override builtins. */
+  readonly priority?: number
   readonly onSelect: () => void
   readonly onSlash?: (args: string) => void
 }
@@ -119,13 +121,13 @@ const builtinCommands = (ctx: SlashCommandContext): ReadonlyArray<SlashCommandEn
   },
 ]
 
-/** Convert extension commands to registry entries at priority 10. */
+/** Convert extension commands to registry entries. Default priority 10. */
 const extensionEntries = (
   commands: ReadonlyArray<ExtensionSlashCommand> | undefined,
 ): ReadonlyArray<SlashCommandEntry> =>
   (commands ?? []).map((c) => ({
     name: c.slash.toLowerCase(),
-    priority: 10,
+    priority: c.priority ?? 10,
     execute: (args: string) =>
       Effect.sync(() => {
         if (c.onSlash !== undefined) c.onSlash(args)

@@ -67,9 +67,27 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly keybind?: string
     /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
     readonly slash?: string
+    /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
+    readonly slashPriority?: number
     readonly onSelect: () => void
     /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
     readonly onSlash?: (args: string) => void
+    /** When set, selecting in the palette pushes a sub-level instead of calling onSelect.
+     *  Return a factory function — called lazily when the user navigates into the level. */
+    readonly paletteLevel?: () => {
+      readonly id: string
+      readonly title: string
+      readonly source: () =>
+        | ReadonlyArray<{
+            readonly id: string
+            readonly title: string
+            readonly description?: string
+            readonly category?: string
+            readonly onSelect: () => void
+          }>
+        | undefined
+      readonly onEnter?: () => void
+    }
   }>
   /** Full-screen overlay panels */
   readonly overlays?: ReadonlyArray<{

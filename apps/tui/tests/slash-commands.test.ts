@@ -291,6 +291,28 @@ describe("executeSlashCommand", () => {
     )
   })
 
+  it.live("extension with lower priority overrides builtin", () => {
+    const { ctx, calls } = createMockContext()
+    let extCalled = false
+    const extCommands: ExtensionSlashCommand[] = [
+      {
+        slash: "clear",
+        priority: -1,
+        onSelect: () => {
+          extCalled = true
+        },
+      },
+    ]
+
+    return executeSlashCommand("clear", "", ctx, extCommands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(extCalled).toBe(true)
+        expect(calls.newSession).toBe(0)
+      }),
+    )
+  })
+
   it.live("extension slash commands are case insensitive", () => {
     const { ctx } = createMockContext()
     let called = false
