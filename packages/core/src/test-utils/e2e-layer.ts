@@ -24,7 +24,6 @@ import { AuthStore } from "../domain/auth-store.js"
 import type { LoadedExtension } from "../domain/extension.js"
 import type { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
-import { Skills } from "../domain/skills.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
@@ -170,7 +169,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRuntimeLive,
         Permission.Test(),
         ApprovalService.Test(),
-        Skills.Test(),
         ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

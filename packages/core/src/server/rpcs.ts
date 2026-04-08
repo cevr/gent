@@ -13,7 +13,6 @@ import { InteractionRpcs } from "./rpcs/interaction.js"
 import { PermissionRpcs } from "./rpcs/permission.js"
 import { ModelRpcs } from "./rpcs/model.js"
 import { AuthRpcs } from "./rpcs/auth.js"
-import { SkillRpcs } from "./rpcs/skill.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ActorRpcs } from "./rpcs/actor.js"
 
@@ -28,7 +27,6 @@ export {
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
-  SkillRpcs,
   ExtensionRpcs,
   ActorRpcs,
 }
@@ -83,8 +81,6 @@ export {
   ExtensionHealthSnapshot,
   ExtensionHealthSummary,
   ExtensionManifestInfo,
-  SkillInfo,
-  SkillContent,
 } from "./transport-contract.js"
 
 // ============================================================================
@@ -101,7 +97,6 @@ export class GentRpcs extends RpcGroup.make().merge(
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
-  SkillRpcs,
   ExtensionRpcs,
   ActorRpcs,
 ) {}

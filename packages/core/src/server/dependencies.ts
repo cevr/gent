@@ -6,7 +6,6 @@ import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import { Permission, PermissionRule } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { Skills } from "../domain/skills.js"
 import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
 import { Provider } from "../providers/provider.js"
@@ -211,10 +210,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
-  const skillsLive = Skills.Live({
-    cwd: config.cwd,
-    home: config.home,
-  })
   // Extension registry needs storageLive for SqlClient (extension task layers use it)
   const extensionRegistryLive = Layer.provide(makeExtensionLayers(config), storageLive)
   const modelRegistryLive = Layer.provide(
@@ -247,7 +242,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerAuthLive,
     configServiceLive,
     modelRegistryLive,
-    skillsLive,
     extensionRegistryLive,
     fileLockServiceLive,
     providerLive,

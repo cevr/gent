@@ -12,8 +12,6 @@ export type {
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
-  SkillInfo,
-  SkillContent,
 } from "@gent/core/server/transport-contract.js"
 
 export { GentConnectionError } from "@gent/core/server/transport-contract.js"
@@ -67,5 +65,3 @@ export {
   type ImageInfo,
   type ExtractedToolCall,
 } from "./client.js"
-
-export type { SkillLevel } from "./client.js"

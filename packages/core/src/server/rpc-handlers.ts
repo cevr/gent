@@ -6,7 +6,6 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
-import { Skills } from "../domain/skills.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -44,7 +43,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const events = yield* SessionEvents
     const subscriptions = yield* SessionSubscriptions
     const interactions = yield* InteractionCommands
-    const skills = yield* Skills
     const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
@@ -252,35 +250,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             sessionId === undefined ? [] : yield* extensionStateRuntime.getActorStatuses(sessionId)
           return buildExtensionHealthSnapshot(activationStatuses, actorStatuses)
         }),
-
-      // -- skill --
-      "skill.list": () =>
-        skills.list().pipe(
-          Effect.map((list) =>
-            list.map((s) => ({
-              name: s.name,
-              description: s.description,
-              level: s.level,
-              filePath: s.filePath,
-              content: s.content,
-            })),
-          ),
-        ),
-
-      "skill.getContent": ({ name }) =>
-        skills.get(name).pipe(
-          Effect.map((s) =>
-            s !== undefined
-              ? {
-                  name: s.name,
-                  description: s.description,
-                  level: s.level,
-                  filePath: s.filePath,
-                  content: s.content,
-                }
-              : null,
-          ),
-        ),
 
       // -- extension --
       "extension.send": ({ sessionId, message, branchId }) =>

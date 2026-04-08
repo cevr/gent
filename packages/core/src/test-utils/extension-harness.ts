@@ -46,7 +46,6 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
-import { Skills } from "../domain/skills.js"
 import { Storage } from "../storage/sqlite-storage.js"
 
 // ── Options ──
@@ -316,7 +315,6 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
         Permission.Test(),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        Skills.Test(),
       )
       const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),

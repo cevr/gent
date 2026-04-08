@@ -11,7 +11,6 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
-import { Skills } from "../domain/skills.js"
 import { DebugProvider } from "../debug/provider.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -61,7 +60,6 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     extensionRegistryLive,
     extensionRuntimeLive,
     Permission.Test(),
-    Skills.Test(),
     ConfigService.Test(),
     ModelRegistry.Test(),
     ToolRunner.Test(),
