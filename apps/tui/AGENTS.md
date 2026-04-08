@@ -153,15 +153,15 @@ Special prefixes at input start trigger different modes:
 
 Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 
-| File                              | Extension ID         | What                                           |
-| --------------------------------- | -------------------- | ---------------------------------------------- |
-| `builtins/tools.client.ts`        | `@gent/tools`        | Tool renderers                                 |
-| `builtins/plan.client.ts`         | `@gent/plan`         | Plan widget + border labels                    |
-| `builtins/auto.client.ts`         | `@gent/auto`         | Auto loop progress                             |
-| `builtins/tasks.client.tsx`       | `@gent/tasks`        | Task widget, dialog overlay, border label      |
-| `builtins/connection.client.ts`   | `@gent/connection`   | Connection status widget                       |
-| `builtins/interactions.client.ts` | `@gent/interactions` | Interaction renderers (questions, permissions) |
-| `builtins/handoff.client.ts`      | `@gent/handoff`      | Handoff interaction renderer                   |
+| File                              | Extension ID              | What                                           |
+| --------------------------------- | ------------------------- | ---------------------------------------------- |
+| `builtins/tools.client.ts`        | `@gent/tools`             | Tool renderers                                 |
+| `builtins/plan.client.ts`         | `@gent/plan`              | Plan widget + border labels                    |
+| `builtins/auto.client.ts`         | `@gent/auto`              | Auto loop progress                             |
+| `builtins/tasks.client.tsx`       | `@gent/task-tools`        | Task widget, dialog overlay, border label      |
+| `builtins/connection.client.ts`   | `@gent/connection`        | Connection status widget                       |
+| `builtins/interactions.client.ts` | `@gent/interaction-tools` | Interaction renderers (questions, permissions) |
+| `builtins/handoff.client.ts`      | `@gent/handoff`           | Handoff interaction renderer                   |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader.ts` → `resolve.ts`
 

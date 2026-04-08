@@ -523,7 +523,7 @@ describe("disabled extensions", () => {
         builtins: builtinClientModules,
         userDir: emptyUser,
         projectDir: emptyProject,
-        disabled: ["@gent/plan", "@gent/tasks"],
+        disabled: ["@gent/plan", "@gent/task-tools"],
       },
       noopCtx,
     )
