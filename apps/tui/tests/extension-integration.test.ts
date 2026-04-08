@@ -30,6 +30,7 @@ const PROJECT_DIR = join(TEST_DIR, "project")
 import { builtinClientModules } from "../src/extensions/builtins/index"
 
 const noopCtx: ExtensionClientContext = {
+  cwd: TEST_DIR,
   openOverlay: () => {},
   closeOverlay: () => {},
   send: () => {},
@@ -48,6 +49,7 @@ const noopCtx: ExtensionClientContext = {
 const createRecordingCtx = () => {
   const calls: string[] = []
   const ctx: ExtensionClientContext = {
+    cwd: TEST_DIR,
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
     send: () => {},
@@ -67,6 +69,7 @@ const createRecordingCtx = () => {
 const createProtocolRecordingCtx = () => {
   const sent: unknown[] = []
   const ctx: ExtensionClientContext = {
+    cwd: TEST_DIR,
     openOverlay: () => {},
     closeOverlay: () => {},
     send: (message) => sent.push(message),

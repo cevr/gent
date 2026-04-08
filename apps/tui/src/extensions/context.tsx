@@ -215,6 +215,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           disabled: [...disabledSet],
         },
         {
+          cwd: workspace.cwd,
           openOverlay: (id) => overlayDispatch().open(id),
           closeOverlay: () => overlayDispatch().close(),
           get sessionId() {

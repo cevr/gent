@@ -136,6 +136,8 @@ export interface ExtensionClientSetup<TComponent = unknown> {
 
 /** Runtime API provided to extensions during setup */
 export interface ExtensionClientContext {
+  /** Working directory for the current workspace */
+  readonly cwd: string
   readonly openOverlay: (id: string) => void
   readonly closeOverlay: () => void
   /** Current session ID (reactive — may be undefined before session is active) */

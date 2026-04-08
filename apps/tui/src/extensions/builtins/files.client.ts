@@ -7,7 +7,7 @@ import { Glob } from "bun"
 const FILE_GLOB = new Glob("**/*")
 const MAX_RESULTS = 50
 
-export default ExtensionPackage.tui("@gent/files-ui", () => ({
+export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
   autocompleteItems: [
     {
       prefix: "@",
@@ -16,7 +16,7 @@ export default ExtensionPackage.tui("@gent/files-ui", () => ({
       items: async (filter: string) => {
         if (filter.length === 0) return []
 
-        const cwd = process.cwd()
+        const cwd = ctx.cwd
         const matches: Array<{ path: string; name: string; score: number }> = []
 
         for await (const path of FILE_GLOB.scan({ cwd, onlyFiles: true })) {
