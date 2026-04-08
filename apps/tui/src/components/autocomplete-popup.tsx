@@ -14,6 +14,7 @@ import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
+import { useClient } from "../client/index"
 import type {
   AutocompleteContribution,
   AutocompleteItem,
@@ -31,6 +32,7 @@ export interface AutocompletePopupProps {
 export function AutocompletePopup(props: AutocompletePopupProps) {
   const { theme } = useTheme()
   const extensionUI = useExtensionUI()
+  const { log } = useClient()
 
   const [rawSelectedIndex, setSelectedIndex] = createSignal(0)
 
@@ -76,9 +78,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       const results = await Promise.all(
         contributions().map((c) =>
           Promise.resolve(c.items(filter)).catch((err) => {
-            console.log(
-              `[tui-ext] autocomplete contribution "${c.prefix}" failed: ${err instanceof Error ? err.message : String(err)}`,
-            )
+            log.error("autocomplete.contribution.failed", {
+              prefix: c.prefix,
+              error: err instanceof Error ? err.message : String(err),
+            })
             return [] as AutocompleteItem[]
           }),
         ),

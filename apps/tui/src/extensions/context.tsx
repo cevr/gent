@@ -254,9 +254,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
               )
               return result
             } catch (err) {
-              console.log(
-                `[tui-ext] ask "${message._tag}" on "${message.extensionId}" failed: ${err instanceof Error ? err.message : String(err)}`,
-              )
+              clientCtx.log.error("extension.ask.failed", {
+                extensionId: message.extensionId,
+                tag: message._tag,
+                error: err instanceof Error ? err.message : String(err),
+              })
               throw err
             }
           },
