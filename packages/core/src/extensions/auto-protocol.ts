@@ -13,4 +13,5 @@ export const AutoProtocol = {
     goal: Schema.optional(Schema.String),
     maxIterations: Schema.optional(Schema.Number),
   }),
+  IsActive: ExtensionMessage.reply(AUTO_EXTENSION_ID, "IsActive", {}, Schema.Boolean),
 }

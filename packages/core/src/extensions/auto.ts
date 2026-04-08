@@ -109,6 +109,7 @@ const MachineEvent = MEvent({
   },
   ReviewSignal: {},
   TurnTick: {},
+  IsActive: MEvent.reply({}, Schema.Boolean),
 })
 type MachineEvent = typeof MachineEvent.Type
 
@@ -314,6 +315,10 @@ const autoMachine = Machine.make({
   .on(MachineState.AwaitingReview, MachineEvent.CancelAuto, () =>
     MachineState.Inactive({ reason: "cancelled" }),
   )
+  // IsActive — pure read, returns boolean without state change
+  .on(MachineState.Inactive, MachineEvent.IsActive, ({ state }) => Machine.reply(state, false))
+  .on(MachineState.Working, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
+  .on(MachineState.AwaitingReview, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
 
 // ── Derive ──
 
@@ -681,6 +686,11 @@ const autoActor: ExtensionActorDefinition<
   mapEvent,
   mapCommand: (message, state) =>
     Schema.is(AutoIntent)(message) ? mapMessage(message, state) : undefined,
+  mapRequest: (message) => {
+    if (message.extensionId !== AUTO_EXTENSION_ID) return undefined
+    if (message._tag === "IsActive") return MachineEvent.IsActive
+    return undefined
+  },
   snapshot: {
     schema: AutoUiModel,
     project: projectSnapshot,

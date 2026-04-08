@@ -68,6 +68,11 @@ export declare namespace ExtensionHostContext {
       branchId?: BranchId,
     ) => Effect.Effect<ReadonlyArray<ExtensionUiSnapshot>>
 
+    /**
+     * Read another extension's UI snapshot. The generic `T` is unchecked at runtime —
+     * prefer `ask()` with a typed protocol for cross-extension reads.
+     * Self-reads (own extensionId) are fine; cross-extension reads couple to internal state shapes.
+     */
     readonly getUiSnapshot: <T>(
       extensionId: string,
       branchId?: BranchId,

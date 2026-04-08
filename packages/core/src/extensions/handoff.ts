@@ -7,6 +7,7 @@ import { HandoffTool } from "./handoff-tool.js"
 import { DEFAULTS } from "../domain/defaults.js"
 import { extension } from "./api.js"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
+import { AutoProtocol } from "./auto-protocol.js"
 
 // Cooldown state — per session, managed by actor lifecycle
 interface CooldownState {
@@ -87,18 +88,17 @@ const autoHandoffImpl = (
 
     if (input.interrupted) return
 
-    // Read cooldown + epoch from actor state, and check if auto is active
-    const snapshots = yield* ctx.extension
-      .getUiSnapshots()
-      .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-
     // Auto owns its own handoff flow — skip generic threshold handoff when active
-    const autoSnap = snapshots.find((s) => s.extensionId === "@gent/auto")
-    const autoActive = (autoSnap?.model as { active?: boolean } | undefined)?.active === true
+    const autoActive = yield* ctx.extension
+      .ask(AutoProtocol.IsActive())
+      .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 
-    const handoffSnap = snapshots.find((s) => s.extensionId === EXTENSION_ID)
-    const cooldown = (handoffSnap?.model as CooldownState | undefined)?.cooldown ?? 0
+    // Read cooldown from own actor snapshot — self-reads are safe (local type)
+    const handoffSnap = yield* ctx.extension
+      .getUiSnapshot<CooldownState>(EXTENSION_ID)
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+    const cooldown = handoffSnap?.cooldown ?? 0
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
     const contextPercent = yield* ctx.session.estimateContextPercent()
