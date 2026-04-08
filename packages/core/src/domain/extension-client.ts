@@ -44,6 +44,31 @@ export const defineInteractionRenderer = (
   metadataType?: string,
 ): InteractionRendererContribution => ({ metadataType, component })
 
+/** Item in an autocomplete popup */
+export interface AutocompleteItem {
+  readonly id: string
+  readonly label: string
+  readonly description?: string
+}
+
+/** Autocomplete popup contribution — registers a prefix trigger and item source */
+export interface AutocompleteContribution {
+  readonly prefix: string
+  readonly title: string
+  /** Trigger mode:
+   *  - "inline": detected anywhere in text after whitespace (like $ and @)
+   *  - "start": only at cursor position 0 (like /) */
+  readonly trigger: "inline" | "start"
+  /** Fetch items for the given filter. Sync or async.
+   *  Popup wraps in createResource — undefined while loading, items when resolved. */
+  readonly items: (
+    filter: string,
+  ) => ReadonlyArray<AutocompleteItem> | Promise<ReadonlyArray<AutocompleteItem>>
+  /** Format the selected item id for insertion into the draft.
+   *  Default: `${prefix}${id} ` */
+  readonly formatInsertion?: (id: string) => string
+}
+
 /** What a TUI extension contributes after setup */
 export interface ExtensionClientSetup<TComponent = unknown> {
   /** Tool renderers keyed by tool name(s) */
@@ -105,6 +130,8 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly priority?: number
     readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
   }>
+  /** Autocomplete popup contributions — register prefix triggers and item sources */
+  readonly autocompleteItems?: ReadonlyArray<AutocompleteContribution>
 }
 
 /** Runtime API provided to extensions during setup */

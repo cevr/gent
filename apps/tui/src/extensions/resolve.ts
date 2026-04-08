@@ -5,7 +5,10 @@
  * Precedence: project > user > builtin. Same-scope collisions throw.
  */
 
-import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
+import type {
+  AutocompleteContribution,
+  ExtensionClientSetup,
+} from "@gent/core/domain/extension-client.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
@@ -46,6 +49,7 @@ export interface ResolvedTuiExtensions {
   readonly interactionRenderers: Map<string | undefined, SolidComponent>
   readonly composerSurface: SolidComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
+  readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
 }
 
 interface ScopeEntry {
@@ -249,6 +253,14 @@ export const resolveTuiExtensions = (
   }
   borderLabels.sort((a, b) => a.priority - b.priority)
 
+  // Autocomplete contributions: collect all, scope-ordered (already sorted)
+  const autocompleteItems: AutocompleteContribution[] = []
+  for (const ext of sorted) {
+    for (const entry of ext.setup.autocompleteItems ?? []) {
+      autocompleteItems.push(entry)
+    }
+  }
+
   return {
     renderers: resolveRenderers(sorted),
     widgets: resolveWidgets(sorted),
@@ -257,5 +269,6 @@ export const resolveTuiExtensions = (
     interactionRenderers: resolveInteractionRenderers(sorted),
     composerSurface: resolveComposerSurface(sorted),
     borderLabels,
+    autocompleteItems,
   }
 }

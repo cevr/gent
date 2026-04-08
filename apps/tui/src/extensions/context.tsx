@@ -31,6 +31,7 @@ import { getExtensionReplyDecoder } from "@gent/core/domain/extension-protocol.j
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
+import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
@@ -85,6 +86,7 @@ export interface ExtensionUIContextValue {
   readonly interactionRenderers: Accessor<Map<string | undefined, SolidComponent>>
   readonly composerSurface: Accessor<SolidComponent | undefined>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
+  readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
@@ -115,6 +117,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   interactionRenderers: new Map(),
   composerSurface: undefined,
   borderLabels: [],
+  autocompleteItems: [],
 }
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
@@ -331,6 +334,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         interactionRenderers: () => resolved().interactionRenderers,
         composerSurface: () => resolved().composerSurface,
         borderLabels: () => resolved().borderLabels,
+        autocompleteItems: () => resolved().autocompleteItems,
         loading,
         setOverlayDispatch,
         setComposerStateProvider,
