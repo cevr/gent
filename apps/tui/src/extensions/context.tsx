@@ -242,15 +242,23 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             if (sid === undefined) {
               throw new Error("Cannot ask extension without an active session")
             }
-            return clientCtx.runtime.run(
-              clientCtx.client.extension
-                .ask({
-                  sessionId: sid,
-                  message,
-                  branchId: bid,
-                })
-                .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
-            )
+            try {
+              const result = await clientCtx.runtime.run(
+                clientCtx.client.extension
+                  .ask({
+                    sessionId: sid,
+                    message,
+                    branchId: bid,
+                  })
+                  .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
+              )
+              return result
+            } catch (err) {
+              console.log(
+                `[tui-ext] ask "${message._tag}" on "${message.extensionId}" failed: ${err instanceof Error ? err.message : String(err)}`,
+              )
+              throw err
+            }
           },
           getSnapshot: (extensionId, schema) => {
             const snap = snapshots().get(extensionId)

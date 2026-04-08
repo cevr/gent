@@ -75,7 +75,12 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     async ([_prefix, filter]): Promise<AutocompleteItem[]> => {
       const results = await Promise.all(
         contributions().map((c) =>
-          Promise.resolve(c.items(filter)).catch(() => [] as AutocompleteItem[]),
+          Promise.resolve(c.items(filter)).catch((err) => {
+            console.log(
+              `[tui-ext] autocomplete contribution "${c.prefix}" failed: ${err instanceof Error ? err.message : String(err)}`,
+            )
+            return [] as AutocompleteItem[]
+          }),
         ),
       )
       // Dedupe by id, first-win (scope-ordered from resolve)

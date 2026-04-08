@@ -85,5 +85,12 @@ export const loadTuiExtensions = async (
     setup: ext.module.setup(ctx),
   }))
 
-  return resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
+  const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
+
+  if (resolved.autocompleteItems.length > 0) {
+    const prefixes = resolved.autocompleteItems.map((c) => c.prefix).join(", ")
+    console.log(`[tui-ext] autocomplete contributions: ${prefixes}`)
+  }
+
+  return resolved
 }
