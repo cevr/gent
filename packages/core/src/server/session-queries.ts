@@ -1,4 +1,5 @@
 import { Effect, Layer, ServiceMap } from "effect"
+import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -138,7 +139,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
         const idleRuntime = {
           phase: "idle" as const,
           status: "idle" as const,
-          agent: "cowork" as const,
+          agent: DEFAULT_AGENT_NAME,
           queue: { steering: [], followUp: [] },
         }
         const runtime = yield* actorProcess
@@ -147,7 +148,7 @@ export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQu
             Effect.map((state) => ({
               phase: state.phase,
               status: state.status,
-              agent: state.agent ?? "cowork",
+              agent: state.agent ?? DEFAULT_AGENT_NAME,
               queue: state.queue,
             })),
             Effect.catchEager(() => Effect.succeed(idleRuntime)),

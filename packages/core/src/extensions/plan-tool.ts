@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import type { AgentDefinition } from "../domain/agent.js"
+import { DEFAULT_AGENT_NAME, type AgentDefinition } from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { requireText } from "../runtime/workflow-helpers.js"
@@ -181,7 +181,7 @@ export const PlanTool = defineTool({
     const mode = params.mode ?? "plan-only"
 
     const architect = yield* ctx.agent.require("architect")
-    const callerAgentName = ctx.agentName ?? "cowork"
+    const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
     const executor = yield* ctx.agent.require(callerAgentName)
 
     // Adversarial planning cycle (always runs)

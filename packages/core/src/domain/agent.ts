@@ -22,6 +22,12 @@ export type ReasoningEffort = typeof ReasoningEffort.Type
 export const AgentPersistence = Schema.Literals(["durable", "ephemeral"])
 export type AgentPersistence = typeof AgentPersistence.Type
 
+export const AgentRole = Schema.Literals(["primary", "reviewer"])
+export type AgentRole = typeof AgentRole.Type
+
+/** Default agent name — used when no agent is explicitly specified. */
+export const DEFAULT_AGENT_NAME = "cowork" as AgentName
+
 /** Brand symbol for detecting full AgentDefinition vs SimpleAgentDef in overloaded APIs */
 export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefinition")
 
@@ -35,6 +41,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   temperature: Schema.optional(Schema.Number),
   reasoningEffort: Schema.optional(ReasoningEffort),
   persistence: Schema.optional(AgentPersistence),
+  role: Schema.optional(AgentRole),
 }) {}
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
@@ -122,6 +129,7 @@ export const Agents = {
     description: "General purpose - full tool access, can execute code changes",
     model: "anthropic/claude-opus-4-6" as ModelId,
     systemPromptAddendum: COWORK_PROMPT,
+    role: "primary",
   }),
 
   deepwork: defineAgent({
@@ -130,6 +138,7 @@ export const Agents = {
     model: "openai/gpt-5.4" as ModelId,
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
+    role: "reviewer",
   }),
 
   explore: defineAgent({

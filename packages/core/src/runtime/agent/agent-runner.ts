@@ -29,6 +29,7 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   AgentRunError,
   AgentRunnerService,
+  DEFAULT_AGENT_NAME,
   resolveAgentPersistence,
   type AgentRunResult,
   type AgentRunToolCall,
@@ -635,7 +636,7 @@ const runEphemeralAgent = (params: {
                 new AgentSwitched({
                   sessionId,
                   branchId,
-                  fromAgent: "cowork",
+                  fromAgent: DEFAULT_AGENT_NAME,
                   toAgent: params.agentName,
                 }),
               )
@@ -763,7 +764,7 @@ export const InProcessRunner = (
           new AgentSwitched({
             sessionId: params.sessionId,
             branchId: params.branchId,
-            fromAgent: "cowork",
+            fromAgent: DEFAULT_AGENT_NAME,
             toAgent: params.agentName,
           }),
         )

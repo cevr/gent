@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
+  DEFAULT_AGENT_NAME,
   defineAgent,
   getDurableAgentRunSessionId,
   type AgentDefinition,
@@ -287,7 +288,7 @@ export const ReviewTool = defineTool({
   execute: Effect.fn("ReviewTool.execute")(function* (params, ctx: ToolContext) {
     const mode = params.mode ?? "report"
 
-    const callerAgentName = ctx.agentName ?? "cowork"
+    const callerAgentName = ctx.agentName ?? DEFAULT_AGENT_NAME
     const executor = yield* ctx.agent.require(callerAgentName)
 
     const reviewInput = yield* resolveReviewInput(

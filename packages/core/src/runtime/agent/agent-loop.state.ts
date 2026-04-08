@@ -4,6 +4,7 @@ import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   AgentName,
   AgentExecutionOverridesSchema,
+  DEFAULT_AGENT_NAME,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
@@ -321,7 +322,7 @@ export const queueContainsContent = (
 // ── Runtime state projection ──
 
 export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState => {
-  const agent = state.currentAgent ?? "cowork"
+  const agent = state.currentAgent ?? DEFAULT_AGENT_NAME
   const queue = queueSnapshotFromState(state)
 
   switch (state._tag) {

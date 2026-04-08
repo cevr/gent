@@ -289,14 +289,21 @@ export class ExtensionRegistry extends ServiceMap.Service<
         }),
       resolveDualModelPair: () =>
         Effect.gen(function* () {
+          const agents = [...resolved.agents.values()]
+          // 1. Role-based: find primary + reviewer
+          const primary = agents.find((a) => a.role === "primary")
+          const reviewer = agents.find((a) => a.role === "reviewer")
+          if (primary !== undefined && reviewer !== undefined) {
+            return [resolveAgentModel(primary), resolveAgentModel(reviewer)] as [ModelId, ModelId]
+          }
+          // 2. Name-based fallback: cowork + deepwork
           const cowork = resolved.agents.get("cowork")
           const deepwork = resolved.agents.get("deepwork")
           if (cowork !== undefined && deepwork !== undefined) {
             return [resolveAgentModel(cowork), resolveAgentModel(deepwork)] as [ModelId, ModelId]
           }
-          const modeledAgents = [...resolved.agents.values()].filter(
-            (agent) => agent.model !== undefined,
-          )
+          // 3. Position-based fallback: first two modeled agents
+          const modeledAgents = agents.filter((agent) => agent.model !== undefined)
           if (modeledAgents.length >= 2) {
             const first = modeledAgents[0]
             const second = modeledAgents[1]

@@ -26,6 +26,7 @@ import {
   AgentName,
   AgentRunError,
   AgentRunnerService,
+  DEFAULT_AGENT_NAME,
   resolveAgentModel,
   type AgentExecutionOverrides,
   type AgentName as AgentNameType,
@@ -151,7 +152,7 @@ export type TurnMetrics = {
 }
 
 export const emptyTurnMetrics = (): TurnMetrics => ({
-  agent: "cowork",
+  agent: DEFAULT_AGENT_NAME,
   model: "",
   inputTokens: 0,
   outputTokens: 0,
@@ -225,7 +226,7 @@ const resolveTurnContext = (params: {
   hostCtx: ExtensionHostContext
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
   Effect.gen(function* () {
-    const currentAgent = params.agentOverride ?? params.currentAgent ?? "cowork"
+    const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
     const rawMessages = yield* params.storage
       .listMessages(params.branchId)
       .pipe(Effect.map((items) => [...items]))
@@ -996,7 +997,7 @@ const resolveStoredAgent = (params: {
         ? latestAgentEvent.toAgent
         : undefined
 
-    return Schema.is(AgentName)(raw) ? raw : "cowork"
+    return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
   })
 
 const hasAgentOverrides = (overrides: AgentExecutionOverrides | undefined) =>
@@ -1421,7 +1422,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               next: AgentNameType,
             ): Effect.Effect<S> =>
               Effect.gen(function* () {
-                const previous = state.currentAgent ?? "cowork"
+                const previous = state.currentAgent ?? DEFAULT_AGENT_NAME
                 if (previous === next) return state
                 const resolved = yield* extensionRegistry.getAgent(next)
                 if (resolved === undefined) return state
@@ -1451,7 +1452,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               let step = 0
               let interrupted = yield* Ref.get(interruptedRef)
               let streamFailed = false
-              let currentTurnAgent: AgentNameType = state.currentAgent ?? "cowork"
+              let currentTurnAgent: AgentNameType = state.currentAgent ?? DEFAULT_AGENT_NAME
 
               // Resume check: if assistant message with tool calls exists but no tool results,
               // we're resuming from WaitingForInteraction or crash. Execute tools first.
@@ -2274,7 +2275,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
         Effect.succeed({
           phase: "idle",
           status: "idle",
-          agent: "cowork",
+          agent: DEFAULT_AGENT_NAME,
           queue: { steering: [], followUp: [] },
         }),
       toRuntimeState: runtimeStateFromLoopState,
