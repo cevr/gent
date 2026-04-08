@@ -147,18 +147,20 @@ export const BashTool = defineTool({
 
     // Background mode — spawn, fork a watcher, return immediately
     if (params.run_in_background === true) {
-      let proc: ReturnType<typeof Bun.spawn>
-      try {
-        const spawnOpts: Parameters<typeof Bun.spawn>[1] = { stdout: "pipe", stderr: "pipe" }
-        if (cwd !== undefined) spawnOpts.cwd = cwd
-        proc = Bun.spawn(["bash", "-c", command], spawnOpts)
-      } catch (e) {
+      const spawnOpts: Parameters<typeof Bun.spawn>[1] = { stdout: "pipe", stderr: "pipe" }
+      if (cwd !== undefined) spawnOpts.cwd = cwd
+      const spawnExit = yield* Effect.try({
+        try: () => Bun.spawn(["bash", "-c", command], spawnOpts),
+        catch: (e) => String(e),
+      }).pipe(Effect.exit)
+      if (spawnExit._tag === "Failure") {
         return {
-          stdout: `Failed to spawn background command: ${e}`,
+          stdout: `Failed to spawn background command: ${spawnExit.cause}`,
           stderr: "",
           exitCode: 1,
         }
       }
+      const proc = spawnExit.value
 
       // Fork a fiber that waits for completion and queues a follow-up
       const bgEffect = Effect.gen(function* () {

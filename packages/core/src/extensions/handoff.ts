@@ -97,7 +97,7 @@ const autoHandoffImpl = (
     // Read cooldown from own actor snapshot — self-reads are safe (local type)
     const handoffSnap = yield* ctx.extension
       .getUiSnapshot<CooldownState>(EXTENSION_ID)
-      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+      .pipe(Effect.catchEager(() => Effect.void))
     const cooldown = handoffSnap?.cooldown ?? 0
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
