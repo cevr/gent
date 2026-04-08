@@ -17,7 +17,14 @@ export interface ExtensionPackage<TSnapshot = unknown> {
 /** Factory helper for defining a unified extension package. */
 export const defineExtensionPackage = <TSnapshot = unknown>(
   pkg: ExtensionPackage<TSnapshot>,
-): ExtensionPackage<TSnapshot> => pkg
+): ExtensionPackage<TSnapshot> => {
+  if (pkg.id !== pkg.server.manifest.id) {
+    throw new Error(
+      `ExtensionPackage id "${pkg.id}" does not match server manifest id "${pkg.server.manifest.id}"`,
+    )
+  }
+  return pkg
+}
 
 /** Input accepted by loaders — either a raw GentExtension or a unified package. */
 export type ExtensionInput = GentExtension | ExtensionPackage
