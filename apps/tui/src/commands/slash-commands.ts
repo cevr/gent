@@ -1,7 +1,8 @@
 /**
- * Slash command handlers
+ * Slash command handlers — priority-sorted registry.
  *
- * Commands: /clear, /new, /sessions, /branch, /tree, /fork, /handoff
+ * Builtins register at priority 0, extension commands at priority 10.
+ * Lower priority wins. First match by name wins within the same priority.
  */
 
 import { Effect } from "effect"
@@ -45,91 +46,110 @@ export interface ExtensionSlashCommand {
   readonly onSlash?: (args: string) => void
 }
 
-const tryExtensionCommand = (
-  cmd: string,
-  args: string,
-  extensionCommands: ReadonlyArray<ExtensionSlashCommand> | undefined,
-): Effect.Effect<SlashCommandResult, UiError> => {
-  const extCmd = extensionCommands?.find((c) => c.slash.toLowerCase() === cmd.toLowerCase())
-  if (extCmd !== undefined) {
-    return Effect.sync(() => {
-      if (extCmd.onSlash !== undefined) {
-        extCmd.onSlash(args)
-      } else {
-        extCmd.onSelect()
-      }
-      return { handled: true }
-    })
-  }
-  return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
+/** A registered slash command entry with priority for ordering. */
+export interface SlashCommandEntry {
+  readonly name: string
+  readonly priority: number
+  readonly execute: (args: string) => Effect.Effect<SlashCommandResult, UiError>
 }
 
-/**
- * Execute a slash command. Builtins take priority; extension commands are checked on fallthrough.
- */
-export const executeSlashCommand = (
-  cmd: string,
-  _args: string,
-  ctx: SlashCommandContext,
-  extensionCommands?: ReadonlyArray<ExtensionSlashCommand>,
-): Effect.Effect<SlashCommandResult, UiError> => {
-  switch (cmd.toLowerCase()) {
-    case "clear":
-      return runCommandEffect(ctx.newSession())
-
-    case "new":
-      return runCommandEffect(ctx.newSession())
-
-    case "sessions":
-      return Effect.sync(() => {
+/** Build the builtin command entries from the context. */
+const builtinCommands = (ctx: SlashCommandContext): ReadonlyArray<SlashCommandEntry> => [
+  { name: "clear", priority: 0, execute: () => runCommandEffect(ctx.newSession()) },
+  { name: "new", priority: 0, execute: () => runCommandEffect(ctx.newSession()) },
+  {
+    name: "sessions",
+    priority: 0,
+    execute: () =>
+      Effect.sync(() => {
         ctx.navigateToSessions()
         return { handled: true }
-      })
-
-    case "branch":
-      return runCommandEffect(ctx.createBranch)
-
-    case "tree":
-      return Effect.sync(() => {
+      }),
+  },
+  { name: "branch", priority: 0, execute: () => runCommandEffect(ctx.createBranch) },
+  {
+    name: "tree",
+    priority: 0,
+    execute: () =>
+      Effect.sync(() => {
         ctx.openTree()
         return { handled: true }
-      })
-
-    case "fork":
-      return Effect.sync(() => {
+      }),
+  },
+  {
+    name: "fork",
+    priority: 0,
+    execute: () =>
+      Effect.sync(() => {
         ctx.openFork()
         return { handled: true }
-      })
-
-    case "think": {
-      const level = _args.trim().toLowerCase()
+      }),
+  },
+  {
+    name: "think",
+    priority: 0,
+    execute: (args) => {
+      const level = args.trim().toLowerCase()
       const validLevels = ["off", "low", "medium", "high", "xhigh"]
       if (level === "" || !validLevels.includes(level)) {
-        return Effect.succeed({
-          handled: true,
-          error: `Usage: /think <${validLevels.join("|")}>`,
-        })
+        return Effect.succeed({ handled: true, error: `Usage: /think <${validLevels.join("|")}>` })
       }
       return runCommandEffect(
         ctx.setReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort)),
       )
-    }
-
-    case "permissions":
-      return Effect.sync(() => {
+    },
+  },
+  {
+    name: "permissions",
+    priority: 0,
+    execute: () =>
+      Effect.sync(() => {
         ctx.openPermissions()
         return { handled: true }
-      })
-
-    case "auth":
-      return Effect.sync(() => {
+      }),
+  },
+  {
+    name: "auth",
+    priority: 0,
+    execute: () =>
+      Effect.sync(() => {
         ctx.openAuth()
         return { handled: true }
-      })
+      }),
+  },
+]
 
-    default:
-      return tryExtensionCommand(cmd, _args, extensionCommands)
-  }
+/** Convert extension commands to registry entries at priority 10. */
+const extensionEntries = (
+  commands: ReadonlyArray<ExtensionSlashCommand> | undefined,
+): ReadonlyArray<SlashCommandEntry> =>
+  (commands ?? []).map((c) => ({
+    name: c.slash.toLowerCase(),
+    priority: 10,
+    execute: (args: string) =>
+      Effect.sync(() => {
+        if (c.onSlash !== undefined) c.onSlash(args)
+        else c.onSelect()
+        return { handled: true } satisfies SlashCommandResult
+      }),
+  }))
+
+/**
+ * Execute a slash command. All commands (builtin + extension) go through
+ * a priority-sorted registry. Lower priority wins; first match by name.
+ */
+export const executeSlashCommand = (
+  cmd: string,
+  args: string,
+  ctx: SlashCommandContext,
+  extensionCommands?: ReadonlyArray<ExtensionSlashCommand>,
+): Effect.Effect<SlashCommandResult, UiError> => {
+  const all = [...builtinCommands(ctx), ...extensionEntries(extensionCommands)].sort(
+    (a, b) => a.priority - b.priority,
+  )
+  const match = all.find((entry) => entry.name === cmd.toLowerCase())
+  if (match !== undefined) return match.execute(args)
+  return Effect.succeed({ handled: false, error: `Unknown command: /${cmd}` })
 }
 
 /**
