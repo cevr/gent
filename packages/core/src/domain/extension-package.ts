@@ -78,6 +78,20 @@ export const defineExtensionPackage = <TSnapshot = never>(
   return result
 }
 
+/**
+ * Static factory for standalone TUI client modules (no server companion).
+ * Use `package.tui(setup)` for paired modules instead.
+ */
+const standaloneClientModule = <TComponent = unknown>(
+  id: string,
+  setup: (ctx: ExtensionClientContext) => ExtensionClientSetup<TComponent>,
+): ExtensionClientModule<TComponent> => ({ id, setup })
+
+// Attach as static method on the ExtensionPackage namespace
+export const ExtensionPackage = {
+  tui: standaloneClientModule,
+}
+
 /** Input accepted by loaders — either a raw GentExtension or a unified package. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ExtensionInput = GentExtension | ExtensionPackage<any>

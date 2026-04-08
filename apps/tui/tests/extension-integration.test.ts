@@ -358,10 +358,9 @@ export const SharedProtocol = {
     )
     writeFileSync(
       join(protocolDir, "protocol.client.ts"),
-      `import { defineClientExtension } from "@gent/core/domain/extension-client.js"
-import { SharedProtocol } from "./shared-protocol"
+      `import { SharedProtocol } from "./shared-protocol"
 
-export default defineClientExtension({
+export default {
   id: "@test/shared-client",
   setup: (ctx) => ({
     commands: [
@@ -372,7 +371,7 @@ export default defineClientExtension({
       },
     ],
   }),
-})`,
+}`,
     )
 
     const { ctx, sent } = createProtocolRecordingCtx()

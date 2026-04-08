@@ -139,8 +139,3 @@ export interface ExtensionClientModule<TComponent = unknown> {
   readonly id: string
   readonly setup: (ctx: ExtensionClientContext) => ExtensionClientSetup<TComponent>
 }
-
-/** Factory helper for defining a TUI extension */
-export const defineClientExtension = <TComponent = unknown>(
-  mod: ExtensionClientModule<TComponent>,
-): ExtensionClientModule<TComponent> => mod
