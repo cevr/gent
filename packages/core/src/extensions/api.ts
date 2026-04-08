@@ -762,12 +762,15 @@ export const extension = <P = never>(
             stderr: "pipe",
           })
 
+          let timer: ReturnType<typeof setTimeout> | undefined
+
           const completion = (async () => {
             const [stdout, stderr] = await Promise.all([
               new Response(proc.stdout).text(),
               new Response(proc.stderr).text(),
             ])
             const exitCode = await proc.exited
+            if (timer !== undefined) clearTimeout(timer)
             return { stdout, stderr, exitCode, timedOut: false as const }
           })()
 
@@ -776,8 +779,8 @@ export const extension = <P = never>(
             stderr: string
             exitCode: number
             timedOut: true
-          }>((resolve) =>
-            setTimeout(() => {
+          }>((resolve) => {
+            timer = setTimeout(() => {
               try {
                 process.kill(-proc.pid, "SIGTERM")
               } catch {
@@ -792,8 +795,8 @@ export const extension = <P = never>(
                 }
               }, 3000)
               resolve({ stdout: "", stderr: "", exitCode: -1, timedOut: true })
-            }, timeoutMs),
-          )
+            }, timeoutMs)
+          })
 
           return Promise.race([completion, deadline])
         },
