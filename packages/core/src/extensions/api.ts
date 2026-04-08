@@ -1,27 +1,24 @@
 /**
- * Unified extension authoring API.
- *
- * ext.on() takes Effect-native handlers. ext.async.on() (coming) will
- * provide Promise-based handlers with ExtensionContext.
+ * Fluent extension authoring API.
  *
  * @example
  * ```ts
  * import { extension } from "@gent/core/extensions/api"
  *
- * // Simple path — tools, agents, commands (no Effect needed)
- * export default extension("my-ext", (ext) => {
- *   ext.tool({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
- *   ext.command("deploy", { handler: async (args, ctx) => { ... } })
- * })
+ * // Simple — tools, agents, commands
+ * export default extension("my-ext", ({ ext }) =>
+ *   ext.tools({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
+ * )
  *
  * // Effect path — hooks, layers, providers
- * export default extension("@gent/my-builtin", (ext) => {
- *   ext.tool(MyFullToolDefinition)
- *   ext.on("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
- *   ext.actor(MyActor)
- *   ext.layer(MyService.Live)
- *   ext.provider(myProvider)
- * })
+ * export default extension("@gent/my-builtin", ({ ext }) =>
+ *   ext
+ *     .tools(MyTool)
+ *     .on("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
+ *     .actor(MyActor)
+ *     .layer(MyService.Live)
+ *     .provider(myProvider)
+ * )
  * ```
  *
  * @module

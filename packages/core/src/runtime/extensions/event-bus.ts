@@ -3,8 +3,8 @@
  *
  * Dispatch rules:
  * - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId
- * - `ext.bus.on("agent:*", handler)` matches all agent events
- * - `ext.bus.on("extensionId:channel", handler)` for targeted side-effects
+ * - `ext.bus("agent:*", handler)` matches all agent events
+ * - `ext.bus("extensionId:channel", handler)` for targeted side-effects
  * - Handlers run as bus-local side effects, not as actor reducers
  * - Errors caught per-handler — one failing handler doesn't affect others
  */
