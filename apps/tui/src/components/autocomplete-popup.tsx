@@ -69,10 +69,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     return [...registered, slashContribution]
   })
 
-  // Fetch items from all contributions for this prefix, keyed on filter
+  // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
-    () => props.state.filter,
-    async (filter): Promise<AutocompleteItem[]> => {
+    () => [props.state.type, props.state.filter] as const,
+    async ([_prefix, filter]): Promise<AutocompleteItem[]> => {
       const results = await Promise.all(
         contributions().map((c) => Promise.resolve(c.items(filter))),
       )
