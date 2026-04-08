@@ -291,12 +291,13 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
     key: K,
     handler: ExtensionInterceptorMap[K],
   ): ExtensionBuilder<Provides>
-  /** Execute a shell command. Returns stdout, stderr, and exitCode. */
+  /** Execute a shell command at setup time. Returns stdout, stderr, and exitCode.
+   *  For runtime exec during turns, use the bash tool instead. */
   exec(
     command: string,
     args?: ReadonlyArray<string>,
-    options?: { cwd?: string },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }>
+    options?: { cwd?: string; timeout?: number },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }>
   /** Register a startup hook. Multiple calls compose in order. */
   onStartup(fn: () => void | Promise<void>): ExtensionBuilder<Provides>
   /** Register a shutdown hook. Multiple calls compose in order. */
@@ -743,17 +744,47 @@ export const extension = <P = never>(
         },
 
         exec: async (command, args, options) => {
+          const timeoutMs = options?.timeout ?? 30_000
           const proc = Bun.spawn([command, ...(args ?? [])], {
             cwd: options?.cwd ?? ctx.cwd,
             stdout: "pipe",
             stderr: "pipe",
           })
-          const [stdout, stderr] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-          ])
-          const exitCode = await proc.exited
-          return { stdout, stderr, exitCode }
+
+          const completion = (async () => {
+            const [stdout, stderr] = await Promise.all([
+              new Response(proc.stdout).text(),
+              new Response(proc.stderr).text(),
+            ])
+            const exitCode = await proc.exited
+            return { stdout, stderr, exitCode, timedOut: false as const }
+          })()
+
+          const deadline = new Promise<{
+            stdout: string
+            stderr: string
+            exitCode: number
+            timedOut: true
+          }>((resolve) =>
+            setTimeout(() => {
+              try {
+                process.kill(-proc.pid, "SIGTERM")
+              } catch {
+                // already dead
+              }
+              setTimeout(() => {
+                try {
+                  process.kill(-proc.pid, 0)
+                  process.kill(-proc.pid, "SIGKILL")
+                } catch {
+                  // already dead
+                }
+              }, 3000)
+              resolve({ stdout: "", stderr: "", exitCode: -1, timedOut: true })
+            }, timeoutMs),
+          )
+
+          return Promise.race([completion, deadline])
         },
 
         onStartup: (fn) => {

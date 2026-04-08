@@ -28,6 +28,12 @@ export const BashParams = Schema.Struct({
       description: "Working directory for command execution",
     }),
   ),
+  run_in_background: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Run in background. Returns immediately, notifies when done. Use for long-running commands.",
+    }),
+  ),
 })
 
 // Bash Tool Result
@@ -136,6 +142,67 @@ export const BashTool = defineTool({
           stderr: "",
           exitCode: 1,
         }
+      }
+    }
+
+    // Background mode — spawn, fork a watcher, return immediately
+    if (params.run_in_background === true) {
+      let proc: ReturnType<typeof Bun.spawn>
+      try {
+        const spawnOpts: Parameters<typeof Bun.spawn>[1] = { stdout: "pipe", stderr: "pipe" }
+        if (cwd !== undefined) spawnOpts.cwd = cwd
+        proc = Bun.spawn(["bash", "-c", command], spawnOpts)
+      } catch (e) {
+        return {
+          stdout: `Failed to spawn background command: ${e}`,
+          stderr: "",
+          exitCode: 1,
+        }
+      }
+
+      // Fork a fiber that waits for completion and queues a follow-up
+      const bgEffect = Effect.gen(function* () {
+        const bgResult = yield* Effect.tryPromise({
+          try: async () => {
+            const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
+            const stderrStream = proc.stderr as ReadableStream<Uint8Array>
+            const [stdout, stderr] = await Promise.all([
+              new Response(stdoutStream).text(),
+              new Response(stderrStream).text(),
+            ])
+            const exitCode = await proc.exited
+            return { stdout, stderr, exitCode }
+          },
+          catch: (e) => new BashError({ message: `Background command failed: ${e}`, command }),
+        })
+
+        const buf = new OutputBuffer(HEAD_LINES, TAIL_LINES)
+        const fullOutput =
+          bgResult.stderr.length > 0 ? `${bgResult.stdout}\n${bgResult.stderr}` : bgResult.stdout
+        buf.add(fullOutput)
+        const formatted = buf.format()
+
+        let outputText = formatted.text
+        if (formatted.truncatedLines > 0) {
+          const path = yield* saveFullOutput(fullOutput, `bash_bg_${command.slice(0, 40)}`).pipe(
+            Effect.orElseSucceed(() => undefined),
+          )
+          if (path !== undefined) {
+            outputText = `${formatted.text}\n\nFull output saved to: ${path}`
+          }
+        }
+
+        yield* ctx.turn.queueFollowUp({
+          content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
+        })
+      }).pipe(Effect.catchEager(() => Effect.void))
+
+      yield* bgEffect.pipe(Effect.forkDetach)
+
+      return {
+        stdout: `Command started in background: \`${command}\`\nYou will be notified when it completes.`,
+        stderr: "",
+        exitCode: 0,
       }
     }
 

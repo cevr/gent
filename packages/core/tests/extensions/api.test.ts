@@ -229,6 +229,21 @@ describe("extension api", () => {
     const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
     await Effect.runPromise(setup.onStartup!)
   })
+  test("ext.exec() returns timedOut on timeout", async () => {
+    let result: { exitCode: number; timedOut?: boolean } | undefined
+    const ext = extension("exec-timeout-test", ({ ext }) =>
+      ext.onStartup(async () => {
+        result = await ext.exec("sleep", ["10"], { timeout: 200 })
+      }),
+    )
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    await Effect.runPromise(setup.onStartup!)
+
+    expect(result).toBeDefined()
+    expect(result!.timedOut).toBe(true)
+  })
+
   test("ext.async.on() handlers receive ExtensionContext with Promise methods", async () => {
     let receivedCtx: unknown = undefined
     const ext = extension("async-ctx-test", ({ ext }) => {
