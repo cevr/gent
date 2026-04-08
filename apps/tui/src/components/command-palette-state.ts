@@ -1,80 +1,62 @@
-import type { SessionInfo } from "../client"
+import type { Accessor } from "solid-js"
 
-export type CommandPaletteLevel = "root" | "sessions" | "theme"
-
-export type CommandPaletteSessionsState =
-  | { readonly _tag: "idle" }
-  | { readonly _tag: "loading" }
-  | { readonly _tag: "loaded"; readonly items: readonly SessionInfo[] }
-  | { readonly _tag: "failed"; readonly message: string }
-
-export interface CommandPaletteState {
-  readonly levelStack: readonly Exclude<CommandPaletteLevel, "root">[]
-  readonly selectedIndex: number
-  readonly searchQuery: string
-  readonly sessions: CommandPaletteSessionsState
+/** A menu item in the command palette. */
+export interface PaletteItem {
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly shortcut?: string
+  readonly disabled?: boolean
+  readonly onSelect: () => void
 }
 
-export type CommandPaletteSelectionOutcome =
-  | { readonly _tag: "PushLevel"; readonly level: Exclude<CommandPaletteLevel, "root"> }
-  | { readonly _tag: "Close" }
-  | { readonly _tag: "Stay" }
+/** A structural level in the palette stack.
+ *
+ *  `source` is a Solid accessor — can be a plain function for sync levels
+ *  or a `Resource` for async levels. Returns `undefined` while loading. */
+export interface PaletteLevel {
+  readonly id: string
+  readonly title: string
+  readonly source: Accessor<readonly PaletteItem[] | undefined>
+  readonly onEnter?: () => void
+}
+
+export interface CommandPaletteState {
+  readonly levelStack: readonly PaletteLevel[]
+  readonly selectedIndex: number
+  readonly searchQuery: string
+}
 
 export type CommandPaletteEvent =
-  | { readonly _tag: "Open" }
+  | { readonly _tag: "Open"; readonly rootLevel: PaletteLevel }
   | { readonly _tag: "Close" }
-  | { readonly _tag: "LoadSessions" }
-  | { readonly _tag: "SessionsLoaded"; readonly sessions: readonly SessionInfo[] }
-  | { readonly _tag: "SessionsFailed"; readonly message: string }
-  | { readonly _tag: "PushLevel"; readonly level: Exclude<CommandPaletteLevel, "root"> }
+  | { readonly _tag: "PushLevel"; readonly level: PaletteLevel }
   | { readonly _tag: "PopLevel" }
   | { readonly _tag: "SearchTyped"; readonly char: string }
   | { readonly _tag: "SearchBackspaced" }
   | { readonly _tag: "ClearSearch" }
   | { readonly _tag: "MoveUp"; readonly itemCount: number }
   | { readonly _tag: "MoveDown"; readonly itemCount: number }
-  | { readonly _tag: "ActivateSelection"; readonly outcome: CommandPaletteSelectionOutcome }
 
 const initial = (): CommandPaletteState => ({
   levelStack: [],
   selectedIndex: 0,
   searchQuery: "",
-  sessions: { _tag: "idle" },
 })
 
-const currentLevel = (state: CommandPaletteState): CommandPaletteLevel =>
-  state.levelStack[state.levelStack.length - 1] ?? "root"
+const currentLevel = (state: CommandPaletteState): PaletteLevel | undefined =>
+  state.levelStack[state.levelStack.length - 1]
 
-const pushLevel = (
-  state: CommandPaletteState,
-  level: Exclude<CommandPaletteLevel, "root">,
-): CommandPaletteState => ({
+const pushLevel = (state: CommandPaletteState, level: PaletteLevel): CommandPaletteState => ({
   ...state,
   levelStack: [...state.levelStack, level],
   selectedIndex: 0,
   searchQuery: "",
 })
 
-const setSessionsLoading = (state: CommandPaletteState): CommandPaletteState => ({
-  ...state,
-  sessions: { _tag: "loading" },
-})
-
-const setSessionsLoaded = (
-  state: CommandPaletteState,
-  sessions: readonly SessionInfo[],
-): CommandPaletteState => ({
-  ...state,
-  sessions: { _tag: "loaded", items: [...sessions] },
-})
-
-const setSessionsFailed = (state: CommandPaletteState, message: string): CommandPaletteState => ({
-  ...state,
-  sessions: { _tag: "failed", message },
-})
-
 const popLevel = (state: CommandPaletteState): CommandPaletteState =>
-  state.levelStack.length === 0
+  state.levelStack.length <= 1
     ? state
     : {
         ...state,
@@ -107,19 +89,6 @@ const moveSelection = (
   }
 }
 
-const applySelectionOutcome = (
-  state: CommandPaletteState,
-  outcome: CommandPaletteSelectionOutcome,
-): CommandPaletteState => {
-  switch (outcome._tag) {
-    case "PushLevel":
-      return pushLevel(state, outcome.level)
-    case "Close":
-    case "Stay":
-      return state
-  }
-}
-
 export const CommandPaletteState = {
   initial,
   currentLevel,
@@ -131,14 +100,9 @@ export function transitionCommandPalette(
 ): CommandPaletteState {
   switch (event._tag) {
     case "Open":
+      return { ...initial(), levelStack: [event.rootLevel] }
     case "Close":
       return initial()
-    case "LoadSessions":
-      return setSessionsLoading(state)
-    case "SessionsLoaded":
-      return setSessionsLoaded(state, event.sessions)
-    case "SessionsFailed":
-      return setSessionsFailed(state, event.message)
     case "PushLevel":
       return pushLevel(state, event.level)
     case "PopLevel":
@@ -153,7 +117,5 @@ export function transitionCommandPalette(
       return moveSelection(state, event.itemCount, "up")
     case "MoveDown":
       return moveSelection(state, event.itemCount, "down")
-    case "ActivateSelection":
-      return applySelectionOutcome(state, event.outcome)
   }
 }

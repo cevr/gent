@@ -2,44 +2,55 @@ import { describe, expect, test } from "bun:test"
 import {
   CommandPaletteState,
   transitionCommandPalette,
+  type PaletteLevel,
 } from "../src/components/command-palette-state"
 
+const stubLevel = (id: string): PaletteLevel => ({
+  id,
+  title: id.charAt(0).toUpperCase() + id.slice(1),
+  source: () => [],
+})
+
+const rootLevel = stubLevel("root")
+
 describe("command-palette-state", () => {
-  test("open resets stack, selection, search, and session load state", () => {
+  test("open initializes stack with root level", () => {
     const dirty = transitionCommandPalette(
-      transitionCommandPalette(
-        transitionCommandPalette(CommandPaletteState.initial(), {
-          _tag: "PushLevel",
-          level: "sessions",
-        }),
-        { _tag: "SearchTyped", char: "x" },
-      ),
-      { _tag: "LoadSessions" },
+      transitionCommandPalette(CommandPaletteState.initial(), {
+        _tag: "PushLevel",
+        level: stubLevel("sessions"),
+      }),
+      { _tag: "SearchTyped", char: "x" },
     )
 
-    expect(transitionCommandPalette(dirty, { _tag: "Open" })).toEqual(CommandPaletteState.initial())
+    const opened = transitionCommandPalette(dirty, { _tag: "Open", rootLevel })
+    expect(opened.levelStack).toHaveLength(1)
+    expect(opened.levelStack[0]!.id).toBe("root")
+    expect(opened.selectedIndex).toBe(0)
+    expect(opened.searchQuery).toBe("")
   })
 
   test("push level clears search and resets selection", () => {
     const state = transitionCommandPalette(
-      transitionCommandPalette(CommandPaletteState.initial(), {
-        _tag: "SearchTyped",
-        char: "t",
-      }),
+      transitionCommandPalette(
+        transitionCommandPalette(CommandPaletteState.initial(), {
+          _tag: "Open",
+          rootLevel,
+        }),
+        { _tag: "SearchTyped", char: "t" },
+      ),
       { _tag: "MoveDown", itemCount: 5 },
     )
 
-    expect(
-      transitionCommandPalette(state, {
-        _tag: "ActivateSelection",
-        outcome: { _tag: "PushLevel", level: "theme" },
-      }),
-    ).toEqual({
-      levelStack: ["theme"],
-      selectedIndex: 0,
-      searchQuery: "",
-      sessions: { _tag: "idle" },
+    const pushed = transitionCommandPalette(state, {
+      _tag: "PushLevel",
+      level: stubLevel("theme"),
     })
+
+    expect(pushed.levelStack).toHaveLength(2)
+    expect(pushed.levelStack[1]!.id).toBe("theme")
+    expect(pushed.selectedIndex).toBe(0)
+    expect(pushed.searchQuery).toBe("")
   })
 
   test("navigation wraps around item bounds", () => {
@@ -56,21 +67,43 @@ describe("command-palette-state", () => {
     expect(movedDown.selectedIndex).toBe(0)
   })
 
-  test("sessions loading lifecycle is explicit", () => {
-    const loading = transitionCommandPalette(CommandPaletteState.initial(), {
-      _tag: "LoadSessions",
+  test("pop level stops at root (stack length 1)", () => {
+    const opened = transitionCommandPalette(CommandPaletteState.initial(), {
+      _tag: "Open",
+      rootLevel,
     })
-    const loaded = transitionCommandPalette(loading, {
-      _tag: "SessionsLoaded",
-      sessions: [],
-    })
-    const failed = transitionCommandPalette(loading, {
-      _tag: "SessionsFailed",
-      message: "boom",
-    })
+    const popped = transitionCommandPalette(opened, { _tag: "PopLevel" })
+    expect(popped.levelStack).toHaveLength(1)
+    expect(popped.levelStack[0]!.id).toBe("root")
+  })
 
-    expect(loading.sessions).toEqual({ _tag: "loading" })
-    expect(loaded.sessions._tag).toBe("loaded")
-    expect(failed.sessions).toEqual({ _tag: "failed", message: "boom" })
+  test("pop level returns to previous level", () => {
+    const withSub = transitionCommandPalette(
+      transitionCommandPalette(CommandPaletteState.initial(), {
+        _tag: "Open",
+        rootLevel,
+      }),
+      { _tag: "PushLevel", level: stubLevel("theme") },
+    )
+    expect(withSub.levelStack).toHaveLength(2)
+
+    const popped = transitionCommandPalette(withSub, { _tag: "PopLevel" })
+    expect(popped.levelStack).toHaveLength(1)
+    expect(popped.levelStack[0]!.id).toBe("root")
+  })
+
+  test("close resets everything", () => {
+    const opened = transitionCommandPalette(
+      transitionCommandPalette(CommandPaletteState.initial(), {
+        _tag: "Open",
+        rootLevel,
+      }),
+      { _tag: "PushLevel", level: stubLevel("sessions") },
+    )
+
+    const closed = transitionCommandPalette(opened, { _tag: "Close" })
+    expect(closed.levelStack).toHaveLength(0)
+    expect(closed.selectedIndex).toBe(0)
+    expect(closed.searchQuery).toBe("")
   })
 })

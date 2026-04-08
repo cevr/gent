@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+/** @jsxImportSource @opentui/solid */
+
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Show,
+  Suspense,
+} from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
@@ -8,7 +18,8 @@ import { useCommand } from "../command/index"
 import {
   CommandPaletteState,
   transitionCommandPalette,
-  type CommandPaletteLevel,
+  type PaletteItem,
+  type PaletteLevel,
 } from "./command-palette-state"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -17,16 +28,6 @@ import { useRouter } from "../router/index"
 import { useTheme } from "../theme/index"
 import { formatError } from "../utils/format-error"
 import { useRuntime } from "../hooks/use-runtime"
-
-interface MenuItem {
-  readonly id: string
-  readonly title: string
-  readonly description?: string
-  readonly category?: string
-  readonly shortcut?: string
-  readonly disabled?: boolean
-  readonly onSelect: () => void
-}
 
 const fuzzyMatch = (text: string, query: string): boolean => {
   const lower = text.toLowerCase()
@@ -38,7 +39,7 @@ const fuzzyMatch = (text: string, query: string): boolean => {
   return j === q.length
 }
 
-const filterItems = (items: readonly MenuItem[], query: string): readonly MenuItem[] => {
+const filterItems = (items: readonly PaletteItem[], query: string): readonly PaletteItem[] => {
   if (query.length === 0) return items
   return items.filter(
     (item) =>
@@ -81,17 +82,6 @@ const buildSessionTree = (list: readonly SessionInfo[]): SessionNode[] => {
   return roots
 }
 
-const levelTitle = (level: CommandPaletteLevel): string => {
-  switch (level) {
-    case "root":
-      return "Commands"
-    case "sessions":
-      return "Sessions"
-    case "theme":
-      return "Theme"
-  }
-}
-
 export function CommandPalette() {
   const command = useCommand()
   const { theme, selected, set, mode, setMode } = useTheme()
@@ -114,64 +104,60 @@ export function CommandPalette() {
     command.closePalette()
   }
 
-  const loadSessions = () => {
-    dispatch({ _tag: "LoadSessions" })
-    cast(
-      client.listSessions().pipe(
-        Effect.tap((sessions) =>
-          Effect.sync(() => {
-            dispatch({ _tag: "SessionsLoaded", sessions })
-          }),
-        ),
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            dispatch({ _tag: "SessionsFailed", message: formatError(error) })
-          }),
-        ),
-      ),
+  // ── Level factories ──
+
+  const themeLevel = (): PaletteLevel => ({
+    id: "theme",
+    title: "Theme",
+    source: (): readonly PaletteItem[] => {
+      const isSystem = selected() === "system"
+      const currentMode = mode()
+      return [
+        {
+          id: "theme.system",
+          title: isSystem ? "System •" : "System",
+          description: "Follow terminal theme",
+          onSelect: () => {
+            set("system")
+            closePalette()
+          },
+        },
+        {
+          id: "theme.dark",
+          title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
+          onSelect: () => {
+            set("opencode")
+            setMode("dark")
+            closePalette()
+          },
+        },
+        {
+          id: "theme.light",
+          title: !isSystem && currentMode === "light" ? "Light •" : "Light",
+          onSelect: () => {
+            set("opencode")
+            setMode("light")
+            closePalette()
+          },
+        },
+      ]
+    },
+  })
+
+  const sessionsLevel = (): PaletteLevel => {
+    const [sessions] = createResource(
+      () =>
+        new Promise<readonly SessionInfo[]>((resolve, reject) => {
+          cast(
+            client.listSessions().pipe(
+              Effect.tap((result) => Effect.sync(() => resolve(result))),
+              Effect.catchEager((error) => Effect.sync(() => reject(formatError(error)))),
+            ),
+          )
+        }),
     )
-  }
 
-  const currentLevel = () => CommandPaletteState.currentLevel(state())
-  const searchQuery = () => state().searchQuery
-
-  const themeItems = (): readonly MenuItem[] => {
-    const isSystem = selected() === "system"
-    const currentMode = mode()
-    return [
-      {
-        id: "theme.system",
-        title: isSystem ? "System •" : "System",
-        description: "Follow terminal theme",
-        onSelect: () => {
-          set("system")
-          closePalette()
-        },
-      },
-      {
-        id: "theme.dark",
-        title: !isSystem && currentMode === "dark" ? "Dark •" : "Dark",
-        onSelect: () => {
-          set("opencode")
-          setMode("dark")
-          closePalette()
-        },
-      },
-      {
-        id: "theme.light",
-        title: !isSystem && currentMode === "light" ? "Light •" : "Light",
-        onSelect: () => {
-          set("opencode")
-          setMode("light")
-          closePalette()
-        },
-      },
-    ]
-  }
-
-  const sessionItems = (): readonly MenuItem[] => {
-    const sessionsState = state().sessions
-    const newSessionItem: MenuItem = {
+    const newSessionItem: PaletteItem = {
       id: "session.new",
       title: "+ New Session",
       onSelect: () => {
@@ -180,34 +166,8 @@ export function CommandPalette() {
       },
     }
 
-    if (sessionsState._tag === "idle" || sessionsState._tag === "loading") {
-      return [
-        newSessionItem,
-        {
-          id: "session.loading",
-          title: "Loading sessions…",
-          description: "Fetching recent workspaces and branches",
-          disabled: true,
-          onSelect: () => {},
-        },
-      ]
-    }
-
-    if (sessionsState._tag === "failed") {
-      return [
-        newSessionItem,
-        {
-          id: "session.failed",
-          title: "Failed to load sessions",
-          description: sessionsState.message,
-          disabled: true,
-          onSelect: () => {},
-        },
-      ]
-    }
-
-    const flattenSessionTree = (nodes: readonly SessionNode[], depth = 0): MenuItem[] => {
-      const items: MenuItem[] = []
+    const flattenSessionTree = (nodes: readonly SessionNode[], depth = 0): PaletteItem[] => {
+      const items: PaletteItem[] = []
       const prefix = depth > 0 ? `${"  ".repeat(depth)}- ` : ""
       for (const node of nodes) {
         const session = node.session
@@ -235,67 +195,75 @@ export function CommandPalette() {
       return items
     }
 
-    return [newSessionItem, ...flattenSessionTree(buildSessionTree(sessionsState.items))]
-  }
-
-  const rootItems = (): readonly MenuItem[] => [
-    {
+    return {
       id: "sessions",
       title: "Sessions",
-      description: "Browse and switch sessions",
-      category: "nav",
-      onSelect: () => {
-        dispatch({
-          _tag: "ActivateSelection",
-          outcome: { _tag: "PushLevel", level: "sessions" },
-        })
-        loadSessions()
+      source: () => {
+        const data = sessions()
+        if (data === undefined) return undefined
+        return [newSessionItem, ...flattenSessionTree(buildSessionTree(data))]
       },
-    },
-    {
-      id: "theme",
-      title: "Theme",
-      description: "Switch color theme",
-      category: "config",
-      onSelect: () =>
-        dispatch({
-          _tag: "ActivateSelection",
-          outcome: { _tag: "PushLevel", level: "theme" },
-        }),
-    },
-    {
-      id: "new-session",
-      title: "New Session",
-      description: "Start a fresh session",
-      category: "cmd",
-      shortcut: "Ctrl+N",
-      onSelect: () => {
-        client.createSession((sessionId, branchId) => router.navigateToSession(sessionId, branchId))
-        closePalette()
-      },
-    },
-    // Extension-registered commands show up in the palette
-    ...command.commands().map((cmd) => ({
-      id: `ext:${cmd.id}`,
-      title: cmd.title,
-      category: cmd.category ?? "ext",
-      shortcut: cmd.keybind,
-      onSelect: () => {
-        cmd.onSelect()
-        closePalette()
-      },
-    })),
-  ]
-
-  const levelItems = createMemo<readonly MenuItem[]>(() => {
-    switch (currentLevel()) {
-      case "root":
-        return rootItems()
-      case "sessions":
-        return sessionItems()
-      case "theme":
-        return themeItems()
     }
+  }
+
+  const pushLevel = (level: PaletteLevel) => {
+    dispatch({ _tag: "PushLevel", level })
+    level.onEnter?.()
+  }
+
+  const rootLevel = (): PaletteLevel => ({
+    id: "root",
+    title: "Commands",
+    source: (): readonly PaletteItem[] => [
+      {
+        id: "sessions",
+        title: "Sessions",
+        description: "Browse and switch sessions",
+        category: "nav",
+        onSelect: () => pushLevel(sessionsLevel()),
+      },
+      {
+        id: "theme",
+        title: "Theme",
+        description: "Switch color theme",
+        category: "config",
+        onSelect: () => pushLevel(themeLevel()),
+      },
+      {
+        id: "new-session",
+        title: "New Session",
+        description: "Start a fresh session",
+        category: "cmd",
+        shortcut: "Ctrl+N",
+        onSelect: () => {
+          client.createSession((sessionId, branchId) =>
+            router.navigateToSession(sessionId, branchId),
+          )
+          closePalette()
+        },
+      },
+      ...command.commands().map((cmd) => ({
+        id: `ext:${cmd.id}`,
+        title: cmd.title,
+        category: cmd.category ?? "ext",
+        shortcut: cmd.keybind,
+        onSelect: () => {
+          cmd.onSelect()
+          closePalette()
+        },
+      })),
+    ],
+  })
+
+  // ── Derived state ──
+
+  const currentLevel = () => CommandPaletteState.currentLevel(state())
+  const searchQuery = () => state().searchQuery
+
+  const levelItems = createMemo<readonly PaletteItem[]>(() => {
+    const level = currentLevel()
+    if (level === undefined) return []
+    return level.source() ?? []
   })
 
   const filteredItems = createMemo(() => filterItems(levelItems(), searchQuery()))
@@ -309,7 +277,7 @@ export function CommandPalette() {
   })
 
   const popLevel = () => {
-    if (state().levelStack.length === 0) {
+    if (state().levelStack.length <= 1) {
       closePalette()
       return
     }
@@ -343,7 +311,7 @@ export function CommandPalette() {
           dispatch({ _tag: "SearchBackspaced" })
           return true
         }
-        if (state().levelStack.length > 0) {
+        if (state().levelStack.length > 1) {
           popLevel()
           return true
         }
@@ -380,7 +348,7 @@ export function CommandPalette() {
 
   createEffect(() => {
     if (command.paletteOpen()) {
-      dispatch({ _tag: "Open" })
+      dispatch({ _tag: "Open", rootLevel: rootLevel() })
     }
   })
 
@@ -389,15 +357,77 @@ export function CommandPalette() {
   const left = () => Math.floor((dimensions().width - paletteWidth()) / 2)
   const top = () => Math.floor((dimensions().height - paletteHeight()) / 2)
 
-  const breadcrumb = () =>
-    state()
-      .levelStack.map((level) => levelTitle(level))
-      .join(" › ") + (state().levelStack.length > 0 ? " ›" : "")
+  const breadcrumb = () => {
+    const stack = state().levelStack
+    if (stack.length <= 1) return ""
+    return (
+      stack
+        .slice(0, -1)
+        .map((level) => level.title)
+        .join(" › ") + " ›"
+    )
+  }
+
+  const levelTitle = () => currentLevel()?.title ?? "Commands"
+
+  const LoadingIndicator = () => (
+    <box paddingLeft={1}>
+      <text style={{ fg: theme.textMuted }}>Loading…</text>
+    </box>
+  )
+
+  const ItemList = () => (
+    <>
+      <For each={filteredItems()}>
+        {(item, index) => {
+          const isSelected = () => state().selectedIndex === index()
+          const disabled = item.disabled === true
+          const catWidth = maxCategoryWidth()
+          const itemTextColor = () => {
+            if (disabled) return theme.textMuted
+            return isSelected() ? theme.selectedListItemText : theme.text
+          }
+          const metaColor = () => {
+            if (disabled) return theme.textMuted
+            return isSelected() ? theme.selectedListItemText : theme.textMuted
+          }
+
+          return (
+            <box
+              id={`item-${index()}`}
+              backgroundColor={isSelected() && !disabled ? theme.primary : "transparent"}
+              paddingLeft={1}
+            >
+              <text style={{ fg: itemTextColor() }}>
+                <Show when={catWidth > 0}>
+                  <span style={{ fg: metaColor() }}>
+                    {(item.category ?? "").padEnd(catWidth)}
+                  </span>{" "}
+                </Show>
+                {item.title}
+                <Show when={item.description !== undefined}>
+                  <span style={{ fg: metaColor() }}> {item.description}</span>
+                </Show>
+                <Show when={item.shortcut !== undefined}>
+                  <span style={{ fg: metaColor() }}> [{item.shortcut}]</span>
+                </Show>
+              </text>
+            </box>
+          )
+        }}
+      </For>
+      <Show when={filteredItems().length === 0}>
+        <box paddingLeft={1}>
+          <text style={{ fg: theme.textMuted }}>No matches</text>
+        </box>
+      </Show>
+    </>
+  )
 
   return (
     <Show when={command.paletteOpen()}>
       <ChromePanel.Root
-        title={levelTitle(currentLevel())}
+        title={levelTitle()}
         width={paletteWidth()}
         height={paletteHeight()}
         left={left()}
@@ -421,53 +451,13 @@ export function CommandPalette() {
             scrollRef = element
           }}
         >
-          <For each={filteredItems()}>
-            {(item, index) => {
-              const isSelected = () => state().selectedIndex === index()
-              const disabled = item.disabled === true
-              const catWidth = maxCategoryWidth()
-              const itemTextColor = () => {
-                if (disabled) return theme.textMuted
-                return isSelected() ? theme.selectedListItemText : theme.text
-              }
-              const metaColor = () => {
-                if (disabled) return theme.textMuted
-                return isSelected() ? theme.selectedListItemText : theme.textMuted
-              }
-
-              return (
-                <box
-                  id={`item-${index()}`}
-                  backgroundColor={isSelected() && !disabled ? theme.primary : "transparent"}
-                  paddingLeft={1}
-                >
-                  <text style={{ fg: itemTextColor() }}>
-                    <Show when={catWidth > 0}>
-                      <span style={{ fg: metaColor() }}>
-                        {(item.category ?? "").padEnd(catWidth)}
-                      </span>{" "}
-                    </Show>
-                    {item.title}
-                    <Show when={item.description !== undefined}>
-                      <span style={{ fg: metaColor() }}> {item.description}</span>
-                    </Show>
-                    <Show when={item.shortcut !== undefined}>
-                      <span style={{ fg: metaColor() }}> [{item.shortcut}]</span>
-                    </Show>
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-          <Show when={filteredItems().length === 0}>
-            <box paddingLeft={1}>
-              <text style={{ fg: theme.textMuted }}>No matches</text>
-            </box>
-          </Show>
+          <Suspense fallback={<LoadingIndicator />}>
+            <ItemList />
+          </Suspense>
         </ChromePanel.Body>
 
         <ChromePanel.Footer>
-          <Show when={state().levelStack.length > 0} fallback="↑↓ · →/Enter · Esc · type to search">
+          <Show when={state().levelStack.length > 1} fallback="↑↓ · →/Enter · Esc · type to search">
             ↑↓ · →/Enter · ←/Esc · type to search
           </Show>
         </ChromePanel.Footer>
