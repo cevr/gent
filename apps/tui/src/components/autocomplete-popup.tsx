@@ -74,7 +74,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     () => [props.state.type, props.state.filter] as const,
     async ([_prefix, filter]): Promise<AutocompleteItem[]> => {
       const results = await Promise.all(
-        contributions().map((c) => Promise.resolve(c.items(filter))),
+        contributions().map((c) =>
+          Promise.resolve(c.items(filter)).catch(() => [] as AutocompleteItem[]),
+        ),
       )
       // Dedupe by id, first-win (scope-ordered from resolve)
       const seen = new Set<string>()
