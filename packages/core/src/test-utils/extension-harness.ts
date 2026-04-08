@@ -27,11 +27,12 @@ import type {
   ExtensionDeriveContext,
   ExtensionReduceContext,
   ExtensionSetup,
-  GentExtension,
   LoadedExtension,
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
+import type { ExtensionInput } from "../domain/extension-package.js"
+import { resolveExtensionInput } from "../domain/extension-package.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -214,11 +215,12 @@ export interface ExtensionHarnessResult {
  * Runs setup() via Effect.runSync, extracts tools/agents/actor/hooks.
  */
 export const createExtensionHarness = (
-  extension: GentExtension,
+  extension: ExtensionInput,
   options?: { cwd?: string },
 ): ExtensionHarnessResult => {
+  const resolved = resolveExtensionInput(extension)
   const setup = Effect.runSync(
-    extension.setup({ cwd: options?.cwd ?? "/tmp", source: "test", home: "/tmp" }),
+    resolved.setup({ cwd: options?.cwd ?? "/tmp", source: "test", home: "/tmp" }),
   )
 
   const tools = new Map<string, AnyToolDefinition>()
@@ -244,7 +246,7 @@ export const createExtensionHarness = (
 
 export interface ToolTestLayerConfig {
   /** Extensions to load (defaults to builtin agents only) */
-  readonly extensions?: ReadonlyArray<GentExtension>
+  readonly extensions?: ReadonlyArray<ExtensionInput>
   /** Extra tools to register */
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   /** AgentRunner mock — default returns success with empty text */

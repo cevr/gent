@@ -3,9 +3,9 @@ import type { FileSystem, Path, Scope } from "effect"
 import type {
   FailedExtension,
   FailedExtensionPhase,
-  GentExtension,
   LoadedExtension,
 } from "../../domain/extension.js"
+import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
@@ -47,7 +47,7 @@ const formatFailure = (error: unknown): string =>
     : String(error)
 
 export const setupBuiltinExtensions = (params: {
-  readonly extensions: ReadonlyArray<GentExtension>
+  readonly extensions: ReadonlyArray<ExtensionInput>
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
@@ -56,7 +56,8 @@ export const setupBuiltinExtensions = (params: {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
 
-    for (const extension of params.extensions) {
+    for (const input of params.extensions) {
+      const extension = resolveExtensionInput(input)
       if (params.disabled.has(extension.manifest.id)) continue
 
       const discovered = {

@@ -7,6 +7,7 @@ import type {
   LoadedExtension,
 } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
+import type { ExtensionPackage } from "../../domain/extension-package.js"
 
 // Discovery — scan directories for extension files
 
@@ -82,15 +83,19 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     const candidates: GentExtension[] = []
     const seen = new Set<unknown>()
 
-    if (mod.default !== undefined && isGentExtension(mod.default) && !seen.has(mod.default)) {
-      seen.add(mod.default)
-      candidates.push(mod.default)
+    if (mod.default !== undefined) {
+      const resolved = resolveToGentExtension(mod.default)
+      if (resolved !== undefined && !seen.has(resolved)) {
+        seen.add(resolved)
+        candidates.push(resolved)
+      }
     }
 
     for (const [, value] of Object.entries(mod)) {
-      if (isGentExtension(value) && !seen.has(value)) {
-        seen.add(value)
-        candidates.push(value as GentExtension)
+      const resolved = resolveToGentExtension(value)
+      if (resolved !== undefined && !seen.has(resolved)) {
+        seen.add(resolved)
+        candidates.push(resolved)
       }
     }
 
@@ -130,6 +135,22 @@ const isGentExtension = (value: unknown): value is GentExtension => {
   if (!("id" in manifest) || typeof manifest["id"] !== "string") return false
   if (!("setup" in obj) || typeof obj["setup"] !== "function") return false
   return true
+}
+
+/** Type guard for ExtensionPackage shape — has `id` + `server` (which is a GentExtension). */
+const isExtensionPackageShape = (value: unknown): value is ExtensionPackage => {
+  if (typeof value !== "object" || value === null) return false
+  const obj = value as Record<string, unknown>
+  if (!("id" in obj) || typeof obj["id"] !== "string") return false
+  if (!("server" in obj) || !isGentExtension(obj["server"])) return false
+  return true
+}
+
+/** Extract GentExtension from either shape. */
+const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
+  if (isGentExtension(value)) return value
+  if (isExtensionPackageShape(value)) return value.server
+  return undefined
 }
 
 // Full discovery + loading pipeline
