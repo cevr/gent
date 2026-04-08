@@ -248,12 +248,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                 .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
             )
           },
-          getSnapshot: (extensionId) => {
-            const snap = snapshots().get(extensionId)
-            if (snap === undefined) return undefined
-            return { model: snap.model }
-          },
-          useTypedSnapshot: (extensionId, schema) => {
+          getSnapshot: (extensionId, schema) => {
             const snap = snapshots().get(extensionId)
             if (snap === undefined) return undefined
             try {

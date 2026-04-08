@@ -11,7 +11,7 @@ export default defineClientExtension({
         position: "top-left" as const,
         priority: 30,
         produce: () => {
-          const model = ctx.useTypedSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
+          const model = ctx.getSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress
@@ -25,7 +25,7 @@ export default defineClientExtension({
         position: "bottom-left" as const,
         priority: 40,
         produce: () => {
-          const model = ctx.useTypedSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
+          const model = ctx.getSnapshot(PLAN_EXTENSION_ID, PlanUiModel)
           if (model?.mode === "plan") return [{ text: "plan", color: "primary" }]
           if (model?.mode === "executing") {
             const p = model.progress

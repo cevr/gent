@@ -17,7 +17,7 @@ export default {
     /** Read task list from extension snapshot (populated by server-side task-tools actor). */
     function useTasksFromSnapshot(): () => readonly TaskEntry[] {
       return createMemo(() => {
-        const model = ctx.useTypedSnapshot(EXTENSION_ID, TaskUiModel)
+        const model = ctx.getSnapshot(EXTENSION_ID, TaskUiModel)
         return model?.tasks ?? []
       })
     }

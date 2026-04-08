@@ -11,7 +11,7 @@ export default defineClientExtension({
         position: "top-left" as const,
         priority: 20,
         produce: () => {
-          const model = ctx.useTypedSnapshot(AUTO_EXTENSION_ID, AutoUiModel)
+          const model = ctx.getSnapshot(AUTO_EXTENSION_ID, AutoUiModel)
           if (!model?.active) return []
           const phase = model.phase === "awaiting-review" ? "review" : "auto"
           const iter =
@@ -40,7 +40,7 @@ export default defineClientExtension({
         slash: "auto",
         onSelect: () => {
           // If auto is active → cancel. If inactive → open goal input overlay.
-          const model = ctx.useTypedSnapshot(AUTO_EXTENSION_ID, AutoUiModel)
+          const model = ctx.getSnapshot(AUTO_EXTENSION_ID, AutoUiModel)
           if (model?.active) {
             ctx.send(AutoProtocol.CancelAuto())
           } else {

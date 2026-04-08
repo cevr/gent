@@ -121,10 +121,8 @@ export interface ExtensionClientContext {
   readonly ask: <M extends AnyExtensionRequestMessage>(
     message: M,
   ) => Promise<ExtractExtensionReply<M>>
-  /** Read the current server-projected snapshot for an extension */
-  readonly getSnapshot: (extensionId: string) => { model: unknown } | undefined
-  /** Read and decode a snapshot model against a Schema. Returns undefined if missing or decode fails. */
-  readonly useTypedSnapshot: <A>(extensionId: string, schema: Schema.Decoder<A>) => A | undefined
+  /** Read and decode a server-projected snapshot for an extension. Returns undefined if missing or decode fails. */
+  readonly getSnapshot: <A>(extensionId: string, schema: Schema.Decoder<A>) => A | undefined
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
   /** Reactive composer state */

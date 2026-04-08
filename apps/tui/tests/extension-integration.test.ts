@@ -28,7 +28,6 @@ const noopCtx: ExtensionClientContext = {
   send: () => {},
   ask: async () => undefined,
   getSnapshot: () => undefined,
-  useTypedSnapshot: () => undefined,
   sendMessage: () => {},
   composerState: () => ({
     draft: "",
@@ -47,7 +46,6 @@ const createRecordingCtx = () => {
     send: () => {},
     ask: async () => undefined,
     getSnapshot: () => undefined,
-    useTypedSnapshot: () => undefined,
     sendMessage: () => {},
     composerState: () => ({
       draft: "",
