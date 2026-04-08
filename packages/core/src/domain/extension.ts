@@ -3,7 +3,7 @@ import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type { Message, MessageMetadata } from "./message"
+import type { Message, MessageMetadata, MessagePart } from "./message"
 import type { PermissionResult, PermissionRule } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
@@ -157,6 +157,13 @@ export interface TurnAfterInput {
   readonly interrupted: boolean
 }
 
+export interface MessageOutputInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: AgentName
+  readonly parts: ReadonlyArray<MessagePart>
+}
+
 export interface ToolResultInput {
   readonly toolCallId: ToolCallId
   readonly toolName: string
@@ -189,6 +196,8 @@ export interface ExtensionInterceptorMap {
   readonly "tool.result": Interceptor<ToolResultInput, unknown>
   /** Pre-message hook — transform user input before message construction */
   readonly "message.input": Interceptor<MessageInputInput, string>
+  /** Post-stream hook — fires after assistant message is assembled, before persistence */
+  readonly "message.output": Interceptor<MessageOutputInput, void>
 }
 
 export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap

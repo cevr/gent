@@ -420,6 +420,9 @@ export const persistAssistantTurn = (params: {
   branchId: BranchId
   messageId: MessageId
   draft: AssistantDraft
+  agentName: AgentNameType
+  extensionRegistry?: ExtensionRegistryService
+  hostCtx?: ExtensionHostContext
 }) =>
   Effect.gen(function* () {
     const assistantParts: Array<TextPart | ReasoningPart | ToolCallPart> = []
@@ -430,6 +433,23 @@ export const persistAssistantTurn = (params: {
       assistantParts.push(new TextPart({ type: "text", text: params.draft.text }))
     }
     assistantParts.push(...params.draft.toolCalls)
+
+    // Fire message.output hook before persistence
+    if (params.extensionRegistry !== undefined && params.hostCtx !== undefined) {
+      yield* params.extensionRegistry.hooks
+        .runInterceptor(
+          "message.output",
+          {
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            agentName: params.agentName,
+            parts: assistantParts,
+          },
+          () => Effect.void,
+          params.hostCtx,
+        )
+        .pipe(Effect.catchEager(() => Effect.void))
+    }
 
     const assistantMessage = new Message({
       id: params.messageId,
@@ -610,6 +630,7 @@ export const streamTurnPhase = (params: {
   resolved: ResolvedTurn
   provider: ProviderService
   extensionRegistry: ExtensionRegistryService
+  hostCtx: ExtensionHostContext
   publishEvent: PublishEvent
   storage: StorageService
   turnMetrics?: Ref.Ref<TurnMetrics>
@@ -746,6 +767,9 @@ export const streamTurnPhase = (params: {
       branchId: params.branchId,
       messageId: assistantMessageIdForTurn(params.messageId, params.step),
       draft: collected.draft,
+      agentName: params.resolved.currentTurnAgent,
+      extensionRegistry: params.extensionRegistry,
+      hostCtx: params.hostCtx,
     })
 
     return collected
@@ -805,6 +829,7 @@ export const invokeToolPhase = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
+  hostCtx: ExtensionHostContext
   bashSemaphore: Semaphore.Semaphore
   storage: StorageService
 }) =>
@@ -829,6 +854,9 @@ export const invokeToolPhase = (params: {
       branchId: params.branchId,
       messageId: params.assistantMessageId,
       draft,
+      agentName: params.currentTurnAgent,
+      extensionRegistry: params.extensionRegistry,
+      hostCtx: params.hostCtx,
     })
 
     const existing = yield* params.storage.getMessage(params.toolResultMessageId)
@@ -1582,6 +1610,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   },
                   provider,
                   extensionRegistry,
+                  hostCtx,
                   publishEvent: publishEventOrDie,
                   storage,
                   sessionId,

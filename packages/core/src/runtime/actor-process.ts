@@ -180,54 +180,56 @@ export const LocalActorProcessLive: Layer.Layer<
     const extensionRegistry = yield* ExtensionRegistry
     const bashSemaphore = yield* Semaphore.make(1)
 
+    // Build host context deps once — reused by all handlers
+    const die = (label: string) => () => Effect.die(`${label} not available`)
+    const opt = <T>(
+      svc: { _tag: "Some"; value: T } | { _tag: "None" },
+      fallback: Record<string, unknown>,
+    ) => (svc._tag === "Some" ? svc.value : (fallback as unknown as T))
+    const hostDeps: MakeExtensionHostContextDeps = {
+      platform: opt(yield* Effect.serviceOption(RuntimePlatform), {
+        cwd: "",
+        home: "",
+        platform: "unknown",
+      }),
+      extensionStateRuntime: opt(yield* Effect.serviceOption(ExtensionStateRuntime), {
+        send: die("ExtensionStateRuntime"),
+        ask: die("ExtensionStateRuntime"),
+        getUiSnapshots: die("ExtensionStateRuntime"),
+      }),
+      approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
+        present: die("ApprovalService"),
+        storeResolution: die("ApprovalService"),
+        respond: die("ApprovalService"),
+        rehydrate: die("ApprovalService"),
+      }),
+      promptPresenter: opt(yield* Effect.serviceOption(PromptPresenter), {
+        present: die("PromptPresenter"),
+        confirm: die("PromptPresenter"),
+        review: die("PromptPresenter"),
+      }),
+      extensionRegistry,
+      turnControl: opt(yield* Effect.serviceOption(ExtensionTurnControl), {
+        queueFollowUp: die("TurnControl"),
+        interject: die("TurnControl"),
+        bind: die("TurnControl"),
+      }),
+      storage,
+      searchStorage: opt(yield* Effect.serviceOption(SearchStorage), {
+        searchMessages: () => Effect.succeed([]),
+      }),
+      agentRunner: opt(yield* Effect.serviceOption(AgentRunnerService), {
+        run: die("AgentRunnerService"),
+      }),
+      eventPublisher,
+    }
+
     return {
       sendUserMessage: (input) =>
         Effect.gen(function* () {
           const commandId = input.commandId ?? makeCommandId()
 
           // Run message.input interceptor — allows extensions to transform user input
-          const die = (label: string) => () => Effect.die(`${label} not available in message.input`)
-          const opt = <T>(
-            svc: { _tag: "Some"; value: T } | { _tag: "None" },
-            fallback: Record<string, unknown>,
-          ) => (svc._tag === "Some" ? svc.value : (fallback as unknown as T))
-          const hostDeps: MakeExtensionHostContextDeps = {
-            platform: opt(yield* Effect.serviceOption(RuntimePlatform), {
-              cwd: "",
-              home: "",
-              platform: "unknown",
-            }),
-            extensionStateRuntime: opt(yield* Effect.serviceOption(ExtensionStateRuntime), {
-              send: die("ExtensionStateRuntime"),
-              ask: die("ExtensionStateRuntime"),
-              getUiSnapshots: die("ExtensionStateRuntime"),
-            }),
-            approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
-              present: die("ApprovalService"),
-              storeResolution: die("ApprovalService"),
-              respond: die("ApprovalService"),
-              rehydrate: die("ApprovalService"),
-            }),
-            promptPresenter: opt(yield* Effect.serviceOption(PromptPresenter), {
-              present: die("PromptPresenter"),
-              confirm: die("PromptPresenter"),
-              review: die("PromptPresenter"),
-            }),
-            extensionRegistry,
-            turnControl: opt(yield* Effect.serviceOption(ExtensionTurnControl), {
-              queueFollowUp: die("TurnControl"),
-              interject: die("TurnControl"),
-              bind: die("TurnControl"),
-            }),
-            storage,
-            searchStorage: opt(yield* Effect.serviceOption(SearchStorage), {
-              searchMessages: () => Effect.succeed([]),
-            }),
-            agentRunner: opt(yield* Effect.serviceOption(AgentRunnerService), {
-              run: die("AgentRunnerService"),
-            }),
-            eventPublisher,
-          }
           const hostCtx = makeExtensionHostContext(
             { sessionId: input.sessionId, branchId: input.branchId },
             hostDeps,
@@ -329,6 +331,10 @@ export const LocalActorProcessLive: Layer.Layer<
           const commandId = input.commandId ?? makeCommandId()
           const toolCallId = toolCallIdForCommand(commandId)
           const currentTurnAgent = (yield* agentLoop.getState(input)).agent
+          const invokeHostCtx = makeExtensionHostContext(
+            { sessionId: input.sessionId, branchId: input.branchId },
+            hostDeps,
+          )
 
           yield* invokeToolPhase({
             assistantMessageId: assistantMessageIdForCommand(commandId),
@@ -343,6 +349,7 @@ export const LocalActorProcessLive: Layer.Layer<
             currentTurnAgent,
             toolRunner,
             extensionRegistry,
+            hostCtx: invokeHostCtx,
             bashSemaphore,
             storage,
           })

@@ -40,6 +40,7 @@ import {
   type TurnAfterInput,
   type ToolResultInput,
   type MessageInputInput,
+  type MessageOutputInput,
   type ExtensionDeriveContext,
   type AnyExtensionActorDefinition,
   type ExtensionReduceContext,
@@ -106,6 +107,7 @@ export {
   type TurnAfterInput,
   type ToolResultInput,
   type MessageInputInput,
+  type MessageOutputInput,
 } from "../domain/extension.js"
 export {
   ExtensionMessage,
@@ -251,6 +253,7 @@ interface AsyncHookHandlers {
   readonly "turn.after": AsyncFireAndForgetHandler<TurnAfterInput>
   readonly "tool.result": AsyncTransformHandler<ToolResultInput, unknown>
   readonly "message.input": AsyncTransformHandler<MessageInputInput, string>
+  readonly "message.output": AsyncFireAndForgetHandler<MessageOutputInput>
 }
 
 // ── Actor Result ──
@@ -455,6 +458,7 @@ const EFFECT_CAPABLE_HOOKS = new Set([
   "tool.result",
   "context.messages",
   "message.input",
+  "message.output",
 ])
 
 type EffectBinder = {
@@ -847,7 +851,7 @@ export const extension = <P = never>(
         },
         async: {
           on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
-            if (key === "turn.before" || key === "turn.after") {
+            if (key === "turn.before" || key === "turn.after" || key === "message.output") {
               _interceptors.push(
                 defineInterceptor(
                   key,

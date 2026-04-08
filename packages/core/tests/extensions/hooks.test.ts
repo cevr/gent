@@ -9,6 +9,7 @@ import type {
   ToolResultInput,
   TurnBeforeInput,
   TurnAfterInput,
+  MessageOutputInput,
 } from "@gent/core/domain/extension"
 import { defineInterceptor } from "@gent/core/domain/extension"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -538,6 +539,47 @@ describe("compileHooks", () => {
           Effect.tap((result) =>
             // bad defected, so falls through to good's chain which appends [good]
             Effect.sync(() => expect(result).toBe("hello [good]")),
+          ),
+        )
+    })
+  })
+
+  describe("message.output", () => {
+    const baseMessageOutputInput: MessageOutputInput = {
+      sessionId: "test-session" as SessionId,
+      branchId: "test-branch" as BranchId,
+      agentName: "cowork" as never,
+      parts: [new TextPart({ type: "text", text: "Hello world" })],
+    }
+
+    it.live("fires with assembled message parts", () => {
+      const captured: MessageOutputInput[] = []
+      const ext = makeExt("output-observer", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "message.output",
+            (
+              input: MessageOutputInput,
+              next: (i: MessageOutputInput) => Effect.Effect<void>,
+              _ctx,
+            ) => {
+              captured.push(input)
+              return next(input)
+            },
+          ),
+        ],
+      })
+
+      const compiled = compileHooks([ext])
+      return compiled
+        .runInterceptor("message.output", baseMessageOutputInput, () => Effect.void, stubCtx)
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              expect(captured).toHaveLength(1)
+              expect(captured[0]!.parts).toHaveLength(1)
+              expect(captured[0]!.agentName).toBe("cowork")
+            }),
           ),
         )
     })
