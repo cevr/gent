@@ -36,6 +36,7 @@ import {
   type ToolExecuteInput,
   type PermissionCheckInput,
   type ContextMessagesInput,
+  type TurnBeforeInput,
   type TurnAfterInput,
   type ToolResultInput,
   type MessageInputInput,
@@ -101,6 +102,7 @@ export {
   type ToolExecuteInput,
   type PermissionCheckInput,
   type ContextMessagesInput,
+  type TurnBeforeInput,
   type TurnAfterInput,
   type ToolResultInput,
   type MessageInputInput,
@@ -245,6 +247,7 @@ interface AsyncHookHandlers {
   readonly "tool.execute": AsyncTransformHandler<ToolExecuteInput, unknown>
   readonly "permission.check": AsyncTransformHandler<PermissionCheckInput, PermissionResult>
   readonly "context.messages": AsyncTransformHandler<ContextMessagesInput, ReadonlyArray<Message>>
+  readonly "turn.before": AsyncFireAndForgetHandler<TurnBeforeInput>
   readonly "turn.after": AsyncFireAndForgetHandler<TurnAfterInput>
   readonly "tool.result": AsyncTransformHandler<ToolResultInput, unknown>
   readonly "message.input": AsyncTransformHandler<MessageInputInput, string>
@@ -441,6 +444,7 @@ const extractContext = (
 
 /** Keys where queueFollowUp/interject are allowed (have sessionId/branchId in input) */
 const EFFECT_CAPABLE_HOOKS = new Set([
+  "turn.before",
   "turn.after",
   "tool.execute",
   "tool.result",
@@ -798,12 +802,13 @@ export const extension = <P = never>(
         },
         async: {
           on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
-            if (key === "turn.after") {
+            if (key === "turn.before" || key === "turn.after") {
               _interceptors.push(
                 defineInterceptor(
                   key,
                   wrapFireAndForgetHandler(
-                    handler as AsyncFireAndForgetHandler<TurnAfterInput>,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    handler as AsyncFireAndForgetHandler<any>,
                     key,
                     effectBinder,
                   ),

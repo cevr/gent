@@ -581,6 +581,28 @@ export const resolveTurnPhase = (params: {
     } satisfies ResolvedTurn
   })
 
+const runTurnBeforeHook = (
+  extensionRegistry: ExtensionRegistryService,
+  resolved: ResolvedTurn,
+  sessionId: SessionId,
+  branchId: BranchId,
+  hostCtx: ExtensionHostContext,
+) =>
+  extensionRegistry.hooks
+    .runInterceptor(
+      "turn.before",
+      {
+        sessionId,
+        branchId,
+        agentName: resolved.currentTurnAgent,
+        toolCount: resolved.tools?.length ?? 0,
+        systemPromptLength: resolved.systemPrompt.length,
+      },
+      () => Effect.void,
+      hostCtx,
+    )
+    .pipe(Effect.catchEager(() => Effect.void))
+
 export const streamTurnPhase = (params: {
   messageId: MessageId
   step: number
@@ -1531,6 +1553,9 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
                   interrupted = true
                   break
                 }
+
+                // 1b. Pre-turn hook
+                yield* runTurnBeforeHook(extensionRegistry, resolved, sessionId, branchId, hostCtx)
 
                 // 2. Stream
                 const activeStream: ActiveStreamHandle = {

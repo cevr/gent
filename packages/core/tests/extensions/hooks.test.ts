@@ -7,6 +7,7 @@ import type {
   LoadedExtension,
   SystemPromptInput,
   ToolResultInput,
+  TurnBeforeInput,
   TurnAfterInput,
 } from "@gent/core/domain/extension"
 import { defineInterceptor } from "@gent/core/domain/extension"
@@ -296,6 +297,93 @@ describe("compileHooks", () => {
             Effect.sync(() => {
               expect(result).toHaveLength(1)
               expect(result[0]!.role).toBe("user")
+            }),
+          ),
+        )
+    })
+  })
+
+  describe("turn.before", () => {
+    const baseTurnBeforeInput: TurnBeforeInput = {
+      sessionId: "test-session" as SessionId,
+      branchId: "test-branch" as BranchId,
+      agentName: "cowork" as never,
+      toolCount: 5,
+      systemPromptLength: 1200,
+    }
+
+    it.live("fires before turn with correct input", () => {
+      const captured: TurnBeforeInput[] = []
+      const ext = makeExt("pre-turn", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "turn.before",
+            (input: TurnBeforeInput, next: (i: TurnBeforeInput) => Effect.Effect<void>, _ctx) => {
+              captured.push(input)
+              return next(input)
+            },
+          ),
+        ],
+      })
+
+      const compiled = compileHooks([ext])
+      return compiled
+        .runInterceptor("turn.before", baseTurnBeforeInput, () => Effect.void, stubCtx)
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              expect(captured).toHaveLength(1)
+              expect(captured[0]!.toolCount).toBe(5)
+              expect(captured[0]!.systemPromptLength).toBe(1200)
+              expect(captured[0]!.agentName).toBe("cowork")
+            }),
+          ),
+        )
+    })
+
+    it.live("chains before and after hooks in correct order", () => {
+      const log: string[] = []
+
+      const ext = makeExt("lifecycle", "builtin", {
+        interceptors: [
+          defineInterceptor(
+            "turn.before",
+            (_input: TurnBeforeInput, next: (i: TurnBeforeInput) => Effect.Effect<void>, _ctx) => {
+              log.push("before")
+              return next(_input)
+            },
+          ),
+          defineInterceptor(
+            "turn.after",
+            (_input: TurnAfterInput, next: (i: TurnAfterInput) => Effect.Effect<void>, _ctx) => {
+              log.push("after")
+              return next(_input)
+            },
+          ),
+        ],
+      })
+
+      const compiled = compileHooks([ext])
+      return compiled
+        .runInterceptor("turn.before", baseTurnBeforeInput, () => Effect.void, stubCtx)
+        .pipe(
+          Effect.andThen(
+            compiled.runInterceptor(
+              "turn.after",
+              {
+                sessionId: "test-session" as SessionId,
+                branchId: "test-branch" as BranchId,
+                durationMs: 1500,
+                agentName: "cowork" as never,
+                interrupted: false,
+              },
+              () => Effect.void,
+              stubCtx,
+            ),
+          ),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              expect(log).toEqual(["before", "after"])
             }),
           ),
         )

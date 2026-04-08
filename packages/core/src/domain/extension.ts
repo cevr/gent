@@ -141,6 +141,14 @@ export interface ContextMessagesInput {
   readonly branchId: BranchId
 }
 
+export interface TurnBeforeInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: AgentName
+  readonly toolCount: number
+  readonly systemPromptLength: number
+}
+
 export interface TurnAfterInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -173,6 +181,8 @@ export interface ExtensionInterceptorMap {
   readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
   readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
   readonly "context.messages": Interceptor<ContextMessagesInput, ReadonlyArray<Message>>
+  /** Pre-turn hook — fires after prompt assembly + tool resolution, before provider.stream() */
+  readonly "turn.before": Interceptor<TurnBeforeInput, void>
   /** Post-turn hook — extensions can schedule follow-ups, count turns, trigger side effects */
   readonly "turn.after": Interceptor<TurnAfterInput, void>
   /** Post-execution hook — extensions can enrich/append to tool results */

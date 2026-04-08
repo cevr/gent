@@ -34,6 +34,7 @@ const emptyInterceptors = (): InterceptorChains => ({
   "tool.execute": [],
   "permission.check": [],
   "context.messages": [],
+  "turn.before": [],
   "turn.after": [],
   "tool.result": [],
   "message.input": [],

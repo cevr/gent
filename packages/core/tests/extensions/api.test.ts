@@ -326,6 +326,89 @@ describe("extension api", () => {
     expect(nextCalled).toBe(false)
   })
 
+  test("ext.on('turn.before') registers and fires via Effect-native path", async () => {
+    const captured: unknown[] = []
+    const ext = extension("turn-before-effect-test", ({ ext }) =>
+      ext.on("turn.before", (input, next) => {
+        captured.push(input)
+        return next(input)
+      }),
+    )
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const resolved = resolveExtensions([
+      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
+    ])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    await Effect.runPromise(
+      compiled.runInterceptor(
+        "turn.before",
+        {
+          sessionId: "s" as SessionId,
+          branchId: "b" as BranchId,
+          agentName: "cowork" as never,
+          toolCount: 3,
+          systemPromptLength: 500,
+        },
+        () => Effect.void,
+        stubCtx,
+      ),
+    )
+
+    expect(captured).toHaveLength(1)
+    expect((captured[0] as { toolCount: number }).toolCount).toBe(3)
+  })
+
+  test("ext.async.on('turn.before') registers and fires via async path", async () => {
+    const captured: unknown[] = []
+    const ext = extension("turn-before-async-test", ({ ext }) => {
+      ext.async.on("turn.before", async (input, next) => {
+        captured.push(input)
+        await next(input)
+      })
+      return ext
+    })
+
+    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const resolved = resolveExtensions([
+      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
+    ])
+    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
+    const compiled = compileHooks(resolved.extensions)
+    const stubCtx = {
+      sessionId: "s" as SessionId,
+      branchId: "b" as BranchId,
+      cwd: "/tmp",
+      home: "/tmp",
+    } as ExtensionHostContext
+
+    await Effect.runPromise(
+      compiled.runInterceptor(
+        "turn.before",
+        {
+          sessionId: "s" as SessionId,
+          branchId: "b" as BranchId,
+          agentName: "cowork" as never,
+          toolCount: 7,
+          systemPromptLength: 1000,
+        },
+        () => Effect.void,
+        stubCtx,
+      ),
+    )
+
+    expect(captured).toHaveLength(1)
+    expect((captured[0] as { systemPromptLength: number }).systemPromptLength).toBe(1000)
+  })
+
   test("message.input interceptor transforms user input", async () => {
     const ext = extension("input-transform-test", ({ ext }) =>
       ext.on("message.input", (input, next) =>

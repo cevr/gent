@@ -38,7 +38,10 @@ function createSkillsAtom(
 
     const runRefresh = () => {
       const sid = sessionId()
-      if (sid === undefined) return undefined
+      if (sid === undefined) {
+        setState({ _tag: "idle", skills: [] })
+        return undefined
+      }
 
       const effect = Effect.gen(function* () {
         yield* Effect.sync(() => {
