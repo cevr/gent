@@ -3,13 +3,21 @@ import {
   ComposerInteractionState,
   transitionComposerInteraction,
 } from "../src/components/composer-interaction-state"
+import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
+
+const testContributions: AutocompleteContribution[] = [
+  { prefix: "$", title: "Skills", trigger: "inline", items: () => [] },
+  { prefix: "@", title: "Files", trigger: "inline", items: () => [] },
+  { prefix: "/", title: "Commands", trigger: "start", items: () => [] },
+]
 
 describe("transitionComposerInteraction", () => {
   test("derives mention autocomplete from draft changes", () => {
-    const next = transitionComposerInteraction(ComposerInteractionState.initial(), {
-      _tag: "DraftChanged",
-      text: "ask @dee",
-    })
+    const next = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: "ask @dee" },
+      testContributions,
+    )
 
     expect(next.draft).toBe("ask @dee")
     expect(next.autocomplete).toEqual({

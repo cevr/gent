@@ -15,8 +15,9 @@ import { ClientError, formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
-import type { AutocompleteState } from "./autocomplete-popup"
+import type { AutocompleteState } from "./composer-interaction-state"
 import type { ApprovalResult } from "@gent/core/domain/event.js"
+import { useExtensionUI } from "../extensions/context"
 
 const PASTE_THRESHOLD_LINES = 3
 const PASTE_THRESHOLD_LENGTH = 150
@@ -87,6 +88,7 @@ export function useComposerController(): ComposerController {
   const { cast } = useRuntime()
   const history = usePromptHistory()
   const paste = createPasteManager()
+  const extensionUI = useExtensionUI()
 
   let inputRef: TextareaRenderable | null = null
   let submitMode: "queue" | "interject" = "queue"
@@ -113,19 +115,10 @@ export function useComposerController(): ComposerController {
     if (state === null || inputRef === null) return
 
     const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
-    let insertion = ""
-
-    switch (state.type) {
-      case "$":
-        insertion = `$${value.split(":").pop() ?? value} `
-        break
-      case "@":
-        insertion = `@${value} `
-        break
-      case "/":
-        insertion = `/${value} `
-        break
-    }
+    const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
+    const insertion = contribution?.formatInsertion
+      ? contribution.formatInsertion(value)
+      : `${state.type}${value} `
 
     const nextValue = beforeTrigger + insertion
     inputRef.replaceText(nextValue)
@@ -349,9 +342,10 @@ export function useComposerController(): ComposerController {
     return false
   }
 
-  const handleSlashAutocompleteKey = (event: { readonly name?: string }): boolean => {
+  const handleStartTriggerKey = (event: { readonly name?: string }): boolean => {
     if (
-      event.name !== "/" ||
+      event.name === undefined ||
+      event.name.length !== 1 ||
       inputRef?.cursorOffset !== 0 ||
       effectiveMode() !== "editing" ||
       autocomplete() !== null
@@ -359,9 +353,15 @@ export function useComposerController(): ComposerController {
       return false
     }
 
+    // Check if any start-trigger contribution matches this key
+    const match = extensionUI
+      .autocompleteItems()
+      .find((c) => c.trigger === "start" && c.prefix === event.name)
+    if (match === undefined) return false
+
     sc.onComposerInteraction({
       _tag: "OpenAutocomplete",
-      autocomplete: { type: "/", filter: "", triggerPos: 0 },
+      autocomplete: { type: match.prefix, filter: "", triggerPos: 0 },
     })
     return true
   }
@@ -424,7 +424,7 @@ export function useComposerController(): ComposerController {
     const autocompleteResult = handleAutocompleteKey(event)
     if (autocompleteResult !== undefined) return autocompleteResult
     if (handleShellModeKey(event)) return true
-    if (handleSlashAutocompleteKey(event)) return true
+    if (handleStartTriggerKey(event)) return true
     if (handlePromptHistoryKey(event)) return true
     return false
   })

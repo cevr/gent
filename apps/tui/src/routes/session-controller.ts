@@ -255,7 +255,9 @@ export function createSessionController(props: {
   }
 
   const onComposerInteraction = (event: ComposerInteractionEvent) => {
-    setInteractionState((current) => transitionComposerInteraction(current, event))
+    setInteractionState((current) =>
+      transitionComposerInteraction(current, event, ext.autocompleteItems()),
+    )
   }
 
   const feed = useSessionFeed(
