@@ -145,61 +145,72 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Title from the first matching contribution
   const title = () => contributions()[0]?.title ?? props.state.type
 
+  const loading = () => items() === undefined
+  const empty = () => !loading() && (items() ?? []).length === 0
+
   return (
-    <Show when={(items() ?? []).length > 0}>
-      <ChromePanel.Root
-        title={title()}
-        width={popupWidth()}
-        height={popupHeight()}
-        left={popupLeft()}
-        bottom={3}
-      >
-        {/* Filter display */}
-        <Show when={props.state.filter.length > 0}>
-          <ChromePanel.Section>
-            <text style={{ fg: theme.textMuted }}>
-              › <span style={{ fg: theme.text }}>{props.state.filter}</span>
-            </text>
-          </ChromePanel.Section>
+    <ChromePanel.Root
+      title={title()}
+      width={popupWidth()}
+      height={popupHeight()}
+      left={popupLeft()}
+      bottom={3}
+    >
+      {/* Filter display */}
+      <Show when={props.state.filter.length > 0}>
+        <ChromePanel.Section>
+          <text style={{ fg: theme.textMuted }}>
+            › <span style={{ fg: theme.text }}>{props.state.filter}</span>
+          </text>
+        </ChromePanel.Section>
+      </Show>
+
+      {/* Items / Loading / Empty */}
+      <ChromePanel.Body ref={scrollRef} paddingLeft={0} paddingRight={0}>
+        <Show when={loading()}>
+          <box paddingLeft={1}>
+            <text style={{ fg: theme.textMuted }}>Loading…</text>
+          </box>
         </Show>
-
-        {/* Items */}
-        <ChromePanel.Body ref={scrollRef} paddingLeft={0} paddingRight={0}>
-          <For each={items() ?? []}>
-            {(item, index) => {
-              const isSelected = () => selectedIndex() === index()
-              return (
-                <box
-                  id={`ac-item-${index()}`}
-                  backgroundColor={isSelected() ? theme.primary : "transparent"}
-                  paddingLeft={1}
+        <Show when={empty()}>
+          <box paddingLeft={1}>
+            <text style={{ fg: theme.textMuted }}>No matches</text>
+          </box>
+        </Show>
+        <For each={items() ?? []}>
+          {(item, index) => {
+            const isSelected = () => selectedIndex() === index()
+            return (
+              <box
+                id={`ac-item-${index()}`}
+                backgroundColor={isSelected() ? theme.primary : "transparent"}
+                paddingLeft={1}
+              >
+                <text
+                  style={{
+                    fg: isSelected() ? theme.selectedListItemText : theme.text,
+                  }}
                 >
-                  <text
-                    style={{
-                      fg: isSelected() ? theme.selectedListItemText : theme.text,
-                    }}
-                  >
-                    {item.label}
-                    <Show when={item.description !== undefined}>
-                      <span
-                        style={{
-                          fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
-                          dim: !isSelected(),
-                        }}
-                      >
-                        {"  "}
-                        {item.description}
-                      </span>
-                    </Show>
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-        </ChromePanel.Body>
+                  {item.label}
+                  <Show when={item.description !== undefined}>
+                    <span
+                      style={{
+                        fg: isSelected() ? theme.selectedListItemText : theme.textMuted,
+                        dim: !isSelected(),
+                      }}
+                    >
+                      {"  "}
+                      {item.description}
+                    </span>
+                  </Show>
+                </text>
+              </box>
+            )
+          }}
+        </For>
+      </ChromePanel.Body>
 
-        <ChromePanel.Footer>↑↓ navigate · enter select · esc close</ChromePanel.Footer>
-      </ChromePanel.Root>
-    </Show>
+      <ChromePanel.Footer>↑↓ navigate · enter select · esc close</ChromePanel.Footer>
+    </ChromePanel.Root>
   )
 }

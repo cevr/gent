@@ -139,15 +139,14 @@ Special prefixes at input start trigger different modes:
 
 ### Slash Commands
 
-| Command     | Action                   |
-| ----------- | ------------------------ |
-| `/auto`     | Toggle auto mode         |
-| `/clear`    | Clear messages           |
-| `/sessions` | Open sessions picker     |
-| `/branch`   | Create new branch        |
-| `/tree`     | Browse branch tree       |
-| `/fork`     | Fork from a message      |
-| `/bypass`   | Toggle permission bypass |
+| Command     | Action               |
+| ----------- | -------------------- |
+| `/auto`     | Toggle auto mode     |
+| `/clear`    | Clear messages       |
+| `/sessions` | Open sessions picker |
+| `/branch`   | Create new branch    |
+| `/tree`     | Browse branch tree   |
+| `/fork`     | Fork from a message  |
 
 ## Extensions
 
@@ -162,6 +161,9 @@ Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 | `builtins/connection.client.ts`   | `@gent/connection`        | Connection status widget                       |
 | `builtins/interactions.client.ts` | `@gent/interaction-tools` | Interaction renderers (questions, permissions) |
 | `builtins/handoff.client.ts`      | `@gent/handoff`           | Handoff interaction renderer                   |
+| `builtins/skills.client.ts`       | `@gent/skills-ui`         | `$` autocomplete: skills popup                 |
+| `builtins/files.client.ts`        | `@gent/files-ui`          | `@` autocomplete: file search popup            |
+| `builtins/commands.client.ts`     | `@gent/commands-ui`       | `/` autocomplete: session + extension commands |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader.ts` → `resolve.ts`
 
@@ -172,18 +174,19 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 - `useExtensionUI()` provides `sessionId()`, `branchId()`, `snapshots()`
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `composerState` reactive signal available in `ExtensionClientContext`: `{ draft, mode, inputFocused, autocompleteOpen }`
+- `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
+- `cwd` available on `ExtensionClientContext` for workspace-relative operations
 
 ## Key Files (Composer + Session)
 
-| File                                        | Purpose                           |
-| ------------------------------------------- | --------------------------------- |
-| `src/routes/session-controller.ts`          | session-screen orchestration      |
-| `src/routes/session.tsx`                    | session presentation + route keys |
-| `src/components/composer.tsx`               | composer render surface           |
-| `src/components/use-composer-controller.ts` | composer interaction wiring       |
-| `src/components/autocomplete-popup.tsx`     | Popup component for $, @, /       |
-| `src/hooks/use-skills.ts`                   | Skill dir scanning + caching      |
-| `src/hooks/use-file-search.ts`              | Glob + fuzzy file search          |
-| `src/utils/shell.ts`                        | Shell execution + truncation      |
-| `src/utils/file-refs.ts`                    | @file#line expansion              |
-| `src/commands/slash-commands.ts`            | Slash command handlers            |
+| File                                        | Purpose                             |
+| ------------------------------------------- | ----------------------------------- |
+| `src/routes/session-controller.ts`          | session-screen orchestration        |
+| `src/routes/session.tsx`                    | session presentation + route keys   |
+| `src/components/composer.tsx`               | composer render surface             |
+| `src/components/use-composer-controller.ts` | composer interaction wiring         |
+| `src/components/autocomplete-popup.tsx`     | Generic contribution-driven popup   |
+| `src/utils/fuzzy-score.ts`                  | Fuzzy match scoring for file search |
+| `src/utils/shell.ts`                        | Shell execution + truncation        |
+| `src/utils/file-refs.ts`                    | @file#line expansion                |
+| `src/commands/slash-commands.ts`            | Slash command handlers              |
