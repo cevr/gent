@@ -249,6 +249,25 @@ describe("fluent builder", () => {
     expect(section?.content).toBe("hello from layer")
   })
 
+  // ── Provides negative constraint (compile-time) ──
+
+  test("dynamic promptSection without matching layer is a compile error", () => {
+    const TestService = ServiceMap.Service<typeof TestService, { readonly value: string }>()("Test")
+
+    // This should NOT compile — TestService is in R but no .layer() provides it.
+    // @ts-expect-error — Type 'TestService' is not assignable to type 'never'
+    extension("no-layer", ({ ext }) =>
+      ext.promptSections({
+        id: "bad",
+        priority: 50,
+        resolve: Effect.gen(function* () {
+          const svc = yield* TestService
+          return svc.value
+        }),
+      }),
+    )
+  })
+
   // ── Provider yields providers array ──
 
   test("provider() produces single-element providers array in setup", async () => {
