@@ -1,5 +1,5 @@
 import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
-import { fuzzyScore } from "../../hooks/use-file-search"
+import { fuzzyScore } from "../../utils/fuzzy-score"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
 import { Glob } from "bun"

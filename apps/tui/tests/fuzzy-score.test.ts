@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { fuzzyScore } from "../src/hooks/use-file-search"
+import { fuzzyScore } from "../src/utils/fuzzy-score"
 
 describe("fuzzyScore", () => {
   describe("exact matches", () => {
