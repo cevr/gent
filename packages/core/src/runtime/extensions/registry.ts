@@ -18,6 +18,7 @@ import {
   type PromptSectionInput,
 } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
+import type { PermissionRule } from "../../domain/permission.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
@@ -29,6 +30,7 @@ export interface ResolvedExtensions {
   readonly providers: ReadonlyMap<string, ProviderContribution>
   readonly promptSections: ReadonlyMap<string, PromptSectionInput>
   readonly commands: ReadonlyArray<CommandContribution>
+  readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly hooks: CompiledHookMap
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
@@ -90,9 +92,13 @@ export const resolveExtensions = (
   )
 
   const commands: CommandContribution[] = []
+  const permissionRules: PermissionRule[] = []
   for (const ext of sorted) {
     for (const cmd of ext.setup.commands ?? []) {
       commands.push(cmd)
+    }
+    for (const rule of ext.setup.permissionRules ?? []) {
+      permissionRules.push(rule)
     }
   }
 
@@ -122,6 +128,7 @@ export const resolveExtensions = (
     providers,
     promptSections: promptSectionsMap,
     commands,
+    permissionRules,
     hooks,
     extensions: sorted,
     failedExtensions: mergedFailures,
@@ -240,6 +247,9 @@ export interface ExtensionRegistryService {
    *  Tries cowork/deepwork by name, falls back to first two modeled agents, dies if none. */
   readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId]>
 
+  // Permission rules
+  readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
+
   // Prompt sections
   readonly listPromptSections: () => Effect.Effect<ReadonlyArray<PromptSection>>
 
@@ -267,6 +277,7 @@ export class ExtensionRegistry extends ServiceMap.Service<
           compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
       listCommands: () => Effect.succeed(resolved.commands),
+      listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
       getProvider: (id) => Effect.succeed(resolved.providers.get(id)),

@@ -4,7 +4,7 @@ import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { Permission, PermissionRule } from "../domain/permission.js"
+import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import { BuiltinExtensions } from "../extensions/index.js"
@@ -247,21 +247,16 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerLive,
   )
 
-  const builtinDenyRules = [
-    new PermissionRule({
-      tool: "bash",
-      pattern: "git\\s+(add\\s+[-.]|push\\s+--force|reset\\s+--hard|clean\\s+-f)",
-      action: "deny",
-    }),
-    new PermissionRule({ tool: "bash", pattern: "rm\\s+-rf\\s+/", action: "deny" }),
-  ]
-
   const permissionLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
         const configService = yield* ConfigService
-        const rules = yield* configService.getPermissionRules()
-        return Permission.Live([...builtinDenyRules, ...rules], "allow")
+        const extensionRegistry = yield* ExtensionRegistry
+        const [configRules, extensionRules] = yield* Effect.all([
+          configService.getPermissionRules(),
+          extensionRegistry.listPermissionRules(),
+        ])
+        return Permission.Live([...extensionRules, ...configRules], "allow")
       }),
     ),
     baseServicesLive,

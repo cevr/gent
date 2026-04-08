@@ -63,7 +63,7 @@ import { toExtensionContext, type ExtensionContext } from "../domain/extension-c
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
-import type { PermissionResult } from "../domain/permission.js"
+import type { PermissionRule, PermissionResult } from "../domain/permission.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
@@ -286,6 +286,10 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   promptSections(
     ...sections: ReadonlyArray<PromptSection | DynamicPromptSection<Provides>>
   ): Omit<ExtensionBuilder<Provides>, "promptSections">
+  /** Register permission deny/allow rules. Single call. */
+  permissionRules(
+    ...rules: ReadonlyArray<PermissionRule>
+  ): Omit<ExtensionBuilder<Provides>, "permissionRules">
   /** Register an Effect-native interceptor hook. Multiple calls ok. */
   on<K extends ExtensionInterceptorKey>(
     key: K,
@@ -628,6 +632,7 @@ export const extension = <P = never>(
       const _shutdownEffects: Array<Effect.Effect<void>> = []
       let _provider: ProviderContribution | undefined
       let _jobs: ScheduledJobContribution[] | undefined
+      let _permissionRules: PermissionRule[] | undefined
       const _busSubscriptions: BusSubscriptionEntry[] = []
       let _layer: Layer.Layer<never, never, object> | undefined
       let _actorResult: AnyExtensionActorDefinition | undefined
@@ -714,6 +719,12 @@ export const extension = <P = never>(
         promptSections: (...sections) => {
           guardSingle("promptSections", _promptSections)
           _promptSections = sections.map((s) => s as PromptSectionInput)
+          return builder
+        },
+
+        permissionRules: (...rules) => {
+          guardSingle("permissionRules", _permissionRules)
+          _permissionRules = [...rules]
           return builder
         },
 
@@ -893,6 +904,9 @@ export const extension = <P = never>(
         ...(_jobs !== undefined && _jobs.length > 0 ? { jobs: _jobs } : {}),
         ...(_busSubscriptions.length > 0 ? { busSubscriptions: _busSubscriptions } : {}),
         ...(_actorResult !== undefined ? { actor: _actorResult } : {}),
+        ...(_permissionRules !== undefined && _permissionRules.length > 0
+          ? { permissionRules: _permissionRules }
+          : {}),
         onStartup,
         onShutdown,
       } satisfies ExtensionSetup

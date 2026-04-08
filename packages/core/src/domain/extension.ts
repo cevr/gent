@@ -4,7 +4,7 @@ import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata } from "./message"
-import type { PermissionResult } from "./permission"
+import type { PermissionResult, PermissionRule } from "./permission"
 import type { AnyToolDefinition, ToolAction } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
 import type { ExtensionContext } from "./extension-context"
@@ -387,6 +387,8 @@ export interface ExtensionSetup {
   readonly providers?: ReadonlyArray<ProviderContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
+  /** Permission deny/allow rules contributed by this extension. */
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** Prompt sections — merged into the base system prompt. Later scope shadows by section id.
    *  Can be static PromptSection or Effect<PromptSection> for sections needing service access. */
   readonly promptSections?: ReadonlyArray<PromptSectionInput>
