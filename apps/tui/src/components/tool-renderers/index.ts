@@ -13,6 +13,7 @@ export { CounselToolRenderer } from "./counsel"
 export { ResearchToolRenderer } from "./research"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
+export { SkillsToolRenderer } from "./skills"
 import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
 import type { ToolRenderer } from "./types"
 import { ReadToolRenderer } from "./read"
@@ -28,6 +29,7 @@ import { CounselToolRenderer } from "./counsel"
 import { ResearchToolRenderer } from "./research"
 import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
+import { SkillsToolRenderer } from "./skills"
 
 /** Builtin tool renderers in ExtensionClientSetup shape for the extension resolution pipeline */
 export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"] = [
@@ -44,6 +46,7 @@ export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"]
   { toolNames: ["research"], component: ResearchToolRenderer },
   { toolNames: ["search_sessions"], component: SearchSessionsToolRenderer },
   { toolNames: ["read_session"], component: ReadSessionToolRenderer },
+  { toolNames: ["skills"], component: SkillsToolRenderer },
 ]
 
 /** @deprecated Use BUILTIN_TOOL_RENDERERS + extension resolution pipeline instead */
