@@ -18,7 +18,42 @@ const formatMatch = (f: { path: string; name: string }) => {
   }
 }
 
-/** Parse .gitignore into Glob matchers. Caches per cwd. */
+/** Parse .gitignore content into Glob matchers. */
+export const parseGitignorePatterns = (content: string): Glob[] => {
+  const patterns: Glob[] = []
+  for (const raw of content.split("\n")) {
+    const line = raw.trim()
+    if (line.length === 0 || line.startsWith("#")) continue
+    // Negation patterns (!) not supported — skip
+    if (line.startsWith("!")) continue
+
+    let pattern = line
+    const isDir = pattern.endsWith("/")
+    if (isDir) pattern = pattern.slice(0, -1)
+
+    const hasSlash = pattern.includes("/")
+    // Leading slash anchors to root — strip it (paths are relative to cwd)
+    if (pattern.startsWith("/")) pattern = pattern.slice(1)
+
+    if (hasSlash) {
+      // Contains slash → anchored, match as-is plus contents
+      patterns.push(new Glob(pattern))
+      patterns.push(new Glob(`${pattern}/**`))
+    } else {
+      // No slash → match at any depth
+      patterns.push(new Glob(pattern))
+      patterns.push(new Glob(`**/${pattern}`))
+      patterns.push(new Glob(`${pattern}/**`))
+      patterns.push(new Glob(`**/${pattern}/**`))
+    }
+  }
+  return patterns
+}
+
+export const isGitignored = (path: string, patterns: Glob[]): boolean =>
+  patterns.some((g) => g.match(path))
+
+/** Load and cache gitignore patterns for a cwd. */
 const gitignoreCache = new Map<string, Glob[]>()
 
 const loadGitignore = (cwd: string): Glob[] => {
@@ -27,25 +62,13 @@ const loadGitignore = (cwd: string): Glob[] => {
 
   let patterns: Glob[] = []
   try {
-    const content = readFileSync(`${cwd}/.gitignore`, "utf-8")
-    patterns = content
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("#"))
-      .map((p) => {
-        // Normalize: strip trailing slash (we match files), ensure glob-ready
-        const cleaned = p.endsWith("/") ? `${p}**` : p
-        return new Glob(cleaned)
-      })
+    patterns = parseGitignorePatterns(readFileSync(`${cwd}/.gitignore`, "utf-8"))
   } catch {
     // No .gitignore or unreadable — no patterns
   }
   gitignoreCache.set(cwd, patterns)
   return patterns
 }
-
-const isGitignored = (path: string, patterns: Glob[]): boolean =>
-  patterns.some((g) => g.match(path))
 
 export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
   autocompleteItems: [
