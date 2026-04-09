@@ -1,7 +1,8 @@
 import { createEffect, onCleanup, onMount, type Accessor } from "solid-js"
 import { Effect } from "effect"
-import type { TextareaRenderable } from "@opentui/core"
+import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
+import { useTheme } from "../theme/index"
 import { useCommand } from "../command/index"
 import { useClient } from "../client/index"
 import { useEnv } from "../env/context"
@@ -81,6 +82,7 @@ export interface ComposerController {
 export function useComposerController(): ComposerController {
   const sc = useSessionController()
   const workspace = useWorkspace()
+  const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
   const renderer = useRenderer()
@@ -93,12 +95,45 @@ export function useComposerController(): ComposerController {
   let inputRef: TextareaRenderable | null = null
   let submitMode: "queue" | "interject" = "queue"
 
+  // Token highlighting — colors autocomplete-resolved tokens with theme.primary
+  const tokenStyle = SyntaxStyle.create()
+  let tokenStyleId: number | undefined
+  const resolvedTokens: Array<string> = []
+
+  const ensureStyleId = () => {
+    if (tokenStyleId !== undefined) return tokenStyleId
+    tokenStyleId = tokenStyle.registerStyle("token", { fg: theme.primary })
+    return tokenStyleId
+  }
+
+  const applyTokenHighlights = () => {
+    if (inputRef === null) return
+    inputRef.clearAllHighlights()
+    if (resolvedTokens.length === 0) return
+    const text = inputRef.plainText
+    const styleId = ensureStyleId()
+    for (const tokenText of resolvedTokens) {
+      let searchFrom = 0
+      while (true) {
+        const idx = text.indexOf(tokenText, searchFrom)
+        if (idx === -1) break
+        inputRef.addHighlightByCharRange({
+          start: idx,
+          end: idx + tokenText.length,
+          styleId,
+        })
+        searchFrom = idx + tokenText.length
+      }
+    }
+  }
+
   const autocomplete = () => sc.interactionState().autocomplete
   const effectiveMode = (): "editing" | "shell" | "interaction" =>
     sc.composerState()?._tag === "interaction" ? "interaction" : sc.interactionState().mode
 
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
+    resolvedTokens.length = 0
     sc.onComposerInteraction({ _tag: "ClearDraft" })
   }
 
@@ -120,10 +155,17 @@ export function useComposerController(): ComposerController {
       ? contribution.formatInsertion(value)
       : `${state.type}${value} `
 
+    // Track the inserted token for highlighting (trim trailing space)
+    const tokenText = insertion.trimEnd()
+    if (!resolvedTokens.includes(tokenText)) {
+      resolvedTokens.push(tokenText)
+    }
+
     const nextValue = beforeTrigger + insertion
     inputRef.replaceText(nextValue)
     inputRef.cursorOffset = nextValue.length
     sc.onComposerInteraction({ _tag: "RestoreDraft", text: nextValue })
+    applyTokenHighlights()
     focusTextarea()
   }
 
@@ -147,6 +189,12 @@ export function useComposerController(): ComposerController {
       }
     }
     sc.onComposerInteraction({ _tag: "DraftChanged", text: value })
+
+    // Prune tokens that are no longer in the text, then re-apply highlights
+    for (let i = resolvedTokens.length - 1; i >= 0; i--) {
+      if (!value.includes(resolvedTokens[i] ?? "")) resolvedTokens.splice(i, 1)
+    }
+    applyTokenHighlights()
   }
 
   const submitShellCommand = (text: string) => {
@@ -492,6 +540,7 @@ export function useComposerController(): ComposerController {
 
   onCleanup(() => {
     paste.clear()
+    tokenStyle.destroy()
   })
 
   return {
@@ -504,6 +553,7 @@ export function useComposerController(): ComposerController {
       inputRef = renderable
       if (renderable !== null) {
         renderable.onContentChange = handleContentChange
+        renderable.syntaxStyle = tokenStyle
       }
     },
     handleTextareaKeyDown,
