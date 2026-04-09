@@ -150,17 +150,6 @@ export function useComposerController(): ComposerController {
     if (state === null || inputRef === null) return
 
     const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
-
-    // Slash commands — execute immediately instead of inserting
-    if (state.type === "/") {
-      const commandText = `${state.type}${value}`
-      clearInput()
-      focusTextarea()
-      submitSlashCommand(commandText)
-      return
-    }
-
-    // Inline triggers ($, @) — insert text into composer
     const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
     const insertion = contribution?.formatInsertion
       ? contribution.formatInsertion(value)
