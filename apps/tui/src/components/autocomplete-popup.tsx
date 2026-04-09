@@ -101,9 +101,13 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     },
   )
 
+  // Use .latest for stale-while-revalidate: keeps showing previous results
+  // during refetch instead of flashing "Loading..."
+  const visibleItems = () => items.latest ?? []
+
   // Clamp index reactively
   const selectedIndex = createMemo(() => {
-    const list = items() ?? []
+    const list = visibleItems()
     const idx = rawSelectedIndex()
     return idx >= list.length ? Math.max(0, list.length - 1) : idx
   })
@@ -112,7 +116,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   // Handle keyboard navigation
   useScopedKeyboard((e) => {
-    const list = items() ?? []
+    const list = visibleItems()
     if (list.length === 0) return false
 
     if (e.name === "escape") {
@@ -142,12 +146,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   const dimensions = useTerminalDimensions()
 
-  // Content-driven height with floor/cap
-  const popupHeight = () => {
-    const list = items() ?? []
-    const contentH = list.length + 3 // items + header + filter hint + footer
-    return Math.min(14, Math.max(5, contentH))
-  }
+  const popupHeight = () => 14
 
   const popupWidth = () => Math.min(60, dimensions().width - 2)
   const popupLeft = () => Math.floor((dimensions().width - popupWidth()) / 2)
@@ -155,8 +154,8 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // Title from the first matching contribution
   const title = () => contributions()[0]?.title ?? props.state.type
 
-  const loading = () => items() === undefined
-  const empty = () => !loading() && (items() ?? []).length === 0
+  const loading = () => items.loading && visibleItems().length === 0
+  const empty = () => !items.loading && visibleItems().length === 0
 
   return (
     <ChromePanel.Root
@@ -187,7 +186,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
             <text style={{ fg: theme.textMuted }}>No matches</text>
           </box>
         </Show>
-        <For each={items() ?? []}>
+        <For each={visibleItems()}>
           {(item, index) => {
             const isSelected = () => selectedIndex() === index()
             return (

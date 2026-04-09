@@ -129,10 +129,10 @@ Composer.Autocomplete = function ComposerAutocomplete() {
   if (ctx === undefined) return null
 
   return (
-    <Show when={ctx.autocomplete()} keyed>
+    <Show when={ctx.autocomplete()}>
       {(state) => (
         <AutocompletePopup
-          state={state}
+          state={state()}
           onSelect={ctx.handleAutocompleteSelect}
           onClose={ctx.handleAutocompleteClose}
         />
