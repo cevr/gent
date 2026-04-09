@@ -13,7 +13,7 @@
  *   ╰── 1.2s
  */
 
-import { Show, type JSX } from "solid-js"
+import { Show, createEffect, createSignal, type JSX } from "solid-js"
 import { useTheme } from "../theme/index"
 import { InlineChrome } from "./inline-chrome"
 
@@ -47,6 +47,11 @@ function formatDuration(ms: number): string {
 
 export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
+  const [localExpanded, setLocalExpanded] = createSignal(props.expanded)
+
+  createEffect(() => {
+    setLocalExpanded(props.expanded)
+  })
 
   const statusIcon = () => {
     if (props.status === "running") return "⋯"
@@ -65,24 +70,31 @@ export function ToolFrame(props: ToolFrameProps) {
     return formatDuration(props.durationMs)
   }
 
+  const expandIndicator = () => (localExpanded() ? "▾" : "▸")
+
   return (
     <InlineChrome.Root paddingLeft={2}>
-      <InlineChrome.Header
-        accentColor={statusColor()}
-        leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
-        title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
-        subtitle={props.subtitle}
-        subtitleHref={props.subtitleHref}
-        subtitleColor={theme.textMuted}
-        trailing={
-          <Show when={footer()}>
-            <span style={{ fg: theme.textMuted }}>{footer()}</span>
-          </Show>
-        }
-      />
+      <box onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+        <InlineChrome.Header
+          accentColor={statusColor()}
+          leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
+          title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
+          subtitle={props.subtitle}
+          subtitleHref={props.subtitleHref}
+          subtitleColor={theme.textMuted}
+          trailing={
+            <>
+              <Show when={footer()}>
+                <span style={{ fg: theme.textMuted }}>{footer()} </span>
+              </Show>
+              <span style={{ fg: theme.textMuted }}>{expandIndicator()}</span>
+            </>
+          }
+        />
+      </box>
 
       <Show
-        when={props.expanded}
+        when={localExpanded()}
         fallback={
           <Show when={props.collapsedContent}>
             <InlineChrome.Body accentColor={statusColor()}>
