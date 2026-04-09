@@ -55,8 +55,6 @@ export interface AutocompleteItem {
 export interface AutocompleteContribution {
   readonly prefix: string
   readonly title: string
-  /** When true, only trigger at position 0 (like /). Default: trigger anywhere after whitespace. */
-  readonly startOnly?: boolean
   /** Fetch items for the given filter. Sync or async.
    *  Popup wraps in createResource — undefined while loading, items when resolved. */
   readonly items: (

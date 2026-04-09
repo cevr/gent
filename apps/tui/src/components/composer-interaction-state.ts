@@ -40,30 +40,19 @@ const deriveAutocomplete = (
 ): AutocompleteState | null => {
   if (_state.mode === "shell") return null
 
-  // Check startOnly prefixes — only match at position 0
-  for (const c of contributions) {
-    if (c.startOnly !== true) continue
-    if (text.startsWith(c.prefix)) {
-      return { type: c.prefix, filter: text.slice(c.prefix.length), triggerPos: 0 }
-    }
-  }
+  const prefixes = contributions.map((c) => c.prefix)
+  if (prefixes.length === 0) return null
 
-  // Inline prefixes — detected anywhere after whitespace or at start
-  const inlinePrefixes = contributions.filter((c) => c.startOnly !== true).map((c) => c.prefix)
-  if (inlinePrefixes.length > 0) {
-    const escaped = inlinePrefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
-    const match = text.match(regex)
-    if (match !== null) {
-      const [fullMatch, prefix, filter] = match
-      if (prefix !== undefined && prefix.length > 0) {
-        const triggerPos = text.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
-        return { type: prefix, filter: filter ?? "", triggerPos }
-      }
-    }
-  }
+  const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
+  const match = text.match(regex)
+  if (match === null) return null
 
-  return null
+  const [fullMatch, prefix, filter] = match
+  if (prefix === undefined || prefix.length === 0) return null
+
+  const triggerPos = text.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
+  return { type: prefix, filter: filter ?? "", triggerPos }
 }
 
 export function transitionComposerInteraction(

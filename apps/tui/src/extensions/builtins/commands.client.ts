@@ -19,7 +19,6 @@ export default ExtensionPackage.tui("@gent/commands-ui", () => ({
     {
       prefix: "/",
       title: "Commands",
-      startOnly: true,
       items: (filter: string) => {
         const lowerFilter = filter.toLowerCase()
         return SESSION_COMMANDS.filter(

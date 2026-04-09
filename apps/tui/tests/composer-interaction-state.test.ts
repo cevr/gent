@@ -8,7 +8,7 @@ import type { AutocompleteContribution } from "@gent/core/domain/extension-clien
 const testContributions: AutocompleteContribution[] = [
   { prefix: "$", title: "Skills", items: () => [] },
   { prefix: "@", title: "Files", items: () => [] },
-  { prefix: "/", title: "Commands", startOnly: true, items: () => [] },
+  { prefix: "/", title: "Commands", items: () => [] },
 ]
 
 describe("transitionComposerInteraction", () => {

@@ -48,7 +48,6 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     const slashContribution: AutocompleteContribution = {
       prefix: "/",
       title: "Commands",
-      startOnly: true,
       items: (filter: string) => {
         const lowerFilter = filter.toLowerCase()
         const items: AutocompleteItem[] = []
