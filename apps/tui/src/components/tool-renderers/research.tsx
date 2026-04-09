@@ -20,7 +20,7 @@ export function ResearchToolRenderer(props: ToolRendererProps) {
     <AgentTree
       title="research"
       subtitle={subtitle()}
-      status={props.toolCall.status}
+      toolCall={props.toolCall}
       expanded={props.expanded}
       childSessions={props.childSessions}
     />

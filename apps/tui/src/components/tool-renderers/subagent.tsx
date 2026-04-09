@@ -40,7 +40,7 @@ export function SubagentToolRenderer(props: ToolRendererProps) {
     <AgentTree
       title={title()}
       subtitle={subtitle()}
-      status={props.toolCall.status}
+      toolCall={props.toolCall}
       expanded={props.expanded}
       childSessions={props.childSessions}
     />

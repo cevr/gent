@@ -40,6 +40,16 @@ const SEVERITY_COLORS: Record<string, string> = {
   low: "#6272a4",
 }
 
+function formatSummary(s: { critical: number; high: number; medium: number; low: number }): string {
+  const total = s.critical + s.high + s.medium + s.low
+  const parts: string[] = []
+  if (s.critical > 0) parts.push(`${s.critical} critical`)
+  if (s.high > 0) parts.push(`${s.high} high`)
+  if (s.medium > 0) parts.push(`${s.medium} medium`)
+  if (s.low > 0) parts.push(`${s.low} low`)
+  return `${total} comments: ${parts.join(", ")}`
+}
+
 export function ReviewToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
@@ -52,6 +62,12 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
     return d.length > 60 ? d.slice(0, 60) + "…" : d
   }
 
+  const summaryText = () => {
+    const s = output()?.summary
+    if (s === undefined) return undefined
+    return formatSummary(s)
+  }
+
   const reviewContent = () => {
     const comments = output()?.comments
     if (comments === undefined || comments.length === 0) return undefined
@@ -62,9 +78,18 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
     <AgentTree
       title="review"
       subtitle={subtitle()}
-      status={props.toolCall.status}
+      toolCall={props.toolCall}
       expanded={props.expanded}
       childSessions={props.childSessions}
+      collapsedSummary={
+        <Show when={summaryText()}>
+          {(text) => (
+            <text style={{ fg: theme.textMuted }}>
+              <span style={{ fg: theme.success }}>✓</span> {text()}
+            </text>
+          )}
+        </Show>
+      }
       completedContent={
         <>
           <Show when={props.expanded && reviewContent()}>
@@ -99,17 +124,6 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
                 }}
               </For>
             )}
-          </Show>
-
-          <Show when={props.toolCall.status !== "running" && output()?.raw !== undefined}>
-            {(() => {
-              const raw = output()?.raw ?? ""
-              return (
-                <text style={{ fg: theme.textMuted }}>
-                  {raw.length > 300 ? raw.slice(0, 300) + "…" : raw}
-                </text>
-              )
-            })()}
           </Show>
 
           <Show when={output()?.error !== undefined}>

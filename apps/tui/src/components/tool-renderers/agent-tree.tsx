@@ -1,10 +1,11 @@
 /**
  * AgentTree — shared renderer for subagent tools (delegate, counsel, research, review).
  *
- * Collapsed: tool call tree (last 10) + usage stats line
+ * Collapsed: tool call tree (last 10) + usage stats + optional summary
  * Expanded:
  *   - Running: live tool calls + streaming text
  *   - Completed: full tool call tree + usage + thinking + message text
+ *   - Fallback: toolCall.output/preview when message fetch unavailable
  */
 
 import { Show, For, createMemo, createResource } from "solid-js"
@@ -15,6 +16,7 @@ import { formatUsageStats } from "../../utils/format-tool.js"
 import { ToolFrame } from "../tool-frame"
 import { ToolCallTree } from "./tool-call-tree"
 import { LiveChildTree } from "./live-child-tree"
+import type { ToolCall } from "./types"
 import type { ChildSessionEntry } from "../../services/child-session-tracker"
 import type { BranchId } from "@gent/core/domain/ids.js"
 
@@ -23,12 +25,14 @@ interface AgentTreeProps {
   title: string
   /** Subtitle for header */
   subtitle?: string
-  /** Tool call status */
-  status: "running" | "completed" | "error"
+  /** The tool call data (for output/summary fallback) */
+  toolCall: ToolCall
   /** Whether expanded */
   expanded: boolean
   /** Child sessions from tracker */
   childSessions?: ChildSessionEntry[]
+  /** Summary shown in collapsed state (e.g. review severity counts) */
+  collapsedSummary?: JSX.Element
   /** Optional extra content to show after tool calls (e.g. review comments) */
   completedContent?: JSX.Element
 }
@@ -95,7 +99,7 @@ export function AgentTree(props: AgentTreeProps) {
     return { input, output, cost: cost > 0 ? cost : undefined }
   })
 
-  // Live stream text from all children (accumulated during running)
+  // Live stream text — bounded tail from all children
   const liveText = createMemo(() => {
     const c = children()
     const parts: string[] = []
@@ -108,7 +112,7 @@ export function AgentTree(props: AgentTreeProps) {
   // Fetch structured messages (reasoning + text) on completion
   const childBranchId = () => completedChild()?.childBranchId as BranchId | undefined
   const fetchKey = () => {
-    if (props.status === "running") return undefined
+    if (props.toolCall.status === "running") return undefined
     return childBranchId()
   }
 
@@ -121,6 +125,17 @@ export function AgentTree(props: AgentTreeProps) {
     }
   })
 
+  // Fallback text from toolCall.output or child preview
+  const fallbackText = () => {
+    const cm = childMessages()
+    if (cm !== undefined && (cm.reasoning.length > 0 || cm.text.length > 0)) return undefined
+    // Try preview from completed child
+    const preview = completedChild()?.preview
+    if (preview !== undefined) return preview
+    // Try toolCall.output or summary
+    return props.toolCall.output ?? props.toolCall.summary ?? undefined
+  }
+
   const usageLine = () => {
     const u = totalUsage()
     if (u === undefined) return undefined
@@ -131,7 +146,7 @@ export function AgentTree(props: AgentTreeProps) {
     <ToolFrame
       title={props.title}
       subtitle={props.subtitle}
-      status={props.status}
+      status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
         <box flexDirection="column">
@@ -141,11 +156,12 @@ export function AgentTree(props: AgentTreeProps) {
           <Show when={usageLine()}>
             {(line) => <text style={{ fg: theme.textMuted }}>{line()}</text>}
           </Show>
+          {props.collapsedSummary}
         </box>
       }
     >
       {/* Running: live tool calls + streaming text */}
-      <Show when={props.status === "running" && hasChildren()}>
+      <Show when={props.toolCall.status === "running" && hasChildren()}>
         <box flexDirection="column">
           <LiveChildTree childSessions={children()} />
           <Show when={liveText().length > 0}>
@@ -156,14 +172,14 @@ export function AgentTree(props: AgentTreeProps) {
         </box>
       </Show>
 
-      <Show when={props.status === "running" && !hasChildren()}>
+      <Show when={props.toolCall.status === "running" && !hasChildren()}>
         <text style={{ fg: theme.textMuted }}>
           <span style={{ fg: theme.warning }}>⋯</span> Running…
         </text>
       </Show>
 
       {/* Completed: tool tree + usage + messages */}
-      <Show when={props.status !== "running" && hasChildren()}>
+      <Show when={props.toolCall.status !== "running" && hasChildren()}>
         <box flexDirection="column">
           <ToolCallTree toolCalls={allToolCalls()} />
           <Show when={usageLine()}>
@@ -175,8 +191,8 @@ export function AgentTree(props: AgentTreeProps) {
       {/* Structured messages from child session (fetched on completion) */}
       <Show when={childMessages()}>
         {(content) => (
-          <box flexDirection="column" marginTop={1}>
-            <Show when={content().reasoning.length > 0}>
+          <Show when={content().reasoning.length > 0 || content().text.length > 0}>
+            <box flexDirection="column" marginTop={1}>
               <For each={content().reasoning}>
                 {(r) => (
                   <text>
@@ -186,9 +202,18 @@ export function AgentTree(props: AgentTreeProps) {
                   </text>
                 )}
               </For>
-            </Show>
-            <For each={content().text}>{(t) => <text style={{ fg: theme.text }}>{t}</text>}</For>
-          </box>
+              <For each={content().text}>{(t) => <text style={{ fg: theme.text }}>{t}</text>}</For>
+            </box>
+          </Show>
+        )}
+      </Show>
+
+      {/* Fallback: preview/output when message fetch unavailable */}
+      <Show when={props.toolCall.status !== "running" && fallbackText()}>
+        {(text) => (
+          <text style={{ fg: theme.textMuted }} marginTop={1}>
+            {text()}
+          </text>
         )}
       </Show>
 

@@ -18,7 +18,7 @@ export function CounselToolRenderer(props: ToolRendererProps) {
     <AgentTree
       title="counsel"
       subtitle={subtitle()}
-      status={props.toolCall.status}
+      toolCall={props.toolCall}
       expanded={props.expanded}
       childSessions={props.childSessions}
     />

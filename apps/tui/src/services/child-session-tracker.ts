@@ -12,6 +12,13 @@ import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/doma
 import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids.js"
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+/** Max chars retained in streamText to avoid unbounded memory growth */
+const STREAM_TEXT_MAX_LENGTH = 2000
+
+// =============================================================================
 // Types (live projection — not durable domain schemas)
 // =============================================================================
 
@@ -119,9 +126,13 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
           }
 
           case "StreamChunk": {
+            const combined = entry.streamText + event.chunk
             const updated: ChildSessionEntry = {
               ...entry,
-              streamText: entry.streamText + event.chunk,
+              streamText:
+                combined.length > STREAM_TEXT_MAX_LENGTH
+                  ? combined.slice(combined.length - STREAM_TEXT_MAX_LENGTH)
+                  : combined,
             }
             yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
