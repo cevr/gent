@@ -40,16 +40,16 @@ const deriveAutocomplete = (
 ): AutocompleteState | null => {
   if (_state.mode === "shell") return null
 
-  // Check start triggers — only match at position 0
+  // Check startOnly prefixes — only match at position 0
   for (const c of contributions) {
-    if (c.trigger !== "start") continue
+    if (c.startOnly !== true) continue
     if (text.startsWith(c.prefix)) {
       return { type: c.prefix, filter: text.slice(c.prefix.length), triggerPos: 0 }
     }
   }
 
-  // Check inline triggers — detected anywhere after whitespace or at start
-  const inlinePrefixes = contributions.filter((c) => c.trigger === "inline").map((c) => c.prefix)
+  // Inline prefixes — detected anywhere after whitespace or at start
+  const inlinePrefixes = contributions.filter((c) => c.startOnly !== true).map((c) => c.prefix)
   if (inlinePrefixes.length > 0) {
     const escaped = inlinePrefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)

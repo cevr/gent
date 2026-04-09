@@ -6,9 +6,9 @@ import {
 import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
 
 const testContributions: AutocompleteContribution[] = [
-  { prefix: "$", title: "Skills", trigger: "inline", items: () => [] },
-  { prefix: "@", title: "Files", trigger: "inline", items: () => [] },
-  { prefix: "/", title: "Commands", trigger: "start", items: () => [] },
+  { prefix: "$", title: "Skills", items: () => [] },
+  { prefix: "@", title: "Files", items: () => [] },
+  { prefix: "/", title: "Commands", startOnly: true, items: () => [] },
 ]
 
 describe("transitionComposerInteraction", () => {
@@ -61,9 +61,7 @@ describe("transitionComposerInteraction", () => {
   })
 
   test("detects custom inline prefix when registered", () => {
-    const custom: AutocompleteContribution[] = [
-      { prefix: "#", title: "Tags", trigger: "inline", items: () => [] },
-    ]
+    const custom: AutocompleteContribution[] = [{ prefix: "#", title: "Tags", items: () => [] }]
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
       { _tag: "DraftChanged", text: "use #tag" },

@@ -151,8 +151,8 @@ export function useComposerController(): ComposerController {
 
     const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
 
-    // Start-trigger commands (/) — execute immediately instead of inserting
-    if (contribution?.trigger === "start") {
+    // Slash commands — execute immediately instead of inserting
+    if (state.type === "/") {
       const commandText = `${state.type}${value}`
       clearInput()
       focusTextarea()

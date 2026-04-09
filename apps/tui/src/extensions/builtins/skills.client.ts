@@ -6,7 +6,6 @@ export default ExtensionPackage.tui("@gent/skills-ui", (ctx) => ({
     {
       prefix: "$",
       title: "Skills",
-      trigger: "inline" as const,
       items: async (filter: string) => {
         const skills = await ctx.ask(SkillsProtocol.ListSkills())
         const lowerFilter = filter.toLowerCase()

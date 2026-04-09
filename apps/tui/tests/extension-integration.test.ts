@@ -1222,7 +1222,6 @@ describe("autocompleteItems resolution", () => {
             {
               prefix: "#",
               title: "Tags",
-              trigger: "inline",
               items: () => [{ id: "tag1", label: "tag1" }],
             },
           ],
@@ -1242,9 +1241,7 @@ describe("autocompleteItems resolution", () => {
         kind: "builtin",
         filePath: "builtin:@test/a",
         setup: {
-          autocompleteItems: [
-            { prefix: "$", title: "Skills A", trigger: "inline", items: () => [] },
-          ],
+          autocompleteItems: [{ prefix: "$", title: "Skills A", items: () => [] }],
         },
       } satisfies LoadedTuiExtension,
       {
@@ -1252,9 +1249,7 @@ describe("autocompleteItems resolution", () => {
         kind: "user",
         filePath: "/test/b",
         setup: {
-          autocompleteItems: [
-            { prefix: "$", title: "Skills B", trigger: "inline", items: () => [] },
-          ],
+          autocompleteItems: [{ prefix: "$", title: "Skills B", items: () => [] }],
         },
       } satisfies LoadedTuiExtension,
     ])

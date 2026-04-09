@@ -75,7 +75,6 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
     {
       prefix: "@",
       title: "Files",
-      trigger: "inline" as const,
       items: async (filter: string) => {
         const cwd = ctx.cwd
         const ignorePatterns = loadGitignore(cwd)
