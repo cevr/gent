@@ -1,7 +1,6 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
-import { ToolFrame } from "../tool-frame"
-import { LiveChildTree } from "./live-child-tree"
+import { AgentTree } from "./agent-tree"
 import type { ToolRendererProps } from "./types"
 
 interface ReviewComment {
@@ -53,91 +52,73 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
     return d.length > 60 ? d.slice(0, 60) + "…" : d
   }
 
-  const summaryText = () => {
-    const s = output()?.summary
-    if (s === undefined) return undefined
-    const total = s.critical + s.high + s.medium + s.low
-    const parts: string[] = []
-    if (s.critical > 0) parts.push(`${s.critical} critical`)
-    if (s.high > 0) parts.push(`${s.high} high`)
-    if (s.medium > 0) parts.push(`${s.medium} medium`)
-    if (s.low > 0) parts.push(`${s.low} low`)
-    return `${total} comments: ${parts.join(", ")}`
+  const reviewContent = () => {
+    const comments = output()?.comments
+    if (comments === undefined || comments.length === 0) return undefined
+    return comments
   }
 
   return (
-    <ToolFrame
+    <AgentTree
       title="review"
       subtitle={subtitle()}
       status={props.toolCall.status}
       expanded={props.expanded}
-    >
-      <Show when={props.toolCall.status === "running"}>
-        <Show
-          when={props.childSessions !== undefined && props.childSessions.length > 0}
-          fallback={
-            <text style={{ fg: theme.textMuted }}>
-              <span style={{ fg: theme.warning }}>⋯</span> Reviewing…
-            </text>
-          }
-        >
-          <LiveChildTree childSessions={props.childSessions ?? []} />
-        </Show>
-      </Show>
+      childSessions={props.childSessions}
+      completedContent={
+        <>
+          <Show when={props.expanded && reviewContent()}>
+            {(comments) => (
+              <For each={comments()}>
+                {(comment, index) => {
+                  const isLast = () => index() === (reviewContent()?.length ?? 1) - 1
+                  const connector = () => (isLast() ? "╰──" : "├──")
+                  const severityColor = () => SEVERITY_COLORS[comment.severity] ?? theme.textMuted
 
-      <Show when={props.toolCall.status !== "running" && summaryText() !== undefined}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.success }}>✓</span> {summaryText()}
-        </text>
-      </Show>
+                  return (
+                    <box flexDirection="column">
+                      <text style={{ fg: theme.textMuted }}>
+                        {connector()}{" "}
+                        <span style={{ fg: severityColor() }}>[{comment.severity}]</span>{" "}
+                        <span style={{ fg: theme.text }}>
+                          {comment.file}
+                          {comment.line !== undefined ? `:${comment.line}` : ""}
+                        </span>{" "}
+                        <span style={{ fg: theme.textMuted }}>({comment.type})</span>
+                      </text>
+                      <box paddingLeft={4}>
+                        <text style={{ fg: theme.textMuted }}>{comment.text}</text>
+                      </box>
+                      <Show when={comment.fix !== undefined}>
+                        <box paddingLeft={4}>
+                          <text style={{ fg: theme.success }}>fix: {comment.fix}</text>
+                        </box>
+                      </Show>
+                    </box>
+                  )
+                }}
+              </For>
+            )}
+          </Show>
 
-      <Show when={props.expanded && (output()?.comments?.length ?? 0) > 0}>
-        <For each={output()?.comments ?? []}>
-          {(comment, index) => {
-            const isLast = () => index() === (output()?.comments?.length ?? 1) - 1
-            const connector = () => (isLast() ? "╰──" : "├──")
-            const severityColor = () => SEVERITY_COLORS[comment.severity] ?? theme.textMuted
-
-            return (
-              <box flexDirection="column">
+          <Show when={props.toolCall.status !== "running" && output()?.raw !== undefined}>
+            {(() => {
+              const raw = output()?.raw ?? ""
+              return (
                 <text style={{ fg: theme.textMuted }}>
-                  {connector()} <span style={{ fg: severityColor() }}>[{comment.severity}]</span>{" "}
-                  <span style={{ fg: theme.text }}>
-                    {comment.file}
-                    {comment.line !== undefined ? `:${comment.line}` : ""}
-                  </span>{" "}
-                  <span style={{ fg: theme.textMuted }}>({comment.type})</span>
+                  {raw.length > 300 ? raw.slice(0, 300) + "…" : raw}
                 </text>
-                <box paddingLeft={4}>
-                  <text style={{ fg: theme.textMuted }}>{comment.text}</text>
-                </box>
-                <Show when={comment.fix !== undefined}>
-                  <box paddingLeft={4}>
-                    <text style={{ fg: theme.success }}>fix: {comment.fix}</text>
-                  </box>
-                </Show>
-              </box>
-            )
-          }}
-        </For>
-      </Show>
+              )
+            })()}
+          </Show>
 
-      <Show when={props.toolCall.status !== "running" && output()?.raw !== undefined}>
-        {(() => {
-          const raw = output()?.raw ?? ""
-          return (
-            <text style={{ fg: theme.textMuted }}>
-              {raw.length > 300 ? raw.slice(0, 300) + "…" : raw}
+          <Show when={output()?.error !== undefined}>
+            <text style={{ fg: theme.error }}>
+              <span>✕</span> {output()?.error}
             </text>
-          )
-        })()}
-      </Show>
-
-      <Show when={output()?.error !== undefined}>
-        <text style={{ fg: theme.error }}>
-          <span>✕</span> {output()?.error}
-        </text>
-      </Show>
-    </ToolFrame>
+          </Show>
+        </>
+      }
+    />
   )
 }

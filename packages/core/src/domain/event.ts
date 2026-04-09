@@ -251,6 +251,7 @@ export class AgentRunSpawned extends Schema.TaggedClass<AgentRunSpawned>()("Agen
   prompt: Schema.String,
   toolCallId: Schema.optional(ToolCallId),
   branchId: Schema.optional(BranchId),
+  childBranchId: Schema.optional(BranchId),
 }) {}
 
 export class AgentRunSucceeded extends Schema.TaggedClass<AgentRunSucceeded>()(

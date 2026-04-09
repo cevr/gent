@@ -24,10 +24,13 @@ export interface ChildToolCall {
 
 export interface ChildSessionEntry {
   childSessionId: string
+  childBranchId?: string
   toolCallId: ToolCallId
   agentName: string
   status: "running" | "completed" | "error"
   toolCalls: ChildToolCall[]
+  /** Accumulated stream text (live, during running) */
+  streamText: string
   usage?: { input: number; output: number; cost?: number }
   preview?: string
   savedPath?: string
@@ -114,6 +117,16 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
             yield* publish({ _tag: "updated", childSessionId, entry: updated })
             break
           }
+
+          case "StreamChunk": {
+            const updated: ChildSessionEntry = {
+              ...entry,
+              streamText: entry.streamText + event.chunk,
+            }
+            yield* Ref.update(entries, (m) => new Map(m).set(childSessionId, updated))
+            yield* publish({ _tag: "updated", childSessionId, entry: updated })
+            break
+          }
         }
       })
 
@@ -156,10 +169,12 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
 
             const entry: ChildSessionEntry = {
               childSessionId: childId,
+              childBranchId: event.childBranchId as string | undefined,
               toolCallId,
               agentName: event.agentName,
               status: "running",
               toolCalls: [],
+              streamText: "",
             }
             yield* Ref.update(entries, (m) => new Map(m).set(childId, entry))
             yield* publish({ _tag: "added", entry })

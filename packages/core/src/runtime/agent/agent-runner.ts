@@ -355,6 +355,7 @@ const makeSharedRunnerHelpers = (
     parentBranchId: BranchId
     toolCallId?: ToolCallId
     sessionId: SessionId
+    childBranchId: BranchId
     agentName: string
     prompt: string
   }) =>
@@ -366,6 +367,7 @@ const makeSharedRunnerHelpers = (
         prompt: params.prompt,
         toolCallId: params.toolCallId,
         branchId: params.parentBranchId,
+        childBranchId: params.childBranchId,
       }),
     )
 
@@ -586,6 +588,7 @@ const runEphemeralAgent = (params: {
       parentBranchId: params.parentBranchId,
       toolCallId: params.toolCallId,
       sessionId,
+      childBranchId: branchId,
       agentName: params.agentName,
       prompt: params.prompt,
     })
@@ -828,6 +831,7 @@ export const InProcessRunner = (
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
                   sessionId,
+                  childBranchId: branchId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
                 })
@@ -975,6 +979,7 @@ export const SubprocessRunner = (
                   parentBranchId: params.parentBranchId,
                   toolCallId: params.toolCallId,
                   sessionId,
+                  childBranchId: branchId,
                   agentName: params.agent.name,
                   prompt: params.prompt,
                 })

@@ -1,8 +1,4 @@
-import { Show } from "solid-js"
-import { useTheme } from "../../theme/index"
-import { formatUsageStats } from "../../utils/format-tool.js"
-import { ToolFrame } from "../tool-frame"
-import { LiveChildTree } from "./live-child-tree"
+import { AgentTree } from "./agent-tree"
 import type { ToolRendererProps } from "./types"
 
 function parseDelegateInput(input: unknown):
@@ -22,15 +18,7 @@ function parseDelegateInput(input: unknown):
   }
 }
 
-/**
- * Generic subagent tool renderer — single source for delegate rendering.
- *
- * Uses child session tracker entries as the source of truth for both
- * live (running) and completed states. No JSON parsing of tool output.
- */
 export function SubagentToolRenderer(props: ToolRendererProps) {
-  const { theme } = useTheme()
-
   const delegateInput = () => parseDelegateInput(props.toolCall.input)
 
   const title = () => {
@@ -48,48 +36,13 @@ export function SubagentToolRenderer(props: ToolRendererProps) {
     return undefined
   }
 
-  const children = () => props.childSessions ?? []
-  const hasChildren = () => children().length > 0
-
-  const completedChild = () => {
-    const c = children()
-    return c.length === 1 ? c[0] : undefined
-  }
-
   return (
-    <ToolFrame
+    <AgentTree
       title={title()}
       subtitle={subtitle()}
       status={props.toolCall.status}
       expanded={props.expanded}
-    >
-      <Show when={hasChildren()}>
-        <LiveChildTree childSessions={children()} />
-      </Show>
-
-      <Show when={!hasChildren() && props.toolCall.status === "running"}>
-        <text style={{ fg: theme.textMuted }}>
-          <span style={{ fg: theme.warning }}>⋯</span> Running sub-agent...
-        </text>
-      </Show>
-
-      <Show when={completedChild()?.usage !== undefined}>
-        <text style={{ fg: theme.textMuted }}>
-          {formatUsageStats(completedChild()?.usage ?? {})}
-        </text>
-      </Show>
-
-      <Show when={props.expanded && completedChild()?.preview !== undefined}>
-        <text style={{ fg: theme.textMuted }}>{completedChild()?.preview}</text>
-      </Show>
-
-      <Show when={completedChild()?.savedPath !== undefined}>
-        <text style={{ fg: theme.textMuted }}>Full output: {completedChild()?.savedPath}</text>
-      </Show>
-
-      <Show when={!hasChildren() && props.toolCall.status !== "running"}>
-        <text style={{ fg: theme.textMuted }}>{props.toolCall.summary ?? ""}</text>
-      </Show>
-    </ToolFrame>
+      childSessions={props.childSessions}
+    />
   )
 }
