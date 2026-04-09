@@ -112,6 +112,16 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
 
+### Three-tier test taxonomy
+
+| Tier           | Layer                   | Exercises                      | Use for                           |
+| -------------- | ----------------------- | ------------------------------ | --------------------------------- |
+| Pure reducer   | `createActorHarness`    | State transitions, projections | Machine behavior                  |
+| Actor runtime  | `makeActorRuntimeLayer` | Direct `ExtensionStateRuntime` | Supervisor, protocol, persistence |
+| RPC acceptance | `createRpcHarness`      | Full RPC → actor → reply path  | Lifecycle, scope, schema, wiring  |
+
+New extension tests should include at least one RPC acceptance test via `createRpcHarness` to catch scope lifetime bugs. Direct-runtime tests (`makeActorRuntimeLayer`) are for behavior — they bypass the per-request scope boundary that production uses.
+
 ### Test layers
 
 ```typescript
@@ -122,6 +132,14 @@ const { layer: providerLayer, controls } =
 // Full in-process stack (AppServicesLive + real event store + real storage)
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
 const layer = baseLocalLayer()
+
+// Shared actor runtime layer (consolidates test boilerplate)
+import { makeActorRuntimeLayer } from "tests/extensions/helpers/actor-runtime-layer"
+const layer = makeActorRuntimeLayer({ extensions, withStorage: true })
+
+// RPC acceptance harness (real per-request scopes)
+import { createRpcHarness } from "tests/extensions/helpers/rpc-harness"
+const { client } = yield * createRpcHarness({ providerLayer, extensions })
 
 // Sequence recording for event assertions
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
