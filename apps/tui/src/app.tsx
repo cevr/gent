@@ -21,19 +21,19 @@ function AppContent(props: AppProps) {
   return (
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
-        <Match when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}>
-          {(r) => {
-            const route = r()
-            return (
-              <Session
-                sessionId={route.sessionId}
-                branchId={route.branchId}
-                initialPrompt={route.prompt}
-                debugMode={props.debugMode}
-                missingAuthProviders={props.missingAuthProviders}
-              />
-            )
-          }}
+        <Match
+          when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}
+          keyed
+        >
+          {(route) => (
+            <Session
+              sessionId={route.sessionId}
+              branchId={route.branchId}
+              initialPrompt={route.prompt}
+              debugMode={props.debugMode}
+              missingAuthProviders={props.missingAuthProviders}
+            />
+          )}
         </Match>
         <Match
           when={

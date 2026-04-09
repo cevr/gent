@@ -3,8 +3,8 @@ import type { AutocompleteItem } from "@gent/core/domain/extension-client.js"
 
 /** Session/chrome commands — always available, not feature-specific */
 const SESSION_COMMANDS: ReadonlyArray<AutocompleteItem> = [
-  { id: "clear", label: "/clear", description: "Clear messages" },
-  { id: "new", label: "/new", description: "Start new session" },
+  { id: "clear", label: "/clear", description: "New session" },
+  { id: "new", label: "/new", description: "New session" },
   { id: "sessions", label: "/sessions", description: "Open sessions picker" },
   { id: "branch", label: "/branch", description: "Create new branch" },
   { id: "tree", label: "/tree", description: "Browse branch tree" },
