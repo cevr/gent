@@ -3,16 +3,15 @@
  * the same path the TUI's `ctx.ask(SkillsProtocol.ListSkills())` takes.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, type Layer } from "effect"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
-import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/core/extensions/skills"
 import { SkillsProtocol } from "@gent/core/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/core/extensions/skills/skills"
+import { makeActorRuntimeLayer } from "../helpers/actor-runtime-layer"
 
 const sessionId = "skills-test-session" as SessionId
 const branchId = "skills-test-branch" as BranchId
@@ -34,20 +33,8 @@ const testSkills = [
   }),
 ]
 
-const makeSkillsRuntimeLayer = (extensions: LoadedExtension[]) => {
-  const testTurnControl = ExtensionTurnControl.Test()
-  const extensionLayers = extensions
-    .filter((ext) => ext.setup.layer !== undefined)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .map((ext) => ext.setup.layer as Layer.Layer<any>)
-
-  return Layer.mergeAll(
-    ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testTurnControl)),
-    EventStore.Memory,
-    testTurnControl,
-    ...(extensionLayers.length > 0 ? extensionLayers : []),
-  )
-}
+const makeSkillsRuntimeLayer = (extensions: LoadedExtension[]) =>
+  makeActorRuntimeLayer({ extensions })
 
 const setupSkillsExtension = Effect.gen(function* () {
   const loaded = yield* setupExtension(

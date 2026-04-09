@@ -18,6 +18,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { reducerActor } from "./helpers/reducer-actor"
+import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
 // ============================================================================
 // Shared fixtures
@@ -46,12 +47,7 @@ const makeCounterExtension = (id: string): LoadedExtension => ({
   setup: { actor: makeCounterActor(id) },
 })
 
-const makeRuntimeLayer = (extensions: LoadedExtension[]) =>
-  Layer.mergeAll(
-    ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(testLayer)),
-    EventStore.Memory,
-    testLayer,
-  )
+const makeRuntimeLayer = (extensions: LoadedExtension[]) => makeActorRuntimeLayer({ extensions })
 
 // ============================================================================
 // spawnMachineExtensionRef — actor boundary

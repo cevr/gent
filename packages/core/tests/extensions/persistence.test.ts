@@ -1,12 +1,12 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Schema } from "effect"
-import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
+import { Effect, Schema } from "effect"
+import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { reducerActor } from "./helpers/reducer-actor"
+import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
 const sessionId = "persist-session" as SessionId
 const branchId = "persist-branch" as BranchId
@@ -38,11 +38,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
 }
 
 const makeLayer = (extensions: LoadedExtension[]) =>
-  Layer.mergeAll(
-    ExtensionStateRuntime.Live(extensions).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
-    EventStore.Memory,
-    Storage.Test(),
-  )
+  makeActorRuntimeLayer({ extensions, withStorage: true })
 
 describe("Extension state persistence", () => {
   it.live("Persist effect writes state to storage", () => {

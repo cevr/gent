@@ -1,7 +1,6 @@
 import { describe, it, test, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import {
-  EventStore,
   SessionStarted,
   StreamChunk,
   StreamStarted,
@@ -25,8 +24,7 @@ import {
 import { PlanProtocol } from "@gent/core/extensions/plan-protocol"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
 const sessionId = "pm-session" as SessionId
 const branchId = "pm-branch" as BranchId
@@ -38,14 +36,7 @@ const planExtension: LoadedExtension = {
   setup: Effect.runSync(PlanExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
 }
 
-const makeLayer = () =>
-  Layer.mergeAll(
-    ExtensionStateRuntime.Live([planExtension]).pipe(
-      Layer.provideMerge(ExtensionTurnControl.Test()),
-    ),
-    EventStore.Memory,
-    Storage.Test(),
-  )
+const makeLayer = () => makeActorRuntimeLayer({ extensions: [planExtension], withStorage: true })
 
 /** Helper: get plan UI snapshot */
 const getPlanSnapshot = (runtime: ExtensionStateRuntime) =>
