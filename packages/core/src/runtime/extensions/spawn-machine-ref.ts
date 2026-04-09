@@ -1,4 +1,4 @@
-import { Effect, Ref } from "effect"
+import { Effect, Exit, Ref, Scope } from "effect"
 import { Machine, type ProvideSlots, type SlotCalls, type SlotsDef } from "effect-machine"
 import type {
   ExtensionActorDefinition,
@@ -102,11 +102,16 @@ export const spawnMachineExtensionRef = <
       const providedSlots = actor.slots !== undefined ? yield* actor.slots(ctx) : undefined
       const slots = providedSlots !== undefined ? normalizeSlots(providedSlots) : undefined
 
+      // Spawn in an unscoped context — Machine.spawn auto-registers actor.stop
+      // on the ambient Scope if one exists, which would kill the actor when that
+      // scope closes. Extension actors are long-lived and managed explicitly by
+      // ExtensionStateRuntime.terminateAll, so we provide a dedicated scope.
+      const actorScope = yield* Scope.make()
       const machineRef = yield* Machine.spawn(actor.machine, {
         id: `${extensionId}-${ctx.sessionId}`,
         ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
         ...(providedSlots !== undefined ? { slots: providedSlots } : {}),
-      })
+      }).pipe(Effect.provideService(Scope.Scope, actorScope))
 
       const persistState = (): Effect.Effect<void> =>
         Effect.gen(function* () {
@@ -154,6 +159,15 @@ export const spawnMachineExtensionRef = <
           const result = yield* machineRef
             .call(machineEvent)
             .pipe(Effect.provideService(CurrentExtensionSession, { sessionId: ctx.sessionId }))
+          yield* Effect.logWarning("extension.actor.dispatch").pipe(
+            Effect.annotateLogs({
+              extensionId,
+              eventTag: (machineEvent as { readonly _tag?: string })._tag,
+              transitioned: result.transitioned,
+              hasReply: result.hasReply,
+              newStateEqPrev: result.newState === result.previousState,
+            }),
+          )
           const changed = result.transitioned && result.newState !== result.previousState
           if (!changed) {
             return {
@@ -233,8 +247,18 @@ export const spawnMachineExtensionRef = <
         ask: (message: AnyExtensionRequestMessage, branchId?: BranchId) =>
           Effect.gen(function* () {
             yield* ensureStarted
-            const mapped = actor.mapRequest?.(message, yield* machineRef.snapshot)
+            const snapshot = yield* machineRef.snapshot
+            const mapped = actor.mapRequest?.(message, snapshot)
             if (mapped === undefined) {
+              yield* Effect.logWarning("extension.actor.ask.unmapped").pipe(
+                Effect.annotateLogs({
+                  extensionId,
+                  tag: message._tag,
+                  messageExtensionId: message.extensionId,
+                  hasMapRequest: actor.mapRequest !== undefined,
+                  stateTag: (snapshot as { readonly _tag?: string })._tag,
+                }),
+              )
               return yield* protocolError(
                 message._tag,
                 "request",
@@ -243,6 +267,14 @@ export const spawnMachineExtensionRef = <
             }
             const result = yield* dispatch(mapped, branchId)
             if (!result.hasReply) {
+              yield* Effect.logWarning("extension.actor.ask.no-reply").pipe(
+                Effect.annotateLogs({
+                  extensionId,
+                  tag: message._tag,
+                  transitioned: result.transitioned,
+                  mappedTag: (mapped as { readonly _tag?: string })._tag,
+                }),
+              )
               return yield* protocolError(
                 message._tag,
                 "request",
@@ -258,7 +290,7 @@ export const spawnMachineExtensionRef = <
             epoch: yield* Ref.get(versionRef),
           }
         }),
-        stop: machineRef.stop,
+        stop: machineRef.stop.pipe(Effect.andThen(Scope.close(actorScope, Exit.void))),
       }
 
       return ref

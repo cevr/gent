@@ -58,7 +58,12 @@ export const setupBuiltinExtensions = (params: {
 
     for (const input of params.extensions) {
       const extension = resolveExtensionInput(input)
-      if (params.disabled.has(extension.manifest.id)) continue
+      if (params.disabled.has(extension.manifest.id)) {
+        yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
+          Effect.annotateLogs({ extensionId: extension.manifest.id, kind: "builtin" }),
+        )
+        continue
+      }
 
       const discovered = {
         extension,
@@ -69,13 +74,30 @@ export const setupBuiltinExtensions = (params: {
       const exit = yield* setupExtension(discovered, params.cwd, params.home).pipe(Effect.exit)
       if (exit._tag === "Success") {
         active.push(exit.value)
+        yield* Effect.logDebug("extension.setup.ok").pipe(
+          Effect.annotateLogs({
+            extensionId: extension.manifest.id,
+            kind: "builtin",
+            hasActor: exit.value.setup.actor !== undefined,
+            hasLayer: exit.value.setup.layer !== undefined,
+            tools: exit.value.setup.tools?.length ?? 0,
+          }),
+        )
       } else {
+        const error = formatFailure(Cause.squash(exit.cause))
         failed.push(
           toFailedExtension(
             { manifest: extension.manifest, kind: "builtin", sourcePath: "builtin" },
             "setup",
-            formatFailure(Cause.squash(exit.cause)),
+            error,
           ),
+        )
+        yield* Effect.logWarning("extension.setup.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: extension.manifest.id,
+            kind: "builtin",
+            error,
+          }),
         )
       }
     }
@@ -94,12 +116,30 @@ export const setupDiscoveredExtensions = (params: {
     const failed: FailedExtension[] = []
 
     for (const discovered of params.extensions) {
-      if (params.disabled.has(discovered.extension.manifest.id)) continue
+      if (params.disabled.has(discovered.extension.manifest.id)) {
+        yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
+          Effect.annotateLogs({
+            extensionId: discovered.extension.manifest.id,
+            kind: discovered.kind,
+          }),
+        )
+        continue
+      }
 
       const exit = yield* setupExtension(discovered, params.cwd, params.home).pipe(Effect.exit)
       if (exit._tag === "Success") {
         active.push(exit.value)
+        yield* Effect.logDebug("extension.setup.ok").pipe(
+          Effect.annotateLogs({
+            extensionId: discovered.extension.manifest.id,
+            kind: discovered.kind,
+            hasActor: exit.value.setup.actor !== undefined,
+            hasLayer: exit.value.setup.layer !== undefined,
+            tools: exit.value.setup.tools?.length ?? 0,
+          }),
+        )
       } else {
+        const error = formatFailure(Cause.squash(exit.cause))
         failed.push(
           toFailedExtension(
             {
@@ -108,8 +148,16 @@ export const setupDiscoveredExtensions = (params: {
               sourcePath: discovered.sourcePath,
             },
             "setup",
-            formatFailure(Cause.squash(exit.cause)),
+            error,
           ),
+        )
+        yield* Effect.logWarning("extension.setup.failed").pipe(
+          Effect.annotateLogs({
+            extensionId: discovered.extension.manifest.id,
+            kind: discovered.kind,
+            sourcePath: discovered.sourcePath,
+            error,
+          }),
         )
       }
     }
@@ -297,10 +345,32 @@ export const reconcileLoadedExtensions = (params: {
       runtime: params.schedulerRuntime,
     })
 
+    const allFailed = [...(params.failedExtensions ?? []), ...validated.failed, ...activated.failed]
     const resolved = resolveExtensions(
       activated.active,
-      [...(params.failedExtensions ?? []), ...validated.failed, ...activated.failed],
+      allFailed,
       groupScheduledJobFailures(scheduledJobFailures),
+    )
+
+    const actorCount = activated.active.filter((ext) => ext.setup.actor !== undefined).length
+    yield* Effect.logInfo("extension.reconciliation.summary").pipe(
+      Effect.annotateLogs({
+        active: activated.active.length,
+        failed: allFailed.length,
+        withActors: actorCount,
+        activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
+        actorIds: activated.active
+          .filter((ext) => ext.setup.actor !== undefined)
+          .map((ext) => ext.manifest.id)
+          .join(", "),
+        ...(allFailed.length > 0
+          ? {
+              failedDetails: allFailed
+                .map((f) => `${f.manifest.id}(${f.phase}): ${f.error}`)
+                .join("; "),
+            }
+          : {}),
+      }),
     )
 
     return {

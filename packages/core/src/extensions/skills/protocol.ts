@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { ExtensionMessage } from "../../domain/extension-protocol.js"
-import { SkillLevel } from "../../domain/skills.js"
+import { SkillLevel } from "./skills.js"
 
 export const SKILLS_EXTENSION_ID = "@gent/skills"
 

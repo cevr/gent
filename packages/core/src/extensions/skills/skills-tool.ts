@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { Skills, resolveSkillName } from "../../domain/skills.js"
+import { Skills, resolveSkillName } from "./skills.js"
 import { defineTool } from "../../domain/tool.js"
 
 export const SkillsParams = Schema.Struct({

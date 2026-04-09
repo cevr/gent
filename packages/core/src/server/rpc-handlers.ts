@@ -253,10 +253,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- extension --
       "extension.send": ({ sessionId, message, branchId }) =>
-        extensionStateRuntime.send(sessionId, message, branchId).pipe(
-          Effect.tap(() => {
-            if (bus === undefined) return Effect.void
-            return bus
+        Effect.gen(function* () {
+          yield* Effect.logDebug("rpc.extension.send.received").pipe(
+            Effect.annotateLogs({
+              sessionId,
+              extensionId: message.extensionId,
+              tag: message._tag,
+              branchId,
+            }),
+          )
+          yield* extensionStateRuntime.send(sessionId, message, branchId)
+          if (bus !== undefined) {
+            yield* bus
               .emit({
                 channel: `${message.extensionId}:${message._tag}`,
                 payload: message,
@@ -264,11 +272,29 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                 branchId,
               })
               .pipe(Effect.catchEager(() => Effect.void))
-          }),
-        ),
+          }
+        }),
 
       "extension.ask": ({ sessionId, message, branchId }) =>
-        extensionStateRuntime.ask(sessionId, message, branchId),
+        Effect.gen(function* () {
+          yield* Effect.logDebug("rpc.extension.ask.received").pipe(
+            Effect.annotateLogs({
+              sessionId,
+              extensionId: message.extensionId,
+              tag: message._tag,
+              branchId,
+            }),
+          )
+          const reply = yield* extensionStateRuntime.ask(sessionId, message, branchId)
+          yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
+            Effect.annotateLogs({
+              sessionId,
+              extensionId: message.extensionId,
+              tag: message._tag,
+            }),
+          )
+          return reply
+        }),
 
       "extension.listCommands": () =>
         extensionRegistry

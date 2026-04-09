@@ -145,6 +145,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
             }
           }
 
+          yield* Effect.logDebug("extension.state-runtime.init").pipe(
+            Effect.annotateLogs({
+              totalExtensions: extensions.length,
+              extensionsWithActors: spawnSpecs.length,
+              actorIds: spawnSpecs.map((s) => s.extensionId).join(", "),
+              extensionsWithoutActors: extensions
+                .filter((ext) => ext.setup.actor === undefined)
+                .map((ext) => ext.manifest.id)
+                .join(", "),
+            }),
+          )
+
           type ActorSlot =
             | { readonly _tag: "ready"; readonly entries: ActorEntry[] }
             | { readonly _tag: "pending"; readonly gate: Deferred.Deferred<ActorEntry[]> }
@@ -178,9 +190,7 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               : undefined
           }
           const logIsolatedFailure = (message: string, fields: Record<string, unknown>) =>
-            Effect.sync(() => {
-              console.warn(message, fields)
-            })
+            Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
           const stopActor = (entry: ActorEntry) => Effect.exit(entry.ref.stop).pipe(Effect.asVoid)
           const getActorStatus = (sessionId: SessionId, extensionId: string) =>
             Ref.get(actorStatusesRef).pipe(
@@ -297,6 +307,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                 status: "running",
                 ...(restartCount > 0 ? { restartCount } : {}),
               })
+              yield* Effect.logDebug("extension.actor.spawned").pipe(
+                Effect.annotateLogs({
+                  extensionId: spec.extensionId,
+                  sessionId,
+                  lifecycleStatus,
+                  restartCount,
+                }),
+              )
               return { ref: spawnExit.value, actor: spec.actor }
             })
 
@@ -453,6 +471,18 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
                   next.set(sessionId, { _tag: "ready", entries })
                   return next
                 })
+                yield* Effect.logDebug("extension.actors.session.ready").pipe(
+                  Effect.annotateLogs({
+                    sessionId,
+                    requested: spawnSpecs.length,
+                    spawned: entries.length,
+                    spawnedIds: entries.map((e) => e.ref.id).join(", "),
+                    failedIds: spawnSpecs
+                      .filter((s) => !entries.some((e) => e.ref.id === s.extensionId))
+                      .map((s) => s.extensionId)
+                      .join(", "),
+                  }),
+                )
                 yield* Deferred.succeed(gate, entries)
                 return entries
               }),
@@ -559,6 +589,14 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               const decoded = yield* decodeMessage(message, "command")
               const entry = findEntry(entries, decoded.extensionId)
               if (entry === undefined) {
+                yield* Effect.logWarning("extension.send.not-loaded").pipe(
+                  Effect.annotateLogs({
+                    extensionId: decoded.extensionId,
+                    tag: decoded._tag,
+                    sessionId,
+                    loadedActors: entries.map((e) => e.ref.id).join(", "),
+                  }),
+                )
                 return yield* protocolError(
                   decoded.extensionId,
                   decoded._tag,
@@ -601,6 +639,15 @@ export class ExtensionStateRuntime extends ServiceMap.Service<
               }
               const entry = findEntry(entries, decoded.extensionId)
               if (entry === undefined) {
+                yield* Effect.logWarning("extension.ask.not-loaded").pipe(
+                  Effect.annotateLogs({
+                    extensionId: decoded.extensionId,
+                    tag: decoded._tag,
+                    sessionId,
+                    loadedActors: entries.map((e) => e.ref.id).join(", "),
+                    registeredSpawnSpecs: spawnSpecs.map((s) => s.extensionId).join(", "),
+                  }),
+                )
                 return yield* protocolError(
                   decoded.extensionId,
                   decoded._tag,

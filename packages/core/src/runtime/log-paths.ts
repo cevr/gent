@@ -1,21 +1,34 @@
 /**
- * Centralized log path resolution — all logs go to ~/.gent/logs/<dashified-cwd>/
+ * Centralized log path resolution — all logs go to /tmp/gent/logs/
  *
- * Each cwd gets its own log directory so multiple gent instances don't clobber
- * each other's files. Directory creation is handled by {@link ensureLogDir}.
+ * Files are named by a short hash of the cwd + process start timestamp so
+ * multiple gent instances don't clobber each other and old logs are easy to
+ * identify by time.
+ *
+ * File naming: `<hash>-<ts>-server.log`, `<hash>-<ts>-server-trace.log`,
+ *              `<hash>-<ts>-client.log`
  */
 
 import { Config, Effect, FileSystem, Option } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs"
 
-const dashifyCwd = (cwd: string): string =>
-  cwd
-    .replace(/^\//, "")
-    .replace(/[/\\]/g, "-")
-    .replace(/[^a-zA-Z0-9._-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/-$/, "")
+const LOG_DIR = "/tmp/gent/logs"
+
+/** FNV-1a 32-bit hash → 8-char hex */
+const hashCwd = (cwd: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < cwd.length; i++) {
+    h ^= cwd.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, "0")
+}
+
+const PROCESS_START_TS = new Date()
+  .toISOString()
+  .replace(/[-:T.]/g, "")
+  .slice(0, 14) // YYYYMMDDHHMMSS
 
 export interface LogPaths {
   readonly dir: string
@@ -26,13 +39,13 @@ export interface LogPaths {
 
 let cached: LogPaths | undefined
 
-const buildPaths = (cwd: string, home: string): LogPaths => {
-  const dir = `${home}/.gent/logs/${dashifyCwd(cwd)}`
+const buildPaths = (cwd: string): LogPaths => {
+  const prefix = `${hashCwd(cwd)}-${PROCESS_START_TS}`
   return {
-    dir,
-    log: `${dir}/gent.log`,
-    trace: `${dir}/gent-trace.log`,
-    client: `${dir}/gent-client.log`,
+    dir: LOG_DIR,
+    log: `${LOG_DIR}/${prefix}-server.log`,
+    trace: `${LOG_DIR}/${prefix}-server-trace.log`,
+    client: `${LOG_DIR}/${prefix}-client.log`,
   }
 }
 
@@ -46,9 +59,8 @@ export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () 
   const cwd = Option.getOrElse(yield* Config.option(Config.string("GENT_CWD")), () =>
     globalThis.process.cwd(),
   )
-  const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "~")
 
-  cached = buildPaths(cwd, home)
+  cached = buildPaths(cwd)
   return cached
 }).pipe(Effect.catchEager(() => Effect.succeed(getLogPaths())))
 
@@ -60,9 +72,9 @@ export const resolveLogPaths: Effect.Effect<LogPaths> = Effect.gen(function* () 
 export const getLogPaths = (): LogPaths => {
   if (cached !== undefined) return cached
   // Fallback for sync callsites before Effect init — best effort
-  cached = buildPaths(globalThis.process.cwd(), globalThis.process.env["HOME"] ?? "~") // eslint-disable-line node/no-process-env -- sync fallback before Effect init
+  cached = buildPaths(globalThis.process.cwd())
   try {
-    mkdirSync(cached.dir, { recursive: true })
+    mkdirSync(LOG_DIR, { recursive: true })
   } catch {}
   return cached
 }
