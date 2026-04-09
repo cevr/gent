@@ -536,20 +536,32 @@ export function createSessionController(props: {
           title: "Commands",
           items: (filter: string) => {
             const lowerFilter = filter.toLowerCase()
+            const hasFilter = lowerFilter.length > 0
             const items: Array<{ id: string; label: string; description?: string }> = []
             for (const c of allCommands) {
               if (c.slash === undefined) continue
-              const names = [c.slash, ...(c.aliases ?? [])]
-              for (const name of names) {
-                if (
-                  name.toLowerCase().includes(lowerFilter) ||
-                  c.title.toLowerCase().includes(lowerFilter)
-                ) {
-                  items.push({
-                    id: name,
-                    label: `/${name}`,
-                    description: c.description ?? c.title,
-                  })
+              // Primary name always shown if it matches (or no filter)
+              if (
+                !hasFilter ||
+                c.slash.toLowerCase().includes(lowerFilter) ||
+                c.title.toLowerCase().includes(lowerFilter)
+              ) {
+                items.push({
+                  id: c.slash,
+                  label: `/${c.slash}`,
+                  description: c.description ?? c.title,
+                })
+              }
+              // Aliases only shown when filter matches them specifically
+              if (hasFilter) {
+                for (const alias of c.aliases ?? []) {
+                  if (alias.toLowerCase().includes(lowerFilter)) {
+                    items.push({
+                      id: alias,
+                      label: `/${alias}`,
+                      description: c.description ?? c.title,
+                    })
+                  }
                 }
               }
             }
