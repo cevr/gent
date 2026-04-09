@@ -45,7 +45,8 @@ const counterActor = reducerActor<CounterState, never, CounterRequest>({
   id: EXTENSION_ID,
   initial: { count: 0 },
   stateSchema: Schema.Struct({ count: Schema.Number }),
-  reduce: (state): ReduceResult<CounterState> => ({ state }),
+  reduce: (state, event): ReduceResult<CounterState> =>
+    event._tag === "TurnCompleted" ? { state: { count: state.count + 100 } } : { state },
   request: (state, message): Effect.Effect<RequestResult<CounterState, unknown>> => {
     if (message._tag === "Increment") {
       const m = message as CounterRequest & { _tag: "Increment"; delta: number }
@@ -140,5 +141,46 @@ describe("Actor lifecycle across RPC boundaries", () => {
         }),
       ),
     { timeout: 10_000 },
+  )
+
+  it.live(
+    "actor survives event publishing from message.send",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([
+            textStep("session reply"),
+            textStep("message reply"),
+          ])
+          const { client } = yield* createRpcHarness({
+            providerLayer,
+            extensions: [counterExtension],
+          })
+
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+
+          // Increment via ask
+          yield* client.extension.ask({
+            sessionId,
+            branchId,
+            message: CounterProtocol.Increment({ delta: 1 }),
+          })
+
+          // message.send triggers agent loop → events → actor.publish
+          // TurnCompleted adds 100 to count via reduce
+          yield* client.message.send({ sessionId, branchId, content: "hello" })
+
+          // Actor must still be alive after event publishing
+          const r = yield* client.extension.ask({
+            sessionId,
+            branchId,
+            message: CounterProtocol.GetCount(),
+          })
+          // count = 1 (Increment) + N*100 (TurnCompleted from session.create + message.send)
+          // Exact count depends on how many TurnCompleted events fire; just verify actor is alive
+          expect((r as { count: number }).count).toBeGreaterThanOrEqual(1)
+        }),
+      ),
+    { timeout: 15_000 },
   )
 })
