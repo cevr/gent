@@ -88,7 +88,47 @@ export interface SessionController {
   onPromptSearchEvent: (event: Extract<SessionUiEvent, { _tag: "PromptSearch" }>["event"]) => void
 }
 
-const SPINNER_FRAMES = ["·", "•", "*", "⁑", "⁂"]
+// Each spinner has frames and a tick multiplier (ticks per frame at 60ms base).
+// multiplier 1 = 60ms/frame, 2 = 120ms/frame, etc.
+const SPINNERS = [
+  { frames: ["·", "•", "*", "⁑", "⁂"], multiplier: 2 },
+  { frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], multiplier: 1 },
+  { frames: ["⠁⠂⠄⡀", "⠂⠄⡀⢀", "⠄⡀⢀⠠", "⡀⢀⠠⠐", "⢀⠠⠐⠈", "⠠⠐⠈⠁", "⠐⠈⠁⠂", "⠈⠁⠂⠄"], multiplier: 2 },
+  { frames: ["⠉⠉", "⠓⠓", "⠦⠦", "⣄⣄", "⠦⠦", "⠓⠓"], multiplier: 2 },
+  { frames: ["⠃", "⠉", "⠘", "⠰", "⢠", "⣀", "⡄", "⠆"], multiplier: 2 },
+  { frames: ["⣀⣀", "⣤⣤", "⣶⣶", "⣿⣿", "⣿⣿", "⣶⣶", "⣤⣤", "⣀⣀", "⠀⠀"], multiplier: 2 },
+  { frames: ["⢕⢕", "⡪⡪", "⢊⠔", "⡡⢊"], multiplier: 4 },
+  {
+    frames: ["⠀⠀⠀", "⠂⠂⠂", "⠌⠌⠌", "⡑⡑⡑", "⢕⢕⢕", "⣫⣫⣫", "⣿⣿⣿", "⣫⣫⣫", "⢕⢕⢕", "⡑⡑⡑", "⠌⠌⠌", "⠂⠂⠂"],
+    multiplier: 2,
+  },
+]
+
+const THINKING_WORDS = [
+  "thinking",
+  "pondering",
+  "reasoning",
+  "analyzing",
+  "processing",
+  "evaluating",
+  "reflecting",
+  "deliberating",
+  "considering",
+  "contemplating",
+  "mulling",
+  "deducing",
+  "inferring",
+  "examining",
+  "synthesizing",
+  "assessing",
+  "ruminating",
+]
+
+const pickRandom = <T>(arr: readonly T[]): T => {
+  const item = arr[Math.floor(Math.random() * arr.length)]
+  if (item === undefined) throw new Error("pickRandom: empty array")
+  return item
+}
 
 const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
   state._tag === "tree" ? state.tree : null
@@ -342,9 +382,25 @@ export function createSessionController(props: {
     onCleanup(() => clearInterval(interval))
   })
 
+  // Pick a random spinner + thinking word each time activity starts
+  let activeSpinner = pickRandom(SPINNERS)
+  let activeWord = "thinking"
+  createEffect(
+    on(
+      () => activity().phase,
+      (phase) => {
+        if (phase !== "idle") {
+          activeSpinner = pickRandom(SPINNERS)
+          activeWord = pickRandom(THINKING_WORDS)
+        }
+      },
+    ),
+  )
+
   const spinner = createMemo(() => {
-    const index = tick() % SPINNER_FRAMES.length
-    return SPINNER_FRAMES[index] ?? "·"
+    const t = tick()
+    const step = Math.floor(t / activeSpinner.multiplier)
+    return activeSpinner.frames[step % activeSpinner.frames.length] ?? "·"
   })
 
   const phaseLabel = createMemo(() => {
@@ -353,7 +409,7 @@ export function createSessionController(props: {
       case "idle":
         return nextActivity.turn > 0 ? "idle" : "ready"
       case "thinking":
-        return "thinking"
+        return activeWord
       case "tool":
         return nextActivity.toolInfo ?? "working"
     }

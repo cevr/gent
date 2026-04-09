@@ -8,7 +8,7 @@ const ticker = createRoot((dispose) => {
   const [tick, setTick] = createSignal(0)
   const interval = setInterval(() => {
     setTick((current) => current + 1)
-  }, 150)
+  }, 60)
   onCleanup(() => clearInterval(interval))
   return tick
 })
