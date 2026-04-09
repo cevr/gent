@@ -233,7 +233,7 @@ describe("extension api", () => {
     let result: { exitCode: number; timedOut?: boolean } | undefined
     const ext = extension("exec-timeout-test", ({ ext }) =>
       ext.onStartup(async () => {
-        result = await ext.exec("sleep", ["10"], { timeout: 200 })
+        result = await ext.exec("sleep", ["10"], { timeout: 1 })
       }),
     )
 

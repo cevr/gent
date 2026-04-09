@@ -197,7 +197,7 @@ const waitForPhase = (
     for (let i = 0; i < attempts; i++) {
       const state = yield* agentLoop.getState(params)
       if (state.phase === phase) return state
-      yield* Effect.sleep("10 millis")
+      yield* Effect.sleep("1 millis")
     }
     throw new Error(`Timed out waiting for phase "${phase}"`)
   })
@@ -288,7 +288,7 @@ describe("streaming", () => {
         const storage = yield* Storage
         return {
           ...storage,
-          getLatestEvent: (input) => storage.getLatestEvent(input).pipe(Effect.delay("25 millis")),
+          getLatestEvent: (input) => storage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
         }
       }),
     )
@@ -794,7 +794,7 @@ describe("concurrency", () => {
             yield* Effect.promise(
               () =>
                 new Promise<void>((resolve) => {
-                  setTimeout(resolve, 20)
+                  setTimeout(resolve, 1)
                 }),
             )
 
@@ -1090,7 +1090,7 @@ describe("continuation", () => {
         })
 
         // Let the machine process the interrupt (sets interruptedRef + signals stream)
-        yield* Effect.sleep("10 millis")
+        yield* Effect.sleep("1 millis")
 
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)
@@ -1157,29 +1157,46 @@ describe("interaction", () => {
         }),
     })
 
-  const interactionProviderLayer = Layer.succeed(Provider, {
-    stream: () =>
-      Effect.succeed(
-        Stream.fromIterable([
-          new ToolCallChunk({
-            toolCallId: "tc-1" as ToolCallId,
-            toolName: "interaction-tool",
-            input: { value: "test" },
-          }),
-          new FinishChunk({ finishReason: "tool_calls" }),
-          new TextChunk({ text: "done" }),
-          new FinishChunk({ finishReason: "stop" }),
-        ] satisfies StreamChunk[]),
-      ),
-    generate: () => Effect.succeed("test"),
-  })
+  // Stateful provider: first stream() returns a tool call (triggers interaction),
+  // subsequent stream() calls return text only (completes the turn).
+  // Without this, the loop re-streams the same tool call 199 times until maxTurnSteps.
+  const makeInteractionProviderLayer = () => {
+    let streamCall = 0
+    return Layer.succeed(Provider, {
+      stream: () => {
+        const call = streamCall++
+        if (call === 0) {
+          return Effect.succeed(
+            Stream.fromIterable([
+              new ToolCallChunk({
+                toolCallId: "tc-1" as ToolCallId,
+                toolName: "interaction-tool",
+                input: { value: "test" },
+              }),
+              new FinishChunk({ finishReason: "tool_calls" }),
+            ] satisfies StreamChunk[]),
+          )
+        }
+        return Effect.succeed(
+          Stream.fromIterable([
+            new TextChunk({ text: "done" }),
+            new FinishChunk({ finishReason: "stop" }),
+          ] satisfies StreamChunk[]),
+        )
+      },
+      generate: () => Effect.succeed("test"),
+    })
+  }
 
-  const makeInteractionRecordingLayer = (tools: AnyToolDefinition[]) => {
+  const makeInteractionRecordingLayer = (
+    tools: AnyToolDefinition[],
+    providerLayer?: Layer.Layer<Provider>,
+  ) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const baseDeps = Layer.mergeAll(
       Storage.TestWithSql(),
-      interactionProviderLayer,
+      providerLayer ?? makeInteractionProviderLayer(),
       makeExtRegistry(tools),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
@@ -1249,7 +1266,7 @@ describe("interaction", () => {
     const resolution = Deferred.makeUnsafe<void>()
     const tool = makeInteractionTool(callCount, resolution)
 
-    const layer = makeLiveToolLayer(interactionProviderLayer, [tool])
+    const layer = makeLiveToolLayer(makeInteractionProviderLayer(), [tool])
 
     await Effect.runPromise(
       Effect.scoped(
@@ -1523,7 +1540,7 @@ describe("recovery", () => {
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         const value = yield* effect
         if (predicate(value)) return value
-        yield* Effect.sleep("10 millis")
+        yield* Effect.sleep("1 millis")
       }
       throw new Error("timed out waiting for recovery")
     })
