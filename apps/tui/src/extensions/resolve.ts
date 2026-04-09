@@ -261,10 +261,39 @@ export const resolveTuiExtensions = (
     }
   }
 
+  const commands = resolveCommands(sorted)
+
+  // Derive / autocomplete items from commands with slash fields.
+  // This is the single source — no separate synthesis in the popup.
+  // Derive / autocomplete items from commands with slash fields — single source of truth
+  const slashEntries = commands.flatMap((c) =>
+    c.slash !== undefined ? [{ slash: c.slash, title: c.title, description: c.description }] : [],
+  )
+  if (slashEntries.length > 0) {
+    autocompleteItems.push({
+      prefix: "/",
+      title: "Commands",
+      items: (filter: string) => {
+        const lowerFilter = filter.toLowerCase()
+        return slashEntries
+          .filter(
+            (e) =>
+              e.slash.toLowerCase().includes(lowerFilter) ||
+              e.title.toLowerCase().includes(lowerFilter),
+          )
+          .map((e) => ({
+            id: e.slash,
+            label: `/${e.slash}`,
+            description: e.description ?? e.title,
+          }))
+      },
+    })
+  }
+
   return {
     renderers: resolveRenderers(sorted),
     widgets: resolveWidgets(sorted),
-    commands: resolveCommands(sorted),
+    commands,
     overlays: resolveOverlays(sorted),
     interactionRenderers: resolveInteractionRenderers(sorted),
     composerSurface: resolveComposerSurface(sorted),

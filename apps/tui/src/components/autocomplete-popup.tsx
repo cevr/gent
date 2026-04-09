@@ -38,37 +38,10 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
 
   let scrollRef: ScrollBoxRenderable | undefined = undefined
 
-  // Find contributions matching the active prefix.
-  // For "/" prefix, also synthesize a contribution from extension commands with .slash fields.
-  const contributions = createMemo((): AutocompleteContribution[] => {
-    const registered = extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type)
-    if (props.state.type !== "/") return [...registered]
-
-    // Synthesize slash command contribution from extension commands
-    const slashContribution: AutocompleteContribution = {
-      prefix: "/",
-      title: "Commands",
-      items: (filter: string) => {
-        const lowerFilter = filter.toLowerCase()
-        const items: AutocompleteItem[] = []
-        for (const c of extensionUI.commands()) {
-          if (c.slash === undefined) continue
-          if (
-            c.slash.toLowerCase().includes(lowerFilter) ||
-            c.title.toLowerCase().includes(lowerFilter)
-          ) {
-            items.push({
-              id: c.slash,
-              label: `/${c.slash}`,
-              description: c.description ?? c.title,
-            })
-          }
-        }
-        return items
-      },
-    }
-    return [...registered, slashContribution]
-  })
+  // Find contributions matching the active prefix
+  const contributions = createMemo((): AutocompleteContribution[] =>
+    extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
+  )
 
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
