@@ -134,11 +134,13 @@ import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"
 const layer = baseLocalLayer()
 
 // Shared actor runtime layer (consolidates test boilerplate)
-import { makeActorRuntimeLayer } from "tests/extensions/helpers/actor-runtime-layer"
+// Import relative from test file, e.g. "./helpers/actor-runtime-layer"
+import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 const layer = makeActorRuntimeLayer({ extensions, withStorage: true })
 
 // RPC acceptance harness (real per-request scopes)
-import { createRpcHarness } from "tests/extensions/helpers/rpc-harness"
+// Import relative from test file, e.g. "./helpers/rpc-harness"
+import { createRpcHarness } from "./helpers/rpc-harness"
 const { client } = yield * createRpcHarness({ providerLayer, extensions })
 
 // Sequence recording for event assertions

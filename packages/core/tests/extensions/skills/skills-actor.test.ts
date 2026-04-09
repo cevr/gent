@@ -1,6 +1,7 @@
 /**
- * Integration test: exercises SkillsExtension through ExtensionStateRuntime.ask —
- * the same path the TUI's `ctx.ask(SkillsProtocol.ListSkills())` takes.
+ * Actor runtime test: exercises SkillsExtension through direct
+ * ExtensionStateRuntime.ask (bypasses RPC per-request scopes).
+ * For RPC acceptance coverage, see skills-rpc.test.ts.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, type Layer } from "effect"

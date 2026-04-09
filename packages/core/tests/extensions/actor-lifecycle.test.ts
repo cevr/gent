@@ -159,7 +159,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          // Increment via ask
+          // Increment via ask to establish baseline
           yield* client.extension.ask({
             sessionId,
             branchId,
@@ -167,17 +167,19 @@ describe("Actor lifecycle across RPC boundaries", () => {
           })
 
           // message.send triggers agent loop → events → actor.publish
-          // TurnCompleted adds 100 to count via reduce
+          // The agent loop runs asynchronously; we don't wait for TurnCompleted.
+          // The key assertion: actor survives the event publishing path.
           yield* client.message.send({ sessionId, branchId, content: "hello" })
 
-          // Actor must still be alive after event publishing
+          // Actor must still be alive and respond after message.send's
+          // event publishing ran through ExtensionStateRuntime.publish
           const r = yield* client.extension.ask({
             sessionId,
             branchId,
             message: CounterProtocol.GetCount(),
           })
-          // count = 1 (Increment) + N*100 (TurnCompleted from session.create + message.send)
-          // Exact count depends on how many TurnCompleted events fire; just verify actor is alive
+          // Count is at least 1 from the Increment; may be higher if TurnCompleted
+          // published before this ask. The assertion proves liveness, not exact timing.
           expect((r as { count: number }).count).toBeGreaterThanOrEqual(1)
         }),
       ),
