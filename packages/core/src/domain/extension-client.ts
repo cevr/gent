@@ -88,6 +88,8 @@ export interface ExtensionClientSetup<TComponent = unknown> {
     readonly keybind?: string
     /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
     readonly slash?: string
+    /** Additional slash names that resolve to this command */
+    readonly aliases?: ReadonlyArray<string>
     /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
     readonly slashPriority?: number
     readonly onSelect: () => void

@@ -10,6 +10,7 @@ import {
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
+import type { ReasoningEffort } from "@gent/core/domain/agent.js"
 import type { QueueEntryInfo } from "@gent/sdk"
 import type { Message, SessionItem } from "../components/message-list"
 import {
@@ -26,18 +27,14 @@ import {
 import { useClient } from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/index"
+import type { Command } from "../command/types"
 import { useRuntime } from "../hooks/use-runtime"
 import { useExit } from "../hooks/use-exit"
 import { useKeyChain } from "../hooks/use-key-chain"
 import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router/index"
-import {
-  ClientError,
-  formatConnectionIssue,
-  formatError,
-  type UiError,
-} from "../utils/format-error"
+import { formatConnectionIssue, formatError, type UiError } from "../utils/format-error"
 import { useWorkspace } from "../workspace/index"
 import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
@@ -82,7 +79,7 @@ export interface SessionController {
   clearMessages: () => void
   onComposerInteraction: (event: ComposerInteractionEvent) => void
   onSubmit: (content: string, mode?: "queue" | "interject") => void
-  onSlashCommand: (cmd: string, args: string) => Effect.Effect<void, UiError>
+  onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
   closeOverlay: () => void
@@ -164,17 +161,6 @@ export function createSessionController(props: {
   const [queueState, setQueueState] = createSignal<QueueState>({ steering: [], followUp: [] })
   const [elapsed, setElapsed] = createSignal(0)
   let activityStartTime = Date.now()
-
-  // Register extension commands reactively — re-registers when extensions finish loading
-  let unsubExtCommands: (() => void) | undefined
-  createEffect(() => {
-    unsubExtCommands?.()
-    const cmds = ext.commands()
-    if (cmds.length > 0) {
-      unsubExtCommands = command.register([...cmds])
-    }
-  })
-  onCleanup(() => unsubExtCommands?.())
 
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
@@ -409,6 +395,143 @@ export function createSessionController(props: {
     dispatchSessionUi({ _tag: "OpenFork" })
   }
 
+  // ── Session builtin commands ──
+  const newSessionCmd = () => {
+    cast(
+      client.client.session.create({ cwd: workspace.cwd }).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            client.switchSession(result.sessionId, result.branchId, result.name)
+            router.navigateToSession(result.sessionId, result.branchId)
+          }),
+        ),
+        Effect.asVoid,
+        Effect.catchEager((error) =>
+          Effect.sync(() => {
+            client.setError(formatError(error))
+          }),
+        ),
+      ),
+    )
+  }
+
+  const sessionBuiltins: Command[] = [
+    {
+      id: "session.new",
+      title: "New Session",
+      category: "Session",
+      slash: "new",
+      aliases: ["clear"],
+      slashPriority: 0,
+      onSelect: newSessionCmd,
+    },
+    {
+      id: "session.sessions",
+      title: "Open Sessions",
+      category: "Session",
+      slash: "sessions",
+      slashPriority: 0,
+      onSelect: () => command.openPalette(),
+    },
+    {
+      id: "session.branch",
+      title: "Create Branch",
+      category: "Session",
+      slash: "branch",
+      slashPriority: 0,
+      onSelect: () => {
+        cast(
+          client.createBranch().pipe(
+            Effect.asVoid,
+            Effect.catchEager((error) =>
+              Effect.sync(() => {
+                client.setError(formatError(error))
+              }),
+            ),
+          ),
+        )
+      },
+    },
+    {
+      id: "session.tree",
+      title: "Browse Branch Tree",
+      category: "Session",
+      slash: "tree",
+      slashPriority: 0,
+      onSelect: openSessionTree,
+    },
+    {
+      id: "session.fork",
+      title: "Fork from Message",
+      category: "Session",
+      slash: "fork",
+      slashPriority: 0,
+      onSelect: openForkPicker,
+    },
+    {
+      id: "session.think",
+      title: "Set Reasoning Level",
+      category: "Session",
+      slash: "think",
+      slashPriority: 0,
+      onSelect: () => {
+        client.setError("Usage: /think <off|low|medium|high|xhigh>")
+      },
+      onSlash: (args) => {
+        const level = args.trim().toLowerCase()
+        const validLevels = ["off", "low", "medium", "high", "xhigh"]
+        if (level === "" || !validLevels.includes(level)) {
+          client.setError(`Usage: /think <${validLevels.join("|")}>`)
+          return
+        }
+        cast(
+          client
+            .updateSessionReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort))
+            .pipe(
+              Effect.catchEager((error) =>
+                Effect.sync(() => {
+                  client.setError(formatError(error))
+                }),
+              ),
+            ),
+        )
+      },
+    },
+    {
+      id: "session.permissions",
+      title: "View/Edit Permissions",
+      category: "Session",
+      slash: "permissions",
+      slashPriority: 0,
+      onSelect: () => dispatchSessionUi({ _tag: "OpenPermissions" }),
+    },
+    {
+      id: "session.auth",
+      title: "Manage API Keys",
+      category: "Session",
+      slash: "auth",
+      slashPriority: 0,
+      onSelect: () => dispatchSessionUi({ _tag: "OpenAuth", enforceAuth: false }),
+    },
+  ]
+
+  // Register session builtins + extension commands
+  {
+    const unsubBuiltins = command.register(sessionBuiltins)
+    let unsubExtCommands: (() => void) | undefined
+    createEffect(() => {
+      unsubExtCommands?.()
+      const cmds = ext.commands()
+      if (cmds.length > 0) {
+        unsubExtCommands = command.register([...cmds])
+      }
+    })
+    onCleanup(() => {
+      unsubBuiltins()
+      unsubExtCommands?.()
+    })
+  }
+
   const onRestoreQueue = () => {
     cast(
       client.drainQueuedMessages().pipe(
@@ -432,59 +555,8 @@ export function createSessionController(props: {
     )
   }
 
-  // Build extension slash commands from resolved commands
-  const extensionSlashCommands = createMemo(() => {
-    const result: Array<{
-      slash: string
-      priority?: number
-      onSelect: () => void
-      onSlash?: (args: string) => void
-    }> = []
-    for (const c of ext.commands()) {
-      if (c.slash !== undefined) {
-        result.push({
-          slash: c.slash,
-          priority: c.slashPriority,
-          onSelect: c.onSelect,
-          onSlash: c.onSlash,
-        })
-      }
-    }
-    return result
-  })
-
-  const onSlashCommand = (cmd: string, args: string): Effect.Effect<void, UiError> =>
-    executeSlashCommand(
-      cmd,
-      args,
-      {
-        openPalette: () => command.openPalette(),
-        clearMessages: feed.clear,
-        navigateToSessions: () => command.openPalette(),
-        createBranch: client.createBranch().pipe(Effect.asVoid),
-        openTree: openSessionTree,
-        openFork: openForkPicker,
-        setReasoningLevel: (level) => client.updateSessionReasoningLevel(level),
-        openPermissions: () => dispatchSessionUi({ _tag: "OpenPermissions" }),
-        openAuth: () => dispatchSessionUi({ _tag: "OpenAuth", enforceAuth: false }),
-        newSession: () =>
-          client.client.session
-            .create({
-              cwd: workspace.cwd,
-            })
-            .pipe(
-              Effect.tap((result) =>
-                Effect.sync(() => {
-                  client.switchSession(result.sessionId, result.branchId, result.name)
-                  router.navigateToSession(result.sessionId, result.branchId)
-                }),
-              ),
-              Effect.asVoid,
-              Effect.catchEager((error) => Effect.fail(ClientError(formatError(error)))),
-            ),
-      },
-      extensionSlashCommands(),
-    ).pipe(
+  const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
+    executeSlashCommand(cmd, args, command.commands()).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
           if (result.error !== undefined) client.setError(result.error)

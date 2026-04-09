@@ -157,9 +157,11 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
       commandMap.set(entry.id, {
         id: entry.id,
         title: entry.title,
+        description: entry.description,
         category: entry.category,
         keybind: entry.keybind,
         slash: entry.slash,
+        aliases: entry.aliases,
         slashPriority: entry.slashPriority,
         onSelect: entry.onSelect,
         onSlash: entry.onSlash,
@@ -263,12 +265,17 @@ export const resolveTuiExtensions = (
 
   const commands = resolveCommands(sorted)
 
-  // Derive / autocomplete items from commands with slash fields.
-  // This is the single source — no separate synthesis in the popup.
-  // Derive / autocomplete items from commands with slash fields — single source of truth
-  const slashEntries = commands.flatMap((c) =>
-    c.slash !== undefined ? [{ slash: c.slash, title: c.title, description: c.description }] : [],
-  )
+  // Derive / autocomplete items from commands with slash fields — single source of truth.
+  // Each command produces an item for its slash name + one per alias.
+  type SlashEntry = { readonly name: string; readonly title: string; readonly description?: string }
+  const slashEntries: SlashEntry[] = []
+  for (const c of commands) {
+    if (c.slash === undefined) continue
+    slashEntries.push({ name: c.slash, title: c.title, description: c.description })
+    for (const alias of c.aliases ?? []) {
+      slashEntries.push({ name: alias, title: c.title, description: c.description })
+    }
+  }
   if (slashEntries.length > 0) {
     autocompleteItems.push({
       prefix: "/",
@@ -278,12 +285,12 @@ export const resolveTuiExtensions = (
         return slashEntries
           .filter(
             (e) =>
-              e.slash.toLowerCase().includes(lowerFilter) ||
+              e.name.toLowerCase().includes(lowerFilter) ||
               e.title.toLowerCase().includes(lowerFilter),
           )
           .map((e) => ({
-            id: e.slash,
-            label: `/${e.slash}`,
+            id: e.name,
+            label: `/${e.name}`,
             description: e.description ?? e.title,
           }))
       },

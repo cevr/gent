@@ -163,7 +163,6 @@ Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 | `builtins/handoff.client.ts`      | `@gent/handoff`           | Handoff interaction renderer                   |
 | `builtins/skills.client.ts`       | `@gent/skills-ui`         | `$` autocomplete: skills popup                 |
 | `builtins/files.client.ts`        | `@gent/files-ui`          | `@` autocomplete: file search popup            |
-| `builtins/commands.client.ts`     | `@gent/commands-ui`       | `/` autocomplete: session + extension commands |
 
 Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader.ts` → `resolve.ts`
 

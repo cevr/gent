@@ -1,12 +1,7 @@
 import { describe, it, expect, test } from "effect-bun-test"
-import {
-  executeSlashCommand,
-  parseSlashCommand,
-  type SlashCommandContext,
-  type ExtensionSlashCommand,
-} from "../src/commands/slash-commands"
+import { executeSlashCommand, parseSlashCommand } from "../src/commands/slash-commands"
 import { Effect } from "effect"
-import { ClientError } from "../src/utils/format-error"
+import type { Command } from "../src/command/types"
 
 describe("parseSlashCommand", () => {
   test("parses simple command", () => {
@@ -41,187 +36,25 @@ describe("parseSlashCommand", () => {
   })
 })
 
+const cmd = (overrides: Partial<Command> & { id: string; slash: string }): Command => ({
+  title: overrides.id,
+  onSelect: () => {},
+  ...overrides,
+})
+
 describe("executeSlashCommand", () => {
-  interface MockCalls {
-    openPalette: number
-    clearMessages: number
-    newSession: number
-    navigateToSessions: number
-    createBranch: number
-    openTree: number
-    openFork: number
-    openPermissions: number
-    openAuth: number
-  }
-
-  const createMockContext = (): { ctx: SlashCommandContext; calls: MockCalls } => {
-    const calls: MockCalls = {
-      openPalette: 0,
-      clearMessages: 0,
-      newSession: 0,
-      navigateToSessions: 0,
-      createBranch: 0,
-      openTree: 0,
-      openFork: 0,
-      openPermissions: 0,
-      openAuth: 0,
-    }
-
-    const ctx: SlashCommandContext = {
-      openPalette: () => {
-        calls.openPalette++
-      },
-      clearMessages: () => {
-        calls.clearMessages++
-      },
-      navigateToSessions: () => {
-        calls.navigateToSessions++
-      },
-      createBranch: Effect.sync(() => {
-        calls.createBranch++
-      }),
-      openTree: () => {
-        calls.openTree++
-      },
-      openFork: () => {
-        calls.openFork++
-      },
-      setReasoningLevel: () => Effect.void,
-      openPermissions: () => {
-        calls.openPermissions++
-      },
-      openAuth: () => {
-        calls.openAuth++
-      },
-      newSession: () =>
-        Effect.sync(() => {
-          calls.newSession++
-        }),
-    }
-
-    return { ctx, calls }
-  }
-
-  it.live("/clear starts a new session", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("clear", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(result.error).toBeUndefined()
-        expect(calls.newSession).toBe(1)
-      }),
-    )
-  })
-
-  it.live("/new starts a new session", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("new", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(result.error).toBeUndefined()
-        expect(calls.newSession).toBe(1)
-      }),
-    )
-  })
-
-  it.live("/sessions navigates to sessions", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("sessions", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(result.error).toBeUndefined()
-        expect(calls.navigateToSessions).toBe(1)
-      }),
-    )
-  })
-
-  it.live("/branch calls createBranch", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("branch", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(calls.createBranch).toBe(1)
-      }),
-    )
-  })
-
-  it.live("/tree opens branch tree", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("tree", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(calls.openTree).toBe(1)
-      }),
-    )
-  })
-
-  it.live("/fork opens fork picker", () => {
-    const { ctx, calls } = createMockContext()
-    return executeSlashCommand("fork", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(calls.openFork).toBe(1)
-      }),
-    )
-  })
-
-  it.live("unknown command returns error", () => {
-    const { ctx } = createMockContext()
-    return executeSlashCommand("unknown", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(false)
-        expect(result.error).toBe("Unknown command: /unknown")
-      }),
-    )
-  })
-
-  it.live("case insensitive commands", () => {
-    const { ctx: ctx1, calls: calls1 } = createMockContext()
-    const { ctx: ctx2, calls: calls2 } = createMockContext()
-    return Effect.gen(function* () {
-      yield* executeSlashCommand("NEW", "", ctx1)
-      expect(calls1.newSession).toBe(1)
-
-      yield* executeSlashCommand("Clear", "", ctx2)
-      expect(calls2.newSession).toBe(1)
-    })
-  })
-
-  it.live("handles async errors gracefully", () => {
-    const ctx: SlashCommandContext = {
-      openPalette: () => {},
-      clearMessages: () => {},
-      navigateToSessions: () => {},
-      createBranch: Effect.fail(ClientError("Branch failed")),
-      openTree: () => {},
-      openFork: () => {},
-      setReasoningLevel: () => Effect.void,
-      openPermissions: () => {},
-      openAuth: () => {},
-      newSession: () => Effect.void,
-    }
-
-    return executeSlashCommand("branch", "", ctx).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(result.error).toBe("Branch failed")
-      }),
-    )
-  })
-
-  it.live("extension slash command is executed", () => {
-    const { ctx } = createMockContext()
+  it.live("executes matching command", () => {
     let called = false
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "myext",
+    const commands = [
+      cmd({
+        id: "new",
+        slash: "new",
         onSelect: () => {
           called = true
         },
-      },
+      }),
     ]
-
-    return executeSlashCommand("myext", "", ctx, extCommands).pipe(
+    return executeSlashCommand("new", "", commands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
         expect(called).toBe(true)
@@ -229,40 +62,66 @@ describe("executeSlashCommand", () => {
     )
   })
 
-  it.live("extension slash command receives args via onSlash", () => {
-    const { ctx } = createMockContext()
-    let receivedArgs = ""
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "myext",
-        onSelect: () => {},
-        onSlash: (args) => {
-          receivedArgs = args
-        },
-      },
-    ]
+  it.live("unknown command returns error", () =>
+    executeSlashCommand("unknown", "", []).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(false)
+        expect(result.error).toBe("Unknown command: /unknown")
+      }),
+    ),
+  )
 
-    return executeSlashCommand("myext", "some args here", ctx, extCommands).pipe(
+  it.live("case insensitive matching", () => {
+    let called = false
+    const commands = [
+      cmd({
+        id: "new",
+        slash: "new",
+        onSelect: () => {
+          called = true
+        },
+      }),
+    ]
+    return executeSlashCommand("NEW", "", commands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
-        expect(receivedArgs).toBe("some args here")
+        expect(called).toBe(true)
       }),
     )
   })
 
-  it.live("extension slash command falls back to onSelect when no onSlash", () => {
-    const { ctx } = createMockContext()
+  it.live("prefers onSlash over onSelect when args present", () => {
+    let receivedArgs = ""
+    const commands = [
+      cmd({
+        id: "think",
+        slash: "think",
+        onSelect: () => {},
+        onSlash: (args) => {
+          receivedArgs = args
+        },
+      }),
+    ]
+    return executeSlashCommand("think", "high", commands).pipe(
+      Effect.map((result) => {
+        expect(result.handled).toBe(true)
+        expect(receivedArgs).toBe("high")
+      }),
+    )
+  })
+
+  it.live("falls back to onSelect when no onSlash", () => {
     let selectCalled = false
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "myext",
+    const commands = [
+      cmd({
+        id: "ext",
+        slash: "ext",
         onSelect: () => {
           selectCalled = true
         },
-      },
+      }),
     ]
-
-    return executeSlashCommand("myext", "ignored args", ctx, extCommands).pipe(
+    return executeSlashCommand("ext", "ignored", commands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
         expect(selectCalled).toBe(true)
@@ -270,62 +129,47 @@ describe("executeSlashCommand", () => {
     )
   })
 
-  it.live("builtin commands take precedence over extension commands", () => {
-    const { ctx, calls } = createMockContext()
-    let extCalled = false
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "clear",
+  it.live("lower priority wins", () => {
+    let winner = ""
+    const commands = [
+      cmd({
+        id: "a",
+        slash: "test",
+        slashPriority: 10,
         onSelect: () => {
-          extCalled = true
+          winner = "a"
         },
-      },
+      }),
+      cmd({
+        id: "b",
+        slash: "test",
+        slashPriority: 0,
+        onSelect: () => {
+          winner = "b"
+        },
+      }),
     ]
-
-    return executeSlashCommand("clear", "", ctx, extCommands).pipe(
+    return executeSlashCommand("test", "", commands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
-        expect(calls.newSession).toBe(1)
-        expect(extCalled).toBe(false)
+        expect(winner).toBe("b")
       }),
     )
   })
 
-  it.live("extension with lower priority overrides builtin", () => {
-    const { ctx, calls } = createMockContext()
-    let extCalled = false
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "clear",
-        priority: -1,
-        onSelect: () => {
-          extCalled = true
-        },
-      },
-    ]
-
-    return executeSlashCommand("clear", "", ctx, extCommands).pipe(
-      Effect.map((result) => {
-        expect(result.handled).toBe(true)
-        expect(extCalled).toBe(true)
-        expect(calls.newSession).toBe(0)
-      }),
-    )
-  })
-
-  it.live("extension slash commands are case insensitive", () => {
-    const { ctx } = createMockContext()
+  it.live("aliases resolve to the command", () => {
     let called = false
-    const extCommands: ExtensionSlashCommand[] = [
-      {
-        slash: "MyExt",
+    const commands = [
+      cmd({
+        id: "new",
+        slash: "new",
+        aliases: ["clear"],
         onSelect: () => {
           called = true
         },
-      },
+      }),
     ]
-
-    return executeSlashCommand("myext", "", ctx, extCommands).pipe(
+    return executeSlashCommand("clear", "", commands).pipe(
       Effect.map((result) => {
         expect(result.handled).toBe(true)
         expect(called).toBe(true)
@@ -333,14 +177,22 @@ describe("executeSlashCommand", () => {
     )
   })
 
-  it.live("unknown command with no matching extension returns error", () => {
-    const { ctx } = createMockContext()
-    const extCommands: ExtensionSlashCommand[] = [{ slash: "other", onSelect: () => {} }]
-
-    return executeSlashCommand("unknown", "", ctx, extCommands).pipe(
+  it.live("alias matching is case insensitive", () => {
+    let called = false
+    const commands = [
+      cmd({
+        id: "new",
+        slash: "new",
+        aliases: ["clear"],
+        onSelect: () => {
+          called = true
+        },
+      }),
+    ]
+    return executeSlashCommand("CLEAR", "", commands).pipe(
       Effect.map((result) => {
-        expect(result.handled).toBe(false)
-        expect(result.error).toBe("Unknown command: /unknown")
+        expect(result.handled).toBe(true)
+        expect(called).toBe(true)
       }),
     )
   })

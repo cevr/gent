@@ -11,8 +11,8 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useWorkspace } from "../workspace/index"
 import { useSessionController } from "../routes/session-controller"
-import { executeSlashCommand, parseSlashCommand } from "../commands/slash-commands"
-import { ClientError, formatError } from "../utils/format-error"
+import { parseSlashCommand } from "../commands/slash-commands"
+import { formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
@@ -236,36 +236,11 @@ export function useComposerController(): ComposerController {
     if (parsed === null) return false
 
     const [cmd, args] = parsed
-    client.log.info("slash-command", { cmd, hasCustomHandler: sc.onSlashCommand !== undefined })
+    client.log.info("slash-command", { cmd })
     clearInput()
 
-    const commandEffect =
-      sc.onSlashCommand !== undefined
-        ? sc.onSlashCommand(cmd, args)
-        : executeSlashCommand(cmd, args, {
-            openPalette: () => command.openPalette(),
-            clearMessages: sc.clearMessages ?? (() => {}),
-            navigateToSessions: () => command.openPalette(),
-            createBranch: Effect.void,
-            openTree: () => {},
-            openFork: () => {},
-            setReasoningLevel: () => Effect.fail(ClientError("Think not available here")),
-            openPermissions: () => {},
-            openAuth: () => {},
-            newSession: () => Effect.fail(ClientError("New session not available here")),
-          }).pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                if (result.error !== undefined) {
-                  client.setError(result.error)
-                }
-              }),
-            ),
-            Effect.asVoid,
-          )
-
     cast(
-      commandEffect.pipe(
+      sc.onSlashCommand(cmd, args).pipe(
         Effect.catchEager((error) =>
           Effect.sync(() => {
             client.setError(formatError(error))
