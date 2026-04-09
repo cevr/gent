@@ -515,7 +515,7 @@ export function createSessionController(props: {
     },
   ]
 
-  // Register session builtins + extension commands
+  // Register session builtins + extension commands, and derive / autocomplete
   {
     const unsubBuiltins = command.register(sessionBuiltins)
     let unsubExtCommands: (() => void) | undefined
@@ -526,9 +526,43 @@ export function createSessionController(props: {
         unsubExtCommands = command.register([...cmds])
       }
     })
+
+    // Derive / autocomplete from the full command registry
+    createEffect(() => {
+      const allCommands = command.commands()
+      ext.setDynamicAutocomplete([
+        {
+          prefix: "/",
+          title: "Commands",
+          items: (filter: string) => {
+            const lowerFilter = filter.toLowerCase()
+            const items: Array<{ id: string; label: string; description?: string }> = []
+            for (const c of allCommands) {
+              if (c.slash === undefined) continue
+              const names = [c.slash, ...(c.aliases ?? [])]
+              for (const name of names) {
+                if (
+                  name.toLowerCase().includes(lowerFilter) ||
+                  c.title.toLowerCase().includes(lowerFilter)
+                ) {
+                  items.push({
+                    id: name,
+                    label: `/${name}`,
+                    description: c.description ?? c.title,
+                  })
+                }
+              }
+            }
+            return items
+          },
+        },
+      ])
+    })
+
     onCleanup(() => {
       unsubBuiltins()
       unsubExtCommands?.()
+      ext.setDynamicAutocomplete([])
     })
   }
 

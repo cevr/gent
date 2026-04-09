@@ -90,6 +90,8 @@ export interface ExtensionUIContextValue {
   readonly loading: Accessor<boolean>
   /** Wire overlay dispatch from the session controller */
   readonly setOverlayDispatch: (open: (id: string) => void, close: () => void) => void
+  /** Register dynamic autocomplete contributions (e.g. from session controller) */
+  readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   /** Wire composer state reactive getter from the session controller */
   readonly setComposerStateProvider: (
     provider: () => {
@@ -127,6 +129,9 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const clientCtx = useClient()
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
+  const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
+    ReadonlyArray<AutocompleteContribution>
+  >([])
   const [loading, setLoading] = createSignal(true)
   const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
 
@@ -355,8 +360,9 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         interactionRenderers: () => resolved().interactionRenderers,
         composerSurface: () => resolved().composerSurface,
         borderLabels: () => resolved().borderLabels,
-        autocompleteItems: () => resolved().autocompleteItems,
+        autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         loading,
+        setDynamicAutocomplete,
         setOverlayDispatch,
         setComposerStateProvider,
         snapshots,

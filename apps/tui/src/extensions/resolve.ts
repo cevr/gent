@@ -263,44 +263,10 @@ export const resolveTuiExtensions = (
     }
   }
 
-  const commands = resolveCommands(sorted)
-
-  // Derive / autocomplete items from commands with slash fields — single source of truth.
-  // Each command produces an item for its slash name + one per alias.
-  type SlashEntry = { readonly name: string; readonly title: string; readonly description?: string }
-  const slashEntries: SlashEntry[] = []
-  for (const c of commands) {
-    if (c.slash === undefined) continue
-    slashEntries.push({ name: c.slash, title: c.title, description: c.description })
-    for (const alias of c.aliases ?? []) {
-      slashEntries.push({ name: alias, title: c.title, description: c.description })
-    }
-  }
-  if (slashEntries.length > 0) {
-    autocompleteItems.push({
-      prefix: "/",
-      title: "Commands",
-      items: (filter: string) => {
-        const lowerFilter = filter.toLowerCase()
-        return slashEntries
-          .filter(
-            (e) =>
-              e.name.toLowerCase().includes(lowerFilter) ||
-              e.title.toLowerCase().includes(lowerFilter),
-          )
-          .map((e) => ({
-            id: e.name,
-            label: `/${e.name}`,
-            description: e.description ?? e.title,
-          }))
-      },
-    })
-  }
-
   return {
     renderers: resolveRenderers(sorted),
     widgets: resolveWidgets(sorted),
-    commands,
+    commands: resolveCommands(sorted),
     overlays: resolveOverlays(sorted),
     interactionRenderers: resolveInteractionRenderers(sorted),
     composerSurface: resolveComposerSurface(sorted),

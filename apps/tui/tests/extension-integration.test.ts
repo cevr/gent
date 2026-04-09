@@ -1268,9 +1268,10 @@ describe("autocompleteItems resolution", () => {
       noopCtx,
     )
 
+    // $ and @ come from extension autocomplete contributions
+    // / is derived from the command registry at runtime by session-controller
     const prefixes = new Set(resolved.autocompleteItems.map((c) => c.prefix))
     expect(prefixes.has("$")).toBe(true)
     expect(prefixes.has("@")).toBe(true)
-    expect(prefixes.has("/")).toBe(true)
   })
 })
