@@ -75,6 +75,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   const [items] = createResource(
     () => [props.state.type, props.state.filter] as const,
     async ([_prefix, filter]): Promise<AutocompleteItem[]> => {
+      setSelectedIndex(0)
       const results = await Promise.all(
         contributions().map((c) =>
           Promise.resolve(c.items(filter)).catch((err) => {

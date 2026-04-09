@@ -26,7 +26,6 @@ export type ComposerInteractionEvent =
   | { readonly _tag: "ClearDraft" }
   | { readonly _tag: "EnterShell" }
   | { readonly _tag: "ExitShell" }
-  | { readonly _tag: "OpenAutocomplete"; readonly autocomplete: AutocompleteState }
   | { readonly _tag: "CloseAutocomplete" }
 
 /**
@@ -35,24 +34,21 @@ export type ComposerInteractionEvent =
  * Start triggers (like /) detected only at text position 0.
  */
 const deriveAutocomplete = (
-  state: ComposerInteractionState,
+  _state: ComposerInteractionState,
   text: string,
   contributions: ReadonlyArray<AutocompleteContribution>,
 ): AutocompleteState | null => {
-  if (state.mode === "shell") return null
+  if (_state.mode === "shell") return null
 
-  // If already in a start-trigger autocomplete, keep it while text still starts with prefix
-  if (state.autocomplete !== null) {
-    const activeType = state.autocomplete.type
-    const current = contributions.find((c) => c.prefix === activeType && c.trigger === "start")
-    if (current !== undefined) {
-      return text.startsWith(current.prefix)
-        ? { type: current.prefix, filter: text.slice(current.prefix.length), triggerPos: 0 }
-        : null
+  // Check start triggers — only match at position 0
+  for (const c of contributions) {
+    if (c.trigger !== "start") continue
+    if (text.startsWith(c.prefix)) {
+      return { type: c.prefix, filter: text.slice(c.prefix.length), triggerPos: 0 }
     }
   }
 
-  // Check inline triggers: detected anywhere in text after whitespace or at start
+  // Check inline triggers — detected anywhere after whitespace or at start
   const inlinePrefixes = contributions.filter((c) => c.trigger === "inline").map((c) => c.prefix)
   if (inlinePrefixes.length > 0) {
     const escaped = inlinePrefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
@@ -109,12 +105,6 @@ export function transitionComposerInteraction(
         ...state,
         mode: "editing",
         autocomplete: null,
-      }
-
-    case "OpenAutocomplete":
-      return {
-        ...state,
-        autocomplete: event.autocomplete,
       }
 
     case "CloseAutocomplete":

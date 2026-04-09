@@ -82,10 +82,13 @@ describe("transitionComposerInteraction", () => {
   })
 
   test("restore and clear draft close autocomplete", () => {
-    const withAutocomplete = transitionComposerInteraction(ComposerInteractionState.initial(), {
-      _tag: "OpenAutocomplete",
-      autocomplete: { type: "/", filter: "", triggerPos: 0 },
-    })
+    const withAutocomplete = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: "/" },
+      testContributions,
+    )
+    expect(withAutocomplete.autocomplete).not.toBeNull()
+
     const restored = transitionComposerInteraction(withAutocomplete, {
       _tag: "RestoreDraft",
       text: "previous prompt",

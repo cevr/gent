@@ -149,8 +149,19 @@ export function useComposerController(): ComposerController {
     const state = autocomplete()
     if (state === null || inputRef === null) return
 
-    const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
     const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
+
+    // Start-trigger commands (/) — execute immediately instead of inserting
+    if (contribution?.trigger === "start") {
+      const commandText = `${state.type}${value}`
+      clearInput()
+      focusTextarea()
+      submitSlashCommand(commandText)
+      return
+    }
+
+    // Inline triggers ($, @) — insert text into composer
+    const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
     const insertion = contribution?.formatInsertion
       ? contribution.formatInsertion(value)
       : `${state.type}${value} `
@@ -177,6 +188,10 @@ export function useComposerController(): ComposerController {
   const handleContentChange = () => {
     const value = inputRef?.plainText ?? ""
     const previousValue = sc.interactionState().draft
+    // Skip if text matches current draft — avoids re-deriving autocomplete
+    // after RestoreDraft (e.g. autocomplete selection triggers replaceText
+    // which fires onContentChange, but we already closed autocomplete)
+    if (value === previousValue) return
     if (value.length > previousValue.length && inputRef !== null) {
       const inserted = value.slice(previousValue.length)
       if (isLargePaste(inserted)) {
@@ -390,30 +405,6 @@ export function useComposerController(): ComposerController {
     return false
   }
 
-  const handleStartTriggerKey = (event: { readonly name?: string }): boolean => {
-    if (
-      event.name === undefined ||
-      event.name.length !== 1 ||
-      inputRef?.cursorOffset !== 0 ||
-      effectiveMode() !== "editing" ||
-      autocomplete() !== null
-    ) {
-      return false
-    }
-
-    // Check if any start-trigger contribution matches this key
-    const match = extensionUI
-      .autocompleteItems()
-      .find((c) => c.trigger === "start" && c.prefix === event.name)
-    if (match === undefined) return false
-
-    sc.onComposerInteraction({
-      _tag: "OpenAutocomplete",
-      autocomplete: { type: match.prefix, filter: "", triggerPos: 0 },
-    })
-    return true
-  }
-
   const handlePromptHistoryKey = (event: {
     readonly ctrl?: boolean
     readonly meta?: boolean
@@ -472,7 +463,6 @@ export function useComposerController(): ComposerController {
     const autocompleteResult = handleAutocompleteKey(event)
     if (autocompleteResult !== undefined) return autocompleteResult
     if (handleShellModeKey(event)) return true
-    if (handleStartTriggerKey(event)) return true
     if (handlePromptHistoryKey(event)) return true
     return false
   })
