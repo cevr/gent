@@ -6,6 +6,7 @@ export interface InlineChromeRootProps {
   paddingLeft?: number
   marginTop?: number
   marginBottom?: number
+  onMouseDown?: (event: unknown) => void
 }
 
 function Root(props: InlineChromeRootProps) {
@@ -15,6 +16,7 @@ function Root(props: InlineChromeRootProps) {
       paddingLeft={props.paddingLeft ?? 2}
       marginTop={props.marginTop}
       marginBottom={props.marginBottom}
+      onMouseDown={props.onMouseDown}
     >
       {props.children}
     </box>

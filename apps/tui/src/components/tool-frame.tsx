@@ -73,25 +73,23 @@ export function ToolFrame(props: ToolFrameProps) {
   const expandIndicator = () => (localExpanded() ? "▾" : "▸")
 
   return (
-    <InlineChrome.Root paddingLeft={2}>
-      <box onMouseDown={() => setLocalExpanded((prev) => !prev)}>
-        <InlineChrome.Header
-          accentColor={statusColor()}
-          leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
-          title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
-          subtitle={props.subtitle}
-          subtitleHref={props.subtitleHref}
-          subtitleColor={theme.textMuted}
-          trailing={
-            <>
-              <Show when={footer()}>
-                <span style={{ fg: theme.textMuted }}>{footer()} </span>
-              </Show>
-              <span style={{ fg: theme.textMuted }}>{expandIndicator()}</span>
-            </>
-          }
-        />
-      </box>
+    <InlineChrome.Root paddingLeft={2} onMouseDown={() => setLocalExpanded((prev) => !prev)}>
+      <InlineChrome.Header
+        accentColor={statusColor()}
+        leading={<span style={{ fg: statusColor() }}>{statusIcon()}</span>}
+        title={<span style={{ fg: theme.info, bold: true }}>{props.title}</span>}
+        subtitle={props.subtitle}
+        subtitleHref={props.subtitleHref}
+        subtitleColor={theme.textMuted}
+        trailing={
+          <>
+            <Show when={footer()}>
+              <span style={{ fg: theme.textMuted }}>{footer()} </span>
+            </Show>
+            <span style={{ fg: theme.textMuted }}>{expandIndicator()}</span>
+          </>
+        }
+      />
 
       <Show
         when={localExpanded()}
