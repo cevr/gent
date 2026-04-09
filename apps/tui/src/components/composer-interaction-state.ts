@@ -52,6 +52,10 @@ const deriveAutocomplete = (
   if (prefix === undefined || prefix.length === 0) return null
 
   const triggerPos = text.length - fullMatch.length + (fullMatch.startsWith(" ") ? 1 : 0)
+
+  // "/" only activates at position 0 — skip mid-text matches like file paths
+  if (prefix === "/" && triggerPos !== 0) return null
+
   return { type: prefix, filter: filter ?? "", triggerPos }
 }
 
