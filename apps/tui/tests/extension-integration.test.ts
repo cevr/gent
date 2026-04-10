@@ -22,6 +22,7 @@ import { PlanPackage } from "@gent/core/extensions/plan-package.js"
 import { TaskToolsPackage } from "@gent/core/extensions/task-tools-package.js"
 import { HandoffPackage } from "@gent/core/extensions/handoff-package.js"
 import { InteractionToolsPackage } from "@gent/core/extensions/interaction-tools-package.js"
+import { ArtifactsPackage } from "@gent/core/extensions/artifacts-package.js"
 
 const TEST_DIR = join(import.meta.dir, ".tmp-ext-integration")
 const USER_DIR = join(TEST_DIR, "user")
@@ -484,9 +485,9 @@ describe("disabled extensions", () => {
     expect(resolved.renderers.has("read")).toBe(false)
     expect(resolved.renderers.has("bash")).toBe(false)
 
-    // Other builtins should still be present
-    const widgetIds = resolved.widgets.map((w) => w.id)
-    expect(widgetIds).toContain("plan")
+    // Other builtins should still be present — check that some non-disabled module loaded
+    const commandIds = resolved.commands.map((c) => c.id)
+    expect(commandIds).toContain("plan.create")
 
     rmSync(emptyUser, { recursive: true, force: true })
     rmSync(emptyProject, { recursive: true, force: true })
@@ -1119,6 +1120,7 @@ describe("ExtensionPackage.tui()", () => {
 
   test("paired builtin IDs match their package IDs", () => {
     const pairedPackages = [
+      ArtifactsPackage,
       AutoPackage,
       PlanPackage,
       TaskToolsPackage,
@@ -1135,6 +1137,7 @@ describe("ExtensionPackage.tui()", () => {
   test("all paired builtins derive ID from package (no manual id)", () => {
     // Verify actual builtin modules match their package IDs
     const expectedIds = new Map([
+      ["@gent/artifacts", ArtifactsPackage.id],
       ["@gent/auto", AutoPackage.id],
       ["@gent/plan", PlanPackage.id],
       ["@gent/task-tools", TaskToolsPackage.id],

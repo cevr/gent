@@ -1,9 +1,5 @@
-import { ExtensionMessage } from "../domain/extension-protocol.js"
-
-export const PLAN_EXTENSION_ID = "@gent/plan"
-
-export const PlanProtocol = {
-  TogglePlan: ExtensionMessage(PLAN_EXTENSION_ID, "TogglePlan", {}),
-  ExecutePlan: ExtensionMessage(PLAN_EXTENSION_ID, "ExecutePlan", {}),
-  RefinePlan: ExtensionMessage(PLAN_EXTENSION_ID, "RefinePlan", {}),
-}
+/**
+ * @deprecated Plan mode actor has been removed. Use the PlanTool + ArtifactProtocol instead.
+ * This file is kept temporarily for import compatibility during migration.
+ */
+export { PLAN_EXTENSION_ID } from "./plan.js"

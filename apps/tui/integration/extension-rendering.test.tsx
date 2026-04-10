@@ -29,7 +29,7 @@ const snap = (extensionId: string, model: unknown, epoch = 1): ExtensionSnapshot
 })
 
 describe("extension snapshot rendering", () => {
-  test("plan border label renders plan mode", async () => {
+  test("artifacts border label renders active count", async () => {
     let inject: ((s: ExtensionSnapshot) => void) | undefined
     const setup = await renderWithProviders(
       () => (
@@ -53,52 +53,21 @@ describe("extension snapshot rendering", () => {
     )
 
     inject?.(
-      snap("@gent/plan", {
-        mode: "plan",
-        steps: [{ id: 0, text: "step 1", status: "pending" }],
-        progress: { total: 1, completed: 0, inProgress: 0 },
+      snap("@gent/artifacts", {
+        items: [
+          { id: "a1", label: "Plan: auth", sourceTool: "plan", status: "active", createdAt: 0 },
+          { id: "a2", label: "Review: 3", sourceTool: "review", status: "active", createdAt: 0 },
+          { id: "a3", label: "Old audit", sourceTool: "audit", status: "resolved", createdAt: 0 },
+        ],
       }),
     )
 
-    const frame = await waitForRenderedFrame(setup, (f) => f.includes("plan"), "plan label")
-    expect(frame).toContain("plan")
-    destroyRenderSetup(setup)
-  })
-
-  test("plan border label renders execution progress", async () => {
-    let inject: ((s: ExtensionSnapshot) => void) | undefined
-    const setup = await renderWithProviders(
-      () => (
-        <>
-          <SnapshotProbe onReady={(fn) => (inject = fn)} />
-          <Session sessionId={SESSION_ID} branchId={BRANCH_ID} />
-        </>
-      ),
-      {
-        initialSession: {
-          id: SESSION_ID,
-          branchId: BRANCH_ID,
-          name: "Test",
-          createdAt: 0,
-          updatedAt: 0,
-        },
-        initialRoute: Route.session(SESSION_ID, BRANCH_ID),
-        width: 100,
-        height: 24,
-      },
+    const frame = await waitForRenderedFrame(
+      setup,
+      (f) => f.includes("artifact"),
+      "artifacts label",
     )
-
-    inject?.(
-      snap("@gent/plan", {
-        mode: "executing",
-        steps: [],
-        progress: { total: 5, completed: 2, inProgress: 1 },
-      }),
-    )
-
-    const frame = await waitForRenderedFrame(setup, (f) => f.includes("exec"), "exec label")
-    expect(frame).toContain("exec")
-    expect(frame).toContain("2/5")
+    expect(frame).toContain("2 artifacts")
     destroyRenderSetup(setup)
   })
 

@@ -544,57 +544,40 @@ describe("TUI renderer surfaces", () => {
 })
 
 describe("uiModel schema validation", () => {
-  const PlanUiModel = Schema.Struct({
-    mode: Schema.Literals(["normal", "plan", "executing"]),
-    steps: Schema.Array(
+  const ArtifactUiModel = Schema.Struct({
+    items: Schema.Array(
       Schema.Struct({
-        id: Schema.Number,
-        text: Schema.String,
-        status: Schema.Literals(["pending", "in_progress", "completed", "failed", "stopped"]),
+        id: Schema.String,
+        label: Schema.String,
+        sourceTool: Schema.String,
+        status: Schema.Literals(["active", "resolved"]),
       }),
     ),
-    progress: Schema.Struct({
-      total: Schema.Number,
-      completed: Schema.Number,
-      inProgress: Schema.Number,
-    }),
   })
-  const decode = Schema.decodeUnknownOption(PlanUiModel)
+  const decode = Schema.decodeUnknownOption(ArtifactUiModel)
 
-  test("valid plan snapshot decodes correctly", () => {
+  test("valid artifact snapshot decodes correctly", () => {
     const valid = {
-      mode: "plan",
-      steps: [{ id: 1, text: "Do thing", status: "pending" }],
-      progress: { total: 1, completed: 0, inProgress: 0 },
+      items: [{ id: "a1", label: "Plan: auth refactor", sourceTool: "plan", status: "active" }],
     }
     const result = decode(valid)
     expect(result._tag).toBe("Some")
   })
 
-  test("all step statuses decode correctly", () => {
-    const valid = {
-      mode: "executing",
-      steps: [
-        { id: 1, text: "A", status: "completed" },
-        { id: 2, text: "B", status: "in_progress" },
-        { id: 3, text: "C", status: "failed" },
-        { id: 4, text: "D", status: "stopped" },
-        { id: 5, text: "E", status: "pending" },
-      ],
-      progress: { total: 5, completed: 1, inProgress: 1 },
-    }
+  test("empty items decodes correctly", () => {
+    const valid = { items: [] }
     const result = decode(valid)
     expect(result._tag).toBe("Some")
   })
 
   test("malformed snapshot decodes to None (not crash)", () => {
-    const malformed = { mode: "invalid-mode", steps: "not-an-array" }
+    const malformed = { items: "not-an-array" }
     const result = decode(malformed)
     expect(result._tag).toBe("None")
   })
 
   test("missing fields decode to None", () => {
-    const partial = { mode: "plan" }
+    const partial = {}
     const result = decode(partial)
     expect(result._tag).toBe("None")
   })
