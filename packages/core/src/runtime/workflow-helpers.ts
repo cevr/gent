@@ -51,29 +51,3 @@ export const requireText = (
   }
   return Effect.succeed(result.text)
 }
-
-// ── Batch Schema ──
-
-export const BatchFinding = Schema.Struct({
-  file: Schema.String,
-  description: Schema.String,
-  severity: Schema.Literals(["critical", "warning", "suggestion"]),
-})
-export type BatchFinding = typeof BatchFinding.Type
-
-export const ExecutionBatch = Schema.Struct({
-  title: Schema.String,
-  files: Schema.Array(Schema.String),
-  skills: Schema.Array(Schema.String),
-  findings: Schema.Array(BatchFinding),
-})
-export type ExecutionBatch = typeof ExecutionBatch.Type
-
-export const BatchedPlan = Schema.Array(ExecutionBatch)
-export type BatchedPlan = typeof BatchedPlan.Type
-
-/** Parse batched plan from JSON string, returning empty array on failure */
-export const parseBatchedPlan = (text: string): Effect.Effect<BatchedPlan> =>
-  Schema.decodeUnknownEffect(Schema.fromJsonString(BatchedPlan))(text).pipe(
-    Effect.catchEager(() => Effect.succeed([])),
-  )
