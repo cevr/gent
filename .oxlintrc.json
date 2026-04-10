@@ -12,6 +12,8 @@
     "gent/no-direct-env": "error",
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",
+    // Custom — extensions must not import from runtime/, storage/, server/
+    "gent/no-extension-internal-imports": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
 

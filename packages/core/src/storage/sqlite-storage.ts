@@ -794,16 +794,16 @@ const makeStorage = Effect.gen(function* () {
     getSessionAncestors: Effect.fn("Storage.getSessionAncestors")(
       function* (sessionId) {
         const rows = yield* sql.unsafe<SessionRow>(
-          `WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
-            SELECT id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at, 0
+          `WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
+            SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, 0
             FROM sessions WHERE id = '${sessionId.replace(/'/g, "''")}'
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.reasoning_level, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20
           )
-          SELECT id, name, cwd, reasoning_level, parent_session_id, parent_branch_id, created_at, updated_at
+          SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at
           FROM ancestors
           ORDER BY depth ASC`,
         )

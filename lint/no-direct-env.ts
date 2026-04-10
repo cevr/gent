@@ -4,6 +4,7 @@
  * Rules:
  * - no-direct-env: flags Bun.env["X"] / process.env.X (use Config from effect)
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
+ * - no-extension-internal-imports: flags imports from runtime/, storage/, server/ inside extensions/
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -22,6 +23,41 @@ const plugin: Plugin = {
     name: "gent",
   },
   rules: {
+    /**
+     * Flags imports from runtime/, storage/, server/ inside extension files.
+     *
+     * Extensions must use the typed extension API (domain types, extensions/api,
+     * protocol files) — not reach into internal host modules.
+     *
+     * Allowlist: extensions/api.ts (the builder implementation layer).
+     *
+     * Catches both relative (../runtime/) and package-path (@gent/core/runtime/) imports.
+     */
+    "no-extension-internal-imports": {
+      create(context) {
+        const filename = context.filename
+        // Only applies to builtin extension source files in packages/core
+        if (!filename.includes("packages/core/src/extensions/")) return {}
+        // Allowlist: api.ts is the builder implementation
+        if (filename.endsWith("/extensions/api.ts")) return {}
+
+        const FORBIDDEN_RELATIVE = /^\.\.?\/(\.\.\/)*(?:runtime|storage|server)\//
+        const FORBIDDEN_PACKAGE = /^@gent\/core\/(runtime|storage|server)\//
+
+        return {
+          ImportDeclaration(node: { source: { value: string }; type: string }) {
+            const source = node.source.value
+            if (FORBIDDEN_RELATIVE.test(source) || FORBIDDEN_PACKAGE.test(source)) {
+              context.report({
+                message: `Extension files must not import from internal modules. Use the typed extension API instead. Forbidden import: "${source}"`,
+                node,
+              })
+            }
+          },
+        }
+      },
+    },
+
     /**
      * Flags direct reads from `Bun.env` and `process.env`.
      *
