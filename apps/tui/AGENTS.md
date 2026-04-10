@@ -155,7 +155,8 @@ Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 | File                              | Extension ID              | What                                           |
 | --------------------------------- | ------------------------- | ---------------------------------------------- |
 | `builtins/tools.client.ts`        | `@gent/tools`             | Tool renderers                                 |
-| `builtins/plan.client.ts`         | `@gent/plan`              | Plan widget + border labels                    |
+| `builtins/plan.client.ts`         | `@gent/plan`              | /plan and /audit slash commands                |
+| `builtins/artifacts.client.ts`    | `@gent/artifacts`         | Artifact count border label                    |
 | `builtins/auto.client.ts`         | `@gent/auto`              | Auto loop progress                             |
 | `builtins/tasks.client.tsx`       | `@gent/task-tools`        | Task widget, dialog overlay, border label      |
 | `builtins/connection.client.ts`   | `@gent/connection`        | Connection status widget                       |
