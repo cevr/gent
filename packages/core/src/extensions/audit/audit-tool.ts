@@ -77,9 +77,11 @@ Identify ${maxConcerns} or fewer concrete concern categories.
 Each concern must be a distinct audit pass — no overlap between concerns.
 Examples: error handling, typing, concurrency, security, performance.
 
-Respond with a numbered list:
-1. <concern name>: <brief description>
-2. <concern name>: <brief description>`
+Respond ONLY with a JSON array:
+[{"name":"<concern name>","description":"<brief description>"}]
+
+If JSON is not possible, fall back to a numbered list:
+1. <concern name>: <brief description>`
 }
 
 const parseConcerns = (text: string, maxConcerns: number): AuditConcern[] => {
@@ -148,7 +150,10 @@ ${notesBlock}
 Deduplicate and keep only evidence-backed findings.
 Drop findings not grounded in a specific file + line reference.
 Group by file proximity so the executor can work in batches.
-Return a numbered list in this exact format:
+Return ONLY a JSON array:
+[{"file":"path/to/file.ts","description":"finding description","severity":"critical|warning|suggestion"}]
+
+If JSON is not possible, fall back to a numbered list:
 1. [critical|warning|suggestion] path/to/file.ts - finding description`
 }
 

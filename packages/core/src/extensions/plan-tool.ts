@@ -208,19 +208,21 @@ export const PlanTool = defineTool({
           ? (reviewResult.content ?? synthesizedPlan)
           : synthesizedPlan
 
-      // Persist as artifact for prompt projection in subsequent turns
-      yield* ctx.extension
-        .ask(
-          ArtifactProtocol.Save({
-            label: `Plan: ${params.prompt.slice(0, 60)}`,
-            sourceTool: "plan",
-            content: finalPlan,
-            path: reviewResult.path,
-            branchId: ctx.branchId,
-          }),
-          ctx.branchId,
-        )
-        .pipe(Effect.ignoreCause)
+      // Only persist approved or edited plans — rejected plans should not pollute artifacts
+      if (reviewResult.decision !== "no") {
+        yield* ctx.extension
+          .ask(
+            ArtifactProtocol.Save({
+              label: `Plan: ${params.prompt.slice(0, 60)}`,
+              sourceTool: "plan",
+              content: finalPlan,
+              path: reviewResult.path,
+              branchId: ctx.branchId,
+            }),
+            ctx.branchId,
+          )
+          .pipe(Effect.ignoreCause)
+      }
 
       return {
         mode,

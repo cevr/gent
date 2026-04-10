@@ -358,11 +358,19 @@ One test file per source file. No god tests. Names match source owners.
 
 The actor tracks `InteractionPresented`/`InteractionResolved` events. Its UI snapshot is the single source of pending interaction state for clients. The client reads the snapshot from `extensionSnapshots` and renders the appropriate interaction UI (routed by `metadata.type`).
 
+## Artifacts Extension
+
+`@gent/artifacts` — generic artifact store with typed protocol. Any tool/extension can persist artifacts via `ctx.extension.ask(ArtifactProtocol.Save(...))`.
+
+Actor state: `{ items: Artifact[] }`. Upsert by `sourceTool + branchId` (last-writer-wins). Artifacts are branch-aware — prompt projection filters to current branch. Agent-facing tools: `artifact_save`, `artifact_read`, `artifact_update`, `artifact_clear`.
+
+Plan, audit, and review tools save artifacts deterministically after producing results. The `@gent/plan` extension is tool-only (no actor) — planning results are persisted as artifacts.
+
 ## Auto Loop Extension
 
 `@gent/auto` — iterative workflow driver via effect-machine.
 
-State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: peer review via delegate between iterations. Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
+State: `Inactive | Working | AwaitingReview`. Signal tool: `auto_checkpoint`. Gate: `review` tool completion between iterations (proves adversarial review actually ran). Safety: `maxIterations` ceiling + `turnsSinceCheckpoint` wedge detection.
 
 ### JSONL Persistence
 
