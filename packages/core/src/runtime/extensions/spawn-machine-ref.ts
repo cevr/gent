@@ -154,7 +154,11 @@ export const spawnMachineExtensionRef = <
           ),
         )
 
-      const dispatch = (machineEvent: Event, branchId: BranchId | undefined) =>
+      const dispatch = (
+        machineEvent: Event,
+        branchId: BranchId | undefined,
+        mode: "normal" | "hydrate" = "normal",
+      ) =>
         Effect.gen(function* () {
           const result = yield* machineRef
             .call(machineEvent)
@@ -185,7 +189,8 @@ export const spawnMachineExtensionRef = <
               ),
             )
           }
-          if (actor.afterTransition !== undefined) {
+          // Skip side effects during hydrate — replay is state reconstruction only
+          if (mode === "normal" && actor.afterTransition !== undefined) {
             const effects = actor.afterTransition(result.previousState, result.newState)
             if (effects.length > 0) {
               yield* runEffects(effects, branchId)
@@ -218,7 +223,7 @@ export const spawnMachineExtensionRef = <
             sessionId: ctx.sessionId,
             snapshot: machineRef.snapshot,
             send: (event) =>
-              dispatch(event, ctx.branchId).pipe(
+              dispatch(event, ctx.branchId, "hydrate").pipe(
                 Effect.map((result) => result.transitioned),
                 Effect.catchEager(() => Effect.succeed(false)),
               ),
