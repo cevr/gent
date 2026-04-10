@@ -872,11 +872,11 @@ const autoHandoffImpl = (
 
 // ── Extension ──
 
-export const AutoExtension = extension("@gent/auto", ({ ext }) =>
+export const AutoExtension = extension("@gent/auto", ({ ext, ctx }) =>
   ext
     .actor(autoActor)
     .tools(AutoCheckpointTool)
     .on("tool.result", journalInterceptorImpl)
     .on("turn.after", autoHandoffImpl)
-    .layer(AutoJournal.Live),
+    .layer(AutoJournal.Live({ cwd: ctx.cwd })),
 )
