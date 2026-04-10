@@ -164,6 +164,7 @@ export function createActorHarness<State, Message = void>(
 
   const deriveCtx: ExtensionDeriveContext = {
     sessionId: ctx.sessionId,
+    branchId: ctx.branchId,
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
   }

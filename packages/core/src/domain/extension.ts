@@ -222,6 +222,7 @@ export interface ExtensionReduceContext {
 
 export interface ExtensionDeriveContext {
   readonly sessionId: SessionId
+  readonly branchId?: BranchId
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<AnyToolDefinition>
 }

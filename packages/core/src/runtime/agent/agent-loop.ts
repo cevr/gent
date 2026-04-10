@@ -265,6 +265,7 @@ const resolveTurnContext = (params: {
     const allTools = yield* params.extensionRegistry.listTools()
     const extensionResults = yield* params.extensionStateRuntime.deriveAll(params.sessionId, {
       sessionId: params.sessionId,
+      branchId: params.branchId,
       agent,
       allTools,
     })
