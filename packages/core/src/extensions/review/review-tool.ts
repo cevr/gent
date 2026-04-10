@@ -7,7 +7,7 @@ import {
 } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { requireText, runCommand as runCommandBase } from "../../runtime/workflow-helpers.js"
+import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
 import { ArtifactProtocol } from "../artifacts-protocol.js"
 
 export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewError", {

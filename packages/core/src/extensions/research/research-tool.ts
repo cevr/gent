@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineAgent } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
-import { requireText } from "../../runtime/workflow-helpers.js"
+import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../delegate/repo-explorer.js"
 
 const MAX_REPOS = 5
