@@ -7,7 +7,6 @@ export { GrepToolRenderer } from "./grep"
 export { GlobToolRenderer } from "./glob"
 export { WebfetchToolRenderer } from "./webfetch"
 export { SubagentToolRenderer } from "./subagent"
-export { GenericToolRenderer } from "./generic"
 export { ReviewToolRenderer } from "./review"
 export { CounselToolRenderer } from "./counsel"
 export { ResearchToolRenderer } from "./research"
@@ -48,10 +47,3 @@ export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"]
   { toolNames: ["read_session"], component: ReadSessionToolRenderer },
   { toolNames: ["skills"], component: SkillsToolRenderer },
 ]
-
-/** @deprecated Use BUILTIN_TOOL_RENDERERS + extension resolution pipeline instead */
-export const TOOL_RENDERERS: Record<string, ToolRenderer> = Object.fromEntries(
-  (BUILTIN_TOOL_RENDERERS ?? []).flatMap((entry) =>
-    entry.toolNames.map((name) => [name, entry.component]),
-  ),
-)

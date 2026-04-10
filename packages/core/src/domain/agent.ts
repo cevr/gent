@@ -2,7 +2,6 @@ import { ServiceMap, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import { ModelId } from "./model"
-import type { AnyToolDefinition } from "./tool"
 
 // Agent definitions
 
@@ -215,8 +214,6 @@ export interface AgentExecutionOverrides {
   readonly systemPromptAddendum?: string
   /** Tags passed to RunContext */
   readonly tags?: ReadonlyArray<string>
-  /** @deprecated Use extension tool projections instead */
-  readonly additionalTools?: ReadonlyArray<AnyToolDefinition>
 }
 
 export const AgentExecutionOverridesSchema = Schema.Struct({

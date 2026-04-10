@@ -47,13 +47,6 @@ export {
   ArtifactsPackage,
 }
 
-// Re-export individual extensions for backwards compatibility
-export { AutoExtension } from "./auto.js"
-export { PlanExtension, PLAN_EXTENSION_ID } from "./plan.js"
-export { TaskExtension } from "./task-tools/index.js"
-export { HandoffExtension } from "./handoff.js"
-export { InteractionToolsExtension } from "./interaction-tools/index.js"
-
 export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
   HandoffPackage,
   FsToolsExtension,

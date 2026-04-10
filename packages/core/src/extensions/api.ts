@@ -316,10 +316,6 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   sendMessage(content: string, metadata?: MessageMetadata): void
   /** Inject a user message mid-turn (interrupts the current turn). */
   sendUserMessage(content: string): void
-  /** @deprecated Use sendMessage() instead. */
-  queueFollowUp(content: string, metadata?: MessageMetadata): void
-  /** @deprecated Use sendUserMessage() instead. */
-  interject(content: string): void
   /** Publish a message to the event bus. */
   busEmit(channel: string, payload: unknown): void
   /** Send a command message to another extension's actor (fire-and-forget). */
@@ -744,13 +740,6 @@ export const extension = <P = never>(
         sendUserMessage: (content) => {
           pushEffect("sendUserMessage", { _tag: "Interject", content })
         },
-        queueFollowUp: (content, metadata?) => {
-          pushEffect("queueFollowUp", { _tag: "QueueFollowUp", content, metadata })
-        },
-        interject: (content) => {
-          pushEffect("interject", { _tag: "Interject", content })
-        },
-
         busEmit: (channel, payload) => {
           pushEffect("busEmit", { _tag: "BusEmit", channel, payload })
         },

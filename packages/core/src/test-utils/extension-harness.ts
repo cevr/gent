@@ -5,7 +5,6 @@
  */
 
 import { BunServices } from "@effect/platform-bun"
-import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import {
   Agents,
@@ -23,7 +22,6 @@ import {
   type AgentEvent,
 } from "../domain/event.js"
 import type {
-  AnyExtensionActorDefinition,
   ExtensionDeriveContext,
   ExtensionReduceContext,
   ExtensionSetup,
@@ -32,7 +30,6 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
-import { resolveExtensionInput } from "../domain/extension-package.js"
 import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -97,13 +94,6 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
 })
 
 export type EventFactories = ReturnType<typeof createEventFactories>
-
-// ── Reference Equality Assertion ──
-
-/** Assert that a reduce call produced no state change (reference equality) */
-export const expectNoChange = <T>(before: T, after: T): void => {
-  expect(after).toBe(before)
-}
 
 // ── Actor Harness ──
 
@@ -198,49 +188,6 @@ export function createActorHarness<State, Message = void>(
     initial: config.initial,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
-}
-
-// ── Extension Lifecycle Harness ──
-
-export interface ExtensionHarnessResult {
-  readonly setup: ExtensionSetup
-  readonly tools: Map<string, AnyToolDefinition>
-  readonly agents: Map<string, AgentDefinition>
-  readonly actor: AnyExtensionActorDefinition | undefined
-  readonly hooks: ExtensionSetup["hooks"]
-}
-
-/**
- * Load an extension through the full lifecycle and return its resolved setup.
- *
- * Runs setup() via Effect.runSync, extracts tools/agents/actor/hooks.
- */
-export const createExtensionHarness = (
-  extension: ExtensionInput,
-  options?: { cwd?: string },
-): ExtensionHarnessResult => {
-  const resolved = resolveExtensionInput(extension)
-  const setup = Effect.runSync(
-    resolved.setup({ cwd: options?.cwd ?? "/tmp", source: "test", home: "/tmp" }),
-  )
-
-  const tools = new Map<string, AnyToolDefinition>()
-  for (const tool of setup.tools ?? []) {
-    tools.set(tool.name, tool)
-  }
-
-  const agents = new Map<string, AgentDefinition>()
-  for (const agent of setup.agents ?? []) {
-    agents.set(agent.name, agent)
-  }
-
-  return {
-    setup,
-    tools,
-    agents,
-    actor: setup.actor,
-    hooks: setup.hooks,
-  }
 }
 
 // ── Tool Test Layer ──

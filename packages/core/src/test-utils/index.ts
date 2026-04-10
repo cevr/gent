@@ -285,16 +285,10 @@ export {
 // Extension test harnesses
 export {
   createActorHarness,
-  createEventFactories,
-  expectNoChange,
-  createExtensionHarness,
   createToolTestLayer,
   testToolContext,
   type ActorHarnessOptions,
   type ActorHarnessConfig,
   type ActorHarnessResult,
-  type EventFactories,
-  type EventFactoryContext,
-  type ExtensionHarnessResult,
   type ToolTestLayerConfig,
 } from "./extension-harness.js"
