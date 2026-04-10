@@ -160,6 +160,10 @@ export declare namespace ExtensionHostContext {
 
     readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
+    readonly getSessionAncestors: (
+      sessionId?: SessionId,
+    ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+
     // Deletion
 
     readonly deleteSession: (

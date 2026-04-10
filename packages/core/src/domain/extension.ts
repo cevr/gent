@@ -338,6 +338,8 @@ export interface ExtensionActorDefinition<
     readonly snapshot: Effect.Effect<State>
     readonly send: (event: Event) => Effect.Effect<boolean>
     readonly sessionCwd?: string
+    readonly parentSessionId?: SessionId
+    readonly getSessionAncestors: () => Effect.Effect<ReadonlyArray<{ readonly id: string }>>
     readonly slots?: SlotCalls<SD>
   }) => Effect.Effect<void>
 }

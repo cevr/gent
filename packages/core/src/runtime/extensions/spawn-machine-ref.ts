@@ -206,11 +206,13 @@ export const spawnMachineExtensionRef = <
         }
         if (actor.onInit !== undefined) {
           let sessionCwd: string | undefined
+          let parentSessionId: string | undefined
           if (storage._tag === "Some") {
             const session = yield* storage.value
               .getSession(ctx.sessionId)
               .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
             sessionCwd = session?.cwd ?? undefined
+            parentSessionId = session?.parentSessionId ?? undefined
           }
           yield* actor.onInit({
             sessionId: ctx.sessionId,
@@ -221,6 +223,13 @@ export const spawnMachineExtensionRef = <
                 Effect.catchEager(() => Effect.succeed(false)),
               ),
             sessionCwd,
+            parentSessionId: parentSessionId as typeof ctx.sessionId | undefined,
+            getSessionAncestors: () =>
+              storage._tag === "Some"
+                ? storage.value
+                    .getSessionAncestors(ctx.sessionId)
+                    .pipe(Effect.catchEager(() => Effect.succeed([])))
+                : Effect.succeed([]),
             slots,
           })
         }

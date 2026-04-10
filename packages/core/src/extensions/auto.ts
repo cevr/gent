@@ -24,14 +24,12 @@ import {
   type TurnProjection,
 } from "../domain/extension.js"
 import type { AgentEvent } from "../domain/event.js"
-import { SessionId } from "../domain/ids.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { extension } from "./api.js"
 import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import { Storage } from "../storage/sqlite-storage.js"
 import { DEFAULTS } from "../domain/defaults.js"
 
 // ── Constants ──
@@ -167,14 +165,15 @@ const ReplayReview = Schema.Struct({
   iteration: Schema.Number,
 })
 
-const ReplaySeed = Schema.Struct({
+const ReplaySeedWithOrigin = Schema.Struct({
+  sessionId: Schema.optional(Schema.String),
   goal: Schema.String,
   maxIterations: Schema.Number,
   rows: Schema.Array(Schema.Union([ReplayCheckpoint, ReplayReview])),
 })
 
 const AutoMachineSlots = Slot.define({
-  loadReplaySeed: Slot.fn({ sessionId: SessionId }, Schema.NullOr(ReplaySeed)),
+  loadReplaySeed: Slot.fn({}, Schema.NullOr(ReplaySeedWithOrigin)),
 })
 
 // ── Prompt sections ──
@@ -644,14 +643,13 @@ export const AutoActorConfig = {
 const autoActor: ExtensionActorDefinition<
   MachineState,
   MachineEvent,
-  AutoJournal | Storage,
+  AutoJournal,
   typeof AutoMachineSlots.definitions
 > = {
   machine: autoMachine,
   slots: () =>
     Effect.gen(function* () {
       const journalOpt = yield* Effect.serviceOption(AutoJournal)
-      const storageOpt = yield* Effect.serviceOption(Storage)
       if (journalOpt._tag === "None") {
         return {
           loadReplaySeed: () => Effect.succeed(null),
@@ -659,30 +657,16 @@ const autoActor: ExtensionActorDefinition<
       }
       const journal = journalOpt.value
       return {
-        loadReplaySeed: ({ sessionId }: { readonly sessionId: SessionId }) =>
+        loadReplaySeed: () =>
           Effect.gen(function* () {
             const active = yield* journal.readActive()
             if (active === undefined) return null
-
-            if (storageOpt._tag === "Some") {
-              const store = storageOpt.value
-              const session = yield* store
-                .getSession(sessionId)
-                .pipe(Effect.catchEager(() => Effect.void as Effect.Effect<undefined>))
-              if (session?.parentSessionId === undefined) return null
-              if (active.sessionId === undefined) return null
-
-              const ancestors = yield* store
-                .getSessionAncestors(sessionId)
-                .pipe(Effect.catchEager(() => Effect.succeed([] as const)))
-              const ancestorIds = new Set(ancestors.map((ancestor) => ancestor.id as string))
-              if (!ancestorIds.has(active.sessionId)) return null
-            }
 
             const config = active.rows.find((row) => row.type === "config")
             if (config === undefined || config.type !== "config") return null
 
             return {
+              sessionId: active.sessionId,
               goal: config.goal,
               maxIterations: config.maxIterations,
               rows: active.rows.filter(
@@ -714,8 +698,19 @@ const autoActor: ExtensionActorDefinition<
   onInit: (ctx) =>
     Effect.gen(function* () {
       if (ctx.slots === undefined) return
-      const replaySeed = yield* ctx.slots.loadReplaySeed({ sessionId: ctx.sessionId })
+      const replaySeed = yield* ctx.slots.loadReplaySeed()
       if (replaySeed === null) return
+
+      // Root sessions never replay — must be a child session
+      if (ctx.parentSessionId === undefined) return
+
+      // Legacy pointers without sessionId are rejected
+      if (replaySeed.sessionId === undefined) return
+
+      // Verify the journal's origin session is an ancestor of the current session
+      const ancestors = yield* ctx.getSessionAncestors()
+      const ancestorIds = new Set(ancestors.map((a) => a.id))
+      if (!ancestorIds.has(replaySeed.sessionId)) return
 
       // Check if current state is already non-Inactive (hydrated from persistence)
       const current = (yield* ctx.snapshot) as MachineState

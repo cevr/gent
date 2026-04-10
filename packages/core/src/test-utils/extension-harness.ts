@@ -325,6 +325,7 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     switchBranch: dieStub("session.switchBranch"),
     createChildSession: dieStub("session.createChildSession"),
     getChildSessions: dieStub("session.getChildSessions"),
+    getSessionAncestors: dieStub("session.getSessionAncestors"),
     deleteSession: dieStub("session.deleteSession"),
     deleteBranch: dieStub("session.deleteBranch"),
     deleteMessages: dieStub("session.deleteMessages"),

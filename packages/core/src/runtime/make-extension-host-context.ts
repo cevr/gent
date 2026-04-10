@@ -246,6 +246,9 @@ export const makeExtensionHostContext = (
 
     getChildSessions: () => deps.storage.getChildSessions(runInfo.sessionId),
 
+    getSessionAncestors: (sessionId) =>
+      deps.storage.getSessionAncestors(sessionId ?? runInfo.sessionId),
+
     deleteSession: (sessionId) =>
       Effect.gen(function* () {
         if (sessionId === runInfo.sessionId) {
