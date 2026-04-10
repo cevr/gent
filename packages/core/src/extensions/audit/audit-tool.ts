@@ -4,16 +4,18 @@ import { defineTool, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { requireText, runCommand } from "../../runtime/workflow-helpers.js"
 
-interface AuditConcern {
-  name: string
-  description: string
-}
+const AuditConcernSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+})
+type AuditConcern = typeof AuditConcernSchema.Type
 
-interface AuditFinding {
-  file: string
-  description: string
-  severity: "critical" | "warning" | "suggestion"
-}
+const AuditFindingSchema = Schema.Struct({
+  file: Schema.String,
+  description: Schema.String,
+  severity: Schema.Literals(["critical", "warning", "suggestion"]),
+})
+type AuditFinding = typeof AuditFindingSchema.Type
 
 export const AuditParams = Schema.Struct({
   prompt: Schema.optional(
@@ -80,6 +82,15 @@ Respond with a numbered list:
 }
 
 const parseConcerns = (text: string, maxConcerns: number): AuditConcern[] => {
+  // Try JSON first, fall back to regex
+  try {
+    const parsed = Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Array(AuditConcernSchema)),
+    )(text.trim())
+    return [...parsed.slice(0, maxConcerns)]
+  } catch {
+    // Fall back to regex parsing for numbered list format
+  }
   const concerns: AuditConcern[] = []
   const pattern = /^(?:\d+[.)]\s*|\s*[-*]\s*)(?:\*\*)?(.+?)(?:\*\*)?:\s*(.+)$/
   for (const line of text.split("\n")) {
@@ -141,6 +152,16 @@ Return a numbered list in this exact format:
 }
 
 const parseFindings = (text: string): AuditFinding[] => {
+  // Try JSON first, fall back to regex
+  try {
+    return [
+      ...Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(AuditFindingSchema)))(
+        text.trim(),
+      ),
+    ]
+  } catch {
+    // Fall back to regex parsing for numbered list format
+  }
   const findings: AuditFinding[] = []
   for (const line of text.split("\n")) {
     const match = line.match(/^\d+\.\s*\[(critical|warning|suggestion)\]\s*(\S+)\s*[-–—]\s*(.+)$/i)

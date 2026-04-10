@@ -88,7 +88,12 @@ const reviewAgent = defineAgent({
 
 const decodeReviewComments = (text: string) =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewOutput))(text).pipe(
-    Effect.catchEager(() => Effect.succeed([])),
+    Effect.catchEager((cause) =>
+      Effect.logWarning("review.decodeComments.failed").pipe(
+        Effect.annotateLogs({ error: String(cause) }),
+        Effect.as([] as ReadonlyArray<ReviewComment>),
+      ),
+    ),
   )
 
 const summarizeComments = (comments: ReadonlyArray<ReviewComment>) => {

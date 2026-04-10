@@ -7,7 +7,7 @@
  *
  * State: Inactive | Working | AwaitingReview
  * Signal: auto_checkpoint tool
- * Gate: peer review via delegate is hardcoded (AwaitingReview blocks until delegate called)
+ * Gate: peer review via review tool (AwaitingReview blocks until review tool called)
  * Safety: maxIterations ceiling + turnsSinceCheckpoint watchdog
  *
  * Uses effect-machine directly for state transitions and actor runtime.
@@ -38,9 +38,19 @@ import { DEFAULTS } from "../domain/defaults.js"
 
 export { AUTO_EXTENSION_ID } from "./auto-protocol.js"
 const AUTO_CHECKPOINT_TOOL = "auto_checkpoint"
-const REVIEW_TOOL = "delegate"
+const REVIEW_TOOL = "review"
 const DEFAULT_MAX_ITERATIONS = 10
 const MAX_TURNS_WITHOUT_CHECKPOINT = 5
+
+/** Schema for checkpoint tool output — used for typed sync parsing in mapEvent */
+const CheckpointOutput = Schema.Struct({
+  status: Schema.optional(Schema.Literals(["continue", "complete", "abandon"])),
+  summary: Schema.optional(Schema.String),
+  learnings: Schema.optional(Schema.String),
+  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  nextIdea: Schema.optional(Schema.String),
+})
+const decodeCheckpointOutput = Schema.decodeUnknownSync(Schema.fromJsonString(CheckpointOutput))
 
 // ── State ──
 
@@ -215,7 +225,7 @@ const reviewPromptSection = (
     "",
     `Iteration ${state.iteration}/${state.maxIterations} is complete.`,
     "",
-    "You MUST call the `delegate` tool to spawn a reviewer agent for this iteration before continuing.",
+    "You MUST call the `review` tool to run an adversarial review of this iteration before continuing.",
     "The loop cannot proceed until the review is done.",
   ].join("\n"),
   priority: 91,
@@ -406,7 +416,8 @@ const afterTransition = (
   if (after._tag === "AwaitingReview") {
     effects.push({
       _tag: "QueueFollowUp",
-      content: "Run `delegate` to spawn a reviewer agent for this iteration before continuing.",
+      content:
+        "Run the `review` tool to perform an adversarial review of this iteration before continuing.",
       metadata: { extensionId: "auto", hidden: true },
     })
   }
@@ -419,9 +430,8 @@ const afterTransition = (
 const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
   if (event._tag === "ToolCallSucceeded") {
     if (event.toolName === AUTO_CHECKPOINT_TOOL) {
-      // Parse checkpoint output
       try {
-        const parsed = JSON.parse(event.output ?? "{}")
+        const parsed = decodeCheckpointOutput(event.output ?? "{}")
         return MachineEvent.AutoSignal({
           status: parsed.status ?? "continue",
           summary: parsed.summary ?? event.summary ?? "Checkpoint",
@@ -800,7 +810,7 @@ const journalInterceptorImpl = (
         }
       }
 
-      if (input.toolName === "delegate") {
+      if (input.toolName === "review") {
         yield* journal.value.appendReview(uiModel.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))

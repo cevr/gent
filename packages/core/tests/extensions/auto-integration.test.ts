@@ -102,7 +102,10 @@ describe("Auto extension E2E", () => {
         // Step 3: tool continuation → text (loop stops, queued review follow-up dequeued)
         textStep("Checkpoint recorded."),
         // Step 4: review follow-up → call delegate tool → Working(iteration 2)
-        toolCallStep("delegate", { prompt: "Reviewed iteration 1. Proceed." }),
+        toolCallStep("review", {
+          content: "diff placeholder",
+          description: "Reviewed iteration 1. Proceed.",
+        }),
         // Step 5: tool continuation → text (loop stops, queued iteration-2 follow-up dequeued)
         textStep("Review complete."),
         // Step 6: iteration 2 → checkpoint(complete) → Inactive
@@ -142,7 +145,7 @@ describe("Auto extension E2E", () => {
           nextIdea: "Fix them",
         }),
         textStep("Checkpoint recorded."),
-        toolCallStep("delegate", { prompt: "Review iteration 1." }),
+        toolCallStep("review", { content: "diff placeholder", description: "Review iteration 1." }),
         textStep("Review done."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
@@ -172,7 +175,7 @@ describe("Auto extension E2E", () => {
           // Should have auto_checkpoint (x2) and delegate (x1)
           const toolNames = toolSucceeded.map((e) => (e.event as { toolName: string }).toolName)
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
-          expect(toolNames.filter((n) => n === "delegate").length).toBe(1)
+          expect(toolNames.filter((n) => n === "review").length).toBe(1)
 
           // TurnCompleted fires once per user-initiated turn, plus once per queued follow-up turn
           // With tool continuation, each tool-call step auto-continues within the same turn
@@ -299,7 +302,7 @@ describe("Auto extension E2E", () => {
           summary: "First pass",
           nextIdea: "Keep going",
         }),
-        toolCallStep("delegate", { prompt: "Review" }),
+        toolCallStep("review", { content: "diff placeholder", description: "Review" }),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "Done",

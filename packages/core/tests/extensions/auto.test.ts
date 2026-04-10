@@ -155,7 +155,7 @@ describe("Auto pure reducer", () => {
         lastSummary: "prev summary",
         nextIdea: "try this",
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Working")
       if (result.state._tag === "Working") {
         expect(result.state.iteration).toBe(3)
@@ -175,7 +175,7 @@ describe("Auto pure reducer", () => {
         learnings: [],
         metrics: [],
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Inactive")
     })
 
@@ -299,7 +299,7 @@ describe("Auto pure reducer", () => {
         learnings: [],
         metrics: [],
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Working")
     })
 
@@ -313,7 +313,7 @@ describe("Auto pure reducer", () => {
         metrics: [],
         turnsSinceCheckpoint: 0,
       }
-      const result = reduce(state, events.toolCallSucceeded({ toolName: "delegate" }))
+      const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state).toBe(state)
     })
 
@@ -504,7 +504,7 @@ describe("Auto pure reducer", () => {
       const projection = derive(state)
       expect(projection.promptSections).toBeDefined()
       const section = projection.promptSections![0]!
-      expect(section.content).toContain("delegate")
+      expect(section.content).toContain("review")
       expect(section.content).toContain("MUST call")
     })
 
@@ -592,7 +592,7 @@ const reviewSignal = () =>
     sessionId,
     branchId,
     toolCallId: "tc-review" as ToolCallId,
-    toolName: "delegate",
+    toolName: "review",
   })
 
 const turnCompleted = () => new TurnCompleted({ sessionId, branchId, durationMs: 100 })

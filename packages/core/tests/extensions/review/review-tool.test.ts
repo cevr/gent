@@ -105,7 +105,7 @@ describe("ReviewTool", () => {
     )
   })
 
-  it.live("falls back to raw text on parse failure", () => {
+  it.live("parse failure returns empty comments with raw text preserved", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed({
