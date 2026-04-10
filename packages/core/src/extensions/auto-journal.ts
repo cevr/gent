@@ -7,7 +7,7 @@
  * Row types:
  * - config: initial goal + maxIterations
  * - checkpoint: per auto_checkpoint call
- * - review: per delegate tool completion (peer review)
+ * - review: per review tool completion (peer review)
  */
 
 import { ServiceMap, Effect, Layer } from "effect"

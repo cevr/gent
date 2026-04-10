@@ -90,8 +90,14 @@ const decodeReviewComments = (text: string) =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewOutput))(text).pipe(
     Effect.catchEager((cause) =>
       Effect.logWarning("review.decodeComments.failed").pipe(
-        Effect.annotateLogs({ error: String(cause) }),
-        Effect.as([] as ReadonlyArray<ReviewComment>),
+        Effect.annotateLogs({ error: String(cause), rawLength: text.length }),
+        Effect.flatMap(() =>
+          Effect.fail(
+            new ReviewError({
+              message: `Review output was not valid JSON (${text.length} chars). Agent should retry with stricter format instructions.`,
+            }),
+          ),
+        ),
       ),
     ),
   )

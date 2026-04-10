@@ -15,6 +15,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
+import type { AgentName } from "@gent/core/domain/agent"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AUTO_EXTENSION_ID } from "@gent/core/extensions/auto"
 import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
@@ -33,6 +34,21 @@ const makeMessage = (text: string) =>
     createdAt: new Date(),
   })
 
+/** Mock subagent runner that returns valid review JSON for review tool compatibility */
+const reviewCompatibleRunner = {
+  run: (params: { prompt: string }) =>
+    Effect.succeed({
+      _tag: "success" as const,
+      text: params.prompt.includes("Synthesize")
+        ? JSON.stringify([
+            { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
+          ])
+        : "No issues found.",
+      sessionId: "test-subagent-session" as SessionId,
+      agentName: "cowork" as AgentName,
+    }),
+}
+
 const runE2ETest = (
   steps: Parameters<typeof createSequenceProvider>[0],
   test: (
@@ -45,6 +61,7 @@ const runE2ETest = (
     const { layer: providerLayer, controls } = yield* createSequenceProvider(steps)
     const e2eLayer = createE2ELayer({
       providerLayer,
+      subagentRunner: reviewCompatibleRunner,
     })
 
     yield* Effect.gen(function* () {
@@ -101,7 +118,7 @@ describe("Auto extension E2E", () => {
         }),
         // Step 3: tool continuation → text (loop stops, queued review follow-up dequeued)
         textStep("Checkpoint recorded."),
-        // Step 4: review follow-up → call delegate tool → Working(iteration 2)
+        // Step 4: review follow-up → call review tool → Working(iteration 2)
         toolCallStep("review", {
           content: "diff placeholder",
           description: "Reviewed iteration 1. Proceed.",
@@ -172,7 +189,7 @@ describe("Auto extension E2E", () => {
           const envelopes = yield* Ref.get(envelopesRef)
           const toolSucceeded = envelopes.filter((e) => e.event._tag === "ToolCallSucceeded")
 
-          // Should have auto_checkpoint (x2) and delegate (x1)
+          // Should have auto_checkpoint (x2) and review (x1)
           const toolNames = toolSucceeded.map((e) => (e.event as { toolName: string }).toolName)
           expect(toolNames.filter((n) => n === "auto_checkpoint").length).toBe(2)
           expect(toolNames.filter((n) => n === "review").length).toBe(1)

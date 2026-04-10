@@ -290,7 +290,7 @@ describe("Auto pure reducer", () => {
       expect(result.state).toBe(state)
     })
 
-    test("delegate while AwaitingReview → ReviewSignal", () => {
+    test("review while AwaitingReview → ReviewSignal", () => {
       const state: AutoState = {
         _tag: "AwaitingReview",
         iteration: 1,
@@ -303,7 +303,7 @@ describe("Auto pure reducer", () => {
       expect(result.state._tag).toBe("Working")
     })
 
-    test("delegate while Working → ignored (ReviewSignal not handled in Working)", () => {
+    test("review while Working → ignored (ReviewSignal not handled in Working)", () => {
       const state: AutoState = {
         _tag: "Working",
         iteration: 1,

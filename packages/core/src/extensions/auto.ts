@@ -276,7 +276,7 @@ const autoMachine = Machine.make({
       })
     }
 
-    // continue → mandate peer review via delegate
+    // continue → mandate peer review via review tool
     return MachineState.AwaitingReview({
       iteration: state.iteration,
       maxIterations: state.maxIterations,

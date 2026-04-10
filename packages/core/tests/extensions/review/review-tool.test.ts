@@ -105,7 +105,7 @@ describe("ReviewTool", () => {
     )
   })
 
-  it.live("parse failure returns empty comments with raw text preserved", () => {
+  it.live("parse failure fails the tool with ReviewError", () => {
     const ctx = makeCtx({
       agentRun: () =>
         Effect.succeed({
@@ -118,9 +118,10 @@ describe("ReviewTool", () => {
     })
 
     return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
-      Effect.map((result) => {
-        expect(result.comments.length).toBe(0)
-        expect(result.raw).toBe("not valid json")
+      Effect.flip,
+      Effect.map((error) => {
+        expect(error._tag).toBe("ReviewError")
+        expect(error.message).toContain("not valid JSON")
       }),
       Effect.provide(runtimePlatformLayer),
     )
