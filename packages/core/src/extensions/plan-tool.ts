@@ -3,6 +3,7 @@ import { DEFAULT_AGENT_NAME, type AgentDefinition } from "../domain/agent.js"
 import { defineTool, type ToolContext } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { requireText } from "../runtime/workflow-helpers.js"
+import { ArtifactProtocol } from "./artifacts-protocol.js"
 
 export const PlanParams = Schema.Struct({
   prompt: Schema.String.annotate({ description: "What to plan" }),
@@ -202,13 +203,29 @@ export const PlanTool = defineTool({
         fileNameSeed: ctx.toolCallId,
       })
 
+      const finalPlan =
+        reviewResult.decision === "edit"
+          ? (reviewResult.content ?? synthesizedPlan)
+          : synthesizedPlan
+
+      // Persist as artifact for prompt projection in subsequent turns
+      yield* ctx.extension
+        .ask(
+          ArtifactProtocol.Save({
+            label: `Plan: ${params.prompt.slice(0, 60)}`,
+            sourceTool: "plan",
+            content: finalPlan,
+            path: reviewResult.path,
+            branchId: ctx.branchId,
+          }),
+          ctx.branchId,
+        )
+        .pipe(Effect.ignoreCause)
+
       return {
         mode,
         decision: reviewResult.decision,
-        plan:
-          reviewResult.decision === "edit"
-            ? (reviewResult.content ?? synthesizedPlan)
-            : synthesizedPlan,
+        plan: finalPlan,
         path: reviewResult.path,
       }
     }
@@ -220,6 +237,19 @@ export const PlanTool = defineTool({
       toolCallId: ctx.toolCallId,
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
+
+    // Persist plan artifact even in fix mode
+    yield* ctx.extension
+      .ask(
+        ArtifactProtocol.Save({
+          label: `Plan: ${params.prompt.slice(0, 60)}`,
+          sourceTool: "plan",
+          content: synthesizedPlan,
+          branchId: ctx.branchId,
+        }),
+        ctx.branchId,
+      )
+      .pipe(Effect.ignoreCause)
 
     return { mode, plan: synthesizedPlan, output: execOutput }
   }),

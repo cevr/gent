@@ -3,6 +3,7 @@ import { DEFAULT_AGENT_NAME, type AgentDefinition } from "../../domain/agent.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { requireText, runCommand } from "../../runtime/workflow-helpers.js"
+import { ArtifactProtocol } from "../artifacts-protocol.js"
 
 const AuditConcernSchema = Schema.Struct({
   name: Schema.String,
@@ -291,6 +292,20 @@ export const AuditTool = defineTool({
       prompt: params.prompt,
       maxConcerns,
     })
+
+    // Persist as artifact for prompt projection
+    yield* ctx.extension
+      .ask(
+        ArtifactProtocol.Save({
+          label: `Audit: ${report.findings.length} findings`,
+          sourceTool: "audit",
+          content: report.raw,
+          metadata: { findingCount: report.findings.length, paths },
+          branchId: ctx.branchId,
+        }),
+        ctx.branchId,
+      )
+      .pipe(Effect.ignoreCause)
 
     if (mode === "report") {
       yield* ctx.interaction.present({

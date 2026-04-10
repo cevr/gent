@@ -23,6 +23,7 @@ import { PlanPackage } from "./plan-package.js"
 import { TaskToolsPackage } from "./task-tools-package.js"
 import { HandoffPackage } from "./handoff-package.js"
 import { InteractionToolsPackage } from "./interaction-tools-package.js"
+import { ArtifactsPackage } from "./artifacts-package.js"
 
 export {
   FsToolsExtension,
@@ -43,6 +44,7 @@ export {
   TaskToolsPackage,
   HandoffPackage,
   InteractionToolsPackage,
+  ArtifactsPackage,
 }
 
 // Re-export individual extensions for backwards compatibility
@@ -76,4 +78,5 @@ export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
   BedrockExtension,
   GoogleExtension,
   MistralExtension,
+  ArtifactsPackage,
 ]

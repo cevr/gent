@@ -8,6 +8,7 @@ import {
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { requireText, runCommand as runCommandBase } from "../../runtime/workflow-helpers.js"
+import { ArtifactProtocol } from "../artifacts-protocol.js"
 
 export class ReviewError extends Schema.TaggedErrorClass<ReviewError>()("ReviewError", {
   message: Schema.String,
@@ -320,6 +321,20 @@ export const ReviewTool = defineTool({
       description: params.description,
     })
     const summary = summarizeComments(report.comments)
+
+    // Persist as artifact for prompt projection
+    yield* ctx.extension
+      .ask(
+        ArtifactProtocol.Save({
+          label: `Review: ${summary.critical + summary.high + summary.medium + summary.low} findings`,
+          sourceTool: "review",
+          content: report.raw,
+          metadata: { summary, commentCount: report.comments.length },
+          branchId: ctx.branchId,
+        }),
+        ctx.branchId,
+      )
+      .pipe(Effect.ignoreCause)
 
     if (mode === "report") {
       return {
