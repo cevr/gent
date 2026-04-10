@@ -15,12 +15,15 @@ import { join, relative } from "node:path"
 const EXTENSIONS_DIR = join(import.meta.dir, "../../src/extensions")
 
 const FORBIDDEN_PATTERNS = [
+  // Relative imports reaching into internal modules
   /from\s+["']\.\.\/runtime\//,
   /from\s+["']\.\.\/storage\//,
   /from\s+["']\.\.\/server\//,
   /from\s+["']\.\.\/\.\.\/runtime\//,
   /from\s+["']\.\.\/\.\.\/storage\//,
   /from\s+["']\.\.\/\.\.\/server\//,
+  // Package-path imports bypassing relative checks
+  /from\s+["']@gent\/core\/(runtime|storage|server)\//,
 ]
 
 /** Files that legitimately need internal imports */

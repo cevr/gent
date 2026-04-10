@@ -707,7 +707,7 @@ const autoActor: ExtensionActorDefinition<
       // Legacy pointers without sessionId are rejected
       if (replaySeed.sessionId === undefined) return
 
-      // Verify the journal's origin session is an ancestor of the current session
+      // Verify the journal's origin session is in the ancestry chain (includes self)
       const ancestors = yield* ctx.getSessionAncestors()
       const ancestorIds = new Set(ancestors.map((a) => a.id))
       if (!ancestorIds.has(replaySeed.sessionId)) return
