@@ -15,7 +15,7 @@ export default PlanPackage.tui((ctx) => ({
         ctx.sendMessage(
           args.trim().length > 0
             ? `Use the plan tool to create an implementation plan for: ${args.trim()}`
-            : "Use the plan tool to create an implementation plan for the current task.",
+            : "Use the artifact_read tool with sourceTool 'plan' to show the current plan. If no plan exists, say so.",
         ),
     },
     {
