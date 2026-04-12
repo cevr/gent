@@ -5,7 +5,7 @@
  * to show nesting. Used by both TUI (embedded) and standalone server.
  */
 
-import type { ServiceMap, PlatformError, Scope } from "effect"
+import type { Context } from "effect"
 import { Config, Effect, FileSystem, Layer, Option, Tracer, Exit, Cause } from "effect"
 
 import { resolveLogPaths, ensureLogDir, getLogPaths } from "./log-paths.js"
@@ -57,7 +57,7 @@ class GentSpan implements Tracer.Span {
 
   readonly name: string
   readonly parent: Option.Option<Tracer.AnySpan>
-  readonly annotations: ServiceMap.ServiceMap<never>
+  readonly annotations: Context.Context<never>
   readonly kind: Tracer.SpanKind
 
   status: Tracer.SpanStatus
@@ -71,7 +71,7 @@ class GentSpan implements Tracer.Span {
     options: {
       readonly name: string
       readonly parent: Option.Option<Tracer.AnySpan>
-      readonly annotations: ServiceMap.ServiceMap<never>
+      readonly annotations: Context.Context<never>
       readonly links: Array<Tracer.SpanLink>
       readonly startTime: bigint
       readonly kind: Tracer.SpanKind
@@ -172,11 +172,7 @@ export function makeGentTracer(writeLine: (line: string) => void): Tracer.Tracer
 }
 
 /** Provides the GentTracer as the Effect Tracer. */
-export const GentTracerLive: Layer.Layer<
-  never,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Scope.Scope
-> = Layer.effect(
+export const GentTracerLive = Layer.effect(
   Tracer.Tracer,
   Effect.gen(function* () {
     const { trace } = yield* resolveLogPaths
@@ -184,7 +180,7 @@ export const GentTracerLive: Layer.Layer<
     const fs = yield* FileSystem.FileSystem
     const traceFile = yield* fs.open(trace, { flag: "a+" })
     const encoder = new TextEncoder()
-    const services = yield* Effect.services<never>()
+    const services = yield* Effect.context<never>()
     const writeLine = (line: string) => {
       void Effect.runForkWith(services)(Effect.ignore(traceFile.write(encoder.encode(line + "\n"))))
     }

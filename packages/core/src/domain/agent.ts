@@ -1,4 +1,4 @@
-import { ServiceMap, Schema } from "effect"
+import { Context, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import { ModelId } from "./model"
@@ -287,6 +287,6 @@ export interface AgentRunner {
   }) => EffectNs.Effect<AgentRunResult, AgentRunError>
 }
 
-export class AgentRunnerService extends ServiceMap.Service<AgentRunnerService, AgentRunner>()(
+export class AgentRunnerService extends Context.Service<AgentRunnerService, AgentRunner>()(
   "@gent/core/src/domain/agent/AgentRunnerService",
 ) {}

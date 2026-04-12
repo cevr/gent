@@ -1,4 +1,4 @@
-import { DateTime, Effect, Layer, ServiceMap, Stream } from "effect"
+import { DateTime, Effect, Layer, Context, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
@@ -54,7 +54,7 @@ export interface SessionCommandsService {
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, AppServiceError>
 }
 
-export class SessionCommands extends ServiceMap.Service<SessionCommands, SessionCommandsService>()(
+export class SessionCommands extends Context.Service<SessionCommands, SessionCommandsService>()(
   "@gent/core/src/server/session-commands/SessionCommands",
 ) {
   static Live = Layer.effect(

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type {
   InteractionRequestRecord,
@@ -41,7 +41,7 @@ export interface InteractionStorageService {
   ) => Effect.Effect<void, StorageError>
 }
 
-export class InteractionStorage extends ServiceMap.Service<
+export class InteractionStorage extends Context.Service<
   InteractionStorage,
   InteractionStorageService
 >()("@gent/core/storage/InteractionStorage") {

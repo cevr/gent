@@ -1,4 +1,4 @@
-import { Clock, ServiceMap, Effect, Layer, Ref, Stream } from "effect"
+import { Clock, Context, Effect, Layer, Ref, Stream } from "effect"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   Provider,
@@ -44,10 +44,9 @@ export interface SequenceRecorderService {
   readonly clear: () => Effect.Effect<void>
 }
 
-export class SequenceRecorder extends ServiceMap.Service<
-  SequenceRecorder,
-  SequenceRecorderService
->()("@gent/core/src/test-utils/index/SequenceRecorder") {
+export class SequenceRecorder extends Context.Service<SequenceRecorder, SequenceRecorderService>()(
+  "@gent/core/src/test-utils/index/SequenceRecorder",
+) {
   static Live: Layer.Layer<SequenceRecorder> = Layer.effect(
     SequenceRecorder,
     Effect.gen(function* () {

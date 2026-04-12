@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect"
+import { Effect, FileSystem, Layer, Path, Context } from "effect"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -37,7 +37,7 @@ import { EventPublisherLive } from "./event-publisher.js"
 import { buildBasePromptSections } from "./system-prompt.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
-class InteractionRecoveryTag extends ServiceMap.Service<
+class InteractionRecoveryTag extends Context.Service<
   InteractionRecoveryTag,
   { readonly recovered: number }
 >()("@gent/core/src/server/dependencies/InteractionRecoveryTag") {}

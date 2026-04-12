@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -20,7 +20,7 @@ export interface ConfigServiceService {
   readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 
-export class ConfigService extends ServiceMap.Service<ConfigService, ConfigServiceService>()(
+export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
   "@gent/core/src/runtime/config-service/ConfigService",
 ) {
   /** Relative path from $HOME for user config */

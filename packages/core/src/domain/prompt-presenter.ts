@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, FileSystem, Path } from "effect"
 import type { PlatformError } from "effect"
 import type { SessionId, BranchId } from "./ids"
 import type { EventStoreError } from "./event"
@@ -49,7 +49,7 @@ const defaultPromptPath = (cwd: string, title: string | undefined, fileNameSeed:
   return `${cwd}/.gent/prompts/${slug}-${fileNameSeed}.md`
 }
 
-export class PromptPresenter extends ServiceMap.Service<PromptPresenter, PromptPresenterService>()(
+export class PromptPresenter extends Context.Service<PromptPresenter, PromptPresenterService>()(
   "@gent/core/src/domain/prompt-presenter/PromptPresenter",
 ) {
   static Live: Layer.Layer<

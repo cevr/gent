@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Exit, Layer, Schema } from "effect"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
 import { ProviderId, parseModelProvider } from "./model"
 import { AgentName, resolveAgentModel } from "./agent.js"
@@ -29,7 +29,7 @@ export interface AuthGuardService {
   ) => Effect.Effect<readonly ProviderId[]>
 }
 
-export class AuthGuard extends ServiceMap.Service<AuthGuard, AuthGuardService>()(
+export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
   "@gent/core/src/domain/auth-guard/AuthGuard",
 ) {
   static Live: Layer.Layer<AuthGuard, never, AuthStore | ExtensionRegistry> = Layer.effect(

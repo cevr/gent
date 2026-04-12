@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Context } from "effect"
 import type { SessionId } from "./ids.js"
 import type { AgentEvent, EventStoreError } from "./event.js"
 
@@ -7,7 +7,7 @@ export interface EventPublisherService {
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-export class EventPublisher extends ServiceMap.Service<EventPublisher, EventPublisherService>()(
+export class EventPublisher extends Context.Service<EventPublisher, EventPublisherService>()(
   "@gent/core/src/domain/event-publisher/EventPublisher",
 ) {
   static Test = (): Layer.Layer<EventPublisher> =>

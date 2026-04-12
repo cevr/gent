@@ -17,7 +17,7 @@ import {
 } from "effect"
 import { makeClientTraceLogger } from "./utils/client-trace-logger"
 import { identity } from "effect/Function"
-import type { ServiceMap } from "effect"
+import type { Context } from "effect"
 import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
@@ -205,7 +205,7 @@ const main = Command.make(
       const uiServices = (yield* Layer.buildWithScope(
         makeUiLayer(),
         scope,
-      )) as ServiceMap.ServiceMap<unknown>
+      )) as Context.Context<unknown>
       const visualOpt = yield* Config.option(Config.string("VISUAL"))
       const editorOpt = yield* Config.option(Config.string("EDITOR"))
       const env = {
@@ -214,15 +214,15 @@ const main = Command.make(
       }
 
       // Create Effect-backed logger from captured services
-      const logServices = yield* Effect.services<never>()
-      const log = createClientLog(logServices as ServiceMap.ServiceMap<unknown>)
+      const logServices = yield* Effect.context<never>()
+      const log = createClientLog(logServices as Context.Context<unknown>)
       let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
       yield* Effect.withFiber((fiber) =>
         Effect.sync(() => {
           mainFiber = fiber
         }),
       )
-      const mainServices = yield* Effect.services<never>()
+      const mainServices = yield* Effect.context<never>()
       const interruptMain = () => {
         shutdownLog("shutdown.interrupt-fiber")
         if (mainFiber !== undefined) {
@@ -423,4 +423,4 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-runCliMain(Effect.scoped(mainEffect), { teardown: gracefulCliTeardown })
+runCliMain(Effect.scoped(mainEffect) as Effect.Effect<void>, { teardown: gracefulCliTeardown })

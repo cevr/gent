@@ -1,17 +1,17 @@
 /** Shared logic for extension actors. */
 
-import { Effect, Schema, ServiceMap } from "effect"
+import { Effect, Schema, Context } from "effect"
 import type { ExtensionEffect } from "../../domain/extension.js"
 import type { AnyExtensionCommandMessage } from "../../domain/extension-protocol.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
 
-export class CurrentExtensionSession extends ServiceMap.Service<
+export class CurrentExtensionSession extends Context.Service<
   CurrentExtensionSession,
   { readonly sessionId: SessionId }
 >()("@gent/core/src/runtime/extensions/CurrentExtensionSession") {}
 
-export class CurrentMailboxSession extends ServiceMap.Service<
+export class CurrentMailboxSession extends Context.Service<
   CurrentMailboxSession,
   { readonly sessionId: SessionId }
 >()("@gent/core/src/runtime/extensions/CurrentMailboxSession") {}

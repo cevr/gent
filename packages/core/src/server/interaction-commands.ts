@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved, type EventStoreError } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
@@ -17,7 +17,7 @@ export interface InteractionCommandsService {
   readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, EventStoreError>
 }
 
-export class InteractionCommands extends ServiceMap.Service<
+export class InteractionCommands extends Context.Service<
   InteractionCommands,
   InteractionCommandsService
 >()("@gent/core/src/server/interaction-commands/InteractionCommands") {

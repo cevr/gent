@@ -1,4 +1,4 @@
-import { Clock, ServiceMap, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
+import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
 import { BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
@@ -459,7 +459,7 @@ const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean =
  * Used directly for synthetic events (ExtensionUiSnapshot) to avoid recursion.
  * Production code should use EventStore which wraps this with extension reduce.
  */
-export class BaseEventStore extends ServiceMap.Service<BaseEventStore, EventStoreService>()(
+export class BaseEventStore extends Context.Service<BaseEventStore, EventStoreService>()(
   "@gent/core/src/domain/event/BaseEventStore",
 ) {}
 
@@ -532,7 +532,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
   return service
 })
 
-export class EventStore extends ServiceMap.Service<EventStore, EventStoreService>()(
+export class EventStore extends Context.Service<EventStore, EventStoreService>()(
   "@gent/core/src/domain/event/EventStore",
 ) {
   static Memory: Layer.Layer<EventStore | BaseEventStore> = Layer.unwrap(

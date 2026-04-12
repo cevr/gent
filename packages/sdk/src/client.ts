@@ -1,6 +1,6 @@
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
-import type { ServiceMap, Scope } from "effect"
+import type { Context, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -187,10 +187,7 @@ export function extractToolCallsWithResults(
 // Internal: build runtime from captured services + lifecycle
 // ---------------------------------------------------------------------------
 
-function makeRuntime(
-  services: ServiceMap.ServiceMap<unknown>,
-  lifecycle: GentLifecycle,
-): GentRuntime {
+function makeRuntime(services: Context.Context<unknown>, lifecycle: GentLifecycle): GentRuntime {
   return {
     cast: (effect) => {
       Effect.runForkWith(services)(effect)
@@ -385,13 +382,10 @@ export const Gent = {
       const scope = yield* Effect.scope
       const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
       const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-      const services = yield* Effect.services<never>()
+      const services = yield* Effect.context<never>()
       return {
         client: makeNamespacedClient(rpcClient),
-        runtime: makeRuntime(
-          services as ServiceMap.ServiceMap<unknown>,
-          supervisorLifecycle(supervisor),
-        ),
+        runtime: makeRuntime(services as Context.Context<unknown>, supervisorLifecycle(supervisor)),
       }
     }),
 
@@ -403,11 +397,11 @@ export const Gent = {
       const scope = yield* Effect.scope
       const transport = yield* Layer.buildWithScope(WsTransport(options.url), scope)
       const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-      const services = yield* Effect.services<never>()
+      const services = yield* Effect.context<never>()
       return {
         client: makeNamespacedClient(rpcClient),
         runtime: makeRuntime(
-          services as ServiceMap.ServiceMap<unknown>,
+          services as Context.Context<unknown>,
           staticLifecycle({ _tag: "connected", generation: 0 }),
         ),
       }
@@ -442,10 +436,10 @@ export const Gent = {
           }),
         toConnectionError,
       )
-      const services = yield* Effect.services<never>()
+      const services = yield* Effect.context<never>()
       return {
         client: supervisor.client,
-        runtime: makeRuntime(services as ServiceMap.ServiceMap<unknown>, supervisor.lifecycle),
+        runtime: makeRuntime(services as Context.Context<unknown>, supervisor.lifecycle),
       }
     }),
 
@@ -458,11 +452,11 @@ export const Gent = {
       const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
         Effect.provide(context),
       ) as Effect.Effect<GentRpcClient>
-      const services = yield* Effect.services<never>()
+      const services = yield* Effect.context<never>()
       return {
         client: makeNamespacedClient(rpcClient),
         runtime: makeRuntime(
-          services as ServiceMap.ServiceMap<unknown>,
+          services as Context.Context<unknown>,
           staticLifecycle({ _tag: "connected", generation: 0 }),
         ),
       }

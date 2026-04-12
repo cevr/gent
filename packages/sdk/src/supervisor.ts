@@ -321,7 +321,7 @@ export const startWorkerSupervisor = (
 ): Effect.Effect<WorkerSupervisor, WorkerSupervisorError, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const supervisorServices = yield* Effect.services<never>()
+      const supervisorServices = yield* Effect.context<never>()
       const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
       const assignedPort = yield* Effect.promise(findOpenPort).pipe(
         Effect.mapError(

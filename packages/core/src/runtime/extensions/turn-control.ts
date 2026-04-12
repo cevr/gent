@@ -5,7 +5,7 @@
  * wiring bug and should fail loudly through actor supervision.
  */
 
-import { Effect, Layer, Ref, Semaphore, ServiceMap } from "effect"
+import { Effect, Layer, Ref, Semaphore, Context } from "effect"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { MessageMetadata } from "../../domain/message.js"
 
@@ -37,7 +37,7 @@ export interface ExtensionTurnControlService {
   readonly bind: (handlers: ExtensionTurnControlHandlers) => Effect.Effect<void>
 }
 
-export class ExtensionTurnControl extends ServiceMap.Service<
+export class ExtensionTurnControl extends Context.Service<
   ExtensionTurnControl,
   ExtensionTurnControlService
 >()("@gent/core/src/runtime/extensions/turn-control/ExtensionTurnControl") {

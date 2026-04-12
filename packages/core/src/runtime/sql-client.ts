@@ -25,7 +25,7 @@ export const SqlClientLive = (config: {
 }): Layer.Layer<SqlClient, Config.ConfigError | SqlError> => {
   if (config.backend === "postgres") {
     if (config.postgres === undefined) {
-      return Layer.effectServices(Effect.die("SqlClientLive: postgres config required"))
+      return Layer.effectContext(Effect.die("SqlClientLive: postgres config required"))
     }
     return PostgresClientLive(config.postgres)
   }

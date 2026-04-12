@@ -9,7 +9,7 @@
  */
 
 import { Effect } from "effect"
-import type { ServiceMap } from "effect"
+import type { Context } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs"
 
@@ -51,8 +51,8 @@ export interface ClientLog {
  * Uses runForkWith — logs are async, fire-and-forget, flow through Effect's logger.
  * Falls back to shutdownLog if the Effect runtime throws (e.g. during teardown).
  */
-export const createClientLog = (services: ServiceMap.ServiceMap<unknown>): ClientLog => {
-  const fork = Effect.runForkWith(services as ServiceMap.ServiceMap<never>)
+export const createClientLog = (services: Context.Context<unknown>): ClientLog => {
+  const fork = Effect.runForkWith(services as Context.Context<never>)
 
   const makeLogFn =
     (effectLog: (msg: string) => Effect.Effect<void>) =>

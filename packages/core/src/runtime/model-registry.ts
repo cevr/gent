@@ -1,4 +1,4 @@
-import { Config, ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { Config, Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model } from "../domain/model.js"
@@ -67,7 +67,7 @@ export interface ModelRegistryService {
   readonly refresh: () => Effect.Effect<void>
 }
 
-export class ModelRegistry extends ServiceMap.Service<ModelRegistry, ModelRegistryService>()(
+export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/model-registry/ModelRegistry",
 ) {
   static Live: Layer.Layer<

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
 import { AuthAuthorization } from "../domain/auth-method.js"
 import type { AuthMethod } from "../domain/auth-method.js"
@@ -29,7 +29,7 @@ export interface ProviderAuthService {
   ) => Effect.Effect<void, ProviderAuthError>
 }
 
-export class ProviderAuth extends ServiceMap.Service<ProviderAuth, ProviderAuthService>()(
+export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
   static Live: Layer.Layer<ProviderAuth, never, AuthStore | ExtensionRegistry> = Layer.effect(

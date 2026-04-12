@@ -1,6 +1,6 @@
 import {
   Cause,
-  ServiceMap,
+  Context,
   DateTime,
   Deferred,
   Effect,
@@ -15,6 +15,7 @@ import {
 } from "effect"
 import {
   type AnyInspectionEvent,
+  ActorScope,
   combineInspectors,
   InspectorService,
   Machine,
@@ -1304,7 +1305,7 @@ export interface AgentLoopService {
   readonly toRuntimeState: (state: LoopState) => LoopRuntimeState
 }
 
-export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()(
+export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
   "@gent/core/src/runtime/agent/agent-loop/AgentLoop",
 ) {
   static Live = (config: {
@@ -1887,7 +1888,7 @@ export class AgentLoop extends ServiceMap.Service<AgentLoop, AgentLoopService>()
               },
             }).pipe(
               Effect.provideService(InspectorService, inspector),
-              Effect.provideService(Scope.Scope, loopScope),
+              Effect.provideService(ActorScope, loopScope),
             )
 
             return {

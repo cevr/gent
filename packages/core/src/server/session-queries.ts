@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
@@ -41,7 +41,7 @@ export interface SessionQueriesService {
   ) => Effect.Effect<SessionSnapshot, AppServiceError>
 }
 
-export class SessionQueries extends ServiceMap.Service<SessionQueries, SessionQueriesService>()(
+export class SessionQueries extends Context.Service<SessionQueries, SessionQueriesService>()(
   "@gent/core/src/server/session-queries/SessionQueries",
 ) {
   static Live = Layer.effect(

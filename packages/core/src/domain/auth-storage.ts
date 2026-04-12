@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { ServiceMap, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 
@@ -24,7 +24,7 @@ export interface AuthStorageService {
 
 // Auth Storage Service Tag
 
-export class AuthStorage extends ServiceMap.Service<AuthStorage, AuthStorageService>()(
+export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService>()(
   "@gent/core/src/domain/auth-storage/AuthStorage",
 ) {
   static LiveSystem = (

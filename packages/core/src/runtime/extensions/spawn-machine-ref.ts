@@ -1,5 +1,11 @@
 import { Effect, Exit, Ref, Scope } from "effect"
-import { Machine, type ProvideSlots, type SlotCalls, type SlotsDef } from "effect-machine"
+import {
+  ActorScope,
+  Machine,
+  type ProvideSlots,
+  type SlotCalls,
+  type SlotsDef,
+} from "effect-machine"
 import type {
   ExtensionActorDefinition,
   ExtensionEffect,
@@ -102,16 +108,15 @@ export const spawnMachineExtensionRef = <
       const providedSlots = actor.slots !== undefined ? yield* actor.slots(ctx) : undefined
       const slots = providedSlots !== undefined ? normalizeSlots(providedSlots) : undefined
 
-      // Spawn in an unscoped context — Machine.spawn auto-registers actor.stop
-      // on the ambient Scope if one exists, which would kill the actor when that
-      // scope closes. Extension actors are long-lived and managed explicitly by
-      // ExtensionStateRuntime.terminateAll, so we provide a dedicated scope.
+      // Provide a dedicated ActorScope so Machine.spawn attaches cleanup to it.
+      // Extension actors are long-lived and managed explicitly by
+      // ExtensionStateRuntime.terminateAll.
       const actorScope = yield* Scope.make()
       const machineRef = yield* Machine.spawn(actor.machine, {
         id: `${extensionId}-${ctx.sessionId}`,
         ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
         ...(providedSlots !== undefined ? { slots: providedSlots } : {}),
-      }).pipe(Effect.provideService(Scope.Scope, actorScope))
+      }).pipe(Effect.provideService(ActorScope, actorScope))
 
       const persistState = (): Effect.Effect<void> =>
         Effect.gen(function* () {

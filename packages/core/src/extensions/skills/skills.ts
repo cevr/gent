@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { ServiceMap, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 
 // Skill Schema
 
@@ -24,7 +24,7 @@ export interface SkillsService {
 
 // Skills Service Tag
 
-export class Skills extends ServiceMap.Service<Skills, SkillsService>()(
+export class Skills extends Context.Service<Skills, SkillsService>()(
   "@gent/core/src/domain/skills",
 ) {
   static Live = (options: {

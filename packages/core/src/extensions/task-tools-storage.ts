@@ -7,7 +7,7 @@
  * Owns its own DDL — no dependency on host Storage service.
  */
 
-import { Clock, ServiceMap, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
 import { Task } from "../domain/task.js"
 import type { SessionId, BranchId, TaskId } from "../domain/ids.js"
 import { SqlClient } from "effect/unstable/sql"
@@ -94,7 +94,7 @@ export interface TaskStorageService {
   readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, TaskStorageError>
 }
 
-export class TaskStorage extends ServiceMap.Service<TaskStorage, TaskStorageService>()(
+export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService>()(
   "@gent/core/src/extensions/task-tools-storage/TaskStorage",
 ) {
   /** Runs its own DDL — only requires SqlClient, not host Storage */

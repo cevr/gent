@@ -8,7 +8,7 @@
  * Tools access this indirectly via `ctx.interaction.approve()` on ToolContext.
  */
 
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { InteractionPresented, type EventStoreError } from "../domain/event.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
@@ -39,7 +39,7 @@ export interface ApprovalServiceShape {
   ) => Effect.Effect<void, EventStoreError>
 }
 
-export class ApprovalService extends ServiceMap.Service<ApprovalService, ApprovalServiceShape>()(
+export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceShape>()(
   "@gent/core/runtime/approval-service/ApprovalService",
 ) {
   static Live: Layer.Layer<ApprovalService, never, EventPublisher> = Layer.effect(

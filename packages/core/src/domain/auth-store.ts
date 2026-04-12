@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { AuthStorage } from "./auth-storage"
 
 // Auth info
@@ -39,7 +39,7 @@ export interface AuthStoreService {
   readonly listInfo: () => Effect.Effect<Record<string, AuthInfo>, AuthStoreError>
 }
 
-export class AuthStore extends ServiceMap.Service<AuthStore, AuthStoreService>()(
+export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
   "@gent/core/src/domain/auth-store/AuthStore",
 ) {
   static Live: Layer.Layer<AuthStore, never, AuthStorage> = Layer.effect(

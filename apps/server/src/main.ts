@@ -5,7 +5,7 @@ import { SteerCommand } from "@gent/core/runtime/agent/agent-loop.js"
 import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
-import { Config, Effect, Layer, Option, Schema, ServiceMap } from "effect"
+import { Config, Effect, Layer, Option, Schema, Context } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { seedDebugSession } from "./debug/session.js"
@@ -151,11 +151,11 @@ const program = Effect.scoped(
 
     const depsServices = yield* Layer.buildWithScope(depsLive, scope)
     const appServices = yield* Layer.buildWithScope(
-      AppServicesLive.pipe(Layer.provide(Layer.succeedServices(depsServices))),
+      AppServicesLive.pipe(Layer.provide(Layer.succeedContext(depsServices))),
       scope,
     )
-    const coreServices = ServiceMap.merge(depsServices, appServices)
-    const coreServicesLive = Layer.succeedServices(coreServices)
+    const coreServices = Context.merge(depsServices, appServices)
+    const coreServicesLive = Layer.succeedContext(coreServices)
 
     // RPC-over-WebSocket route (defaults to WS when protocol is omitted)
     const RpcRoutes = RpcServer.layerHttp({

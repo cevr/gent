@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap, Stream } from "effect"
+import { Effect, Layer, Context, Stream } from "effect"
 import {
   EventStore,
   type EventEnvelope,
@@ -18,7 +18,7 @@ export interface SessionEventsService {
   ) => Stream.Stream<EventEnvelope, EventStoreError>
 }
 
-export class SessionEvents extends ServiceMap.Service<SessionEvents, SessionEventsService>()(
+export class SessionEvents extends Context.Service<SessionEvents, SessionEventsService>()(
   "@gent/core/src/server/session-events/SessionEvents",
 ) {
   static Live = Layer.effect(

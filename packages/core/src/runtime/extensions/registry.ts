@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
@@ -264,7 +264,7 @@ export interface ExtensionRegistryService {
   readonly getResolved: () => ResolvedExtensions
 }
 
-export class ExtensionRegistry extends ServiceMap.Service<
+export class ExtensionRegistry extends Context.Service<
   ExtensionRegistry,
   ExtensionRegistryService
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {

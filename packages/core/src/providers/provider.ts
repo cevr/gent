@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId, type ToolCallId as ToolCallIdType } from "../domain/ids.js"
@@ -49,7 +49,7 @@ const makeModelResolver = (
       })
     }
     const [providerName, modelName] = parsed
-    const services = yield* Effect.services<never>()
+    const services = yield* Effect.context<never>()
 
     const extensionProvider = yield* extensionRegistry.getProvider(providerName)
     if (extensionProvider === undefined) {
@@ -201,7 +201,7 @@ const resolveProviderOptions = (
   )
 }
 
-export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
+export class Provider extends Context.Service<Provider, ProviderService>()(
   "@gent/core/src/providers/provider",
 ) {
   static Live: Layer.Layer<Provider, never, AuthStore | ExtensionRegistry> = Layer.effect(
@@ -336,7 +336,7 @@ export class Provider extends ServiceMap.Service<Provider, ProviderService>()(
 
           return result.text
         }),
-      }
+      } satisfies ProviderService
     }),
   )
 

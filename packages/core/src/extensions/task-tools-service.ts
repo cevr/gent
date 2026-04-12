@@ -1,4 +1,4 @@
-import { ServiceMap, DateTime, Effect, Layer, Option } from "effect"
+import { Context, DateTime, Effect, Layer, Option } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import {
   Task,
@@ -82,7 +82,7 @@ export interface TaskServiceApi {
   readonly getDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>>
 }
 
-export class TaskService extends ServiceMap.Service<TaskService, TaskServiceApi>()(
+export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
   "@gent/core/src/extensions/task-tools-service/TaskService",
 ) {
   /** No-op TaskService returned when @gent/task-tools is disabled (TaskStorage absent) */

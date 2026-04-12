@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { StorageError } from "./sqlite-storage.js"
 
@@ -39,7 +39,7 @@ export interface SearchStorageService {
   ) => Effect.Effect<ReadonlyArray<SearchResult>, StorageError>
 }
 
-export class SearchStorage extends ServiceMap.Service<SearchStorage, SearchStorageService>()(
+export class SearchStorage extends Context.Service<SearchStorage, SearchStorageService>()(
   "@gent/core/storage/SearchStorage",
 ) {
   static Live: Layer.Layer<SearchStorage, never, SqlClient.SqlClient> = Layer.effect(

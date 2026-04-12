@@ -6,7 +6,7 @@
  * rebuilt inline on every write/remove (idempotent).
  */
 
-import { Effect, Layer, Schema, ServiceMap } from "effect"
+import { Effect, Layer, Schema, Context } from "effect"
 import * as Fs from "node:fs" // eslint-disable-line -- vault needs direct fs access
 import * as Path from "node:path" // eslint-disable-line -- vault needs direct path access
 import { createHash } from "node:crypto" // eslint-disable-line
@@ -160,7 +160,7 @@ export interface MemoryVault {
   readonly rebuildIndex: (scope?: MemoryScope, project?: string) => Effect.Effect<void>
 }
 
-export const MemoryVault = ServiceMap.Service<MemoryVault>("@gent/memory/vault")
+export const MemoryVault = Context.Service<MemoryVault>("@gent/memory/vault")
 
 // ── Implementation ──
 

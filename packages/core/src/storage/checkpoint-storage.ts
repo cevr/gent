@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import type { AgentLoopCheckpointRecord } from "../runtime/agent/agent-loop.checkpoint.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
@@ -39,7 +39,7 @@ export interface CheckpointStorageService {
   }) => Effect.Effect<void, StorageError>
 }
 
-export class CheckpointStorage extends ServiceMap.Service<
+export class CheckpointStorage extends Context.Service<
   CheckpointStorage,
   CheckpointStorageService
 >()("@gent/core/storage/CheckpointStorage") {

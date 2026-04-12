@@ -8,8 +8,8 @@
  * Uses Effect.withLogSpan for timing data.
  */
 
-import { Cause, Config, Effect, FileSystem, Layer, Logger, Option, ServiceMap } from "effect"
-import type { PlatformError, Scope } from "effect"
+import { Cause, Config, Effect, FileSystem, Layer, Logger, Option, Context } from "effect"
+
 import type { LogLevel } from "effect/LogLevel"
 import { CurrentLogAnnotations, CurrentLogSpans, MinimumLogLevel } from "effect/References"
 
@@ -187,13 +187,7 @@ const formatJsonLogger: Logger.Logger<unknown, string> = Logger.make(
   },
 )
 
-const makeJsonFileLogger = (
-  path: string,
-): Effect.Effect<
-  Logger.Logger<unknown, void>,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Scope.Scope
-> =>
+const makeJsonFileLogger = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const logFile = yield* fs.open(path, { flag: "a+" })
@@ -222,11 +216,7 @@ const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileS
 // =============================================================================
 
 /** JSON (file) logger by default. Set GENT_LOG_FORMAT=pretty|both for stderr output. */
-export const GentLogger: Layer.Layer<
-  never,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Scope.Scope
-> = Layer.unwrap(
+export const GentLogger = Layer.unwrap(
   Effect.gen(function* () {
     const { log: defaultLogFile } = yield* resolveLogPaths
     const formatOpt = yield* Config.option(Config.string("GENT_LOG_FORMAT"))
@@ -262,11 +252,7 @@ export const GentLogger: Layer.Layer<
 )
 
 /** JSON-only logger layer (for headless/prod). */
-export const GentLoggerJson: Layer.Layer<
-  never,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Scope.Scope
-> = Layer.unwrap(
+export const GentLoggerJson = Layer.unwrap(
   Effect.gen(function* () {
     const { log: defaultLogFile } = yield* resolveLogPaths
     const logFileOpt = yield* Config.option(Config.string("GENT_LOG_FILE"))
@@ -308,11 +294,11 @@ export const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
           return "Debug"
       }
     })()
-    return Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, level)))
+    return Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, level)))
   }).pipe(
     Effect.catchEager(() =>
       Effect.succeed(
-        Layer.effectServices(Effect.succeed(ServiceMap.make(MinimumLogLevel, "Info" as LogLevel))),
+        Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info" as LogLevel))),
       ),
     ),
   ),

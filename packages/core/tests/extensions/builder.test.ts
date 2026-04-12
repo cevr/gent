@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, ServiceMap } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 
@@ -110,7 +110,7 @@ describe("fluent builder", () => {
   })
 
   test("layer() throws on second call", async () => {
-    const TestService = ServiceMap.Service<typeof TestService, { readonly value: string }>()("Test")
+    const TestService = Context.Service<typeof TestService, { readonly value: string }>()("Test")
     const ext = extension("double-layer", ({ ext }) => {
       const b = ext.layer(Layer.succeed(TestService, { value: "a" }))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,7 +208,7 @@ describe("fluent builder", () => {
   // ── Layer + Provides ──
 
   test("layer() widens Provides — dynamic promptSection can access provided service", async () => {
-    const TestService = ServiceMap.Service<typeof TestService, { readonly value: string }>()("Test")
+    const TestService = Context.Service<typeof TestService, { readonly value: string }>()("Test")
 
     const ext = extension("layer-provides", ({ ext }) =>
       ext.layer(Layer.succeed(TestService, { value: "hello from layer" })).promptSections({
@@ -252,7 +252,7 @@ describe("fluent builder", () => {
   // ── Provides negative constraint (compile-time) ──
 
   test("dynamic promptSection without matching layer is a compile error", () => {
-    const TestService = ServiceMap.Service<typeof TestService, { readonly value: string }>()("Test")
+    const TestService = Context.Service<typeof TestService, { readonly value: string }>()("Test")
 
     // This should NOT compile — TestService is in R but no .layer() provides it.
     // @ts-expect-error — Type 'TestService' is not assignable to type 'never'

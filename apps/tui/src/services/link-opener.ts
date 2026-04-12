@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { OsService } from "./os-service"
 
 export class LinkOpenerError extends Schema.TaggedErrorClass<LinkOpenerError>()("LinkOpenerError", {
@@ -33,7 +33,7 @@ const makeOpener = (command: string, argsForUrl: (url: string) => string[]): Lin
   ),
 })
 
-export class LinkOpener extends ServiceMap.Service<LinkOpener, LinkOpenerService>()(
+export class LinkOpener extends Context.Service<LinkOpener, LinkOpenerService>()(
   "@gent/tui/services/link-opener/LinkOpener",
 ) {
   static LiveDarwin: Layer.Layer<LinkOpener> = Layer.succeed(

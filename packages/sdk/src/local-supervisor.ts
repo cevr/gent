@@ -56,7 +56,7 @@ export const startLocalSupervisor = <E, R>(
   Effect.acquireRelease(
     Effect.gen(function* () {
       const supervisorScope = yield* Scope.Scope
-      const supervisorServices = yield* Effect.services<R>()
+      const supervisorServices = yield* Effect.context<R>()
       const listeners = new Set<(state: ConnectionState) => void>()
       const transitionLock = yield* Semaphore.make(1)
       const generationRef = yield* Ref.make(0)

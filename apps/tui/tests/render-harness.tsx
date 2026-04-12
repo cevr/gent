@@ -2,7 +2,7 @@
 
 import { beforeEach, afterEach } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, Layer, Scope, ServiceMap, Stream } from "effect"
+import { Effect, Layer, Scope, Context, Stream } from "effect"
 import { testRender } from "@opentui/solid"
 import type { JSX } from "solid-js"
 import { RegistryProvider } from "../src/atom-solid"
@@ -26,7 +26,7 @@ const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 type TestRenderSetup = Awaited<ReturnType<typeof testRender>>
 
 let currentSetup: TestRenderSetup | undefined
-let sharedServices: ServiceMap.ServiceMap<unknown> | undefined
+let sharedServices: Context.Context<unknown> | undefined
 let sharedScope: Scope.Closeable | undefined
 const defaultWorkspaceCwd = new URL("../../..", import.meta.url).pathname
 
@@ -180,7 +180,7 @@ const getServices = async () => {
   if (sharedServices !== undefined) return sharedServices
   sharedScope = await Effect.runPromise(Scope.make())
   const context = await Effect.runPromise(Layer.buildWithScope(BunServices.layer, sharedScope))
-  sharedServices = ServiceMap.add(context, Scope.Scope, sharedScope)
+  sharedServices = Context.add(context, Scope.Scope, sharedScope)
   return sharedServices
 }
 

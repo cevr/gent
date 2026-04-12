@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Semaphore, Path } from "effect"
+import { Context, Effect, Layer, Ref, Semaphore, Path } from "effect"
 
 export interface FileLockShape {
   readonly withLock: <A, E, R>(
@@ -7,7 +7,7 @@ export interface FileLockShape {
   ) => Effect.Effect<A, E, R>
 }
 
-export class FileLockService extends ServiceMap.Service<FileLockService, FileLockShape>()(
+export class FileLockService extends Context.Service<FileLockService, FileLockShape>()(
   "@gent/core/src/domain/file-lock/FileLockService",
 ) {
   static layer = Layer.effect(

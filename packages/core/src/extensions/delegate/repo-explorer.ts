@@ -165,7 +165,7 @@ export const RepoTool = defineTool({
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
-    const services = yield* Effect.services<never>()
+    const services = yield* Effect.context<never>()
     const run = Effect.runPromiseWith(services)
 
     switch (params.action) {

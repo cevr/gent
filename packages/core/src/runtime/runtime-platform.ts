@@ -1,4 +1,4 @@
-import { Layer, ServiceMap } from "effect"
+import { Layer, Context } from "effect"
 
 export interface RuntimePlatformShape {
   readonly cwd: string
@@ -6,7 +6,7 @@ export interface RuntimePlatformShape {
   readonly platform: string
 }
 
-export class RuntimePlatform extends ServiceMap.Service<RuntimePlatform, RuntimePlatformShape>()(
+export class RuntimePlatform extends Context.Service<RuntimePlatform, RuntimePlatformShape>()(
   "@gent/core/src/runtime/runtime-platform/RuntimePlatform",
 ) {
   static Live = (config: RuntimePlatformShape): Layer.Layer<RuntimePlatform> =>

@@ -9,7 +9,7 @@
  * - Errors caught per-handler — one failing handler doesn't affect others
  */
 
-import { Effect, ServiceMap, Layer } from "effect"
+import { Effect, Context, Layer } from "effect"
 import type { SessionId, BranchId } from "../../domain/ids.js"
 
 // ── Envelope ──
@@ -42,7 +42,7 @@ const parseWildcard = (pattern: string): { prefix: string } | undefined => {
   return undefined
 }
 
-export class ExtensionEventBus extends ServiceMap.Service<
+export class ExtensionEventBus extends Context.Service<
   ExtensionEventBus,
   ExtensionEventBusService
 >()("@gent/core/src/runtime/extensions/event-bus/ExtensionEventBus") {

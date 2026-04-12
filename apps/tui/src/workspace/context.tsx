@@ -2,7 +2,7 @@ import { createContext, useContext, onMount, onCleanup, createSignal } from "sol
 import type { JSX } from "solid-js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ChildProcess } from "effect/unstable/process"
-import { Effect, Fiber, ServiceMap, Stream } from "effect"
+import { Effect, Fiber, Context, Stream } from "effect"
 
 export interface GitStatus {
   branch: string
@@ -30,7 +30,7 @@ export function useWorkspace(): WorkspaceContextValue {
 interface WorkspaceProviderProps {
   cwd: string
   children: JSX.Element
-  services?: ServiceMap.ServiceMap<unknown>
+  services?: Context.Context<unknown>
 }
 
 interface GitInfo {
@@ -102,14 +102,14 @@ function deriveProjectName(cwd: string, gitRoot: string | null): string {
 
 export function WorkspaceProvider(props: WorkspaceProviderProps) {
   const [gitInfo, setGitInfo] = createSignal<GitInfo | null>(null)
-  const services = props.services ?? ServiceMap.empty()
+  const services = props.services ?? Context.empty()
   let currentFiber: Fiber.Fiber<GitInfo | null, never> | null = null
 
   const refreshGitInfo = () => {
     if (currentFiber !== null) {
       Effect.runFork(Fiber.interrupt(currentFiber))
     }
-    const gitServices = services as ServiceMap.ServiceMap<ChildProcessSpawner.ChildProcessSpawner>
+    const gitServices = services as Context.Context<ChildProcessSpawner.ChildProcessSpawner>
     currentFiber = Effect.runForkWith(gitServices)(
       getGitInfo(props.cwd).pipe(
         Effect.tap((info) =>

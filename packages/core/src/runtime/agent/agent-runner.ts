@@ -9,7 +9,7 @@ import {
   ManagedRuntime,
   Stream,
 } from "effect"
-import type { ServiceMap } from "effect"
+import type { Context } from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -429,10 +429,10 @@ const makeSharedRunnerHelpers = (
 
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
-  parentServices: ServiceMap.ServiceMap<never>
+  parentServices: Context.Context<never>
   extensionRegistry: ExtensionRegistryService
 }) => {
-  const parentLayer = Layer.succeedServices(params.parentServices)
+  const parentLayer = Layer.succeedContext(params.parentServices)
 
   const resolved = params.extensionRegistry.getResolved()
 
@@ -532,7 +532,7 @@ const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
   shared: ReturnType<typeof makeSharedRunnerHelpers>
   extensionRegistry: ExtensionRegistryService
-  parentServices: ServiceMap.ServiceMap<never>
+  parentServices: Context.Context<never>
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId
@@ -737,8 +737,8 @@ export const InProcessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
 
-      // Capture full parent service map — no manual enumeration needed
-      const parentServices = yield* Effect.services()
+      // Capture full parent context — no manual enumeration needed
+      const parentServices = yield* Effect.context()
 
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {
@@ -925,8 +925,8 @@ export const SubprocessRunner = (
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
 
-      // Capture full parent service map — no manual enumeration needed
-      const parentServices = yield* Effect.services()
+      // Capture full parent context — no manual enumeration needed
+      const parentServices = yield* Effect.context()
 
       const shared = makeSharedRunnerHelpers(storage, eventPublisher)
       const notifyMirroredEventObservers = (event: AgentEvent) => {

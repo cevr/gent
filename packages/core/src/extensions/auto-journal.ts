@@ -10,7 +10,7 @@
  * - review: per review tool completion (peer review)
  */
 
-import { ServiceMap, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   appendFileSync,
@@ -78,7 +78,7 @@ export interface AutoJournalService {
   readonly getActivePath: () => Effect.Effect<string | undefined>
 }
 
-export class AutoJournal extends ServiceMap.Service<AutoJournal, AutoJournalService>()(
+export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService>()(
   "@gent/core/src/extensions/auto-journal/AutoJournal",
 ) {
   static Noop: Layer.Layer<AutoJournal> = Layer.succeed(AutoJournal, {

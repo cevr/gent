@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { Clock, ServiceMap, Effect, Layer, Schema, FileSystem, Path } from "effect"
+import { Clock, Context, Effect, Layer, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart } from "../domain/message.js"
 import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
@@ -873,7 +873,7 @@ const makeStorage = Effect.gen(function* () {
   } satisfies StorageService
 })
 
-export class Storage extends ServiceMap.Service<Storage, StorageService>()(
+export class Storage extends Context.Service<Storage, StorageService>()(
   "@gent/core/src/storage/sqlite-storage/Storage",
 ) {
   static Live = (

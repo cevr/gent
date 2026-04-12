@@ -9,7 +9,7 @@ import {
   Schema,
   Scope,
   Semaphore,
-  ServiceMap,
+  Context,
 } from "effect"
 import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
 import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
@@ -110,7 +110,7 @@ export interface ExtensionStateRuntimeService {
   readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-export class ExtensionStateRuntime extends ServiceMap.Service<
+export class ExtensionStateRuntime extends Context.Service<
   ExtensionStateRuntime,
   ExtensionStateRuntimeService
 >()("@gent/core/src/runtime/extensions/state-runtime/ExtensionStateRuntime") {

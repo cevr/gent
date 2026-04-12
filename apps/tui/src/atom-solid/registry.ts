@@ -1,11 +1,11 @@
 import { createRoot, getOwner, runWithOwner } from "solid-js"
 import type { Accessor, Owner } from "solid-js"
-import * as ServiceMap from "effect/ServiceMap"
+import * as Context from "effect/Context"
 import type { Atom, AtomInstance, Writable, WritableInstance } from "./atom"
 
 export interface Registry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services: ServiceMap.ServiceMap<any>
+  readonly services: Context.Context<any>
   readonly read: <A>(atom: Atom<A>) => Accessor<A>
   readonly get: <A>(atom: Atom<A>) => A
   readonly set: <R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)) => void
@@ -16,20 +16,20 @@ export interface Registry {
 
 export interface RegistryOptions {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services?: ServiceMap.ServiceMap<any>
+  readonly services?: Context.Context<any>
   readonly maxEntries?: number
 }
 
 export const make = (options?: RegistryOptions): Registry =>
   new RegistryImpl(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    options?.services ?? (ServiceMap.empty() as ServiceMap.ServiceMap<any>),
+    options?.services ?? (Context.empty() as Context.Context<any>),
     options?.maxEntries,
   )
 
 class RegistryImpl implements Registry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services: ServiceMap.ServiceMap<any>
+  readonly services: Context.Context<any>
   private readonly instances = new Map<Atom<unknown>, AtomInstance<unknown>>()
   private readonly refCounts = new Map<Atom<unknown>, number>()
   private readonly maxEntries: number | undefined
@@ -38,7 +38,7 @@ class RegistryImpl implements Registry {
   private readonly disposeRoot: () => void
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(services: ServiceMap.ServiceMap<any>, maxEntries?: number) {
+  constructor(services: Context.Context<any>, maxEntries?: number) {
     this.services = services
     this.maxEntries = maxEntries
     this.shouldEvict = maxEntries !== undefined && maxEntries > 0

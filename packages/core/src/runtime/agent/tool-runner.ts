@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
 import { ExtensionRegistry } from "../extensions/registry.js"
 import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
@@ -44,7 +44,7 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
     },
   })
 
-export class ToolRunner extends ServiceMap.Service<ToolRunner, ToolRunnerService>()(
+export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
   static Live: Layer.Layer<

@@ -1,4 +1,4 @@
-import { ServiceMap, Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 
 // Valid Regex Pattern - validates regex at decode time
 const ValidRegexPattern = Schema.String.pipe(
@@ -39,7 +39,7 @@ export interface PermissionService {
   readonly getRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 }
 
-export class Permission extends ServiceMap.Service<Permission, PermissionService>()(
+export class Permission extends Context.Service<Permission, PermissionService>()(
   "@gent/core/src/domain/permission",
 ) {
   static Live = (

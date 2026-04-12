@@ -3,7 +3,7 @@ import type { Accessor } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
-import type * as ServiceMap from "effect/ServiceMap"
+import type * as Context from "effect/Context"
 import type { Registry } from "./registry"
 import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
@@ -69,7 +69,7 @@ export const effect = <A, E, R>(
     const get = <T>(atom: Atom<T>) => registry.read(atom)()
 
     const runEffect = (eff: Effect.Effect<A, E, R>) => {
-      const services = registry.services as ServiceMap.ServiceMap<R>
+      const services = registry.services as Context.Context<R>
       let cancelled = false
       const fiber = Effect.runForkWith(services)(eff)
       fiber.addObserver((exit) => {

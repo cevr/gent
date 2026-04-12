@@ -1,4 +1,4 @@
-import { Cause, ServiceMap, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
 import { AgentName, AgentRunnerService } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
@@ -130,7 +130,7 @@ export interface ActorProcessService {
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
 
-export class ActorProcess extends ServiceMap.Service<ActorProcess, ActorProcessService>()(
+export class ActorProcess extends Context.Service<ActorProcess, ActorProcessService>()(
   "@gent/core/src/runtime/actor-process/ActorProcess",
 ) {
   static Test = (): Layer.Layer<ActorProcess> =>

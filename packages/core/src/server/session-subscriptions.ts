@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap, Stream, SubscriptionRef } from "effect"
+import { Effect, Layer, Context, Stream, SubscriptionRef } from "effect"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import type { AppServiceError } from "./errors.js"
 import type { SessionRuntime, WatchRuntimeInput } from "./transport-contract.js"
@@ -9,7 +9,7 @@ export interface SessionSubscriptionsService {
   ) => Stream.Stream<SessionRuntime, AppServiceError>
 }
 
-export class SessionSubscriptions extends ServiceMap.Service<
+export class SessionSubscriptions extends Context.Service<
   SessionSubscriptions,
   SessionSubscriptionsService
 >()("@gent/core/src/server/session-subscriptions/SessionSubscriptions") {
