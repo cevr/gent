@@ -5,6 +5,7 @@ import { getFileTag } from "../../components/file-tag"
 import { Glob } from "bun"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync, readdirSync } from "node:fs"
+import { searchFiles, trackSelection } from "../../utils/file-finder"
 
 const FILE_GLOB = new Glob("**/*")
 const MAX_RESULTS = 50
@@ -70,6 +71,31 @@ const loadGitignore = (cwd: string): Glob[] => {
   return patterns
 }
 
+/** Fallback search using Bun Glob + fuzzyScore (no native deps) */
+async function fallbackSearch(
+  cwd: string,
+  filter: string,
+  ignorePatterns: Glob[],
+): Promise<ReadonlyArray<{ id: string; label: string; description?: string }>> {
+  const matches: Array<{ path: string; name: string; score: number }> = []
+
+  for await (const path of FILE_GLOB.scan({ cwd, onlyFiles: true })) {
+    if (path.startsWith(".") || path.includes("/.")) continue
+    if (isGitignored(path, ignorePatterns)) continue
+    const score = fuzzyScore(filter, path)
+    if (score > 0) {
+      matches.push({ path, name: path.split("/").pop() ?? path, score })
+    }
+    if (matches.length > MAX_RESULTS * 3) break
+  }
+
+  matches.sort((a, b) => b.score - a.score)
+  return matches.slice(0, MAX_RESULTS).map(formatMatch)
+}
+
+// Track the last filter for frecency (set on search, used on select)
+let lastFilter = ""
+
 export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
   autocompleteItems: [
     {
@@ -77,10 +103,10 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
       title: "Files",
       items: async (filter: string) => {
         const cwd = ctx.cwd
-        const ignorePatterns = loadGitignore(cwd)
 
         // Empty filter: list top-level directory entries
         if (filter.length === 0) {
+          const ignorePatterns = loadGitignore(cwd)
           try {
             const entries = readdirSync(cwd, { withFileTypes: true })
             return entries
@@ -101,20 +127,23 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
           }
         }
 
-        const matches: Array<{ path: string; name: string; score: number }> = []
+        lastFilter = filter
 
-        for await (const path of FILE_GLOB.scan({ cwd, onlyFiles: true })) {
-          if (path.startsWith(".") || path.includes("/.")) continue
-          if (isGitignored(path, ignorePatterns)) continue
-          const score = fuzzyScore(filter, path)
-          if (score > 0) {
-            matches.push({ path, name: path.split("/").pop() ?? path, score })
-          }
-          if (matches.length > MAX_RESULTS * 3) break
+        // Try native FFF search first
+        const fffResult = await searchFiles(cwd, filter, MAX_RESULTS)
+        if (fffResult !== null) {
+          return fffResult.items.map((item) =>
+            formatMatch({ path: item.relativePath, name: item.fileName }),
+          )
         }
 
-        matches.sort((a, b) => b.score - a.score)
-        return matches.slice(0, MAX_RESULTS).map(formatMatch)
+        // Fallback: Bun Glob + fuzzyScore
+        return fallbackSearch(cwd, filter, loadGitignore(cwd))
+      },
+      formatInsertion: (id: string) => {
+        // Track selection for frecency learning
+        trackSelection(ctx.cwd, lastFilter, id)
+        return `@${id} `
       },
     },
   ],
