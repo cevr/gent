@@ -20,14 +20,10 @@
     "test": "bun test tests/"
   },
   "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^4.0.89",
-    "@ai-sdk/anthropic": "catalog:",
-    "@ai-sdk/google": "catalog:",
-    "@ai-sdk/mistral": "catalog:",
-    "@ai-sdk/openai": "catalog:",
-    "@aws-sdk/credential-providers": "^3.1024.0",
+    "@effect/ai-anthropic": "catalog:",
+    "@effect/ai-openai": "catalog:",
+    "@effect/ai-openai-compat": "catalog:",
     "@types/turndown": "^5.0.6",
-    "ai": "catalog:",
     "effect-machine": "catalog:",
     "effect-wide-event": "catalog:",
     "linkedom": "^0.18.12",

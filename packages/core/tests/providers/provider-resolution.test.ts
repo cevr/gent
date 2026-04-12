@@ -1,10 +1,11 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
-import { Provider } from "@gent/core/providers/provider"
-import type { LanguageModel } from "ai"
+import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
+import { LanguageModel } from "effect/unstable/ai"
+import * as AiError from "effect/unstable/ai/AiError"
 
 const testAuthStorage = {
   get: () => Effect.sync(() => undefined as AuthInfo | undefined),
@@ -14,17 +15,40 @@ const testAuthStorage = {
   listInfo: () => Effect.succeed({} as Record<string, AuthInfo>),
 }
 
-const fakeModel = (id: string): LanguageModel =>
-  ({
-    modelId: id,
-    provider: "test",
-    specificationVersion: "v1",
-  }) as unknown as LanguageModel
+/** Create a fake ProviderResolution with a stub LanguageModel layer */
+const fakeResolution = (): ProviderResolution => ({
+  layer: Layer.succeed(LanguageModel.LanguageModel, {
+    generateText: () =>
+      Effect.fail(
+        AiError.make({
+          module: "Test",
+          method: "generateText",
+          reason: new AiError.UnknownError({ description: "stub" }),
+        }),
+      ),
+    generateObject: () =>
+      Effect.fail(
+        AiError.make({
+          module: "Test",
+          method: "generateObject",
+          reason: new AiError.UnknownError({ description: "stub" }),
+        }),
+      ),
+    streamText: () =>
+      Stream.fail(
+        AiError.make({
+          module: "Test",
+          method: "streamText",
+          reason: new AiError.UnknownError({ description: "stub" }),
+        }),
+      ),
+  } as LanguageModel.Service),
+})
 
 const makeProvider = (id: string, name?: string): ProviderContribution => ({
   id,
   name: name ?? id,
-  resolveModel: (modelName) => fakeModel(`${id}/${modelName}`),
+  resolveModel: () => fakeResolution(),
 })
 
 const makeExt = (extId: string, providers: ProviderContribution[]): LoadedExtension => ({
@@ -47,19 +71,21 @@ describe("Provider model resolution", () => {
     const result = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const provider = yield* Provider
-        yield* provider.stream({
+        // Should resolve successfully (the stream will fail with stub error, not resolution error)
+        const stream = yield* provider.stream({
           model: "custom/gpt-5",
           messages: [],
           systemPrompt: "",
         })
+        // Consume one chunk to trigger the stream — expect the stub error, not "Unknown provider"
+        yield* Stream.runHead(stream)
       }).pipe(Effect.provide(layer)),
     )
-    // The fake model triggers an AI SDK version error (not a "Unknown provider" resolution error),
-    // proving that model resolution through the extension succeeded.
     if (result._tag === "Failure") {
       const pretty = result.cause.toString()
       expect(pretty).not.toContain("Unknown provider")
-      expect(pretty).toContain("Unsupported model version")
+      // Stub LanguageModel fails with AiError — wrapped as ProviderError
+      expect(pretty).toContain("stub")
     }
   })
 

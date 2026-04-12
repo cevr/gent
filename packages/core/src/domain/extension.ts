@@ -360,6 +360,7 @@ export interface CommandContribution {
 export type {
   ProviderContribution,
   ProviderAuthInfo,
+  ProviderHints,
   PersistAuth,
   ProviderAuthorizeContext,
   ProviderCallbackContext,

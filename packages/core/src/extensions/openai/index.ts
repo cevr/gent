@@ -1,7 +1,11 @@
-import { Effect } from "effect"
-import { createOpenAI } from "@ai-sdk/openai"
+import { Effect, Layer, Redacted } from "effect"
 import { extension } from "../api.js"
-import type { ProviderAuthInfo, ProviderContribution } from "../../domain/extension.js"
+import type {
+  ProviderAuthInfo,
+  ProviderContribution,
+  ProviderHints,
+} from "../../domain/extension.js"
+import type { ProviderResolution } from "../../providers/provider.js"
 import {
   authorizeOpenAI,
   createOpenAIOAuthFetch,
@@ -10,6 +14,8 @@ import {
 } from "./oauth.js"
 import { AuthOauth } from "../../domain/auth-store.js"
 import { AuthMethod } from "../../domain/auth-method.js"
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { FetchHttpClient } from "effect/unstable/http"
 
 const readEnv = (name: string): string | undefined => {
   const val = process.env[name]
@@ -71,32 +77,46 @@ type OAuthCallback = (code?: string) => Promise<{
   accountId?: string
 }>
 
+const buildOpenAiConfig = (hints?: ProviderHints) => {
+  const config: Record<string, unknown> = {}
+  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
+  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
+  if (hints?.reasoning !== undefined && hints.reasoning !== "none") {
+    config["reasoning_effort"] = hints.reasoning
+  }
+  return config
+}
+
 export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
   // Pending OAuth callbacks keyed by authorizationId (closure state)
   const pendingCallbacks = new Map<string, OAuthCallback>()
   const openaiProvider: ProviderContribution = {
     id: "openai",
     name: "OpenAI",
-    buildOptions: (_modelId, reasoning, existing) => {
-      if (reasoning === undefined || reasoning === "none") return existing
-      const existingRec = existing as Record<string, unknown> | undefined
-      const existingOpenai = existingRec?.["openai"] as Record<string, unknown> | undefined
-      return { ...existingRec, openai: { ...existingOpenai, reasoningEffort: reasoning } }
-    },
-    resolveModel: (modelName, authInfo) => {
+    resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+      const config = buildOpenAiConfig(hints)
+
       // Stored OAuth — handle inline with token refresh
+      // Uses openai-compat (Chat Completions) since the Codex endpoint expects that format
       if (authInfo?.type === "oauth") {
         if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
           throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
         }
         const loadAuth = buildOAuthLoader(authInfo)
         const oauthFetch = createOpenAIOAuthFetch(loadAuth)
-        const client = createOpenAI({
-          apiKey: "oauth",
-          fetch: oauthFetch,
-          headers: { originator: "gent" },
-        })
-        return client.responses(modelName)
+
+        // Provide custom fetch via FetchHttpClient.Fetch layer
+        const customFetchLayer = Layer.succeed(
+          FetchHttpClient.Fetch,
+          oauthFetch as typeof globalThis.fetch,
+        )
+        const clientLayer = OpenAiClient.layer({
+          apiKey: Redacted.make("oauth"),
+        }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
+        const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+          Layer.provide(clientLayer),
+        )
+        return { layer: modelLayer }
       }
 
       // Stored API key takes precedence over env var
@@ -106,11 +126,21 @@ export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
       const apiKey = storedApiKey ?? envApiKey
 
       if (apiKey !== undefined) {
-        return createOpenAI({ apiKey })(modelName)
+        const clientLayer = OpenAiClient.layer({
+          apiKey: Redacted.make(apiKey),
+        }).pipe(Layer.provide(FetchHttpClient.layer))
+        const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+          Layer.provide(clientLayer),
+        )
+        return { layer: modelLayer }
       }
 
       // No auth available — try unauthenticated (will fail at API call time)
-      return createOpenAI({})(modelName)
+      const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
+      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+        Layer.provide(clientLayer),
+      )
+      return { layer: modelLayer }
     },
     listModels: (baseCatalog, authInfo) => {
       // When OAuth is active, filter to allowed models + zero pricing

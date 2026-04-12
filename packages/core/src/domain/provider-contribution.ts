@@ -9,14 +9,28 @@ import type { AuthMethod, AuthAuthorizationMethod } from "./auth-method"
 
 // Provider Contribution — what a provider extension registers
 
+/** Hints passed from ProviderRequest to resolveModel. Extensions bake these into their
+ *  provider Config layer (e.g. AnthropicLanguageModel.Config.max_tokens). */
+export interface ProviderHints {
+  readonly reasoning?: string
+  readonly maxTokens?: number
+  readonly temperature?: number
+}
+
 export interface ProviderContribution {
   /** Provider identifier — e.g. "anthropic", "openai", "my-custom" */
   readonly id: string
   /** Display name */
   readonly name: string
-  /** Resolve a model name to a LanguageModel instance (typed as unknown to avoid domain→ai dep).
-   *  authInfo is the stored auth from AuthStore (api key or oauth tokens), if available. */
-  readonly resolveModel: (modelName: string, authInfo?: ProviderAuthInfo) => unknown
+  /** Resolve a model name to a ProviderResolution (typed as unknown to avoid domain→ai dep).
+   *  The resolved value should be a `{ layer, keychainMode? }` object where `layer` is a
+   *  `Layer<LanguageModel.LanguageModel>` with all config baked in.
+   *  During migration, extensions may still return a vercel LanguageModel — provider.ts bridges them. */
+  readonly resolveModel: (
+    modelName: string,
+    authInfo?: ProviderAuthInfo,
+    hints?: ProviderHints,
+  ) => unknown
   /** Filter/extend the model catalog for this provider. authInfo provided when stored auth exists. */
   readonly listModels?: (
     baseCatalog: ReadonlyArray<unknown>,
@@ -24,8 +38,7 @@ export interface ProviderContribution {
   ) => ReadonlyArray<unknown>
   /** Auth configuration — methods + authorize/callback handlers */
   readonly auth?: ProviderAuthContribution
-  /** Build provider-specific options for the AI SDK. Called during stream/generate setup.
-   *  Receives the model ID, reasoning level, and existing options — returns merged options. */
+  /** @deprecated Use hints parameter on resolveModel instead. Kept for bridge compatibility. */
   readonly buildOptions?: (
     modelId: string,
     reasoning: string | undefined,

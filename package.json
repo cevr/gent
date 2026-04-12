@@ -26,8 +26,6 @@
     "multipasta": "catalog:"
   },
   "devDependencies": {
-    "@ai-sdk/google": "catalog:",
-    "@ai-sdk/mistral": "catalog:",
     "@effect/language-service": "^0.84.3",
     "@effect/platform-bun": "catalog:",
     "@effect/sql-pg": "catalog:",
@@ -43,6 +41,9 @@
     "typescript": "^6.0.2"
   },
   "overrides": {
+    "@effect/ai-anthropic": "4.0.0-beta.47",
+    "@effect/ai-openai": "4.0.0-beta.47",
+    "@effect/ai-openai-compat": "4.0.0-beta.47",
     "effect": "4.0.0-beta.47"
   },
   "packageManager": "bun@1.3.6",
@@ -55,13 +56,11 @@
     "effect-wide-event": "file:/Users/cvr/Developer/personal/effect-wide-event",
     "msgpackr": "^1.11.9",
     "multipasta": "^0.2.7",
-    "ai": "^6.0.146",
-    "@ai-sdk/anthropic": "^3.0.66",
-    "@ai-sdk/openai": "^3.0.50",
-    "@ai-sdk/google": "^3.0.58",
-    "@ai-sdk/mistral": "^3.0.28",
     "effect-bun-test": "0.3.0",
-    "solid-js": "^1.9.11"
+    "solid-js": "^1.9.11",
+    "@effect/ai-anthropic": "4.0.0-beta.47",
+    "@effect/ai-openai": "4.0.0-beta.47",
+    "@effect/ai-openai-compat": "4.0.0-beta.47"
   },
   "patchedDependencies": {}
 }

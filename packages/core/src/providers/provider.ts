@@ -3,21 +3,26 @@ import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId, type ToolCallId as ToolCallIdType } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
-import type { ProviderAuthInfo } from "../domain/extension.js"
-import {
-  streamText,
-  generateText,
-  tool,
-  jsonSchema,
-  type LanguageModel,
-  type ToolSet,
-  type ModelMessage,
-  type ToolModelMessage,
-  type ToolResultPart as AIToolResultPart,
-} from "ai"
+import type { ProviderAuthInfo, ProviderHints } from "../domain/extension.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry"
+import { LanguageModel } from "effect/unstable/ai"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import type * as Response from "effect/unstable/ai/Response"
+import * as AiTool from "effect/unstable/ai/Tool"
+import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import * as AiError from "effect/unstable/ai/AiError"
 
-// Provider Info
+// ── Provider Resolution ──
+
+/** What a migrated extension returns from resolveModel (typed as unknown at the boundary) */
+export interface ProviderResolution {
+  /** Layer<LanguageModel.LanguageModel, never, never> — fully provided including HttpClient */
+  readonly layer: Layer.Layer<LanguageModel.LanguageModel>
+  /** Keychain/OAuth mode — triggers mcp_ tool prefix + system identity injection */
+  readonly keychainMode?: boolean
+}
+
+// ── Provider Info ──
 
 export class ProviderInfo extends Schema.Class<ProviderInfo>("ProviderInfo")({
   id: Schema.String,
@@ -31,6 +36,8 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
   return [modelId.slice(0, slash), modelId.slice(slash + 1)]
 }
 
+// ── Model Resolver ──
+
 const makeModelResolver = (
   authStore: AuthStoreService,
   extensionRegistry: ExtensionRegistryService,
@@ -40,7 +47,7 @@ const makeModelResolver = (
       .get(providerName)
       .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
 
-  return Effect.fn("Provider.resolveModel")(function* (modelId: string) {
+  return Effect.fn("Provider.resolveModel")(function* (modelId: string, hints?: ProviderHints) {
     const parsed = parseModelId(modelId)
     if (parsed === undefined) {
       return yield* new ProviderError({
@@ -88,22 +95,20 @@ const makeModelResolver = (
       }
     }
 
-    return yield* Effect.try({
-      try: () => extensionProvider.resolveModel(modelName, authParam) as LanguageModel,
+    const resolved = yield* Effect.try({
+      try: () => extensionProvider.resolveModel(modelName, authParam, hints) as ProviderResolution,
       catch: (e) =>
         new ProviderError({
           message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
           model: modelId,
         }),
     })
+
+    return resolved
   })
 }
 
-type StreamTextResult = ReturnType<typeof streamText>
-type FullStreamPart = StreamTextResult extends { fullStream: AsyncIterable<infer A> } ? A : never
-type ProviderOptions = Parameters<typeof streamText>[0]["providerOptions"]
-
-// Provider Error
+// ── Provider Error ──
 
 export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("ProviderError", {
   message: Schema.String,
@@ -111,7 +116,7 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
   cause: Schema.optional(Schema.Defect),
 }) {}
 
-// Stream Chunk Types
+// ── Stream Chunk Types ──
 
 export class TextChunk extends Schema.TaggedClass<TextChunk>()("TextChunk", {
   text: Schema.String,
@@ -140,7 +145,7 @@ export class FinishChunk extends Schema.TaggedClass<FinishChunk>()("FinishChunk"
 export const StreamChunk = Schema.Union([TextChunk, ToolCallChunk, ReasoningChunk, FinishChunk])
 export type StreamChunk = typeof StreamChunk.Type
 
-// Provider Request
+// ── Provider Request ──
 
 export interface ProviderRequest {
   readonly model: string
@@ -151,7 +156,7 @@ export interface ProviderRequest {
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
   readonly abortSignal?: AbortSignal
-  readonly providerOptions?: ProviderOptions
+  readonly providerOptions?: unknown
 }
 
 // Simple generate request (no tools, no streaming)
@@ -163,7 +168,7 @@ export interface GenerateRequest {
   readonly maxTokens?: number
 }
 
-// Provider Service
+// ── Provider Service ──
 
 export interface ProviderService {
   readonly stream: (
@@ -173,189 +178,14 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-/** Resolve provider-specific options from extension-contributed buildOptions */
-const resolveProviderOptions = (
-  registry: {
-    getProvider: (id: string) => Effect.Effect<
-      | {
-          buildOptions?: (
-            modelId: string,
-            reasoning: string | undefined,
-            existing: unknown,
-          ) => unknown
-        }
-      | undefined
-    >
-  },
-  modelId: string,
-  reasoning: ProviderRequest["reasoning"],
-  existing: ProviderOptions | undefined,
-): Effect.Effect<ProviderOptions | undefined> => {
-  const providerId = modelId.indexOf("/") > 0 ? modelId.slice(0, modelId.indexOf("/")) : undefined
-  if (providerId === undefined) return Effect.succeed(existing)
-  return registry.getProvider(providerId).pipe(
-    Effect.map((provider) => {
-      if (provider?.buildOptions === undefined) return existing
-      return provider.buildOptions(modelId, reasoning, existing) as ProviderOptions
-    }),
-  )
+// ── Message Conversion (our MessagePart → Prompt.Message) ──
+
+interface ConvertOptions {
+  readonly keychainMode: boolean
 }
 
-export class Provider extends Context.Service<Provider, ProviderService>()(
-  "@gent/core/src/providers/provider",
-) {
-  static Live: Layer.Layer<Provider, never, AuthStore | ExtensionRegistry> = Layer.effect(
-    Provider,
-    Effect.gen(function* () {
-      const authStore = yield* AuthStore
-      const registry = yield* ExtensionRegistry
-      const getModel = makeModelResolver(authStore, registry)
-
-      return {
-        stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
-          const model = yield* getModel(request.model)
-
-          const messages = convertMessages(request.messages)
-          const tools = request.tools !== undefined ? convertTools(request.tools) : undefined
-
-          const opts: Parameters<typeof streamText>[0] = {
-            model,
-            messages,
-          }
-          if (tools !== undefined) opts.tools = tools
-          if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
-            opts.system = request.systemPrompt
-          }
-          if (request.maxTokens !== undefined) {
-            opts.maxOutputTokens = request.maxTokens
-          }
-          if (request.temperature !== undefined) {
-            opts.temperature = request.temperature
-          }
-          if (request.abortSignal !== undefined) {
-            opts.abortSignal = request.abortSignal
-          }
-          opts.providerOptions = yield* resolveProviderOptions(
-            registry,
-            request.model,
-            request.reasoning,
-            request.providerOptions,
-          )
-          // 30s chunk timeout — abort stream if no data for 30 seconds
-          opts.timeout = { chunkMs: 30_000 }
-
-          const result = yield* Effect.try({
-            try: () => streamText(opts),
-            catch: (e) =>
-              new ProviderError({
-                message: `Stream failed: ${e}`,
-                model: request.model,
-                cause: e,
-              }),
-          })
-
-          const toChunk = (
-            part: FullStreamPart,
-          ): Effect.Effect<StreamChunk | null, ProviderError> => {
-            switch (part.type) {
-              case "text-delta":
-                return Effect.succeed<StreamChunk>(new TextChunk({ text: part.text }))
-              case "tool-call":
-                return Effect.succeed<StreamChunk>(
-                  new ToolCallChunk({
-                    toolCallId: part.toolCallId as ToolCallIdType,
-                    toolName: part.toolName,
-                    input: part.input,
-                  }),
-                )
-              case "reasoning-delta":
-                return Effect.succeed<StreamChunk>(new ReasoningChunk({ text: part.text }))
-              case "finish":
-                return Effect.succeed<StreamChunk>(
-                  new FinishChunk({
-                    finishReason: part.finishReason ?? "stop",
-                    usage:
-                      part.totalUsage !== undefined
-                        ? {
-                            inputTokens: part.totalUsage.inputTokens ?? 0,
-                            outputTokens: part.totalUsage.outputTokens ?? 0,
-                          }
-                        : undefined,
-                  }),
-                )
-              case "error": {
-                const err = part.error instanceof Error ? part.error : new Error(String(part.error))
-                return Effect.fail(
-                  new ProviderError({
-                    message: `API error: ${err.message}`,
-                    model: request.model,
-                    cause: err,
-                  }),
-                )
-              }
-              default:
-                return Effect.succeed(null)
-            }
-          }
-
-          return Stream.fromAsyncIterable<FullStreamPart, ProviderError>(
-            result.fullStream,
-            (e) =>
-              new ProviderError({
-                message: `Stream failed: ${e}`,
-                model: request.model,
-                cause: e,
-              }),
-          ).pipe(
-            Stream.mapEffect(toChunk),
-            Stream.filter((chunk): chunk is StreamChunk => chunk !== null),
-          )
-        }),
-
-        generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const model = yield* getModel(request.model)
-
-          const opts: Parameters<typeof generateText>[0] = {
-            model,
-            prompt: request.prompt,
-          }
-          if (request.systemPrompt !== undefined && request.systemPrompt !== "") {
-            opts.system = request.systemPrompt
-          }
-          if (request.maxTokens !== undefined) opts.maxOutputTokens = request.maxTokens
-
-          const result = yield* Effect.tryPromise({
-            try: () => generateText(opts),
-            catch: (e) =>
-              new ProviderError({
-                message: `Generate failed: ${e}`,
-                model: request.model,
-                cause: e,
-              }),
-          })
-
-          return result.text
-        }),
-      } satisfies ProviderService
-    }),
-  )
-
-  static Test = (responses: ReadonlyArray<ReadonlyArray<StreamChunk>>): Layer.Layer<Provider> => {
-    let index = 0
-    return Layer.succeed(Provider, {
-      stream: () =>
-        Effect.succeed(
-          Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
-        ),
-      generate: () => Effect.succeed("test response"),
-    })
-  }
-}
-
-// Convert our Messages to AI SDK ModelMessages
-// Since our types now match AI SDK's shape, this is mostly direct mapping
-function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
-  const result: ModelMessage[] = []
+function convertMessages(messages: ReadonlyArray<Message>, opts: ConvertOptions): Prompt.Message[] {
+  const result: Prompt.Message[] = []
 
   for (const msg of messages) {
     const parts = msg.parts
@@ -363,10 +193,15 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
     if (msg.role === "system") {
       const textParts = parts.filter((p): p is TextPart => p.type === "text")
       if (textParts.length > 0) {
-        result.push({
-          role: "system",
-          content: textParts.map((p) => p.text).join("\n"),
-        })
+        const text = textParts.map((p) => p.text).join("\n")
+        result.push(
+          Prompt.systemMessage({
+            content: text,
+            ...(opts.keychainMode
+              ? { options: { anthropic: { cacheControl: { type: "ephemeral" as const } } } }
+              : {}),
+          }),
+        )
       }
       continue
     }
@@ -374,72 +209,55 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
     if (msg.role === "tool") {
       const toolResults = parts.filter((p): p is ToolResultPart => p.type === "tool-result")
       if (toolResults.length > 0) {
-        const toolMessage: ToolModelMessage = {
-          role: "tool",
-          content: toolResults.map(
-            (p): AIToolResultPart => ({
-              type: "tool-result",
-              toolCallId: p.toolCallId,
-              toolName: p.toolName,
-              // SAFETY: Our ToolResultOutput shape matches AI SDK v6's ToolResultOutput.
-              // The cast bridges the external type boundary.
-              output: (p.output.type === "json"
-                ? { type: "json" as const, value: p.output.value }
-                : {
-                    type: "error-json" as const,
-                    value: p.output.value,
-                  }) as AIToolResultPart["output"],
-            }),
-          ),
-        }
-        result.push(toolMessage)
+        result.push(
+          Prompt.toolMessage({
+            content: toolResults.map((p) =>
+              Prompt.toolResultPart({
+                id: p.toolCallId,
+                name: p.toolName,
+                isFailure: p.output.type === "error-json",
+                result: p.output.value,
+              }),
+            ),
+          }),
+        )
       }
       continue
     }
 
     if (msg.role === "user") {
-      const content: Array<{ type: "text"; text: string } | { type: "image"; image: string }> = []
-
+      const content: Prompt.UserMessagePart[] = []
       for (const part of parts) {
         if (part.type === "text") {
-          content.push({ type: "text", text: part.text })
+          content.push(Prompt.textPart({ text: part.text }))
         } else if (part.type === "image") {
-          content.push({ type: "image", image: part.image })
+          content.push(Prompt.filePart({ data: part.image, mediaType: "image/png" }))
         }
       }
-
       if (content.length > 0) {
-        result.push({ role: "user", content })
+        result.push(Prompt.userMessage({ content }))
       }
       continue
     }
 
     if (msg.role === "assistant") {
-      const content: Array<
-        | { type: "text"; text: string }
-        | {
-            type: "tool-call"
-            toolCallId: typeof ToolCallId.Type
-            toolName: string
-            input: unknown
-          }
-      > = []
-
+      const content: Prompt.AssistantMessagePart[] = []
       for (const part of parts) {
         if (part.type === "text") {
-          content.push({ type: "text", text: part.text })
+          content.push(Prompt.textPart({ text: part.text }))
         } else if (part.type === "tool-call") {
-          content.push({
-            type: "tool-call",
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-          })
+          content.push(
+            Prompt.toolCallPart({
+              id: part.toolCallId,
+              name: part.toolName,
+              params: part.input,
+              providerExecuted: false,
+            }),
+          )
         }
       }
-
       if (content.length > 0) {
-        result.push({ role: "assistant", content })
+        result.push(Prompt.assistantMessage({ content }))
       }
     }
   }
@@ -447,7 +265,9 @@ function convertMessages(messages: ReadonlyArray<Message>): ModelMessage[] {
   return result
 }
 
-const toolCache = new WeakMap<AnyToolDefinition, ToolSet[string]>()
+// ── Tool Conversion (AnyToolDefinition → Toolkit.WithHandler) ──
+
+const MCP_PREFIX = "mcp_"
 
 /**
  * Flatten allOf into parent object. Effect's `.check()` emits constraints
@@ -482,38 +302,203 @@ function flattenAllOf(schema: Record<string, unknown>): Record<string, unknown> 
   return result
 }
 
+function buildToolJsonSchema(t: AnyToolDefinition): Record<string, unknown> {
+  const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
+  const merged =
+    Object.keys(doc.definitions).length > 0 ? { ...doc.schema, $defs: doc.definitions } : doc.schema
+  const flat = flattenAllOf(merged as Record<string, unknown>)
+  // Ensure top-level type: "object" — Anthropic rejects schemas without it
+  if (flat["type"] === undefined) {
+    flat["type"] = "object"
+    if (flat["properties"] === undefined) flat["properties"] = {}
+    delete flat["anyOf"]
+    delete flat["oneOf"]
+  }
+  return flat
+}
+
 /** @internal — exported for testing */
-export function convertTools(tools: ReadonlyArray<AnyToolDefinition>): ToolSet {
-  const result: ToolSet = {}
+export function convertTools(
+  tools: ReadonlyArray<AnyToolDefinition>,
+  opts: ConvertOptions,
+): AiToolkit.WithHandler<Record<string, AiTool.Any>> {
+  const toolsRecord: Record<string, AiTool.Any> = {}
 
   for (const t of tools) {
-    const cached = toolCache.get(t)
-    if (cached !== undefined) {
-      result[t.name] = cached
-      continue
-    }
-    const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
-    const merged =
-      Object.keys(doc.definitions).length > 0
-        ? { ...doc.schema, $defs: doc.definitions }
-        : doc.schema
-    const flatJsonSchema = flattenAllOf(merged as Record<string, unknown>)
-    // Ensure top-level type: "object" — Anthropic rejects schemas without it
-    // and rejects anyOf/oneOf/allOf at the top level. Schema.Struct({}) produces
-    // anyOf: [{ type: "object" }, { type: "array" }] which triggers both issues.
-    if (flatJsonSchema["type"] === undefined) {
-      flatJsonSchema["type"] = "object"
-      if (flatJsonSchema["properties"] === undefined) flatJsonSchema["properties"] = {}
-      delete flatJsonSchema["anyOf"]
-      delete flatJsonSchema["oneOf"]
-    }
-    const wrapped = tool({
+    const name = opts.keychainMode ? `${MCP_PREFIX}${t.name}` : t.name
+    const flat = buildToolJsonSchema(t)
+    toolsRecord[name] = AiTool.dynamic(name, {
       description: t.description,
-      inputSchema: jsonSchema(flatJsonSchema),
-    }) as ToolSet[string]
-    toolCache.set(t, wrapped)
-    result[t.name] = wrapped
+      parameters: flat,
+    })
   }
 
-  return result
+  // Manual WithHandler construction — Toolkit.make().asEffect() eagerly resolves
+  // handlers from context which crashes when none are provided. Since we use
+  // disableToolCallResolution: true, handlers are never called.
+  return {
+    tools: toolsRecord,
+    handle: (() =>
+      Effect.die("unreachable: disableToolCallResolution is true")) as AiToolkit.WithHandler<
+      Record<string, AiTool.Any>
+    >["handle"],
+  }
+}
+
+// ── StreamPart → StreamChunk mapping ──
+
+type AnyStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
+
+const toStreamChunk =
+  (model: string, keychainMode: boolean) =>
+  (part: AnyStreamPart): Effect.Effect<StreamChunk | null, ProviderError> => {
+    switch (part.type) {
+      case "text-delta":
+        return Effect.succeed<StreamChunk>(new TextChunk({ text: part.delta }))
+      case "tool-call": {
+        const toolName =
+          keychainMode && part.name.startsWith(MCP_PREFIX)
+            ? part.name.slice(MCP_PREFIX.length)
+            : part.name
+        return Effect.succeed<StreamChunk>(
+          new ToolCallChunk({
+            toolCallId: part.id as ToolCallIdType,
+            toolName,
+            input: part.params,
+          }),
+        )
+      }
+      case "reasoning-delta":
+        return Effect.succeed<StreamChunk>(new ReasoningChunk({ text: part.delta }))
+      case "finish":
+        return Effect.succeed<StreamChunk>(
+          new FinishChunk({
+            finishReason: part.reason,
+            usage:
+              part.usage !== undefined
+                ? {
+                    inputTokens: part.usage.inputTokens.total ?? 0,
+                    outputTokens: part.usage.outputTokens.total ?? 0,
+                  }
+                : undefined,
+          }),
+        )
+      case "error":
+        return Effect.fail(
+          new ProviderError({
+            message: `API error: ${String(part)}`,
+            model,
+          }),
+        )
+      default:
+        return Effect.succeed(null)
+    }
+  }
+
+// ── Provider Live ──
+
+export class Provider extends Context.Service<Provider, ProviderService>()(
+  "@gent/core/src/providers/provider",
+) {
+  static Live: Layer.Layer<Provider, never, AuthStore | ExtensionRegistry> = Layer.effect(
+    Provider,
+    Effect.gen(function* () {
+      const authStore = yield* AuthStore
+      const registry = yield* ExtensionRegistry
+      const getModel = makeModelResolver(authStore, registry)
+
+      return {
+        stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
+          const hints: ProviderHints = {
+            reasoning: request.reasoning,
+            maxTokens: request.maxTokens,
+            temperature: request.temperature,
+          }
+          const resolution = yield* getModel(request.model, hints)
+          const keychainMode = resolution.keychainMode === true
+          const modelLayer = resolution.layer
+
+          // Build prompt
+          const msgs = convertMessages(request.messages, { keychainMode })
+          const promptMessages: Prompt.Message[] =
+            request.systemPrompt !== undefined && request.systemPrompt !== ""
+              ? [Prompt.systemMessage({ content: request.systemPrompt }), ...msgs]
+              : msgs
+
+          // Build tools
+          const withHandler =
+            request.tools !== undefined ? convertTools(request.tools, { keychainMode }) : undefined
+
+          // Create stream via LanguageModel service
+          const rawStream =
+            withHandler !== undefined
+              ? LanguageModel.streamText({
+                  prompt: Prompt.make(promptMessages),
+                  toolkit: withHandler,
+                  disableToolCallResolution: true as const,
+                })
+              : LanguageModel.streamText({
+                  prompt: Prompt.make(promptMessages),
+                })
+
+          return rawStream.pipe(
+            Stream.provide(modelLayer),
+            Stream.mapEffect(toStreamChunk(request.model, keychainMode)),
+            Stream.filter((chunk): chunk is StreamChunk => chunk !== null),
+            Stream.catch((error: unknown) =>
+              Stream.fail(
+                new ProviderError({
+                  message: AiError.isAiError(error) ? error.message : String(error),
+                  model: request.model,
+                  cause: error,
+                }),
+              ),
+            ),
+          )
+        }),
+
+        generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
+          const hints: ProviderHints = { maxTokens: request.maxTokens }
+          const resolution = yield* getModel(request.model, hints)
+          const modelLayer = resolution.layer
+
+          const promptMessages: Prompt.Message[] =
+            request.systemPrompt !== undefined && request.systemPrompt !== ""
+              ? [
+                  Prompt.systemMessage({ content: request.systemPrompt }),
+                  Prompt.userMessage({ content: [Prompt.textPart({ text: request.prompt })] }),
+                ]
+              : [Prompt.userMessage({ content: [Prompt.textPart({ text: request.prompt })] })]
+
+          const result = yield* LanguageModel.generateText({
+            prompt: Prompt.make(promptMessages),
+          }).pipe(
+            // @effect-diagnostics-next-line strictEffectProvide:off
+            Effect.provide(modelLayer),
+            Effect.mapError(
+              (error: unknown) =>
+                new ProviderError({
+                  message: AiError.isAiError(error) ? error.message : `Generate failed: ${error}`,
+                  model: request.model,
+                  cause: error,
+                }),
+            ),
+          )
+
+          return result.text
+        }),
+      } satisfies ProviderService
+    }),
+  )
+
+  static Test = (responses: ReadonlyArray<ReadonlyArray<StreamChunk>>): Layer.Layer<Provider> => {
+    let index = 0
+    return Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(
+          Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
+        ),
+      generate: () => Effect.succeed("test response"),
+    })
+  }
 }

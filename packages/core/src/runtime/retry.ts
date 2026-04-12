@@ -1,5 +1,6 @@
 import { Cause, Effect, Schedule, Duration, Schema } from "effect"
 import { ProviderError } from "../providers/provider.js"
+import * as AiError from "effect/unstable/ai/AiError"
 
 // Retry Config Schema
 
@@ -55,6 +56,12 @@ const hasRetryableStatus = (cause: unknown) => {
 export const isRetryable = (error: unknown): boolean => {
   if (!Schema.is(ProviderError)(error)) return false
 
+  // Check if cause is an AiError — use typed retryability
+  if (AiError.isAiError(error.cause)) {
+    return error.cause.isRetryable
+  }
+
+  // Fallback to string matching for non-AiError causes
   const message = error.message.toLowerCase()
   if (retryableMessageSnippets.some((snippet) => message.includes(snippet))) return true
   return hasRetryableStatus(error.cause)
@@ -65,8 +72,14 @@ export const isRetryable = (error: unknown): boolean => {
 export const getRetryAfter = (error: unknown): number | undefined => {
   if (error === null || typeof error !== "object") return undefined
 
-  // Check cause for headers
-  const cause = (error as { cause?: unknown }).cause
+  // Check if cause is an AiError with retryAfter
+  const errorCause = (error as { cause?: unknown }).cause
+  if (AiError.isAiError(errorCause) && errorCause.retryAfter !== undefined) {
+    return Duration.toMillis(errorCause.retryAfter)
+  }
+
+  // Fallback: check cause for headers
+  const cause = errorCause
   if (cause !== null && typeof cause === "object" && "headers" in cause) {
     const headers = (cause as { headers: unknown }).headers
     if (headers instanceof Headers) {

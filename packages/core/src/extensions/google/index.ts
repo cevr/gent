@@ -1,24 +1,44 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google"
+import { Layer, Redacted } from "effect"
 import { extension } from "../api.js"
-import type { ProviderContribution } from "../../domain/extension.js"
+import type { ProviderContribution, ProviderHints } from "../../domain/extension.js"
+import type { ProviderResolution } from "../../providers/provider.js"
 import { AuthMethod } from "../../domain/auth-method.js"
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
+import { FetchHttpClient } from "effect/unstable/http"
+
+const GOOGLE_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 const readEnv = (name: string): string | undefined => {
   const val = process.env[name]
   return val !== undefined && val !== "" ? val : undefined
 }
 
+const buildConfig = (hints?: ProviderHints) => {
+  const config: Record<string, unknown> = {}
+  if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
+  if (hints?.temperature !== undefined) config["temperature"] = hints.temperature
+  return config
+}
+
 export const GoogleExtension = extension("@gent/provider-google", ({ ext }) => {
   const googleProvider: ProviderContribution = {
     id: "google",
     name: "Google",
-    resolveModel: (modelName, authInfo) => {
+    resolveModel: (modelName, authInfo, hints): ProviderResolution => {
       const storedApiKey =
         authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
       const envApiKey = readEnv("GOOGLE_GENERATIVE_AI_API_KEY")
       const apiKey = storedApiKey ?? envApiKey
-      const client = createGoogleGenerativeAI(apiKey !== undefined ? { apiKey } : undefined)
-      return client(modelName)
+      const config = buildConfig(hints)
+
+      const clientLayer = OpenAiClient.layer({
+        ...(apiKey !== undefined ? { apiKey: Redacted.make(apiKey) } : {}),
+        apiUrl: GOOGLE_COMPAT_URL,
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+        Layer.provide(clientLayer),
+      )
+      return { layer: modelLayer }
     },
     auth: {
       methods: [new AuthMethod({ type: "api", label: "Manually enter API key" })],
