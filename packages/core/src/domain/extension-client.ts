@@ -63,6 +63,8 @@ export interface AutocompleteContribution {
   /** Format the selected item id for insertion into the draft.
    *  Default: `${prefix}${id} ` */
   readonly formatInsertion?: (id: string) => string
+  /** Called after an item is selected. Use for side effects like frecency tracking. */
+  readonly onSelect?: (id: string, filter: string) => void
 }
 
 /** What a TUI extension contributes after setup */

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { parseGitignorePatterns, isGitignored } from "../src/extensions/builtins/files.client"
+import { parseGitignorePatterns, isGitignored } from "../src/utils/fallback-file-search"
 
 const parse = (gitignore: string) => parseGitignorePatterns(gitignore)
 const ignored = (path: string, gitignore: string) => isGitignored(path, parse(gitignore))

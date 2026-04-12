@@ -150,6 +150,8 @@ export function useComposerController(): ComposerController {
     if (state === null || inputRef === null) return
 
     const contribution = extensionUI.autocompleteItems().find((c) => c.prefix === state.type)
+    // Notify contribution of selection (frecency tracking, etc.)
+    contribution?.onSelect?.(value, state.filter)
     const beforeTrigger = inputRef.plainText.slice(0, state.triggerPos)
     const insertion = contribution?.formatInsertion
       ? contribution.formatInsertion(value)
