@@ -245,128 +245,14 @@ export const getModelBetas = (modelId: string, excluded?: Set<string>): string[]
   return betas
 }
 
-// ── Tool Name Transforms (mcp_ prefix) ──
+// ── System Identity (exported for keychain-client.ts) ──
 
-const TOOL_PREFIX = "mcp_"
-
-/** Prefix all tool names with mcp_ in outgoing request bodies (Claude Code convention) */
-const transformBody = (body: BodyInit | null | undefined): BodyInit | null | undefined => {
-  if (typeof body !== "string") return body
-  try {
-    const parsed = JSON.parse(body) as {
-      tools?: Array<{ name?: string } & Record<string, unknown>>
-      messages?: Array<{ content?: Array<Record<string, unknown>> }>
-    }
-
-    const prefixName = (name: string): string =>
-      name.startsWith(TOOL_PREFIX) ? name : `${TOOL_PREFIX}${name}`
-
-    if (Array.isArray(parsed.tools)) {
-      parsed.tools = parsed.tools.map((tool) => ({
-        ...tool,
-        name: tool.name ? prefixName(tool.name) : tool.name,
-      }))
-    }
-
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = parsed.messages.map((message) => {
-        if (!Array.isArray(message.content)) return message
-        return {
-          ...message,
-          content: message.content.map((block) => {
-            if (block["type"] !== "tool_use" || typeof block["name"] !== "string") return block
-            return { ...block, name: prefixName(block["name"] as string) }
-          }),
-        }
-      })
-    }
-
-    return JSON.stringify(parsed)
-  } catch {
-    return body
-  }
-}
-
-/** Strip mcp_ prefix from tool names in response stream */
-const stripToolPrefix = (text: string): string =>
-  text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"')
-
-/** Transform response stream to strip mcp_ prefixes */
-const transformResponseStream = (response: Response): Response => {
-  if (!response.body) return response
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const encoder = new TextEncoder()
-  let buffer = ""
-
-  const drain = async (controller: ReadableStreamDefaultController): Promise<void> => {
-    // Emit complete SSE events from buffer
-    const boundary = buffer.indexOf("\n\n")
-    if (boundary !== -1) {
-      const completeEvent = buffer.slice(0, boundary + 2)
-      buffer = buffer.slice(boundary + 2)
-      controller.enqueue(encoder.encode(stripToolPrefix(completeEvent)))
-      return
-    }
-
-    const { done, value } = await reader.read()
-    if (done) {
-      if (buffer) {
-        controller.enqueue(encoder.encode(stripToolPrefix(buffer)))
-        buffer = ""
-      }
-      controller.close()
-      return
-    }
-
-    buffer += decoder.decode(value, { stream: true })
-    return drain(controller)
-  }
-
-  const stream = new ReadableStream({ pull: (controller) => drain(controller) })
-
-  return new Response(stream, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  })
-}
-
-// ── System Identity ──
-
-const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
-
-/** Inject Claude Code system identity into request body if not already present */
-const injectSystemIdentity = (body: BodyInit | null | undefined): BodyInit | null | undefined => {
-  if (typeof body !== "string") return body
-  try {
-    const parsed = JSON.parse(body) as {
-      system?: string | Array<{ type?: string; text?: string }>
-    }
-
-    if (typeof parsed.system === "string") {
-      if (!parsed.system.includes(SYSTEM_IDENTITY_PREFIX)) {
-        parsed.system = `${SYSTEM_IDENTITY_PREFIX}\n\n${parsed.system}`
-      }
-    } else if (Array.isArray(parsed.system)) {
-      const hasPrefix = parsed.system.some(
-        (entry) => typeof entry.text === "string" && entry.text.includes(SYSTEM_IDENTITY_PREFIX),
-      )
-      if (!hasPrefix) {
-        parsed.system.unshift({ type: "text", text: SYSTEM_IDENTITY_PREFIX })
-      }
-    } else {
-      parsed.system = SYSTEM_IDENTITY_PREFIX
-    }
-
-    return JSON.stringify(parsed)
-  } catch {
-    return body
-  }
-}
+export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
 // ── Custom Fetch ──
+// Note: mcp_ tool prefixing, system identity injection, and response stream transforms
+// are handled by keychain-client.ts at the AnthropicClient layer.
+// This fetch wrapper only handles: auth, headers, beta flags, billing, retry.
 
 const DEFAULT_CC_VERSION = "2.1.80"
 
@@ -509,11 +395,9 @@ export const createAnthropicKeychainFetch = (
     }
 
     const requestInit = init ?? {}
-    // Apply body transforms: mcp_ tool prefix + system identity injection
-    const transformedBody = injectSystemIdentity(transformBody(requestInit.body))
-    const finalInit = { ...requestInit, body: transformedBody }
 
-    const bodyStr = typeof transformedBody === "string" ? transformedBody : undefined
+    // Extract model ID from body for header construction
+    const bodyStr = typeof requestInit.body === "string" ? requestInit.body : undefined
     let modelId = "unknown"
     if (bodyStr !== undefined) {
       try {
@@ -523,11 +407,7 @@ export const createAnthropicKeychainFetch = (
       }
     }
 
-    const response = await Effect.runPromise(
-      fetchWithBetaRetry(input, finalInit, latest.accessToken, modelId),
-    )
-    // Strip mcp_ prefixes from response stream
-    return transformResponseStream(response)
+    return Effect.runPromise(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
   }
   return Object.assign(fetcher, {
     preconnect: fetch.preconnect?.bind(fetch),

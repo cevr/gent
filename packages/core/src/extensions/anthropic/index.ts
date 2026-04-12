@@ -16,6 +16,7 @@ import {
 import { AuthMethod } from "../../domain/auth-method.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { FetchHttpClient } from "effect/unstable/http"
+import { keychainClient } from "./keychain-client.js"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
@@ -155,34 +156,29 @@ export const AnthropicExtension = extension("@gent/provider-anthropic", ({ ext }
         const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
           Layer.provide(clientLayer),
         )
-        return { layer: modelLayer, keychainMode: false }
+        return { layer: modelLayer }
       }
 
-      // Fall back to keychain/OAuth with extension-owned credential cache
-      // Note: keychain mode uses a custom fetch wrapper that handles:
-      // - OAuth bearer token auth
-      // - mcp_ tool name prefixing (handled at tool/stream level in provider.ts)
-      // - System identity injection (handled at prompt level in provider.ts)
-      // - Anthropic beta flags, billing headers
-      // - Retryable 429/529 with backoff
-      // - Long-context beta error retry
+      // Fall back to keychain/OAuth with extension-owned credential cache.
+      // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
+      // system identity injection, and cache control at the structured payload level.
+      // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
       const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
       const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
 
-      // For keychain mode, we still use the custom fetch via FetchHttpClient
-      // because the keychain fetch wrapper does complex body/response transforms
-      // that are difficult to replicate via HttpClient.transformClient
       const customFetchLayer = Layer.succeed(
         FetchHttpClient.Fetch,
         keychainFetch as typeof globalThis.fetch,
       )
-      const clientLayer = AnthropicClient.layer({
+      const baseClientLayer = AnthropicClient.layer({
         apiKey: Redacted.make("oauth-placeholder"),
       }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
+      // Wrap the base client with keychain transforms (mcp_, identity, cache control)
+      const wrappedClientLayer = keychainClient.pipe(Layer.provide(baseClientLayer))
       const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(clientLayer),
+        Layer.provide(wrappedClientLayer),
       )
-      return { layer: modelLayer, keychainMode: true }
+      return { layer: modelLayer }
     },
     auth: {
       methods: [

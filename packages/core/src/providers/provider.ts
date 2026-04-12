@@ -14,12 +14,11 @@ import * as AiError from "effect/unstable/ai/AiError"
 
 // ── Provider Resolution ──
 
-/** What a migrated extension returns from resolveModel (typed as unknown at the boundary) */
+/** What an extension returns from resolveModel (typed as unknown at the boundary).
+ *  The Layer should be fully self-contained — all provider-specific behavior
+ *  (auth, tool naming, cache control) baked in via Layer composition. */
 export interface ProviderResolution {
-  /** Layer<LanguageModel.LanguageModel, never, never> — fully provided including HttpClient */
   readonly layer: Layer.Layer<LanguageModel.LanguageModel>
-  /** Keychain/OAuth mode — triggers mcp_ tool prefix + system identity injection */
-  readonly keychainMode?: boolean
 }
 
 // ── Provider Info ──
@@ -180,15 +179,8 @@ export interface ProviderService {
 
 // ── Message Conversion (our MessagePart → Prompt.Message) ──
 
-export interface ConvertOptions {
-  readonly keychainMode: boolean
-}
-
 /** @internal — exported for testing */
-export function convertMessages(
-  messages: ReadonlyArray<Message>,
-  opts: ConvertOptions,
-): Prompt.Message[] {
+export function convertMessages(messages: ReadonlyArray<Message>): Prompt.Message[] {
   const result: Prompt.Message[] = []
 
   for (const msg of messages) {
@@ -198,14 +190,7 @@ export function convertMessages(
       const textParts = parts.filter((p): p is TextPart => p.type === "text")
       if (textParts.length > 0) {
         const text = textParts.map((p) => p.text).join("\n")
-        result.push(
-          Prompt.systemMessage({
-            content: text,
-            ...(opts.keychainMode
-              ? { options: { anthropic: { cacheControl: { type: "ephemeral" as const } } } }
-              : {}),
-          }),
-        )
+        result.push(Prompt.systemMessage({ content: text }))
       }
       continue
     }
@@ -271,8 +256,6 @@ export function convertMessages(
 
 // ── Tool Conversion (AnyToolDefinition → Toolkit.WithHandler) ──
 
-const MCP_PREFIX = "mcp_"
-
 /**
  * Flatten allOf into parent object. Effect's `.check()` emits constraints
  * (minItems, maxItems, minLength, maxLength) as allOf entries, but some
@@ -324,14 +307,12 @@ function buildToolJsonSchema(t: AnyToolDefinition): Record<string, unknown> {
 /** @internal — exported for testing */
 export function convertTools(
   tools: ReadonlyArray<AnyToolDefinition>,
-  opts: ConvertOptions,
 ): AiToolkit.WithHandler<Record<string, AiTool.Any>> {
   const toolsRecord: Record<string, AiTool.Any> = {}
 
   for (const t of tools) {
-    const name = opts.keychainMode ? `${MCP_PREFIX}${t.name}` : t.name
     const flat = buildToolJsonSchema(t)
-    toolsRecord[name] = AiTool.dynamic(name, {
+    toolsRecord[t.name] = AiTool.dynamic(t.name, {
       description: t.description,
       parameters: flat,
     })
@@ -356,24 +337,19 @@ export type AnyStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
 
 /** @internal — exported for testing */
 export const toStreamChunk =
-  (model: string, keychainMode: boolean) =>
+  (model: string) =>
   (part: AnyStreamPart): Effect.Effect<StreamChunk | null, ProviderError> => {
     switch (part.type) {
       case "text-delta":
         return Effect.succeed<StreamChunk>(new TextChunk({ text: part.delta }))
-      case "tool-call": {
-        const toolName =
-          keychainMode && part.name.startsWith(MCP_PREFIX)
-            ? part.name.slice(MCP_PREFIX.length)
-            : part.name
+      case "tool-call":
         return Effect.succeed<StreamChunk>(
           new ToolCallChunk({
             toolCallId: part.id as ToolCallIdType,
-            toolName,
+            toolName: part.name,
             input: part.params,
           }),
         )
-      }
       case "reasoning-delta":
         return Effect.succeed<StreamChunk>(new ReasoningChunk({ text: part.delta }))
       case "finish":
@@ -421,19 +397,17 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
             temperature: request.temperature,
           }
           const resolution = yield* getModel(request.model, hints)
-          const keychainMode = resolution.keychainMode === true
           const modelLayer = resolution.layer
 
           // Build prompt
-          const msgs = convertMessages(request.messages, { keychainMode })
+          const msgs = convertMessages(request.messages)
           const promptMessages: Prompt.Message[] =
             request.systemPrompt !== undefined && request.systemPrompt !== ""
               ? [Prompt.systemMessage({ content: request.systemPrompt }), ...msgs]
               : msgs
 
           // Build tools
-          const withHandler =
-            request.tools !== undefined ? convertTools(request.tools, { keychainMode }) : undefined
+          const withHandler = request.tools !== undefined ? convertTools(request.tools) : undefined
 
           // Create stream via LanguageModel service
           const rawStream =
@@ -449,7 +423,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
 
           return rawStream.pipe(
             Stream.provide(modelLayer),
-            Stream.mapEffect(toStreamChunk(request.model, keychainMode)),
+            Stream.mapEffect(toStreamChunk(request.model)),
             Stream.filter((chunk): chunk is StreamChunk => chunk !== null),
             Stream.catch((error: unknown) =>
               Stream.fail(

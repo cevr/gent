@@ -23,9 +23,9 @@ export interface ProviderContribution {
   /** Display name */
   readonly name: string
   /** Resolve a model name to a ProviderResolution (typed as unknown to avoid domain→ai dep).
-   *  The resolved value should be a `{ layer, keychainMode? }` object where `layer` is a
-   *  `Layer<LanguageModel.LanguageModel>` with all config baked in.
-   *  During migration, extensions may still return a vercel LanguageModel — provider.ts bridges them. */
+   *  The resolved value should be a `{ layer }` object where `layer` is a
+   *  `Layer<LanguageModel.LanguageModel>` with all provider-specific behavior baked in
+   *  (auth, tool naming, cache control, etc.) via Layer composition. */
   readonly resolveModel: (
     modelName: string,
     authInfo?: ProviderAuthInfo,

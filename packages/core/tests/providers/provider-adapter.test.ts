@@ -41,7 +41,7 @@ const tcId = ToolCallId.make("tc-1")
 describe("convertMessages", () => {
   test("converts system message", () => {
     const msgs = [makeMsg("system", [new TextPart({ type: "text", text: "You are helpful." })])]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(1)
     expect(result[0]!.role).toBe("system")
     expect(result[0]!.content).toBe("You are helpful.")
@@ -49,7 +49,7 @@ describe("convertMessages", () => {
 
   test("converts user message with text", () => {
     const msgs = [makeMsg("user", [new TextPart({ type: "text", text: "Hello" })])]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(1)
     expect(result[0]!.role).toBe("user")
     const parts = result[0]!.content as Prompt.UserMessagePart[]
@@ -60,7 +60,7 @@ describe("convertMessages", () => {
     const msgs = [
       makeMsg("user", [new ImagePart({ type: "image", image: "data:image/png;base64,abc" })]),
     ]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(1)
     const parts = result[0]!.content as Prompt.UserMessagePart[]
     expect(parts[0]!.type).toBe("file")
@@ -78,7 +78,7 @@ describe("convertMessages", () => {
         }),
       ]),
     ]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(1)
     expect(result[0]!.role).toBe("assistant")
     const parts = result[0]!.content as Prompt.AssistantMessagePart[]
@@ -102,7 +102,7 @@ describe("convertMessages", () => {
         }),
       ]),
     ]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(1)
     expect(result[0]!.role).toBe("tool")
     const parts = result[0]!.content as Prompt.ToolMessagePart[]
@@ -123,22 +123,15 @@ describe("convertMessages", () => {
         }),
       ]),
     ]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     const parts = result[0]!.content as Prompt.ToolMessagePart[]
     const tr = parts[0] as Prompt.ToolResultPart
     expect(tr.isFailure).toBe(true)
   })
 
-  test("keychainMode adds cache control to system messages", () => {
-    const msgs = [makeMsg("system", [new TextPart({ type: "text", text: "System prompt" })])]
-    const result = convertMessages(msgs, { keychainMode: true })
-    const sys = result[0]! as Prompt.SystemMessage
-    expect(sys.options.anthropic?.cacheControl).toEqual({ type: "ephemeral" })
-  })
-
   test("skips empty messages", () => {
     const msgs = [makeMsg("user", [])]
-    const result = convertMessages(msgs, { keychainMode: false })
+    const result = convertMessages(msgs)
     expect(result).toHaveLength(0)
   })
 })
@@ -156,24 +149,18 @@ describe("convertTools", () => {
   }
 
   test("creates tools with correct names", () => {
-    const result = convertTools([echoDef], { keychainMode: false })
+    const result = convertTools([echoDef])
     expect(Object.keys(result.tools)).toEqual(["echo"])
     expect(result.tools["echo"]!.name).toBe("echo")
   })
 
-  test("keychainMode prefixes tool names with mcp_", () => {
-    const result = convertTools([echoDef], { keychainMode: true })
-    expect(Object.keys(result.tools)).toEqual(["mcp_echo"])
-    expect(result.tools["mcp_echo"]!.name).toBe("mcp_echo")
-  })
-
   test("creates WithHandler with handle function", () => {
-    const result = convertTools([echoDef], { keychainMode: false })
+    const result = convertTools([echoDef])
     expect(typeof result.handle).toBe("function")
   })
 
   test("tool has json schema parameters", () => {
-    const result = convertTools([echoDef], { keychainMode: false })
+    const result = convertTools([echoDef])
     const tool = result.tools["echo"]!
     // Dynamic tools have jsonSchema property
     const js = (tool as { jsonSchema?: unknown }).jsonSchema as Record<string, unknown>
@@ -193,7 +180,7 @@ describe("convertTools", () => {
       params: SearchParams,
       execute: () => Effect.succeed("found"),
     }
-    const result = convertTools([echoDef, searchDef], { keychainMode: false })
+    const result = convertTools([echoDef, searchDef])
     expect(Object.keys(result.tools).sort()).toEqual(["echo", "search"])
   })
 })
@@ -201,8 +188,7 @@ describe("convertTools", () => {
 // ── toStreamChunk ──
 
 describe("toStreamChunk", () => {
-  const map = toStreamChunk("test/model", false)
-  const mapKeychain = toStreamChunk("test/model", true)
+  const map = toStreamChunk("test/model")
 
   test("maps text-delta to TextChunk", async () => {
     const part = Response.makePart("text-delta", {
@@ -270,18 +256,7 @@ describe("toStreamChunk", () => {
     expect(chunk).toBeNull()
   })
 
-  test("strips mcp_ prefix from tool names in keychainMode", async () => {
-    const part = Response.makePart("tool-call", {
-      id: "tc-1",
-      name: "mcp_echo",
-      params: { text: "hi" },
-      providerExecuted: false,
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(mapKeychain(part))
-    expect((chunk as ToolCallChunk).toolName).toBe("echo")
-  })
-
-  test("does not strip mcp_ prefix when not in keychainMode", async () => {
+  test("passes through tool names as-is (no mcp_ stripping)", async () => {
     const part = Response.makePart("tool-call", {
       id: "tc-1",
       name: "mcp_echo",
