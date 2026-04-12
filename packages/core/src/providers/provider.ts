@@ -180,11 +180,15 @@ export interface ProviderService {
 
 // ── Message Conversion (our MessagePart → Prompt.Message) ──
 
-interface ConvertOptions {
+export interface ConvertOptions {
   readonly keychainMode: boolean
 }
 
-function convertMessages(messages: ReadonlyArray<Message>, opts: ConvertOptions): Prompt.Message[] {
+/** @internal — exported for testing */
+export function convertMessages(
+  messages: ReadonlyArray<Message>,
+  opts: ConvertOptions,
+): Prompt.Message[] {
   const result: Prompt.Message[] = []
 
   for (const msg of messages) {
@@ -347,9 +351,11 @@ export function convertTools(
 
 // ── StreamPart → StreamChunk mapping ──
 
-type AnyStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
+/** @internal — exported for testing */
+export type AnyStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
 
-const toStreamChunk =
+/** @internal — exported for testing */
+export const toStreamChunk =
   (model: string, keychainMode: boolean) =>
   (part: AnyStreamPart): Effect.Effect<StreamChunk | null, ProviderError> => {
     switch (part.type) {
