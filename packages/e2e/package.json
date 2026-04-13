@@ -13,7 +13,7 @@
     "@gent/server-http": "workspace:*"
   },
   "devDependencies": {
-    "zigpty": "^0.0.4"
+    "zigpty": "^0.1.6"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
