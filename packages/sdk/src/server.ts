@@ -43,26 +43,24 @@ import { findOpenPort } from "./supervisor.js"
 
 // ── Types ──
 
-export interface StateSpec {
-  readonly _tag: "sqlite" | "memory"
-  readonly home?: string
-  readonly dbPath?: string
-}
+export type StateSpec =
+  | { readonly _tag: "sqlite"; readonly home?: string; readonly dbPath?: string }
+  | { readonly _tag: "memory" }
 
-export interface ProviderSpec {
-  readonly _tag: "live" | "mock"
-  readonly delayMs?: number
-  readonly failing?: boolean
-  readonly retries?: boolean
-}
+export type ProviderSpec =
+  | { readonly _tag: "live" }
+  | {
+      readonly _tag: "mock"
+      readonly delayMs?: number
+      readonly failing?: boolean
+      readonly retries?: boolean
+    }
 
 export interface GentServerOptions {
   readonly cwd: string
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly env?: Record<string, string | undefined>
-  readonly startupTimeoutMs?: number
-  readonly debug?: boolean
 }
 
 /** Public opaque server handle. */
@@ -128,11 +126,17 @@ const resolveProviderLayer = (
 
 const LocalPlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
 
-// ── Resolve canonical DB path ──
+// ── Helpers ──
+
+const resolveHome = (options: GentServerOptions, stateSpec: StateSpec): string =>
+  (stateSpec._tag === "sqlite" ? stateSpec.home : undefined) ??
+  options.env?.["HOME"] ??
+  os.homedir()
 
 const resolveDbPath = (options: GentServerOptions, stateSpec: StateSpec): string => {
-  const home = stateSpec.home ?? options.env?.["HOME"] ?? os.homedir()
-  if (stateSpec.dbPath !== undefined) return pathResolve(stateSpec.dbPath)
+  const home = resolveHome(options, stateSpec)
+  if (stateSpec._tag === "sqlite" && stateSpec.dbPath !== undefined)
+    return pathResolve(stateSpec.dbPath)
   const dataDir = pathJoin(home, ".gent")
   return pathResolve(pathJoin(dataDir, "data.db"))
 }
@@ -154,7 +158,7 @@ const buildOwnedServer = (
         ),
       )
       const url = `http://127.0.0.1:${port}/rpc`
-      const home = stateSpec.home ?? os.homedir()
+      const home = resolveHome(options, stateSpec)
       const serverId = Bun.randomUUIDv7()
       const buildFingerprint = yield* resolveBuildFingerprint
 
@@ -251,8 +255,7 @@ const buildOwnedServer = (
 
 const probeServer = (
   rpcUrl: string,
-  expectedDbPath: string,
-  expectedFingerprint: string,
+  expected: { serverId: string; dbPath: string; buildFingerprint: string },
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const baseUrl = rpcUrl.replace("/rpc", "")
@@ -261,10 +264,15 @@ const probeServer = (
     )
     if (!response.ok) return false
     const identity = (yield* Effect.tryPromise(() => response.json())) as {
+      serverId?: string
       dbPath?: string
       buildFingerprint?: string
     }
-    return identity.dbPath === expectedDbPath && identity.buildFingerprint === expectedFingerprint
+    return (
+      identity.serverId === expected.serverId &&
+      identity.dbPath === expected.dbPath &&
+      identity.buildFingerprint === expected.buildFingerprint
+    )
   }).pipe(Effect.catchEager(() => Effect.succeed(false)))
 
 // ── Main server resolver ──
@@ -282,7 +290,7 @@ export const resolveServer = (
     }
 
     // SQLite state: registry-aware
-    const home = stateSpec.home ?? os.homedir()
+    const home = resolveHome(options, stateSpec)
     const dbPath = resolveDbPath(options, stateSpec)
     const fingerprint = computeLocalFingerprint()
 
@@ -291,8 +299,12 @@ export const resolveServer = (
     if (existing !== undefined) {
       const validation = validateRegistryEntry(existing)
       if (validation.valid && existing.buildFingerprint === fingerprint) {
-        // Probe the server before trusting
-        const alive = yield* probeServer(existing.rpcUrl, dbPath, fingerprint)
+        // Probe the server before trusting — verify serverId, dbPath, fingerprint
+        const alive = yield* probeServer(existing.rpcUrl, {
+          serverId: existing.serverId,
+          dbPath,
+          buildFingerprint: fingerprint,
+        })
         if (alive) {
           return { _tag: "attached" as const, url: existing.rpcUrl }
         }
@@ -337,10 +349,24 @@ export const resolveServer = (
       }),
     ).pipe(
       Effect.catchEager((lockErr) => {
-        // Lock contention — another process is starting. Retry registry.
+        // Lock contention — another process started. Retry registry with probe.
         const retryEntry = readRegistryEntry(home, dbPath)
         if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
-          return Effect.succeed({ _tag: "attached" as const, url: retryEntry.rpcUrl })
+          return probeServer(retryEntry.rpcUrl, {
+            serverId: retryEntry.serverId,
+            dbPath,
+            buildFingerprint: fingerprint,
+          }).pipe(
+            Effect.flatMap((alive) =>
+              alive
+                ? Effect.succeed({ _tag: "attached" as const, url: retryEntry.rpcUrl })
+                : Effect.fail(
+                    new GentConnectionError({
+                      message: "Lock contention: new server did not pass identity probe",
+                    }),
+                  ),
+            ),
+          )
         }
         return Effect.fail(
           new GentConnectionError({
