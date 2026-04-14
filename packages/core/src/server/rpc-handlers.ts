@@ -32,6 +32,8 @@ import { AgentRunnerService } from "../domain/agent.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { toExtensionAsyncContext } from "../domain/extension-context.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import { ConnectionTracker } from "./connection-tracker.js"
+import { ServerIdentity } from "./server-identity.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -449,6 +451,27 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "actor.getMetrics": ({ sessionId, branchId }) =>
         actorProcess.getMetrics({ sessionId, branchId }),
+
+      // -- server --
+      "server.status": () =>
+        Effect.gen(function* () {
+          const identityOpt = yield* Effect.serviceOption(ServerIdentity)
+          const trackerOpt = yield* Effect.serviceOption(ConnectionTracker)
+          if (identityOpt._tag !== "Some") {
+            return yield* Effect.die("ServerIdentity not available")
+          }
+          const identity = identityOpt.value
+          const connectionCount = trackerOpt._tag === "Some" ? yield* trackerOpt.value.count() : 0
+          return {
+            serverId: identity.serverId,
+            pid: identity.pid,
+            hostname: identity.hostname,
+            uptime: Date.now() - identity.startedAt,
+            connectionCount,
+            dbPath: identity.dbPath,
+            buildFingerprint: identity.buildFingerprint,
+          }
+        }),
     }
   }),
 )

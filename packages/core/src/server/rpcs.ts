@@ -15,6 +15,7 @@ import { ModelRpcs } from "./rpcs/model.js"
 import { AuthRpcs } from "./rpcs/auth.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ActorRpcs } from "./rpcs/actor.js"
+import { ServerRpcs } from "./rpcs/server.js"
 
 // Re-export sub-groups for handler wiring
 export {
@@ -29,6 +30,7 @@ export {
   AuthRpcs,
   ExtensionRpcs,
   ActorRpcs,
+  ServerRpcs,
 }
 
 // Re-export transport contract schemas (consumed by SDK + tests)
@@ -99,6 +101,7 @@ export class GentRpcs extends RpcGroup.make().merge(
   AuthRpcs,
   ExtensionRpcs,
   ActorRpcs,
+  ServerRpcs,
 ) {}
 
 // ============================================================================

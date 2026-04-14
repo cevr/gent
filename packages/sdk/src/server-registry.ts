@@ -12,67 +12,17 @@ import { createHash } from "node:crypto"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname } from "node:os"
 // @effect-diagnostics nodeBuiltinImport:off
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  rmdirSync,
-  statSync,
-} from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs"
 // @effect-diagnostics nodeBuiltinImport:off
 import { join, resolve } from "node:path"
-// @effect-diagnostics nodeBuiltinImport:off
-import { fileURLToPath } from "node:url"
 
-import { Config, Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 
-// ── Build Fingerprint ──
-
-/**
- * Compute a build fingerprint from local sources (no env).
- * Priority: binary mtime → gent source git hash → "unknown"
- */
-export const computeLocalFingerprint = (): string => {
-  // 1. Binary mtime (compiled mode)
-  try {
-    const stat = statSync(process.execPath)
-    return `bin-${stat.mtimeMs.toString(36)}`
-  } catch {
-    // not a compiled binary or stat failed
-  }
-
-  // 2. Git hash from gent source root (dev mode)
-  try {
-    const gentRoot = resolve(fileURLToPath(import.meta.url), "../../..")
-    const proc = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: gentRoot })
-    const hash = new TextDecoder().decode(proc.stdout).trim()
-    if (hash.length > 0) return `src-${hash}`
-  } catch {
-    // no git or not in repo
-  }
-
-  return "unknown"
-}
-
-/**
- * Resolve the build fingerprint via Effect Config.
- * Priority: GENT_BUILD_FINGERPRINT env → local computation
- */
-/** Resolve the build fingerprint. Env var takes precedence, then local computation. */
-export const resolveBuildFingerprint: Effect.Effect<string> = Effect.succeed(
-  computeLocalFingerprint(),
-).pipe(
-  Effect.flatMap((local) =>
-    Effect.gen(function* () {
-      const opt: Option.Option<string> = yield* Config.option(
-        Config.string("GENT_BUILD_FINGERPRINT"),
-      )
-      return Option.isSome(opt) && opt.value !== "" ? opt.value : local
-    }).pipe(Effect.catchEager(() => Effect.succeed(local))),
-  ),
-)
+// Re-export fingerprint from core (single source of truth)
+export {
+  computeLocalFingerprint,
+  resolveBuildFingerprint,
+} from "@gent/core/server/build-fingerprint.js"
 
 // ── Server Registry ──
 
@@ -165,8 +115,6 @@ export const validateRegistryEntry = (
 
 // ── Cross-Process Lock ──
 
-const LOCK_STALE_AGE_MS = 60_000
-
 interface LockInfo {
   pid: number
   hostname: string
@@ -178,39 +126,50 @@ export const acquireLock = (home: string, dbPath: string): boolean => {
   const lockDir = join(ensureRegistryDir(home), `${registryHash(dbPath)}.lock`)
   const infoPath = join(lockDir, "info.json")
 
+  const cleanupAndRetry = (): boolean => {
+    try {
+      unlinkSync(infoPath)
+    } catch {
+      /* ignore */
+    }
+    try {
+      rmdirSync(lockDir)
+    } catch {
+      /* ignore */
+    }
+    try {
+      mkdirSync(lockDir)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // Try to create lock directory (atomic on local FS)
   try {
     mkdirSync(lockDir)
   } catch {
-    // Lock exists — check if stale
+    // Lock dir exists — check if stale
+    let info: LockInfo | undefined
     try {
-      const info: LockInfo = JSON.parse(readFileSync(infoPath, "utf8"))
-      const age = Date.now() - info.createdAt
+      info = JSON.parse(readFileSync(infoPath, "utf8")) as LockInfo
+    } catch {
+      // Missing or corrupt info.json (crash between mkdir and write) — treat as stale
+      if (!cleanupAndRetry()) return false
+      info = undefined // mark as recovered
+    }
+
+    if (info !== undefined) {
       const isLocal = info.hostname === hostname()
       const isAlive = isLocal && isPidAlive(info.pid)
 
-      if (age > LOCK_STALE_AGE_MS || (isLocal && !isAlive)) {
-        // Stale lock — force cleanup and retry
-        try {
-          unlinkSync(infoPath)
-        } catch {
-          // ignore
-        }
-        try {
-          rmdirSync(lockDir)
-        } catch {
-          // ignore
-        }
-        try {
-          mkdirSync(lockDir)
-        } catch {
-          return false
-        }
-      } else {
+      if (isAlive) {
+        // Lock held by a live process on this host — never steal
         return false
       }
-    } catch {
-      return false
+
+      // Dead PID, different host, or age exceeded — stale
+      if (!cleanupAndRetry()) return false
     }
   }
 
@@ -255,11 +214,9 @@ export const withLock = <A, E>(
   body: Effect.Effect<A, E>,
 ): Effect.Effect<A, E | LockAcquireError> =>
   Effect.acquireUseRelease(
-    Effect.sync(() => {
-      if (!acquireLock(home, dbPath)) {
-        throw new LockAcquireError({ dbPath })
-      }
-    }),
+    Effect.suspend(() =>
+      acquireLock(home, dbPath) ? Effect.void : Effect.fail(new LockAcquireError({ dbPath })),
+    ),
     () => body,
     () => Effect.sync(() => releaseLock(home, dbPath)),
   )

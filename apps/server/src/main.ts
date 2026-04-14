@@ -5,7 +5,7 @@ import { SteerCommand } from "@gent/core/runtime/agent/agent-loop.js"
 import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
-import { Config, Effect, Layer, Option, Schema, Context } from "effect"
+import { Config, Deferred, Effect, Layer, Option, Schema, Context } from "effect"
 import * as os from "node:os"
 import { GentApi } from "@gent/core/server/http-api.js"
 import { seedDebugSession } from "./debug/session.js"
@@ -17,6 +17,9 @@ import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { createDependencies } from "@gent/core/server/dependencies.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
 import { wsTracingLayer } from "@gent/core/server/ws-tracing.js"
+import { ConnectionTracker } from "@gent/core/server/connection-tracker.js"
+import { ServerIdentity } from "@gent/core/server/server-identity.js"
+import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
@@ -47,6 +50,8 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const serverModeOpt = yield* Config.option(Config.string("GENT_SERVER_MODE"))
   const debugModeOpt = yield* Config.option(Config.string("GENT_DEBUG_MODE"))
   const shellOpt = yield* Config.option(Config.string("SHELL"))
+  const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
+  const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
 
   const home = Option.getOrElse(homeOpt, () => os.homedir())
   const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
@@ -66,6 +71,8 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     isWorker: Option.getOrUndefined(serverModeOpt) === "worker",
     isDebug: Option.getOrUndefined(debugModeOpt) === "1",
     shell: Option.getOrUndefined(shellOpt),
+    serverId: Option.getOrElse(serverIdOpt, () => Bun.randomUUIDv7()),
+    idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
   }
 })
 
@@ -141,13 +148,35 @@ const program = Effect.scoped(
       Layer.provide(GentTracerLive),
     )
 
+    const buildFingerprint = yield* resolveBuildFingerprint
+    const startedAt = Date.now()
+
+    // Connection tracker for idle shutdown
+    const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
+    const connectionTracker = Context.get(connectionTrackerCtx, ConnectionTracker)
+
+    // Server identity
+    const serverIdentityLive = ServerIdentity.Live({
+      serverId: config.serverId,
+      pid: process.pid,
+      hostname: os.hostname(),
+      dbPath: config.dbPath,
+      buildFingerprint,
+      startedAt,
+    })
+
     const depsServices = yield* Layer.buildWithScope(depsLive, scope)
     const appServices = yield* Layer.buildWithScope(
       AppServicesLive.pipe(Layer.provide(Layer.succeedContext(depsServices))),
       scope,
     )
-    const coreServices = Context.merge(depsServices, appServices)
-    const coreServicesLive = Layer.succeedContext(coreServices)
+    const coreServices = Context.merge(
+      Context.merge(depsServices, appServices),
+      connectionTrackerCtx,
+    )
+    const serverIdentityCtx = yield* Layer.buildWithScope(serverIdentityLive, scope)
+    const allServices = Context.merge(coreServices, serverIdentityCtx)
+    const coreServicesLive = Layer.succeedContext(allServices)
 
     // RPC-over-WebSocket route (defaults to WS when protocol is omitted)
     const RpcRoutes = RpcServer.layerHttp({
@@ -172,6 +201,19 @@ const program = Effect.scoped(
       path: "/docs",
     })
 
+    // Identity route — used by registry validation
+    const IdentityRoute = HttpRouter.add(
+      "GET",
+      "/_gent/identity",
+      HttpServerResponse.json({
+        serverId: config.serverId,
+        pid: process.pid,
+        hostname: os.hostname(),
+        dbPath: config.dbPath,
+        buildFingerprint,
+      }),
+    )
+
     // OpenAPI JSON
     const OpenApiJsonRoute = HttpRouter.add(
       "GET",
@@ -180,10 +222,13 @@ const program = Effect.scoped(
     )
 
     // Merge all routes (REST API + RPC + docs)
-    const AllRoutes = Layer.mergeAll(RpcRoutes, HttpApiRoutes, DocsRoute, OpenApiJsonRoute).pipe(
-      Layer.provide(wsTracingLayer),
-      Layer.provide(HttpRouter.cors()),
-    )
+    const AllRoutes = Layer.mergeAll(
+      RpcRoutes,
+      HttpApiRoutes,
+      DocsRoute,
+      OpenApiJsonRoute,
+      IdentityRoute,
+    ).pipe(Layer.provide(wsTracingLayer), Layer.provide(HttpRouter.cors()))
 
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
@@ -214,6 +259,45 @@ const program = Effect.scoped(
       console.log(`Gent server ready on ${baseUrl}`)
       // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`Swagger UI: ${baseUrl}/docs`)
+    }
+
+    // Idle shutdown: worker mode waits for idle, standalone runs forever
+    if (config.isWorker) {
+      const idleTimeoutMs = Number.isFinite(config.idleTimeoutMs) ? config.idleTimeoutMs : 30_000
+      const shutdownDeferred = yield* Deferred.make<void>()
+
+      // Idle watcher fiber — polls connection count every second
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          let idleStartMs: number | undefined
+
+          while (true) {
+            yield* Effect.sleep("1 second")
+            const count = yield* connectionTracker.count()
+
+            if (count === 0) {
+              if (idleStartMs === undefined) idleStartMs = Date.now()
+              if (Date.now() - idleStartMs >= idleTimeoutMs) {
+                // Final liveness check before shutdown
+                const finalCount = yield* connectionTracker.count()
+                if (finalCount === 0) {
+                  yield* Effect.logInfo("idle-shutdown.triggered").pipe(
+                    Effect.annotateLogs({ idleMs: Date.now() - idleStartMs }),
+                  )
+                  yield* Deferred.succeed(shutdownDeferred, void 0)
+                  return
+                }
+                // Client connected during final check — reset
+                idleStartMs = undefined
+              }
+            } else {
+              idleStartMs = undefined
+            }
+          }
+        }),
+      )
+
+      return yield* Deferred.await(shutdownDeferred)
     }
 
     return yield* Effect.never

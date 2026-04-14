@@ -13,8 +13,9 @@
  *   - `ws.disconnect` log with reason (clean vs error)
  */
 
-import { Effect, type Layer } from "effect"
+import { Effect, Option, type Layer } from "effect"
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
+import { ConnectionTracker } from "./connection-tracker.js"
 
 /**
  * Layer that registers WebSocket lifecycle tracing on the HttpRouter.
@@ -39,6 +40,10 @@ export const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = 
 
         if (!isUpgrade) return yield* handler
 
+        // Track connection for idle shutdown
+        const trackerOpt = yield* Effect.serviceOption(ConnectionTracker)
+        if (Option.isSome(trackerOpt)) yield* trackerOpt.value.increment()
+
         yield* Effect.logInfo("ws.connect").pipe(
           Effect.annotateLogs({
             url: request.url,
@@ -54,12 +59,15 @@ export const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = 
             },
           }),
           Effect.ensuring(
-            Effect.logInfo("ws.disconnect").pipe(
-              Effect.annotateLogs({
-                url: request.url,
-                remoteAddress: request.remoteAddress ?? "unknown",
-              }),
-            ),
+            Effect.gen(function* () {
+              if (Option.isSome(trackerOpt)) yield* trackerOpt.value.decrement()
+              yield* Effect.logInfo("ws.disconnect").pipe(
+                Effect.annotateLogs({
+                  url: request.url,
+                  remoteAddress: request.remoteAddress ?? "unknown",
+                }),
+              )
+            }),
           ),
         )
       }),
