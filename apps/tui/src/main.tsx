@@ -186,6 +186,10 @@ const main = Command.make(
       Flag.withDescription("Run in headless mode (no TUI, streams to stdout)"),
       Flag.withDefault(false),
     ),
+    isolate: Flag.boolean("isolate").pipe(
+      Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+      Flag.withDefault(false),
+    ),
     debug: Flag.boolean("debug").pipe(
       Flag.withDescription("Launch TUI renderer playground for widgets and tool renderers"),
       Flag.withDefault(false),
@@ -215,6 +219,7 @@ const main = Command.make(
     connect,
     session,
     continue_,
+    isolate,
     headless,
     debug,
     prompt,
@@ -265,9 +270,12 @@ const main = Command.make(
         ),
       )
 
-      const bundle = yield* Option.isSome(connect)
-        ? Gent.connect({ url: connect.value })
-        : Gent.local(localOptions)
+      const resolveBundle = () => {
+        if (Option.isSome(connect)) return Gent.connect({ url: connect.value })
+        if (isolate || debug) return Gent.local(localOptions)
+        return Gent.spawn({ cwd })
+      }
+      const bundle = yield* resolveBundle()
       const requestedAgent: AgentName | undefined =
         Option.isSome(agent) && Schema.is(AgentNameSchema)(agent.value) ? agent.value : undefined
 
@@ -381,12 +389,21 @@ const sessions = Command.make(
       Flag.withDescription("Connect to an existing gent server"),
       Flag.optional,
     ),
+    isolate: Flag.boolean("isolate").pipe(
+      Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+      Flag.withDefault(false),
+    ),
   },
-  ({ connect }) =>
+  ({ connect, isolate }) =>
     Effect.gen(function* () {
-      const bundle = yield* Option.isSome(connect)
-        ? Gent.connect({ url: connect.value })
-        : resolveLocalOptions(process.cwd()).pipe(Effect.flatMap((options) => Gent.local(options)))
+      const cwd = process.cwd()
+      const resolveBundle = () => {
+        if (Option.isSome(connect)) return Gent.connect({ url: connect.value })
+        if (isolate)
+          return resolveLocalOptions(cwd).pipe(Effect.flatMap((options) => Gent.local(options)))
+        return Gent.spawn({ cwd })
+      }
+      const bundle = yield* resolveBundle()
       yield* bundle.runtime.lifecycle.waitForReady
       const allSessions = yield* bundle.client.session.list()
 

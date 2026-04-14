@@ -52,6 +52,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
   const shellOpt = yield* Config.option(Config.string("SHELL"))
   const serverIdOpt = yield* Config.option(Config.string("GENT_SERVER_ID"))
   const idleTimeoutOpt = yield* Config.option(Config.string("GENT_IDLE_TIMEOUT_MS"))
+  const sharedServerUrlOpt = yield* Config.option(Config.string("GENT_SHARED_SERVER_URL"))
 
   const home = Option.getOrElse(homeOpt, () => os.homedir())
   const dataDir = Option.getOrElse(dataDirOpt, () => joinPath(home, ".gent"))
@@ -73,6 +74,7 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     shell: Option.getOrUndefined(shellOpt),
     serverId: Option.getOrElse(serverIdOpt, () => Bun.randomUUIDv7()),
     idleTimeoutMs: Number(Option.getOrElse(idleTimeoutOpt, () => "30000")),
+    sharedServerUrl: Option.getOrUndefined(sharedServerUrlOpt),
   }
 })
 
@@ -129,6 +131,11 @@ const program = Effect.scoped(
     const config = yield* resolveRuntimeConfig
 
     // Dependencies layer
+    // Shared server URL: either passed via env or derived from this server's port
+    const sharedServerUrl =
+      config.sharedServerUrl ??
+      (config.isWorker ? `http://localhost:${config.port}/rpc` : undefined)
+
     const depsLive = createDependencies({
       cwd: config.cwd,
       home: config.home,
@@ -141,6 +148,7 @@ const program = Effect.scoped(
       persistenceMode: config.persistenceMode,
       providerMode: config.providerMode,
       scheduledJobCommand: resolveScheduledJobCommand(),
+      sharedServerUrl,
     }).pipe(
       Layer.provide(PlatformLayer),
       Layer.provide(GentLogger),

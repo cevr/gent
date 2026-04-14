@@ -76,6 +76,7 @@ describe("headless CLI", () => {
         "--preload",
         "./node_modules/@opentui/solid/scripts/preload.ts",
         "src/main.tsx",
+        "--isolate",
         "-H",
         "Say hi in 3 words",
       ],

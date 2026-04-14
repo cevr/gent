@@ -57,6 +57,8 @@ export interface DependenciesConfig {
   providerMode?: "live" | "debug-scripted" | "debug-failing" | "debug-slow"
   disabledExtensions?: ReadonlyArray<string>
   scheduledJobCommand?: ScheduledJobCommand
+  /** URL of the shared server. Subprocess children pass --connect to reuse it. */
+  sharedServerUrl?: string
 }
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
@@ -362,6 +364,9 @@ export const createDependencies = (config: DependenciesConfig) => {
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
             : {}),
           ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
+          ...(config.sharedServerUrl !== undefined
+            ? { sharedServerUrl: config.sharedServerUrl }
+            : {}),
           baseSections,
         }
         const agentLoopLive = AgentLoop.Live({ baseSections })

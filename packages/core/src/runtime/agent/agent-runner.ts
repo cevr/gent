@@ -124,6 +124,8 @@ export interface AgentRunnerConfig {
   readonly dbPath?: string
   readonly timeoutMs?: number
   readonly baseSections?: ReadonlyArray<PromptSection>
+  /** URL of the shared server. Subprocess children pass --connect <url> to reuse it. */
+  readonly sharedServerUrl?: string
 }
 
 const latestAssistantContent = (messages: ReadonlyArray<Message>) => {
@@ -1014,6 +1016,9 @@ export const SubprocessRunner = (
                   "--headless",
                   "--session",
                   sessionId,
+                  ...(config.sharedServerUrl !== undefined
+                    ? ["--connect", config.sharedServerUrl]
+                    : []),
                   ...(overridesJson !== undefined ? ["--execution-overrides", overridesJson] : []),
                   params.prompt,
                 ]
@@ -1041,6 +1046,9 @@ export const SubprocessRunner = (
                       env: {
                         ...Bun.env,
                         ...(config.dbPath !== undefined ? { GENT_DB_PATH: config.dbPath } : {}),
+                        ...(config.sharedServerUrl !== undefined
+                          ? { GENT_SHARED_SERVER_URL: config.sharedServerUrl }
+                          : {}),
                         ...(currentSpan !== undefined
                           ? {
                               GENT_TRACE_ID: currentSpan.traceId,
