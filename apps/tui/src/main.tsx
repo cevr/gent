@@ -211,7 +211,7 @@ const main = Command.make(
         const serverState = debug || isolate ? Gent.state.memory() : Gent.state.sqlite()
         const serverProvider = debug ? Gent.provider.mock() : Gent.provider.live()
         return Effect.flatMap(
-          Gent.server({ cwd, state: serverState, provider: serverProvider }),
+          Gent.server({ cwd, state: serverState, provider: serverProvider, debug }),
           Gent.client,
         )
       }

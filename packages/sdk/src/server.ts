@@ -26,6 +26,7 @@ import { ServerIdentity } from "@gent/core/server/server-identity.js"
 import { buildServerRoutes } from "@gent/core/server/server-routes.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { DebugProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
+import { seedDebugSession } from "@gent/core/debug/session.js"
 import type { Provider } from "@gent/core/providers/provider.js"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
@@ -61,6 +62,8 @@ export interface GentServerOptions {
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly env?: Record<string, string | undefined>
+  /** Seed storage with a debug session on startup. */
+  readonly debug?: boolean
 }
 
 /** Public opaque server handle. */
@@ -232,6 +235,14 @@ const buildOwnedServer = (
       )
 
       yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
+
+      // Seed debug session if requested
+      if (options.debug === true) {
+        yield* seedDebugSession(options.cwd).pipe(
+          Effect.provide(coreServicesLive),
+          Effect.catchEager(() => Effect.void),
+        )
+      }
 
       // Build RPC handler context for direct in-process client
       const handlersContext = yield* Layer.buildWithScope(
