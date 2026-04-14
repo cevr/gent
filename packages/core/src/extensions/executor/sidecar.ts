@@ -16,6 +16,7 @@ import {
   type ResolvedExecutorSettings,
   ScopeInfo,
   ExecutorSettings,
+  ExecutorSettingsDefaults,
   ExecutorSidecarError,
   resolveSettings,
   DEFAULT_PORT_SEED,
@@ -344,11 +345,23 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             }
           })
 
-        // Register finalizer to shut down all owned sidecars
+        // Register finalizer to shut down owned sidecars (respects stopLocalOnShutdown)
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const owned = Array.from(sidecarsByCwd.values()).filter((r) => r.ownedByGent)
-            yield* Effect.all(owned.map(killRecord), { concurrency: "unbounded" })
+            yield* Effect.all(
+              owned.map((record) =>
+                Effect.gen(function* () {
+                  const settings = yield* loadSettings(record.cwd).pipe(
+                    Effect.catchEager(() => Effect.succeed(ExecutorSettingsDefaults)),
+                  )
+                  if (settings.stopLocalOnShutdown) {
+                    yield* killRecord(record)
+                  }
+                }),
+              ),
+              { concurrency: "unbounded" },
+            )
           }).pipe(Effect.catchCause(() => Effect.void)),
         )
 

@@ -9,6 +9,7 @@ import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 import { executorActor } from "./actor.js"
 import { ExecuteTool, ResumeTool } from "./tools.js"
+import { ExecutorProtocol } from "./protocol.js"
 
 export { ExecutorUiModel } from "./actor.js"
 export { EXECUTOR_EXTENSION_ID } from "./domain.js"
@@ -20,19 +21,13 @@ export const ExecutorExtension = extension(EXECUTOR_EXTENSION_ID, ({ ext, ctx })
     .command("executor-start", {
       description: "Connect to the configured Executor endpoint.",
       handler: async (_args, extCtx) => {
-        await extCtx.extension.send({
-          extensionId: EXECUTOR_EXTENSION_ID,
-          _tag: "Connect",
-        } as never)
+        await extCtx.extension.send(ExecutorProtocol.Connect({ cwd: extCtx.cwd }))
       },
     })
     .command("executor-stop", {
       description: "Disconnect and stop the local Executor sidecar.",
       handler: async (_args, extCtx) => {
-        await extCtx.extension.send({
-          extensionId: EXECUTOR_EXTENSION_ID,
-          _tag: "Disconnect",
-        } as never)
+        await extCtx.extension.send(ExecutorProtocol.Disconnect())
       },
     })
     .layer(Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)),

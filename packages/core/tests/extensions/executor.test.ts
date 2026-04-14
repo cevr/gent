@@ -12,7 +12,7 @@ import {
   ExecutorSettingsDefaults,
   type ExecutorSettings,
 } from "@gent/core/extensions/executor/domain"
-import { readExecutionId } from "@gent/core/extensions/executor/mcp-bridge"
+import { readExecutionId, normalizeToolResult } from "@gent/core/extensions/executor/mcp-bridge"
 
 // ── Helpers ──
 
@@ -28,7 +28,7 @@ const stubCtx: ExtensionTurnContext = {
 
 const derive = (state: ExecutorState) => ExecutorActorConfig.derive(state, stubCtx)
 
-const connect = { _tag: "Connect" as const }
+const connect = { _tag: "Connect" as const, cwd: "/test" }
 const disconnect = { _tag: "Disconnect" as const }
 const connected = (opts?: {
   mode?: "local" | "remote"
@@ -217,9 +217,9 @@ describe("Executor snapshot projection", () => {
     expect(result).toEqual({ status: "idle" })
   })
 
-  test("Connecting → { status: 'connecting', mode }", () => {
-    const result = projectSnapshot({ _tag: "Connecting", mode: "local" } as never)
-    expect(result).toEqual({ status: "connecting", mode: "local" })
+  test("Connecting → { status: 'connecting' }", () => {
+    const result = projectSnapshot({ _tag: "Connecting", cwd: "/test" } as never)
+    expect(result).toEqual({ status: "connecting" })
   })
 
   test("Ready → { status: 'ready', mode, baseUrl }", () => {
@@ -235,5 +235,67 @@ describe("Executor snapshot projection", () => {
   test("Error → { status: 'error', errorMessage }", () => {
     const result = projectSnapshot({ _tag: "Error", message: "timeout" } as never)
     expect(result).toEqual({ status: "error", errorMessage: "timeout" })
+  })
+})
+
+// ── normalizeToolResult ──
+
+describe("normalizeToolResult", () => {
+  test("content array with text items", () => {
+    const result = normalizeToolResult({
+      content: [
+        { type: "text", text: "line 1" },
+        { type: "text", text: "line 2" },
+      ],
+    })
+    expect(result.text).toBe("line 1\nline 2")
+    expect(result.isError).toBe(false)
+    expect(result.executionId).toBeUndefined()
+  })
+
+  test("missing content falls back to toolResult", () => {
+    const result = normalizeToolResult({
+      toolResult: { answer: 42 },
+    } as never)
+    expect(result.text).toContain("42")
+    expect(result.structuredContent).toEqual({ answer: 42 })
+  })
+
+  test("missing content and no toolResult → default text", () => {
+    const result = normalizeToolResult({} as never)
+    expect(result.text).toBe("(no result)")
+    expect(result.structuredContent).toBeNull()
+  })
+
+  test("structuredContent extracted", () => {
+    const result = normalizeToolResult({
+      content: [{ type: "text", text: "ok" }],
+      structuredContent: { data: "value" },
+    })
+    expect(result.structuredContent).toEqual({ data: "value" })
+  })
+
+  test("isError flag propagated", () => {
+    const result = normalizeToolResult({
+      content: [{ type: "text", text: "error" }],
+      isError: true,
+    })
+    expect(result.isError).toBe(true)
+  })
+
+  test("executionId from waiting_for_interaction", () => {
+    const result = normalizeToolResult({
+      content: [{ type: "text", text: "waiting" }],
+      structuredContent: { status: "waiting_for_interaction", executionId: "exec-xyz" },
+    })
+    expect(result.executionId).toBe("exec-xyz")
+  })
+
+  test("no executionId when status is not waiting_for_interaction", () => {
+    const result = normalizeToolResult({
+      content: [{ type: "text", text: "done" }],
+      structuredContent: { status: "completed" },
+    })
+    expect(result.executionId).toBeUndefined()
   })
 })

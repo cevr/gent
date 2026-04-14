@@ -40,7 +40,7 @@ export const readExecutionId = (structured: unknown): string | undefined => {
     : undefined
 }
 
-const normalizeToolResult = (
+export const normalizeToolResult = (
   raw: Awaited<ReturnType<Client["callTool"]>>,
 ): ExecutorMcpToolResult => {
   // MCP SDK can return { toolResult } without content array
