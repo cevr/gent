@@ -3,7 +3,7 @@ import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import type { AgentEvent } from "@gent/core/domain/event"
 import type {
   ExtensionActorDefinition,
-  ExtensionDeriveContext,
+  ExtensionTurnContext,
   ExtensionEffect,
   ExtensionReduceContext,
   ReduceResult,
@@ -23,7 +23,7 @@ export interface TestReducerActorConfig<State, Message = never, Request = never,
     event: AgentEvent,
     ctx: ExtensionReduceContext,
   ) => ReduceResult<State>
-  readonly derive?: (state: State, ctx?: ExtensionDeriveContext) => DerivedProjection
+  readonly derive?: (state: State, ctx?: ExtensionTurnContext) => DerivedProjection
   readonly receive?: (state: State, message: Message) => ReduceResult<State>
   readonly messageSchema?: Schema.Schema<Message>
   readonly request?: (

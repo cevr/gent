@@ -68,7 +68,6 @@ export const GrepResult = Schema.Struct({
 
 export const GrepTool = defineTool({
   name: "grep",
-  action: "read",
   concurrency: "parallel",
   idempotent: true,
   description: "Search file contents with regex. Returns matching lines.",

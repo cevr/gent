@@ -41,7 +41,7 @@ import {
   type ToolResultInput,
   type MessageInputInput,
   type MessageOutputInput,
-  type ExtensionDeriveContext,
+  type ExtensionTurnContext,
   type AnyExtensionActorDefinition,
   type ExtensionReduceContext,
   type ReduceResult,
@@ -55,12 +55,11 @@ import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js
 import {
   defineTool,
   ToolDefinitionBrand,
-  type ToolAction,
   type ToolContext,
   type AnyToolDefinition,
 } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import { toExtensionContext, type ExtensionContext } from "../domain/extension-context.js"
+import { toExtensionAsyncContext, type ExtensionContext } from "../domain/extension-context.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -84,7 +83,6 @@ export {
   ToolDefinitionBrand,
   type AnyToolDefinition,
   type ToolContext,
-  type ToolAction,
 } from "../domain/tool.js"
 export { defineAgent, AgentDefinition, AgentDefinitionBrand } from "../domain/agent.js"
 export {
@@ -98,7 +96,7 @@ export {
   type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
-  type ExtensionDeriveContext,
+  type ExtensionTurnContext,
   type SystemPromptInput,
   type ToolExecuteInput,
   type PermissionCheckInput,
@@ -128,7 +126,7 @@ export {
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
-export { type ExtensionContext, toExtensionContext } from "../domain/extension-context.js"
+export { type ExtensionContext, toExtensionAsyncContext } from "../domain/extension-context.js"
 
 // ── Simple Parameter Types ──
 
@@ -145,7 +143,6 @@ type SimpleParams = Record<string, SimpleParam>
 export interface SimpleToolDef {
   readonly name: string
   readonly description: string
-  readonly action?: ToolAction
   readonly parameters?: SimpleParams
   readonly concurrency?: "serial" | "parallel"
   readonly idempotent?: boolean
@@ -408,7 +405,6 @@ const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> =>
 const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
   defineTool({
     name: def.name,
-    action: def.action ?? "read",
     description: def.description,
     params: buildParamsSchema(def.parameters),
     concurrency: def.concurrency,
@@ -509,7 +505,7 @@ const wrapTransformHandler =
     return Effect.tryPromise({
       try: () => {
         const effectNext = (i: I) => Effect.runPromise(next(i))
-        return Promise.resolve(handler(input, effectNext, toExtensionContext(ctx)))
+        return Promise.resolve(handler(input, effectNext, toExtensionAsyncContext(ctx)))
       },
       catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
     }).pipe(
@@ -540,7 +536,7 @@ const wrapFireAndForgetHandler =
       yield* Effect.tryPromise({
         try: () => {
           const effectNext = (i: I) => Effect.runPromise(next(i))
-          return Promise.resolve(handler(input, effectNext, toExtensionContext(ctx)))
+          return Promise.resolve(handler(input, effectNext, toExtensionAsyncContext(ctx)))
         },
         catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
       }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))

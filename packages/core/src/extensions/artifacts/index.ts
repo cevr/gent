@@ -13,7 +13,7 @@ import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import type {
   ExtensionActorDefinition,
-  ExtensionDeriveContext,
+  ExtensionTurnContext,
   TurnProjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
@@ -184,7 +184,7 @@ const artifactsMachine = Machine.make({
 
 const projectTurn = (
   state: typeof ArtifactsMachineState.Type,
-  ctx: ExtensionDeriveContext,
+  ctx: ExtensionTurnContext,
 ): TurnProjection => {
   const items = state.items.filter(
     (a) => a.status === "active" && (a.branchId === undefined || a.branchId === ctx.branchId),
@@ -267,7 +267,6 @@ const artifactsActor: ExtensionActorDefinition<
 
 const ArtifactSaveTool = defineTool({
   name: "artifact_save",
-  action: "state" as const,
   concurrency: "parallel" as const,
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
@@ -296,7 +295,6 @@ const ArtifactSaveTool = defineTool({
 
 const ArtifactReadTool = defineTool({
   name: "artifact_read",
-  action: "state" as const,
   concurrency: "parallel" as const,
   description: "Read the full content of an artifact by label/source or ID.",
   params: Schema.Struct({
@@ -318,7 +316,6 @@ const ArtifactReadTool = defineTool({
 
 const ArtifactUpdateTool = defineTool({
   name: "artifact_update",
-  action: "state" as const,
   concurrency: "serial" as const,
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
@@ -361,7 +358,6 @@ const ArtifactUpdateTool = defineTool({
 
 const ArtifactClearTool = defineTool({
   name: "artifact_clear",
-  action: "state" as const,
   concurrency: "parallel" as const,
   description: "Remove an artifact by ID.",
   params: Schema.Struct({

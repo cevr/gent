@@ -17,7 +17,6 @@ describe("reconcileTestExtensions", () => {
                 tools: [
                   {
                     name: "conflict",
-                    action: "read",
                     description: "tool a",
                     params: {} as never,
                     execute: () => undefined as never,
@@ -33,7 +32,6 @@ describe("reconcileTestExtensions", () => {
                 tools: [
                   {
                     name: "conflict",
-                    action: "read",
                     description: "tool b",
                     params: {} as never,
                     execute: () => undefined as never,

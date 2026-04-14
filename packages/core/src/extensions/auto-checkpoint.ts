@@ -9,7 +9,6 @@ import { defineTool } from "../domain/tool.js"
  */
 export const AutoCheckpointTool = defineTool({
   name: "auto_checkpoint",
-  action: "state",
   concurrency: "serial",
   description:
     "Report your iteration results. Call with status 'continue' to proceed to the next iteration, " +

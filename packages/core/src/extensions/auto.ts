@@ -17,7 +17,7 @@ import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   type ExtensionActorDefinition,
-  type ExtensionDeriveContext,
+  type ExtensionTurnContext,
   type ExtensionEffect,
   type ToolResultInput,
   type TurnAfterInput,
@@ -331,7 +331,7 @@ const autoMachine = Machine.make({
 
 // ── Derive ──
 
-const derive = (state: MachineState, _ctx?: ExtensionDeriveContext) => {
+const derive = (state: MachineState, _ctx?: ExtensionTurnContext) => {
   if (state._tag === "Inactive") {
     const uiModel: AutoUiModel = { active: false, learningsCount: 0 }
     return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] }, uiModel }
@@ -372,7 +372,7 @@ const projectSnapshot = (state: MachineState): AutoUiModel => {
   return (uiModel ?? { active: false, learningsCount: 0 }) as AutoUiModel
 }
 
-const projectTurn = (state: MachineState, ctx: ExtensionDeriveContext): TurnProjection => {
+const projectTurn = (state: MachineState, ctx: ExtensionTurnContext): TurnProjection => {
   const { uiModel: _, ...turn } = derive(state, ctx)
   return turn
 }
@@ -484,7 +484,7 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 export const AutoActorConfig = {
   id: AUTO_EXTENSION_ID,
   initial: { _tag: "Inactive" as const } satisfies AutoState,
-  derive: (state: AutoState, ctx?: ExtensionDeriveContext) => derive(state as MachineState, ctx),
+  derive: (state: AutoState, ctx?: ExtensionTurnContext) => derive(state as MachineState, ctx),
   reduce: (state: AutoState, event: AgentEvent): { state: AutoState } => {
     const mapped = mapEvent(event)
     if (mapped === undefined) return { state }

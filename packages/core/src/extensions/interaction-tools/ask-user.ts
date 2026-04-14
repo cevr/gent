@@ -62,7 +62,6 @@ const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
 
 export const AskUserTool = defineTool({
   name: "ask_user",
-  action: "interact",
   concurrency: "serial",
   interactive: true,
   description:

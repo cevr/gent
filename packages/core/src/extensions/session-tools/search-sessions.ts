@@ -64,7 +64,6 @@ export function parseRelativeDate(s: string): number | undefined {
 
 export const SearchSessionsTool = defineTool({
   name: "search_sessions",
-  action: "state",
   concurrency: "parallel",
   idempotent: true,
   description:

@@ -9,7 +9,6 @@ export const RenameSessionParams = Schema.Struct({
 
 export const RenameSessionTool = defineTool({
   name: "rename_session",
-  action: "state",
   concurrency: "serial",
   idempotent: true,
   description:

@@ -2,10 +2,6 @@ import type { Effect, Schema } from "effect"
 import type { ToolCallId } from "./ids"
 import type { ExtensionHostContext } from "./extension-host-context"
 
-// Tool Action — classifies what a tool does for agent filtering
-
-export type ToolAction = "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state"
-
 // Tool Definition
 
 // Params must have no context requirement (never) for sync decoding
@@ -18,7 +14,6 @@ export interface ToolDefinition<
   Deps = never,
 > {
   readonly name: Name
-  readonly action: ToolAction
   readonly description: string
   readonly concurrency?: "serial" | "parallel"
   /** Whether this tool is safe to replay after restart (read-only tools = true) */

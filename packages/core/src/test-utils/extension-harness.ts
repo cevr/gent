@@ -22,7 +22,7 @@ import {
   type AgentEvent,
 } from "../domain/event.js"
 import type {
-  ExtensionDeriveContext,
+  ExtensionTurnContext,
   ExtensionReduceContext,
   ExtensionSetup,
   LoadedExtension,
@@ -114,7 +114,7 @@ export interface ActorHarnessResult<State, Message = void> {
     ? undefined
     : (state: State, message: Message) => ReduceResult<State>
   readonly ctx: ExtensionReduceContext
-  readonly deriveCtx: ExtensionDeriveContext
+  readonly deriveCtx: ExtensionTurnContext
   readonly events: EventFactories
   readonly initial: State
 }
@@ -129,7 +129,7 @@ export interface ActorHarnessConfig<State, Message = void> {
   ) => ReduceResult<State>
   readonly derive?: (
     state: State,
-    ctx: ExtensionDeriveContext,
+    ctx: ExtensionTurnContext,
   ) => TurnProjection & { readonly uiModel?: unknown }
   readonly receive?: (state: State, message: Message) => ReduceResult<State>
 }
@@ -152,11 +152,12 @@ export function createActorHarness<State, Message = void>(
     branchId: (options?.branchId ?? "test-branch") as BranchId,
   }
 
-  const deriveCtx: ExtensionDeriveContext = {
+  const deriveCtx: ExtensionTurnContext = {
     sessionId: ctx.sessionId,
-    branchId: ctx.branchId,
+    branchId: (ctx.branchId ?? "test-branch") as BranchId,
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
+    interactive: true,
   }
 
   const branchId = (options?.branchId ?? "test-branch") as BranchId

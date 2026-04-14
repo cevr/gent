@@ -1140,7 +1140,6 @@ describe("interaction", () => {
   const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
     defineTool({
       name: "interaction-tool",
-      action: "interact" as const,
       description: "Tool that triggers an interaction",
       concurrency: "serial",
       params: Schema.Struct({ value: Schema.String }),
@@ -1420,7 +1419,6 @@ describe("interaction", () => {
 describe("recovery", () => {
   const idempotentTestTool = defineTool({
     name: "test-idempotent",
-    action: "read",
     description: "Test idempotent tool",
     concurrency: "parallel",
     idempotent: true,

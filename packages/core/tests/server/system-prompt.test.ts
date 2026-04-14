@@ -121,7 +121,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "read",
-        action: "read" as const,
         description: "Read files",
         promptSnippet: "Read file contents",
         params: {} as never,
@@ -129,7 +128,6 @@ describe("buildTurnPrompt", () => {
       },
       {
         name: "bash",
-        action: "exec" as const,
         description: "Run commands",
         promptSnippet: "Execute shell commands",
         params: {} as never,
@@ -146,7 +144,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "read",
-        action: "read" as const,
         description: "Read files",
         promptGuidelines: ["Use instead of bash cat"] as const,
         params: {} as never,
@@ -162,7 +159,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "read",
-        action: "read" as const,
         description: "Read",
         promptGuidelines: ["Shared guideline"] as const,
         params: {} as never,
@@ -170,7 +166,6 @@ describe("buildTurnPrompt", () => {
       },
       {
         name: "grep",
-        action: "read" as const,
         description: "Grep",
         promptGuidelines: ["Shared guideline"] as const,
         params: {} as never,
@@ -192,7 +187,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "plain",
-        action: "read" as const,
         description: "No metadata",
         params: {} as never,
         execute: (() => {}) as never,
@@ -207,14 +201,12 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "bash",
-        action: "exec" as const,
         description: "Run",
         params: {} as never,
         execute: (() => {}) as never,
       },
       {
         name: "grep",
-        action: "read" as const,
         description: "Search",
         params: {} as never,
         execute: (() => {}) as never,
@@ -229,28 +221,24 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "bash",
-        action: "exec" as const,
         description: "Run",
         params: {} as never,
         execute: (() => {}) as never,
       },
       {
         name: "grep",
-        action: "read" as const,
         description: "Search",
         params: {} as never,
         execute: (() => {}) as never,
       },
       {
         name: "glob",
-        action: "read" as const,
         description: "Find",
         params: {} as never,
         execute: (() => {}) as never,
       },
       {
         name: "read",
-        action: "read" as const,
         description: "Read",
         params: {} as never,
         execute: (() => {}) as never,
@@ -264,7 +252,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "bash",
-        action: "exec" as const,
         description: "Run",
         params: {} as never,
         execute: (() => {}) as never,
@@ -278,7 +265,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "delegate",
-        action: "delegate" as const,
         description: "Delegate work",
         params: {} as never,
         execute: (() => {}) as never,
@@ -301,7 +287,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "delegate",
-        action: "delegate" as const,
         description: "Delegate",
         params: {} as never,
         execute: (() => {}) as never,
@@ -317,7 +302,6 @@ describe("buildTurnPrompt", () => {
     const tools = [
       {
         name: "read",
-        action: "read" as const,
         description: "Read",
         params: {} as never,
         execute: (() => {}) as never,

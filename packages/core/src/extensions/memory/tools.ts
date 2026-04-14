@@ -38,7 +38,6 @@ const RememberParams = Schema.Struct({
 
 export const MemoryRememberTool = defineTool({
   name: "memory_remember",
-  action: "state",
   concurrency: "serial",
   description:
     "Store a memory for future reference. Use 'session' for this conversation only, 'project' for this codebase, 'global' for cross-session knowledge.",
@@ -99,7 +98,6 @@ const RecallParams = Schema.Struct({
 
 export const MemoryRecallTool = defineTool({
   name: "memory_recall",
-  action: "read",
   concurrency: "parallel",
   idempotent: true,
   description:
@@ -162,7 +160,6 @@ const ForgetParams = Schema.Struct({
 
 export const MemoryForgetTool = defineTool({
   name: "memory_forget",
-  action: "state",
   concurrency: "serial",
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,

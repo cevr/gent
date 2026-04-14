@@ -152,7 +152,6 @@ export const fetchRepo = (spec: string, home: string) =>
 
 export const RepoTool = defineTool({
   name: "repo",
-  action: "state",
   concurrency: "serial",
   idempotent: true,
   description:

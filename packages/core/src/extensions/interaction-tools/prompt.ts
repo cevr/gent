@@ -58,7 +58,6 @@ export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewRe
 
 export const PromptTool = defineTool({
   name: "prompt",
-  action: "interact",
   concurrency: "serial",
   description:
     "Present content to the user for review, confirmation, or informational display. " +

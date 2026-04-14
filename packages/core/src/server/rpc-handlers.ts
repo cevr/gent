@@ -30,7 +30,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { toExtensionContext } from "../domain/extension-context.js"
+import { toExtensionAsyncContext } from "../domain/extension-context.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -382,7 +382,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           }
 
           const hostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
-          const ctx = toExtensionContext(hostCtx)
+          const ctx = toExtensionAsyncContext(hostCtx)
           yield* Effect.promise(() => Promise.resolve(cmd.handler(args, ctx)))
         }),
 

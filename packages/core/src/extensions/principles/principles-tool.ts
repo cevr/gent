@@ -10,7 +10,6 @@ export const PrinciplesParams = Schema.Struct({
 
 export const PrinciplesTool = defineTool({
   name: "principles",
-  action: "read" as const,
   description:
     "Read governing principles by name. Use before architectural decisions, plan creation, or code review.",
   promptSnippet: "Read governing principles for grounding decisions",

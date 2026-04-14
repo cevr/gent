@@ -5,9 +5,9 @@ import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata, MessagePart } from "./message"
 import type { PermissionResult, PermissionRule } from "./permission"
-import type { AnyToolDefinition, ToolAction } from "./tool"
+import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
-import type { ExtensionContext } from "./extension-context"
+import type { ExtensionAsyncContext } from "./extension-context"
 import type { PromptSection, PromptSectionInput } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -167,7 +167,6 @@ export interface MessageOutputInput {
 export interface ToolResultInput {
   readonly toolCallId: ToolCallId
   readonly toolName: string
-  readonly toolAction: ToolAction
   readonly input: unknown
   readonly result: unknown
   readonly agentName?: AgentName
@@ -220,12 +219,13 @@ export interface ExtensionReduceContext {
   readonly branchId?: BranchId
 }
 
-export interface ExtensionDeriveContext {
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
+export interface ExtensionTurnContext extends RunContext {
   readonly agent: AgentDefinition
   readonly allTools: ReadonlyArray<AnyToolDefinition>
 }
+
+/** @deprecated Use ExtensionTurnContext */
+export type ExtensionDeriveContext = ExtensionTurnContext
 
 /** Fragment contributed by an extension's derive() to influence tool visibility */
 export interface ToolPolicyFragment {
@@ -252,7 +252,7 @@ export interface ExtensionActorSnapshotConfig<State = unknown> {
 
 export interface ExtensionActorTurnConfig<State = unknown> {
   /** Derive turn directives from actor state. Pure projection only. */
-  readonly project: (state: State, ctx: ExtensionDeriveContext) => TurnProjection
+  readonly project: (state: State, ctx: ExtensionTurnContext) => TurnProjection
 }
 
 // Extension Actor — OTP-inspired unified state model
@@ -352,7 +352,7 @@ export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any
 export interface CommandContribution {
   readonly name: string
   readonly description?: string
-  readonly handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+  readonly handler: (args: string, ctx: ExtensionAsyncContext) => void | Promise<void>
 }
 
 // Provider Contribution — re-exported from dedicated file for backwards compatibility

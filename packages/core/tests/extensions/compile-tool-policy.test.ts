@@ -6,13 +6,9 @@ import { defineTool } from "@gent/core/domain/tool"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("compileToolPolicy", () => {
-  const makeTool = (
-    name: string,
-    action: "read" | "edit" | "exec" | "delegate" | "interact" | "network" | "state",
-  ) =>
+  const makeTool = (name: string) =>
     defineTool({
       name,
-      action,
       concurrency: "parallel",
       description: name,
       params: Schema.Struct({}),
@@ -20,17 +16,17 @@ describe("compileToolPolicy", () => {
     })
 
   const allTools = [
-    makeTool("read", "read"),
-    makeTool("grep", "read"),
-    makeTool("glob", "read"),
-    makeTool("write", "edit"),
-    makeTool("edit", "edit"),
-    makeTool("bash", "exec"),
-    makeTool("delegate", "delegate"),
-    makeTool("ask_user", "interact"),
-    makeTool("webfetch", "network"),
-    makeTool("websearch", "network"),
-    makeTool("search_skills", "read"),
+    makeTool("read"),
+    makeTool("grep"),
+    makeTool("glob"),
+    makeTool("write"),
+    makeTool("edit"),
+    makeTool("bash"),
+    makeTool("delegate"),
+    makeTool("ask_user"),
+    makeTool("webfetch"),
+    makeTool("websearch"),
+    makeTool("search_skills"),
   ]
 
   const emptyCtx = { sessionId: "s" as SessionId, branchId: "b" as BranchId }
@@ -136,14 +132,13 @@ describe("compileToolPolicy", () => {
   test("interactive tools filtered when context.interactive is false", () => {
     const interactiveTool = defineTool({
       name: "ask_user",
-      action: "interact",
       interactive: true,
       concurrency: "parallel",
       description: "ask_user",
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
     })
-    const nonInteractiveTool = makeTool("read", "read")
+    const nonInteractiveTool = makeTool("read")
     const agent = new AgentDefinition({ name: "cowork" })
     const ctx = { ...emptyCtx, interactive: false as const }
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
@@ -154,7 +149,6 @@ describe("compileToolPolicy", () => {
   test("interactive tools kept when context.interactive is not false", () => {
     const interactiveTool = defineTool({
       name: "ask_user",
-      action: "interact",
       interactive: true,
       concurrency: "parallel",
       description: "ask_user",

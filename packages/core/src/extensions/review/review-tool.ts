@@ -285,7 +285,6 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
 
 export const ReviewTool = defineTool({
   name: "review",
-  action: "delegate" as const,
   concurrency: "serial" as const,
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",

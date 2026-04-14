@@ -42,7 +42,6 @@ describe("extension activation isolation", () => {
           tools: [
             {
               name: "good_tool",
-              action: "read",
               description: "good",
               params: {} as never,
               execute: () => Effect.void,
@@ -116,7 +115,6 @@ describe("extension activation isolation", () => {
             tools: [
               {
                 name: "healthy_tool",
-                action: "read",
                 description: "healthy",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -127,7 +125,6 @@ describe("extension activation isolation", () => {
             tools: [
               {
                 name: "shared_tool",
-                action: "read",
                 description: "a",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -138,7 +135,6 @@ describe("extension activation isolation", () => {
             tools: [
               {
                 name: "shared_tool",
-                action: "read",
                 description: "b",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -168,7 +164,6 @@ describe("extension activation isolation", () => {
             tools: [
               {
                 name: "healthy_tool",
-                action: "read",
                 description: "healthy",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -190,7 +185,6 @@ describe("extension activation isolation", () => {
             tools: [
               {
                 name: "failing_tool",
-                action: "read",
                 description: "failing",
                 params: {} as never,
                 execute: () => Effect.void,

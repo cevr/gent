@@ -258,7 +258,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                 {
                   toolCallId: toolCall.toolCallId,
                   toolName: toolCall.toolName,
-                  toolAction: toolDefinition.action,
                   input: decodedInput.success,
                   result: executeResult.success,
                   agentName: ctx.agentName,

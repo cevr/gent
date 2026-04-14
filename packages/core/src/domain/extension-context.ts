@@ -1,10 +1,10 @@
 /**
- * ExtensionContext — Promise-based facade over ExtensionHostContext.
+ * ExtensionAsyncContext — Promise-based facade over ExtensionHostContext.
  *
  * Third-party extension authors use this. Same capabilities as ExtensionHostContext,
  * but every method returns a Promise instead of an Effect.
  *
- * Created via `toExtensionContext(hostCtx)`.
+ * Created via `toExtensionAsyncContext(hostCtx)`.
  *
  * @module
  */
@@ -31,24 +31,24 @@ import type { SearchResult } from "../storage/search-storage.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 
 // ---------------------------------------------------------------------------
-// ExtensionContext — Promise-returning, author-facing
+// ExtensionAsyncContext — Promise-returning, author-facing
 // ---------------------------------------------------------------------------
 
-export interface ExtensionContext {
+export interface ExtensionAsyncContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
   readonly cwd: string
   readonly home: string
 
-  readonly extension: ExtensionContext.Extension
-  readonly agent: ExtensionContext.Agent
-  readonly session: ExtensionContext.SessionFacet
-  readonly interaction: ExtensionContext.Interaction
-  readonly turn: ExtensionContext.Turn
+  readonly extension: ExtensionAsyncContext.Extension
+  readonly agent: ExtensionAsyncContext.Agent
+  readonly session: ExtensionAsyncContext.SessionFacet
+  readonly interaction: ExtensionAsyncContext.Interaction
+  readonly turn: ExtensionAsyncContext.Turn
 }
 
-export declare namespace ExtensionContext {
+export declare namespace ExtensionAsyncContext {
   interface Extension {
     readonly send: (message: AnyExtensionCommandMessage, branchId?: BranchId) => Promise<void>
 
@@ -163,12 +163,12 @@ export declare namespace ExtensionContext {
 }
 
 // ---------------------------------------------------------------------------
-// Adapter — wraps ExtensionHostContext (Effect) → ExtensionContext (Promise)
+// Adapter — wraps ExtensionHostContext (Effect) → ExtensionAsyncContext (Promise)
 // ---------------------------------------------------------------------------
 
 const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(effect)
 
-export const toExtensionContext = (ctx: ExtensionHostContext): ExtensionContext => ({
+export const toExtensionAsyncContext = (ctx: ExtensionHostContext): ExtensionAsyncContext => ({
   sessionId: ctx.sessionId,
   branchId: ctx.branchId,
   agentName: ctx.agentName,
@@ -220,3 +220,9 @@ export const toExtensionContext = (ctx: ExtensionHostContext): ExtensionContext 
     interject: (params) => run(ctx.turn.interject(params)),
   },
 })
+
+// Migration aliases
+/** @deprecated Use ExtensionAsyncContext */
+export type ExtensionContext = ExtensionAsyncContext
+/** @deprecated Use toExtensionAsyncContext */
+export const toExtensionContext = toExtensionAsyncContext

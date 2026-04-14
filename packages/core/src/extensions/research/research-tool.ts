@@ -75,7 +75,6 @@ const buildSynthesisPrompt = (
 
 export const ResearchTool = defineTool({
   name: "research",
-  action: "delegate" as const,
   concurrency: "serial" as const,
   description:
     "Research external repositories to understand how they work. Single repo for focused explanation, multiple repos for comparative analysis.",

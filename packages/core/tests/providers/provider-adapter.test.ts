@@ -142,7 +142,6 @@ describe("convertTools", () => {
   const EchoParams = Schema.Struct({ text: Schema.String })
   const echoDef: AnyToolDefinition = {
     name: "echo",
-    action: "read",
     description: "Echoes input",
     params: EchoParams,
     execute: () => Effect.succeed("echoed"),
@@ -175,7 +174,6 @@ describe("convertTools", () => {
     const SearchParams = Schema.Struct({ query: Schema.String })
     const searchDef: AnyToolDefinition = {
       name: "search",
-      action: "read",
       description: "Searches",
       params: SearchParams,
       execute: () => Effect.succeed("found"),

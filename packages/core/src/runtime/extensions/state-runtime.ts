@@ -16,7 +16,7 @@ import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/ev
 import type {
   AnyExtensionActorDefinition,
   ExtensionActorStatusInfo,
-  ExtensionDeriveContext,
+  ExtensionTurnContext,
   ExtensionReduceContext,
   ExtensionRef,
   ExtensionSnapshot,
@@ -88,7 +88,7 @@ export interface ExtensionStateRuntimeService {
   readonly publish: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
   readonly deriveAll: (
     sessionId: SessionId,
-    ctx: ExtensionDeriveContext,
+    ctx: ExtensionTurnContext,
   ) => Effect.Effect<ReadonlyArray<{ extensionId: string; projection: TurnProjection }>>
   readonly send: (
     sessionId: SessionId,

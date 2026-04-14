@@ -267,8 +267,11 @@ const resolveTurnContext = (params: {
     const extensionResults = yield* params.extensionStateRuntime.deriveAll(params.sessionId, {
       sessionId: params.sessionId,
       branchId: params.branchId,
-      agent,
+      agent: effectiveAgent,
       allTools,
+      interactive: params.interactive,
+      tags: params.executionOverrides?.tags,
+      agentName: currentAgent,
     })
     const extensionProjections = extensionResults.map((r) => r.projection)
 

@@ -29,7 +29,6 @@ const makeLoaded = (
   setup: {
     tools: (opts.toolNames ?? []).map((name) => ({
       name,
-      action: "read" as const,
       description: `test tool ${name}`,
       params: {} as never,
       execute: () => Effect.void,
