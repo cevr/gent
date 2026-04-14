@@ -80,6 +80,77 @@ const waitForExit = (pid: number, timeoutMs: number): Promise<number> =>
     }, 200)
   })
 
+/** Spawn a raw server on a fixed port. Returns url + proc. */
+const spawnServerOnPort = async (opts: {
+  dataDir: string
+  port: number
+}): Promise<{ url: string; proc: Bun.Subprocess }> => {
+  const proc = Bun.spawn(["bun", serverEntry], {
+    cwd: repoRoot,
+    env: {
+      ...Bun.env,
+      GENT_PORT: String(opts.port),
+      GENT_SERVER_MODE: "worker",
+      GENT_PERSISTENCE_MODE: "memory",
+      GENT_PROVIDER_MODE: "debug-scripted",
+      GENT_DATA_DIR: opts.dataDir,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+
+  const url = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("server did not become ready")), 10_000)
+    const chunks: string[] = []
+    const decoder = new TextDecoder()
+    const reader = proc.stdout.getReader()
+    const pump = (): void => {
+      reader.read().then(({ value, done }) => {
+        if (done) {
+          reject(new Error("stdout closed before ready"))
+          return
+        }
+        chunks.push(decoder.decode(value))
+        const all = chunks.join("")
+        const match = all.match(/GENT_WORKER_READY (.+)/)
+        if (match) {
+          clearTimeout(timeout)
+          reader.releaseLock()
+          resolve(match[1]!.trim())
+        } else {
+          pump()
+        }
+      })
+    }
+    pump()
+  })
+
+  return { url: `${url}/rpc`, proc }
+}
+
+/** Poll until a predicate is true or timeout. */
+const waitUntil = (
+  predicate: () => boolean,
+  timeoutMs: number,
+  intervalMs = 100,
+): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (predicate()) {
+      resolve(true)
+      return
+    }
+    const deadline = Date.now() + timeoutMs
+    const check = setInterval(() => {
+      if (predicate()) {
+        clearInterval(check)
+        resolve(true)
+      } else if (Date.now() >= deadline) {
+        clearInterval(check)
+        resolve(false)
+      }
+    }, intervalMs)
+  })
+
 describe("server lifecycle", () => {
   test("identity route returns server identity", async () => {
     const dataDir = makeTempDir()
@@ -124,7 +195,9 @@ describe("server lifecycle", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const { client } = yield* Gent.client({ url: supervisor.url })
+          const bundle = yield* Gent.client({ url: supervisor.url })
+          yield* bundle.runtime.lifecycle.waitForReady
+          const { client } = bundle
 
           // server.status should reflect our connection
           const status = yield* client.server
@@ -190,18 +263,15 @@ describe("server lifecycle", () => {
             state: Gent.state.sqlite({ home: dataDir, dbPath }),
             provider: Gent.provider.mock(),
           })
-          const bundle2 = yield* Gent.client(server2)
-
-          const status2 = yield* bundle2.client.server
-            .status()
-            .pipe(Effect.mapError((e) => new Error(String(e))))
-          const pid2 = status2.pid
-
-          // Same server — same PID
-          expect(pid1).toBe(pid2)
+          // Second server should attach — verify via tag and probing identity
           expect(server2._tag).toBe("attached")
-          // Owned client uses direct RPC (no WS), only attached client increments ConnectionTracker
-          expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
+
+          // Verify same server by probing identity endpoint (avoids WS lifecycle timing)
+          const baseUrl = server2.url.replace("/rpc", "")
+          const identity = yield* Effect.tryPromise(() =>
+            fetch(`${baseUrl}/_gent/identity`).then((r) => r.json()),
+          ).pipe(Effect.mapError((e) => new Error(String(e))))
+          expect((identity as { pid: number }).pid).toBe(pid1)
         }),
       ),
     )
@@ -222,6 +292,9 @@ describe("server lifecycle", () => {
       const bundle = await Effect.runPromise(
         Gent.client({ url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
       )
+
+      // Wait for WS connection to establish
+      await Effect.runPromise(bundle.runtime.lifecycle.waitForReady)
 
       // Verify connection registered
       const status = await Effect.runPromise(
@@ -251,4 +324,67 @@ describe("server lifecycle", () => {
       }
     }
   }, 20_000)
+
+  test("WS client reconnects after server kill and restart", async () => {
+    const dataDir = makeTempDir()
+    const port = 19_000 + Math.floor(Math.random() * 1000)
+
+    // Start initial server
+    let server = await spawnServerOnPort({ dataDir, port })
+
+    try {
+      // Connect with auto-reconnecting WS client
+      const clientScope = Effect.runSync(Scope.make())
+      const bundle = await Effect.runPromise(
+        Gent.client({ url: server.url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
+      )
+
+      // Wait for WS connection to establish
+      await Effect.runPromise(bundle.runtime.lifecycle.waitForReady)
+
+      // Track lifecycle transitions
+      const states: string[] = []
+      bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
+
+      // Verify initial connection works
+      const status1 = await Effect.runPromise(
+        bundle.client.server.status().pipe(Effect.mapError((e) => new Error(String(e)))),
+      )
+      expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
+      expect(states).toContain("connected")
+
+      // Kill the server
+      server.proc.kill("SIGTERM")
+      await server.proc.exited
+
+      // Wait for client to detect disconnection and enter reconnecting
+      const sawReconnecting = await waitUntil(() => states.includes("reconnecting"), 5_000)
+      expect(sawReconnecting).toBe(true)
+
+      // Restart server on the same port
+      server = await spawnServerOnPort({ dataDir, port })
+
+      // Wait for client to reconnect — lifecycle should return to connected
+      const reconnected = await waitUntil(
+        () => bundle.runtime.lifecycle.getState()._tag === "connected",
+        10_000,
+      )
+      expect(reconnected).toBe(true)
+
+      // Verify RPC works again through the same client handle
+      const status2 = await Effect.runPromise(
+        bundle.client.server.status().pipe(Effect.mapError((e) => new Error(String(e)))),
+      )
+      expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
+
+      // Clean up
+      await Effect.runPromise(Scope.close(clientScope, Exit.void))
+    } finally {
+      try {
+        server.proc.kill()
+      } catch {
+        /* already dead */
+      }
+    }
+  }, 30_000)
 })

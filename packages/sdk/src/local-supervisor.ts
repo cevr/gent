@@ -53,6 +53,9 @@ export interface LocalSupervisorOptions {
   /** When true, automatically reconnect on build failure or post-connect scope close.
    *  Uses exponential backoff: 1s → 2s → 4s → ... → 30s cap. */
   readonly autoReconnect?: boolean
+  /** Called after a successful connect. Should complete (success or failure)
+   *  when the connection is lost. Supervisor triggers reconnect on completion. */
+  readonly watchConnection?: () => Effect.Effect<void>
 }
 
 /** Compute reconnect delay: exponential backoff 1s → 2s → 4s → 8s → 16s → 30s cap */
@@ -176,21 +179,23 @@ export const startLocalSupervisor = <E, R>(
             yield* Ref.set(reconnectAttemptRef, 0)
           }
 
-          // Auto-reconnect: watch for scope close (socket death) and trigger reconnect
-          if (autoReconnect) {
-            yield* Scope.addFinalizer(
-              scope,
-              Effect.gen(function* () {
-                // Only reconnect if this is still the current generation
-                const currentGen = yield* Ref.get(generationRef)
-                const isStopped = yield* Ref.get(stoppedRef)
-                if (currentGen === generation && !isStopped) {
-                  yield* Effect.logWarning("local-supervisor.scope-closed.auto-reconnect").pipe(
-                    Effect.annotateLogs({ generation }),
-                  )
-                  yield* triggerAutoReconnect
-                }
-              }),
+          // Auto-reconnect: watch connection health and trigger reconnect on loss
+          if (autoReconnect && options?.watchConnection !== undefined) {
+            yield* options.watchConnection().pipe(
+              Effect.catchEager(() => Effect.void),
+              Effect.flatMap(() =>
+                Effect.gen(function* () {
+                  const currentGen = yield* Ref.get(generationRef)
+                  const isStopped = yield* Ref.get(stoppedRef)
+                  if (currentGen === generation && !isStopped) {
+                    yield* Effect.logWarning(
+                      "local-supervisor.connection-lost.auto-reconnect",
+                    ).pipe(Effect.annotateLogs({ generation }))
+                    yield* triggerAutoReconnect
+                  }
+                }),
+              ),
+              Effect.forkScoped,
             )
           }
         })

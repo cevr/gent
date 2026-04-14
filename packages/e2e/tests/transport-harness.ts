@@ -189,6 +189,7 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
       Effect.scoped(
         Gent.client({ url: worker.url }).pipe(
           Effect.mapError((e) => new Error(e.message)),
+          Effect.tap((bundle) => bundle.runtime.lifecycle.waitForReady),
           Effect.flatMap(assertion),
           Effect.timeoutOrElse({
             duration: WORKER_TIMEOUT,

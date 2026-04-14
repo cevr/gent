@@ -39,7 +39,6 @@ import {
   type GentNamespacedClient,
   type GentRuntime,
 } from "./namespaced-client.js"
-import { startLocalSupervisor } from "./local-supervisor.js"
 import {
   resolveServer,
   getOwnedInternal,
@@ -265,37 +264,78 @@ export interface GentClientBundle {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: WS connect with reconnection
+// Internal: WS connect with reconnection via ConnectionHooks
 // ---------------------------------------------------------------------------
 
-/** Build a WS-backed RPC client within a given scope. */
-const buildWsRpcClient = (url: string) => (scope: Scope.Closeable) =>
-  Effect.gen(function* () {
-    const transport = yield* Layer.buildWithScope(WsTransport(url), scope)
-    return yield* makeRpcClient.pipe(Effect.provide(transport))
-  })
-
-const toConnectionError = (error: unknown) =>
-  new GentConnectionError({
-    message:
-      typeof error === "object" && error !== null && "message" in error
-        ? String((error as { readonly message: unknown }).message)
-        : String(error),
-  })
-
-/** Connect via WS with automatic reconnection. Uses the local supervisor
- *  pattern: swappable client proxy + lifecycle transitions + generation tracking. */
+/** Connect via WS with lifecycle driven by RPC protocol's ConnectionHooks.
+ *  The Effect RPC protocol handles WS reconnection internally — we observe
+ *  connect/disconnect via hooks and project onto GentLifecycle. */
 const connectWs = (
   url: string,
 ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
-    const supervisor = yield* startLocalSupervisor(buildWsRpcClient(url), toConnectionError, {
-      autoReconnect: true,
+    const scope = yield* Effect.scope
+    let generation = 0
+    let currentState: ConnectionState = { _tag: "connecting" }
+    const listeners = new Set<(state: ConnectionState) => void>()
+
+    const emit = (state: ConnectionState) => {
+      currentState = state
+      for (const listener of listeners) listener(state)
+    }
+
+    const hooksLayer = Layer.succeed(RpcClient.ConnectionHooks, {
+      onConnect: Effect.sync(() => {
+        emit({ _tag: "connected", generation })
+      }),
+      onDisconnect: Effect.sync(() => {
+        generation++
+        emit({ _tag: "reconnecting", attempt: generation, generation })
+      }),
     })
+
+    const transport = yield* Layer.buildWithScope(
+      WsTransport(url).pipe(Layer.provide(hooksLayer)),
+      scope,
+    )
+    const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
     const services = yield* Effect.context<never>()
+
+    const lifecycle: GentLifecycle = {
+      getState: () => currentState,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        listener(currentState)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+      restart: Effect.fail(
+        new GentConnectionError({
+          message: "restart not supported — WS transport reconnects automatically",
+        }),
+      ),
+      waitForReady: Effect.suspend(() => {
+        if (currentState._tag === "connected" || currentState._tag === "disconnected") {
+          return Effect.void
+        }
+        return Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              const unsub = lifecycle.subscribe((s) => {
+                if (s._tag === "connected" || s._tag === "disconnected") {
+                  unsub()
+                  resolve()
+                }
+              })
+            }),
+        )
+      }),
+    }
+
     return {
-      client: supervisor.client,
-      runtime: makeRuntime(services as Context.Context<unknown>, supervisor.lifecycle),
+      client: makeNamespacedClient(rpcClient),
+      runtime: makeRuntime(services as Context.Context<unknown>, lifecycle),
     }
   })
 
