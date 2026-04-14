@@ -58,6 +58,16 @@ import {
   type GentNamespacedClient,
   type GentRuntime,
 } from "./namespaced-client.js"
+import {
+  resolveServer,
+  getOwnedInternal,
+  state as stateFactories,
+  provider as providerFactories,
+  type GentServer,
+  type GentServerOptions,
+  type StateSpec,
+  type ProviderSpec,
+} from "./server.js"
 
 export type {
   MessagePart,
@@ -91,6 +101,7 @@ export type {
 }
 export { GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
+export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
 
 // Re-export RPC types
 export type { GentRpcsClient, GentRpcError }
@@ -597,6 +608,56 @@ export const Gent = {
           services as Context.Context<unknown>,
           staticLifecycle({ _tag: "connected", generation: 0 }),
         ),
+      }
+    }),
+
+  // ── New composable API ──
+
+  /** Composable state spec factories. */
+  state: stateFactories,
+
+  /** Composable provider spec factories. */
+  provider: providerFactories,
+
+  /** Resolve or start a server. Returns a server handle with a URL. */
+  server: (
+    options: GentServerOptions,
+  ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => resolveServer(options),
+
+  /** Connect to a server. Owned servers use direct RPC; attached/remote use WS. */
+  client: (
+    serverOrUrl: GentServer | { readonly url: string },
+  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
+    Effect.gen(function* () {
+      // URL shorthand → remote
+      if (!("_tag" in serverOrUrl)) {
+        return yield* Gent.connect({ url: serverOrUrl.url })
+      }
+
+      switch (serverOrUrl._tag) {
+        case "owned": {
+          // Direct in-process RPC — zero network
+          const internal = getOwnedInternal(serverOrUrl)
+          if (internal === undefined) {
+            return yield* Effect.fail(
+              new GentConnectionError({ message: "owned server internal state missing" }),
+            )
+          }
+          const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
+            Effect.provide(internal.handlerContext),
+          ) as Effect.Effect<GentRpcClient>
+          const services = yield* Effect.context<never>()
+          return {
+            client: makeNamespacedClient(rpcClient),
+            runtime: makeRuntime(
+              services as Context.Context<unknown>,
+              staticLifecycle({ _tag: "connected", generation: 0 }),
+            ),
+          }
+        }
+        case "attached":
+        case "remote":
+          return yield* Gent.connect({ url: serverOrUrl.url })
       }
     }),
 } as const

@@ -59,6 +59,9 @@ export interface DependenciesConfig {
   scheduledJobCommand?: ScheduledJobCommand
   /** URL of the shared server. Subprocess children pass --connect to reuse it. */
   sharedServerUrl?: string
+  /** Provider layer override. When set, bypasses providerMode string and uses this layer directly.
+   *  Must be a fully-provided layer (no requirements, no errors). */
+  providerLayerOverride?: Layer.Layer<Provider, never, never>
 }
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
@@ -225,9 +228,15 @@ export const createDependencies = (config: DependenciesConfig) => {
   const fileLockServiceLive = FileLockService.layer
 
   let providerLive = Layer.provide(Provider.Live, authDeps)
-  if (providerMode === "debug-scripted") providerLive = DebugProvider()
-  else if (providerMode === "debug-failing") providerLive = DebugFailingProvider
-  else if (providerMode === "debug-slow") providerLive = DebugProvider({ delayMs: 10 })
+  if (config.providerLayerOverride !== undefined) {
+    providerLive = config.providerLayerOverride
+  } else if (providerMode === "debug-scripted") {
+    providerLive = DebugProvider()
+  } else if (providerMode === "debug-failing") {
+    providerLive = DebugFailingProvider
+  } else if (providerMode === "debug-slow") {
+    providerLive = DebugProvider({ delayMs: 10 })
+  }
 
   const eventPublisherLive = Layer.provide(
     EventPublisherLive,

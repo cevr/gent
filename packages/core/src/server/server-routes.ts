@@ -79,8 +79,8 @@ export interface ServerRoutesConfig {
  * Includes: RPC-over-WS, REST API, Swagger docs, identity route, CORS.
  * Caller provides `coreServicesLive` containing all service dependencies.
  */
-export const buildServerRoutes = <R>(
-  coreServicesLive: Layer.Layer<never, never, R>,
+export const buildServerRoutes = <A>(
+  coreServicesLive: Layer.Layer<A>,
   config: ServerRoutesConfig,
 ) => {
   // RPC-over-WebSocket route
