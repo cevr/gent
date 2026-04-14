@@ -7,6 +7,7 @@ import { describe, test, expect } from "bun:test"
 import { it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
+import { waitFor } from "@gent/core/test-utils/fixtures"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ExecutorUiModel } from "@gent/core/extensions/executor/actor"
@@ -117,6 +118,22 @@ const makeExecutorExtension = (overrides?: {
 
   return { extension, layer: Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never> }
 }
+
+const waitForExecutorStatus = (
+  runtime: typeof ExtensionStateRuntime.Type,
+  status: ExecutorUiModel["status"],
+) =>
+  waitFor(
+    runtime.getUiSnapshots(sessionId, branchId),
+    (snaps) => {
+      const model = snaps.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)?.model as
+        | ExecutorUiModel
+        | undefined
+      return model?.status === status
+    },
+    3_000,
+    `executor status = ${status}`,
+  ).pipe(Effect.catchEager(() => Effect.succeed([] as never)))
 
 // ── Tool tests ──
 
@@ -260,7 +277,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("100 millis")
+        yield* waitForExecutorStatus(runtime, "ready")
 
         const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
         const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -286,7 +303,8 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("100 millis")
+        // autoStart=false means no Connect is sent — actor stays Idle.
+        yield* waitForExecutorStatus(runtime, "idle")
 
         const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
         const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -315,7 +333,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "error")
 
         const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
         const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -340,7 +358,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("50 millis")
+        yield* waitForExecutorStatus(runtime, "idle")
 
         // Verify idle
         const before = yield* runtime.getUiSnapshots(sessionId, branchId)
@@ -351,7 +369,7 @@ describe("Executor actor lifecycle", () => {
         // Send Connect command
         yield* runtime.send(sessionId, ExecutorProtocol.Connect({ cwd: "/test" }), branchId)
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "ready")
 
         const after = yield* runtime.getUiSnapshots(sessionId, branchId)
         const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -374,7 +392,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "ready")
 
         // Verify ready
         const before = yield* runtime.getUiSnapshots(sessionId, branchId)
@@ -385,7 +403,7 @@ describe("Executor actor lifecycle", () => {
         // Send disconnect
         yield* runtime.send(sessionId, ExecutorProtocol.Disconnect(), branchId)
 
-        yield* Effect.sleep("50 millis")
+        yield* waitForExecutorStatus(runtime, "idle")
 
         const after = yield* runtime.getUiSnapshots(sessionId, branchId)
         const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -420,7 +438,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "error")
 
         const mid = yield* runtime.getUiSnapshots(sessionId, branchId)
         const midModel = mid.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -430,7 +448,7 @@ describe("Executor actor lifecycle", () => {
         // Retry via command — second call succeeds
         yield* runtime.send(sessionId, ExecutorProtocol.Connect({ cwd: "/test" }), branchId)
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "ready")
 
         const after = yield* runtime.getUiSnapshots(sessionId, branchId)
         const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
@@ -454,7 +472,7 @@ describe("Executor actor lifecycle", () => {
           branchId,
         })
 
-        yield* Effect.sleep("200 millis")
+        yield* waitForExecutorStatus(runtime, "ready")
 
         // Actor should be Ready (onInit → Connect → .spawn → Connected)
         const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
