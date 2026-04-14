@@ -1,25 +1,17 @@
 import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
-import { SteerCommand } from "@gent/core/runtime/agent/agent-loop.js"
-import { HttpApiBuilder, HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
-import { RpcServer, RpcSerialization } from "effect/unstable/rpc"
-import { Config, Deferred, Effect, Layer, Option, Schema, Context } from "effect"
+import { HttpRouter } from "effect/unstable/http"
+import { Config, Deferred, Effect, Layer, Option, Context } from "effect"
 import * as os from "node:os"
-import { GentApi } from "@gent/core/server/http-api.js"
 import { seedDebugSession } from "./debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
-import { SessionQueries } from "@gent/core/server/session-queries.js"
-import { SessionCommands } from "@gent/core/server/session-commands.js"
-import { GentRpcs } from "@gent/core/server/rpcs.js"
-import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { createDependencies } from "@gent/core/server/dependencies.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
-import { wsTracingLayer } from "@gent/core/server/ws-tracing.js"
 import { ConnectionTracker } from "@gent/core/server/connection-tracker.js"
 import { ServerIdentity } from "@gent/core/server/server-identity.js"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
+import { buildServerRoutes } from "@gent/core/server/server-routes.js"
 
 const joinPath = (...parts: readonly string[]) => parts.join("/").replace(/\/+/g, "/")
 
@@ -77,50 +69,6 @@ const resolveRuntimeConfig = Effect.gen(function* () {
     sharedServerUrl: Option.getOrUndefined(sharedServerUrlOpt),
   }
 })
-
-// Sessions API Handlers
-const SessionsApiLive = HttpApiBuilder.group(GentApi, "sessions", (handlers) =>
-  Effect.gen(function* () {
-    const queries = yield* SessionQueries
-    const commands = yield* SessionCommands
-    return handlers
-      .handle("create", ({ payload }) =>
-        commands
-          .createSession({
-            name: payload.name ?? "New Session",
-            ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
-          })
-          .pipe(Effect.orDie),
-      )
-      .handle("list", () => queries.listSessions().pipe(Effect.orDie))
-      .handle("get", ({ params }) =>
-        queries.getSession(params.sessionId).pipe(
-          Effect.flatMap((s) =>
-            s !== null ? Effect.succeed(s) : Effect.die(new Error("Session not found")),
-          ),
-          Effect.orDie,
-        ),
-      )
-      .handle("delete", ({ params }) => commands.deleteSession(params.sessionId).pipe(Effect.orDie))
-  }),
-)
-
-// Messages API Handlers
-const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
-  Effect.gen(function* () {
-    const queries = yield* SessionQueries
-    const commands = yield* SessionCommands
-    return handlers
-      .handle("send", ({ payload }) => commands.sendMessage(payload).pipe(Effect.orDie))
-      .handle("list", ({ params }) => queries.listMessages(params.branchId).pipe(Effect.orDie))
-      .handle("steer", ({ payload }) =>
-        Effect.gen(function* () {
-          const command = yield* Schema.decodeEffect(SteerCommand)(payload)
-          yield* commands.steer(command)
-        }).pipe(Effect.orDie),
-      )
-  }),
-)
 
 // Platform layer for Storage
 const PlatformLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
@@ -186,60 +134,16 @@ const program = Effect.scoped(
     const allServices = Context.merge(coreServices, serverIdentityCtx)
     const coreServicesLive = Layer.succeedContext(allServices)
 
-    // RPC-over-WebSocket route (defaults to WS when protocol is omitted)
-    const RpcRoutes = RpcServer.layerHttp({
-      group: GentRpcs,
-      path: "/rpc",
-    }).pipe(
-      Layer.provide(RpcSerialization.layerJson),
-      Layer.provide(RpcHandlersLive),
-      Layer.provide(coreServicesLive),
-    )
-
-    // API Groups Layer (REST endpoints)
-    const HttpGroupsLive = Layer.provideMerge(SessionsApiLive, MessagesApiLive).pipe(
-      Layer.provide(coreServicesLive),
-    )
-
-    // API Routes
-    const HttpApiRoutes = HttpApiBuilder.layer(GentApi).pipe(Layer.provide(HttpGroupsLive))
-
-    // Swagger docs at /docs
-    const DocsRoute = HttpApiScalar.layer(GentApi, {
-      path: "/docs",
-    })
-
-    // Identity route — used by registry validation
-    const IdentityRoute = HttpRouter.add(
-      "GET",
-      "/_gent/identity",
-      HttpServerResponse.json({
+    // Build all HTTP routes (RPC, REST, docs, identity)
+    const AllRoutes = buildServerRoutes(coreServicesLive, {
+      identity: {
         serverId: config.serverId,
         pid: process.pid,
         hostname: os.hostname(),
         dbPath: config.dbPath,
         buildFingerprint,
-      }),
-    )
-
-    // OpenAPI JSON
-    const OpenApiJsonRoute = HttpRouter.add(
-      "GET",
-      "/docs/openapi.json",
-      HttpServerResponse.json(OpenApi.fromApi(GentApi)),
-    )
-
-    // Merge all routes (REST API + RPC + docs)
-    const AllRoutes = Layer.mergeAll(
-      RpcRoutes,
-      HttpApiRoutes,
-      DocsRoute,
-      OpenApiJsonRoute,
-      IdentityRoute,
-    ).pipe(
-      Layer.provide(wsTracingLayer.pipe(Layer.provide(coreServicesLive))),
-      Layer.provide(HttpRouter.cors()),
-    )
+      },
+    })
 
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(

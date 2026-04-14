@@ -88,7 +88,7 @@ const resolveWorkerLaunch = async (options?: {
   }
 }
 
-const findOpenPort = (): Promise<number> =>
+export const findOpenPort = (): Promise<number> =>
   new Promise((resolve, reject) => {
     const server = net.createServer()
     server.once("error", reject)
