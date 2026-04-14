@@ -289,7 +289,9 @@ const connectWs = (
   url: string,
 ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
-    const supervisor = yield* startLocalSupervisor(buildWsRpcClient(url), toConnectionError)
+    const supervisor = yield* startLocalSupervisor(buildWsRpcClient(url), toConnectionError, {
+      autoReconnect: true,
+    })
     const services = yield* Effect.context<never>()
     return {
       client: supervisor.client,

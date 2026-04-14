@@ -49,12 +49,23 @@ const makeSwappableClient = (
   return makeNamespacedClient(flatClient)
 }
 
+export interface LocalSupervisorOptions {
+  /** When true, automatically reconnect on build failure or post-connect scope close.
+   *  Uses exponential backoff: 1s → 2s → 4s → ... → 30s cap. */
+  readonly autoReconnect?: boolean
+}
+
+/** Compute reconnect delay: exponential backoff 1s → 2s → 4s → 8s → 16s → 30s cap */
+const reconnectDelayMs = (attempt: number): number => Math.min(1000 * Math.pow(2, attempt), 30_000)
+
 export const startLocalSupervisor = <E, R>(
   buildClient: BuildLocalRpcClient<E, R>,
   mapError: (error: E | unknown) => GentConnectionError,
+  options?: LocalSupervisorOptions,
 ): Effect.Effect<LocalSupervisor, GentConnectionError, R | Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
+      const autoReconnect = options?.autoReconnect ?? false
       const supervisorScope = yield* Scope.Scope
       const supervisorServices = yield* Effect.context<R>()
       const listeners = new Set<(state: ConnectionState) => void>()
@@ -67,6 +78,7 @@ export const startLocalSupervisor = <E, R>(
       const initialReady = yield* Deferred.make<void>()
       const readyRef = yield* Ref.make(initialReady)
       const stateRef = yield* Ref.make<ConnectionState>({ _tag: "connecting" })
+      const reconnectAttemptRef = yield* Ref.make(0)
 
       const emit = (state: ConnectionState) =>
         Effect.gen(function* () {
@@ -90,6 +102,9 @@ export const startLocalSupervisor = <E, R>(
           fiber === undefined ? Effect.void : Fiber.interrupt(fiber).pipe(Effect.asVoid),
         ),
       )
+
+      // Forward-declared; assigned after restartInternal is defined
+      let triggerAutoReconnect: Effect.Effect<void> = Effect.void
 
       const launchGeneration = (generation: number, ready: Deferred.Deferred<void>) =>
         Effect.gen(function* () {
@@ -125,6 +140,18 @@ export const startLocalSupervisor = <E, R>(
             }
             yield* emit({ _tag: "disconnected", reason: error.message })
             yield* Deferred.succeed(ready, void 0)
+
+            // Auto-reconnect: retry with exponential backoff instead of giving up
+            if (autoReconnect) {
+              const attempt = yield* Ref.getAndUpdate(reconnectAttemptRef, (n) => n + 1)
+              const delayMs = reconnectDelayMs(attempt)
+              yield* Effect.logWarning("local-supervisor.auto-reconnect.scheduled").pipe(
+                Effect.annotateLogs({ generation, delayMs }),
+              )
+              yield* Effect.sleep(delayMs)
+              yield* triggerAutoReconnect
+              return
+            }
             return yield* error
           }
 
@@ -143,6 +170,29 @@ export const startLocalSupervisor = <E, R>(
           yield* Ref.set(clientRef, exit.value)
           yield* emit({ _tag: "connected", generation })
           yield* Deferred.succeed(ready, void 0)
+
+          // Reset backoff counter on successful connect
+          if (autoReconnect) {
+            yield* Ref.set(reconnectAttemptRef, 0)
+          }
+
+          // Auto-reconnect: watch for scope close (socket death) and trigger reconnect
+          if (autoReconnect) {
+            yield* Scope.addFinalizer(
+              scope,
+              Effect.gen(function* () {
+                // Only reconnect if this is still the current generation
+                const currentGen = yield* Ref.get(generationRef)
+                const isStopped = yield* Ref.get(stoppedRef)
+                if (currentGen === generation && !isStopped) {
+                  yield* Effect.logWarning("local-supervisor.scope-closed.auto-reconnect").pipe(
+                    Effect.annotateLogs({ generation }),
+                  )
+                  yield* triggerAutoReconnect
+                }
+              }),
+            )
+          }
         })
 
       const startLaunch = (generation: number, transition: ConnectionState) =>
@@ -161,7 +211,7 @@ export const startLocalSupervisor = <E, R>(
         const nextGeneration = (yield* Ref.get(generationRef)) + 1
         yield* Ref.set(generationRef, nextGeneration)
         yield* interruptLaunch
-        yield* closeCurrentScope(false)
+        yield* closeCurrentScope(true)
         yield* startLaunch(nextGeneration, {
           _tag: "reconnecting",
           attempt: nextGeneration,
@@ -174,6 +224,18 @@ export const startLocalSupervisor = <E, R>(
           Effect.runPromiseWith(supervisorServices)(
             restartInternal.pipe(Effect.provideService(Scope.Scope, supervisorScope)),
           ),
+        ),
+      )
+
+      // Wire up auto-reconnect trigger (uses restartInternal, defined above)
+      triggerAutoReconnect = Effect.promise(() =>
+        Effect.runPromiseWith(supervisorServices)(
+          transitionLock
+            .withPermits(1)(restartInternal)
+            .pipe(
+              Effect.provideService(Scope.Scope, supervisorScope),
+              Effect.catchEager(() => Effect.void),
+            ),
         ),
       )
 
