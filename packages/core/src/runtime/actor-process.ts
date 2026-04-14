@@ -26,6 +26,7 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
+import { SessionProfileCache } from "./session-profile.js"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -180,6 +181,8 @@ export const LocalActorProcessLive: Layer.Layer<
     const toolRunner = yield* ToolRunner
     const extensionRegistry = yield* ExtensionRegistry
     const bashSemaphore = yield* Semaphore.make(1)
+    const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+    const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
     // Build host context deps once — reused by all handlers
     const die = (label: string) => () => Effect.die(`${label} not available`)
@@ -230,17 +233,22 @@ export const LocalActorProcessLive: Layer.Layer<
         Effect.gen(function* () {
           const commandId = input.commandId ?? makeCommandId()
 
-          // Resolve session cwd for per-session scoping
+          // Resolve per-session profile for cwd-scoped registry/hooks
           const session = yield* storage
             .getSession(input.sessionId)
             .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+          const profile =
+            profileCache !== undefined && session?.cwd !== undefined
+              ? yield* profileCache.resolve(session.cwd)
+              : undefined
+          const activeRegistry = profile?.registryService ?? extensionRegistry
 
           // Run message.input interceptor — allows extensions to transform user input
           const hostCtx = makeExtensionHostContext(
             { sessionId: input.sessionId, branchId: input.branchId, sessionCwd: session?.cwd },
-            hostDeps,
+            { ...hostDeps, extensionRegistry: activeRegistry },
           )
-          const content = yield* extensionRegistry.hooks.runInterceptor(
+          const content = yield* activeRegistry.hooks.runInterceptor(
             "message.input",
             { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
             (i) => Effect.succeed(i.content),
@@ -340,16 +348,22 @@ export const LocalActorProcessLive: Layer.Layer<
           const commandId = input.commandId ?? makeCommandId()
           const toolCallId = toolCallIdForCommand(commandId)
           const currentTurnAgent = (yield* agentLoop.getState(input)).agent
+          // Resolve per-session profile for cwd-scoped registry
           const invokeSession = yield* storage
             .getSession(input.sessionId)
             .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+          const invokeProfile =
+            profileCache !== undefined && invokeSession?.cwd !== undefined
+              ? yield* profileCache.resolve(invokeSession.cwd)
+              : undefined
+          const invokeRegistry = invokeProfile?.registryService ?? extensionRegistry
           const invokeHostCtx = makeExtensionHostContext(
             {
               sessionId: input.sessionId,
               branchId: input.branchId,
               sessionCwd: invokeSession?.cwd,
             },
-            hostDeps,
+            { ...hostDeps, extensionRegistry: invokeRegistry },
           )
 
           yield* invokeToolPhase({
@@ -364,7 +378,7 @@ export const LocalActorProcessLive: Layer.Layer<
             branchId: input.branchId,
             currentTurnAgent,
             toolRunner,
-            extensionRegistry,
+            extensionRegistry: invokeRegistry,
             hostCtx: invokeHostCtx,
             bashSemaphore,
             storage,

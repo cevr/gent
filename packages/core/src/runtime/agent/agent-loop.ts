@@ -532,7 +532,7 @@ const executeToolCalls = (params: {
           turn: {} as ToolContext["turn"],
         }
         const run = params.toolRunner
-          .run(toolCall, ctx)
+          .run(toolCall, ctx, params.extensionRegistry)
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
         const result = yield* tool?.concurrency === "serial"

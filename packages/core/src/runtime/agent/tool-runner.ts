@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
-import { ExtensionRegistry } from "../extensions/registry.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ToolResultPart } from "../../domain/message.js"
@@ -30,6 +30,9 @@ export interface ToolRunnerService {
   readonly run: (
     toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
+    /** Per-session registry override. When provided, tool lookup, hooks, and host
+     *  context use this instead of the server-wide registry captured at Layer construction. */
+    registryOverride?: ExtensionRegistryService,
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
 
@@ -60,14 +63,16 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const platform = yield* RuntimePlatform
       const extensionStateRuntime = yield* ExtensionStateRuntime
 
-      const { hooks } = extensionRegistry
-
       return ToolRunner.of({
-        run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx) {
+        run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, registryOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
 
-            const tool: AnyToolDefinition | undefined = yield* extensionRegistry.getTool(
+            // Use per-session registry when provided, falling back to server-wide
+            const activeRegistry = registryOverride ?? extensionRegistry
+            const activeHooks = activeRegistry.hooks
+
+            const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
               toolCall.toolName,
             )
             if (tool === undefined) {
@@ -82,7 +87,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run permission.check interceptor, falling back to base Permission service
-            const permCheckResult = yield* hooks
+            const permCheckResult = yield* activeHooks
               .runInterceptor(
                 "permission.check",
                 { toolName: toolCall.toolName, input: toolCall.input },
@@ -169,7 +174,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                       confirm: die("PromptPresenter"),
                       review: die("PromptPresenter"),
                     } as MakeExtensionHostContextDeps["promptPresenter"]),
-              extensionRegistry,
+              extensionRegistry: activeRegistry,
               turnControl:
                 lazyDeps.turnControl._tag === "Some"
                   ? lazyDeps.turnControl.value
@@ -223,7 +228,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
 
             // Run tool.execute interceptor, falling back to direct tool execution
-            const executeResult = yield* hooks
+            const executeResult = yield* activeHooks
               .runInterceptor(
                 "tool.execute",
                 {
@@ -265,7 +270,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run tool.result interceptor — extensions can enrich/append to tool results
-            const enrichedResult = yield* hooks
+            const enrichedResult = yield* activeHooks
               .runInterceptor(
                 "tool.result",
                 {

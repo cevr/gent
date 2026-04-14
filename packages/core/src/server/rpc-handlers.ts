@@ -31,6 +31,7 @@ import { SearchStorage } from "../storage/search-storage.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { toExtensionAsyncContext } from "../domain/extension-context.js"
+import { SessionProfileCache } from "../runtime/session-profile.js"
 
 // ============================================================================
 // RPC Handlers Layer
@@ -54,6 +55,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const extensionRegistry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
+    const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+    const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
     return {
       // -- session --
@@ -313,13 +316,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "extension.invokeCommand": ({ name, args, sessionId, branchId }) =>
         Effect.gen(function* () {
-          const cmds = yield* extensionRegistry.listCommands()
-          const cmd = cmds.find((c) => c.name === name)
-          if (cmd === undefined) {
-            return yield* Effect.die(`Unknown command: ${name}`)
-          }
-
-          // Resolve deps lazily for host context (same pattern as tool-runner)
+          // Resolve per-session profile for cwd-scoped registry
           const lazyDeps = yield* Effect.all({
             platform: Effect.serviceOption(RuntimePlatform),
             approvalService: Effect.serviceOption(ApprovalService),
@@ -331,13 +328,32 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             eventPublisher: Effect.serviceOption(EventPublisher),
           })
 
+          const cmdSession =
+            lazyDeps.storage._tag === "Some"
+              ? yield* lazyDeps.storage.value
+                  .getSession(sessionId)
+                  .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              : undefined
+          const cmdProfile =
+            profileCache !== undefined && cmdSession?.cwd !== undefined
+              ? yield* profileCache.resolve(cmdSession.cwd)
+              : undefined
+          const activeRegistry = cmdProfile?.registryService ?? extensionRegistry
+          const activeStateRuntime = cmdProfile?.extensionStateRuntime ?? extensionStateRuntime
+
+          const cmds = yield* activeRegistry.listCommands()
+          const cmd = cmds.find((c) => c.name === name)
+          if (cmd === undefined) {
+            return yield* Effect.die(`Unknown command: ${name}`)
+          }
+
           const die = (label: string) => () => Effect.die(`${label} not available in invokeCommand`)
           const hostDeps: MakeExtensionHostContextDeps = {
             platform:
               lazyDeps.platform._tag === "Some"
                 ? lazyDeps.platform.value
                 : ({ cwd: "/", home: "/" } as MakeExtensionHostContextDeps["platform"]),
-            extensionStateRuntime,
+            extensionStateRuntime: activeStateRuntime,
             approvalService:
               lazyDeps.approvalService._tag === "Some"
                 ? lazyDeps.approvalService.value
@@ -355,7 +371,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                     confirm: die("PromptPresenter"),
                     review: die("PromptPresenter"),
                   } as MakeExtensionHostContextDeps["promptPresenter"]),
-            extensionRegistry,
+            extensionRegistry: activeRegistry,
             turnControl:
               lazyDeps.turnControl._tag === "Some"
                 ? lazyDeps.turnControl.value
@@ -388,14 +404,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                     terminateSession: die("EventPublisher"),
                   } as MakeExtensionHostContextDeps["eventPublisher"]),
           }
-
-          // Resolve session cwd for per-session scoping
-          const cmdSession =
-            lazyDeps.storage._tag === "Some"
-              ? yield* lazyDeps.storage.value
-                  .getSession(sessionId)
-                  .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
-              : undefined
 
           const hostCtx = makeExtensionHostContext(
             { sessionId, branchId, sessionCwd: cmdSession?.cwd },
