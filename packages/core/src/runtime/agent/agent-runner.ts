@@ -7,6 +7,7 @@ import {
   Fiber,
   Layer,
   ManagedRuntime,
+  Schema,
   Stream,
 } from "effect"
 import type { Context } from "effect"
@@ -35,6 +36,7 @@ import {
   type AgentRunToolCall,
   type AgentPersistence,
   type AgentExecutionOverrides,
+  AgentExecutionOverridesSchema,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
 import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
@@ -996,7 +998,25 @@ export const SubprocessRunner = (
                 )
 
                 const binary = config.subprocessBinaryPath ?? "gent"
-                const args = [binary, "--headless", "--session", sessionId, params.prompt]
+                // Merge parentToolCallId into overrides for subprocess
+                const subprocessOverrides: AgentExecutionOverrides | undefined =
+                  params.toolCallId !== undefined
+                    ? { ...params.overrides, parentToolCallId: params.toolCallId }
+                    : params.overrides
+                const overridesJson =
+                  subprocessOverrides !== undefined
+                    ? Schema.encodeSync(Schema.fromJsonString(AgentExecutionOverridesSchema))(
+                        subprocessOverrides,
+                      )
+                    : undefined
+                const args = [
+                  binary,
+                  "--headless",
+                  "--session",
+                  sessionId,
+                  ...(overridesJson !== undefined ? ["--execution-overrides", overridesJson] : []),
+                  params.prompt,
+                ]
 
                 const killSubprocess = (proc: Bun.Subprocess) => {
                   try {

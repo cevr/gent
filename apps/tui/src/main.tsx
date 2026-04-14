@@ -22,7 +22,12 @@ import { RegistryProvider } from "./atom-solid/solid"
 import { LinkOpener } from "./services/link-opener"
 import { OsService } from "./services/os-service"
 import type { ProviderId } from "@gent/core/domain/model.js"
-import { AgentName as AgentNameSchema, type AgentName } from "@gent/core/domain/agent.js"
+import {
+  AgentExecutionOverridesSchema,
+  AgentName as AgentNameSchema,
+  type AgentExecutionOverrides,
+  type AgentName,
+} from "@gent/core/domain/agent.js"
 
 import { render } from "@opentui/solid"
 import { App } from "./app"
@@ -134,6 +139,7 @@ const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
   agent: Option.Option<string>,
+  executionOverrides?: AgentExecutionOverrides,
 ) =>
   Effect.gen(function* () {
     const branchId = state.session.branchId
@@ -150,6 +156,7 @@ const runHeadlessTurn = (
       branchId,
       state.prompt,
       Option.getOrUndefined(agent),
+      executionOverrides,
     ).pipe(
       Effect.withSpan("Headless.run"),
       parentSpan !== undefined ? Effect.withParentSpan(parentSpan) : identity,
@@ -197,8 +204,24 @@ const main = Command.make(
       Flag.withDescription("Agent to use for headless mode (e.g. memory:reflect)"),
       Flag.optional,
     ),
+    executionOverrides: Flag.string("execution-overrides").pipe(
+      Flag.withDescription(
+        "JSON-encoded AgentExecutionOverrides (internal, used by subprocess runner)",
+      ),
+      Flag.optional,
+    ),
   },
-  ({ connect, session, continue_, headless, debug, prompt, promptArg, agent }) =>
+  ({
+    connect,
+    session,
+    continue_,
+    headless,
+    debug,
+    prompt,
+    promptArg,
+    agent,
+    executionOverrides: executionOverridesJson,
+  }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
       const scope = yield* Effect.scope
@@ -277,7 +300,17 @@ const main = Command.make(
           return yield* Effect.die("headless startup resolved an interactive state")
         }
 
-        yield* runHeadlessTurn(bundle, state, agent)
+        const decodedOverrides: AgentExecutionOverrides | undefined = Option.isSome(
+          executionOverridesJson,
+        )
+          ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AgentExecutionOverridesSchema))(
+              executionOverridesJson.value,
+            ).pipe(
+              Effect.catchEager((e) => Effect.die(`Invalid --execution-overrides: ${String(e)}`)),
+            )
+          : undefined
+
+        yield* runHeadlessTurn(bundle, state, agent, decodedOverrides)
         return
       }
 

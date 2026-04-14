@@ -102,15 +102,7 @@ const MessagesApiLive = HttpApiBuilder.group(GentApi, "messages", (handlers) =>
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
     return handlers
-      .handle("send", ({ payload }) =>
-        commands
-          .sendMessage({
-            sessionId: payload.sessionId,
-            branchId: payload.branchId,
-            content: payload.content,
-          })
-          .pipe(Effect.orDie),
-      )
+      .handle("send", ({ payload }) => commands.sendMessage(payload).pipe(Effect.orDie))
       .handle("list", ({ params }) => queries.listMessages(params.branchId).pipe(Effect.orDie))
       .handle("steer", ({ payload }) =>
         Effect.gen(function* () {

@@ -1,4 +1,5 @@
 import { Deferred, Effect, Stream } from "effect"
+import type { AgentExecutionOverrides } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { GentNamespacedClient } from "@gent/sdk"
 
@@ -8,13 +9,20 @@ export const runHeadless = (
   branchId: BranchId,
   promptText: string,
   agentOverride?: string,
+  executionOverrides?: AgentExecutionOverrides,
 ) =>
   Effect.gen(function* () {
     const eventStream = client.session.events({ sessionId, branchId })
     const done = yield* Deferred.make<void>()
 
     yield* client.message
-      .send({ sessionId, branchId, content: promptText, agentOverride })
+      .send({
+        sessionId,
+        branchId,
+        content: promptText,
+        ...(agentOverride !== undefined ? { agentOverride } : {}),
+        ...(executionOverrides !== undefined ? { executionOverrides } : {}),
+      })
       .pipe(Effect.withSpan("Headless.sendMessage"))
 
     yield* eventStream.pipe(
