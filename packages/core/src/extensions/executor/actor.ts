@@ -232,7 +232,7 @@ export const executorActor: ExtensionActorDefinition<
 
       // Resolve endpoint via slot (wired to ExecutorSidecar)
       const endpointRaw = yield* ctx.slots.resolveEndpoint({ cwd: ctx.sessionCwd ?? "/" })
-      const endpoint = Schema.decodeUnknownSync(ExecutorEndpoint)(endpointRaw)
+      const endpoint = yield* Schema.decodeUnknownEffect(ExecutorEndpoint)(endpointRaw)
 
       // Inspect MCP for instructions (best-effort)
       const inspectionRaw = yield* ctx.slots
