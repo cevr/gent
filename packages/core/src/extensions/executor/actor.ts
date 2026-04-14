@@ -17,6 +17,7 @@ import type { PromptSection } from "../../domain/prompt.js"
 import { ExecutorEndpoint, ExecutorMode, EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
+import { ExecutorProtocol } from "./protocol.js"
 
 // ── States ──
 
@@ -223,6 +224,7 @@ export const executorActor: ExtensionActorDefinition<
   },
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
   persist: true,
+  protocols: ExecutorProtocol,
   onInit: (ctx) =>
     Effect.gen(function* () {
       if (ctx.slots === undefined) return

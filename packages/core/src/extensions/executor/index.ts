@@ -1,0 +1,39 @@
+/**
+ * @gent/executor extension — sandboxed TypeScript execution via Executor.
+ */
+
+import { Layer } from "effect"
+import { extension } from "../api.js"
+import { EXECUTOR_EXTENSION_ID } from "./domain.js"
+import { ExecutorSidecar } from "./sidecar.js"
+import { ExecutorMcpBridge } from "./mcp-bridge.js"
+import { executorActor } from "./actor.js"
+import { ExecuteTool, ResumeTool } from "./tools.js"
+
+export { ExecutorUiModel } from "./actor.js"
+export { EXECUTOR_EXTENSION_ID } from "./domain.js"
+
+export const ExecutorExtension = extension(EXECUTOR_EXTENSION_ID, ({ ext, ctx }) =>
+  ext
+    .actor(executorActor)
+    .tools(ExecuteTool, ResumeTool)
+    .command("executor-start", {
+      description: "Connect to the configured Executor endpoint.",
+      handler: async (_args, extCtx) => {
+        await extCtx.extension.send({
+          extensionId: EXECUTOR_EXTENSION_ID,
+          _tag: "Connect",
+        } as never)
+      },
+    })
+    .command("executor-stop", {
+      description: "Disconnect and stop the local Executor sidecar.",
+      handler: async (_args, extCtx) => {
+        await extCtx.extension.send({
+          extensionId: EXECUTOR_EXTENSION_ID,
+          _tag: "Disconnect",
+        } as never)
+      },
+    })
+    .layer(Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)),
+)

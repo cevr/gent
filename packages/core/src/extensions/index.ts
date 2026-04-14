@@ -24,6 +24,7 @@ import { TaskToolsPackage } from "./task-tools-package.js"
 import { HandoffPackage } from "./handoff-package.js"
 import { InteractionToolsPackage } from "./interaction-tools-package.js"
 import { ArtifactsPackage } from "./artifacts-package.js"
+import { ExecutorPackage } from "./executor-package.js"
 
 export {
   FsToolsExtension,
@@ -45,6 +46,7 @@ export {
   HandoffPackage,
   InteractionToolsPackage,
   ArtifactsPackage,
+  ExecutorPackage,
 }
 
 export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
@@ -52,6 +54,7 @@ export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
+  ExecutorPackage,
   DelegateExtension,
   InteractionToolsPackage,
   SessionToolsExtension,
