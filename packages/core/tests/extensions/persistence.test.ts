@@ -25,10 +25,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
     persist: true,
     reduce: (state, event): ReduceResult<CounterState> => {
       if (event._tag === "TurnCompleted") {
-        return {
-          state: { count: state.count + 1 },
-          effects: [{ _tag: "Persist" }],
-        }
+        return { state: { count: state.count + 1 } }
       }
       return { state }
     },
@@ -41,7 +38,7 @@ const makeLayer = (extensions: LoadedExtension[]) =>
   makeActorRuntimeLayer({ extensions, withStorage: true })
 
 describe("Extension state persistence", () => {
-  it.live("Persist effect writes state to storage", () => {
+  it.live("durability writes state to storage on transition", () => {
     const ext = makeCounterExtension()
     const layer = makeLayer([ext])
 
@@ -99,7 +96,7 @@ describe("Extension state persistence", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live("Persist effect updates existing state", () => {
+  it.live("durability updates existing state on subsequent transitions", () => {
     const layer = makeLayer([makeCounterExtension()])
 
     return Effect.gen(function* () {
@@ -130,56 +127,7 @@ describe("Extension state persistence", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live(
-    "persist: true auto-persists on every state change without explicit Persist effect",
-    () => {
-      // Auto-persist extension: no Persist effect emitted, but persist: true
-      const actor = reducerActor<CounterState>({
-        id: "auto-persist",
-        initial: { count: 0 },
-        stateSchema: CounterSchema,
-        persist: true,
-        reduce: (state, event): ReduceResult<CounterState> => {
-          if (event._tag === "TurnCompleted") {
-            // No Persist effect — auto-persist should handle it
-            return { state: { count: state.count + 1 } }
-          }
-          return { state }
-        },
-      })
-      const autoPersistExt: LoadedExtension = {
-        manifest: { id: "auto-persist" },
-        kind: "builtin",
-        sourcePath: "builtin",
-        setup: { actor },
-      }
-
-      const layer = makeLayer([autoPersistExt])
-
-      return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
-        const storage = yield* Storage
-
-        yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
-          sessionId,
-          branchId,
-        })
-
-        const loaded = yield* storage.loadExtensionState({
-          sessionId,
-          extensionId: "auto-persist",
-        })
-        expect(loaded).toBeDefined()
-        const parsed = JSON.parse(loaded!.stateJson) as {
-          readonly _tag: "Active"
-          readonly value: CounterState
-        }
-        expect(parsed.value.count).toBe(1)
-      }).pipe(Effect.provide(layer))
-    },
-  )
-
-  it.live("non-persistent actor does not write to storage", () => {
+  it.live("actor without stateSchema does not write to storage", () => {
     const actor = reducerActor<{ value: number }>({
       id: "ephemeral",
       initial: { value: 0 },

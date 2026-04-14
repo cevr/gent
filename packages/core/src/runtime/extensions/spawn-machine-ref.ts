@@ -94,7 +94,7 @@ export const spawnMachineExtensionRef = <
       // .spawn() internal self.send, fixing the epoch/persist gap.
       let loadedEpoch = 0
       const lifecycle: Lifecycle<State, Event> | undefined =
-        actor.persist === true && storage._tag === "Some" && codec !== undefined
+        storage._tag === "Some" && codec !== undefined
           ? {
               recovery: {
                 resolve: () =>
@@ -156,7 +156,6 @@ export const spawnMachineExtensionRef = <
       ) =>
         interpretEffects(effects, ctx.sessionId, branchId, {
           turnControl,
-          // Persist effects are no-ops for machine actors — durability handles it
           busEmit:
             bus._tag === "Some"
               ? (channel, payload) =>

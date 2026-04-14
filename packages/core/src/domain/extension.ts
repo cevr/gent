@@ -265,7 +265,6 @@ export type ExtensionEffect =
       readonly metadata?: MessageMetadata
     }
   | { readonly _tag: "Interject"; readonly content: string }
-  | { readonly _tag: "Persist" }
   | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
   | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
 
@@ -328,8 +327,9 @@ export interface ExtensionActorDefinition<
   readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
   readonly snapshot?: ExtensionActorSnapshotConfig<State>
   readonly turn?: ExtensionActorTurnConfig<State>
+  /** State schema enables persistence — if set, the actor's state is persisted
+   *  via effect-machine's Recovery + Durability lifecycle. */
   readonly stateSchema?: Schema.Schema<State>
-  readonly persist?: boolean
   /** Protocol definitions owned by this actor. */
   readonly protocols?: Readonly<Record<string, unknown>>
   readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>

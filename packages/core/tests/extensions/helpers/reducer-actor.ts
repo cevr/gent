@@ -138,8 +138,7 @@ export const reducerActor = <State, Message = never, Request = never, RequestR =
               return turn
             },
           },
-    stateSchema: WrappedState,
-    persist: config.persist,
+    stateSchema: config.persist ? WrappedState : undefined,
     afterTransition:
       config.afterTransition === undefined
         ? undefined

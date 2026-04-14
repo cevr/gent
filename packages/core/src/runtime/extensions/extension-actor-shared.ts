@@ -36,7 +36,6 @@ export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
  */
 export interface InterpretEffectsServices {
   readonly turnControl: ExtensionTurnControlService
-  readonly persistFn?: () => Effect.Effect<void>
   readonly busEmit?: (channel: string, payload: unknown) => Effect.Effect<void>
   readonly send?: (sessionId: SessionId, message: AnyExtensionCommandMessage) => Effect.Effect<void>
 }
@@ -68,11 +67,6 @@ export const interpretEffects = (
               yield* services.turnControl
                 .interject({ sessionId, branchId, content: effect.content })
                 .pipe(Effect.catchDefect(() => Effect.void))
-            }
-            break
-          case "Persist":
-            if (services.persistFn !== undefined) {
-              yield* services.persistFn().pipe(Effect.catchDefect(() => Effect.void))
             }
             break
           case "BusEmit":

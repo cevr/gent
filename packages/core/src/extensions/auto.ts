@@ -693,7 +693,6 @@ const autoActor: ExtensionActorDefinition<
     project: projectTurn,
   },
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
-  persist: true,
   afterTransition,
   onInit: (ctx) =>
     Effect.gen(function* () {

@@ -259,7 +259,6 @@ const artifactsActor: ExtensionActorDefinition<
     project: projectTurn,
   },
   stateSchema: ArtifactsMachineState,
-  persist: true,
   protocols: ArtifactProtocol,
 }
 

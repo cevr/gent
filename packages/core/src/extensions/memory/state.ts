@@ -3,7 +3,7 @@
  *
  * Session memories are ephemeral (lost on restart).
  * Vault index is re-read from disk on SessionStarted.
- * No persist: true — vault files are the durable store.
+ * No stateSchema on actor definition — vault files are the durable store.
  */
 
 import { Schema } from "effect"

@@ -259,7 +259,6 @@ export const executorActor: ExtensionActorDefinition<
     project: projectTurn,
   },
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
-  persist: true,
   protocols: ExecutorProtocol,
   onInit: (ctx) =>
     Effect.gen(function* () {
