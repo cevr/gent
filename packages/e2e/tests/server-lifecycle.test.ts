@@ -164,6 +164,51 @@ describe("server lifecycle", () => {
     }
   }, 15_000)
 
+  test("two Gent.spawn calls with same dbPath share one server", async () => {
+    const dataDir = makeTempDir()
+    const dbPath = path.join(dataDir, "data.db")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          // First spawn starts a new server
+          const bundle1 = yield* Gent.spawn({
+            cwd: repoRoot,
+            mode: "debug",
+            shared: true,
+            dbPath,
+            home: dataDir,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const status1 = yield* bundle1.client.server
+            .status()
+            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const pid1 = status1.pid
+
+          // Second spawn should reuse the same server via registry
+          const bundle2 = yield* Gent.spawn({
+            cwd: repoRoot,
+            mode: "debug",
+            shared: true,
+            dbPath,
+            home: dataDir,
+            env: { GENT_DATA_DIR: dataDir },
+          })
+
+          const status2 = yield* bundle2.client.server
+            .status()
+            .pipe(Effect.mapError((e) => new Error(String(e))))
+          const pid2 = status2.pid
+
+          // Same server — same PID
+          expect(pid1).toBe(pid2)
+          expect(status2.connectionCount).toBeGreaterThanOrEqual(2)
+        }),
+      ),
+    )
+  }, 20_000)
+
   test("WS connection resets idle timer, shutdown triggers after disconnect", async () => {
     const dataDir = makeTempDir()
     const IDLE_TIMEOUT_MS = 3_000

@@ -407,6 +407,7 @@ const spawnAndRegister = (
     const serverId = Bun.randomUUIDv7()
     const supervisor = yield* startWorkerSupervisor({
       ...options,
+      shared: true,
       env: {
         ...options.env,
         GENT_SERVER_ID: serverId,
