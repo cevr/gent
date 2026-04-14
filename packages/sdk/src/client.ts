@@ -1,18 +1,10 @@
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import type { Context, Scope } from "effect"
-// @effect-diagnostics nodeBuiltinImport:off
-import { resolve as pathResolve, join as pathJoin } from "node:path"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
-import * as os from "node:os"
 import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { createDependencies, type DependenciesConfig } from "@gent/core/server/dependencies.js"
-import { AppServicesLive } from "@gent/core/server/index.js"
-import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
-import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import {
   GentConnectionError,
   type ConnectionState,
@@ -42,17 +34,6 @@ import type {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
-import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
-import {
-  readRegistryEntry,
-  validateRegistryEntry,
-  writeRegistryEntry,
-  removeRegistryEntry,
-  ServerRegistryEntry,
-  withLock,
-  computeLocalFingerprint,
-} from "./server-registry.js"
-import { startLocalSupervisor } from "./local-supervisor.js"
 import {
   makeNamespacedClient,
   type GentNamespacedClient,
@@ -237,54 +218,6 @@ const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
 })
 
 // ---------------------------------------------------------------------------
-// Supervisor → GentLifecycle adapter
-// ---------------------------------------------------------------------------
-
-const supervisorLifecycle = (supervisor: WorkerSupervisor): GentLifecycle => ({
-  getState: () => {
-    const s = supervisor.getState()
-    switch (s._tag) {
-      case "starting":
-        return { _tag: "connecting" }
-      case "running":
-        return { _tag: "connected", pid: s.pid, generation: s.restartCount }
-      case "restarting":
-        return { _tag: "reconnecting", attempt: s.restartCount, generation: s.restartCount }
-      case "stopped":
-        return { _tag: "disconnected", reason: "stopped" }
-      case "failed":
-        return { _tag: "disconnected", reason: s.message }
-    }
-  },
-  subscribe: (listener) =>
-    supervisor.subscribe((s) => {
-      switch (s._tag) {
-        case "starting":
-          return listener({ _tag: "connecting" })
-        case "running":
-          return listener({ _tag: "connected", pid: s.pid, generation: s.restartCount })
-        case "restarting":
-          return listener({
-            _tag: "reconnecting",
-            attempt: s.restartCount,
-            generation: s.restartCount,
-          })
-        case "stopped":
-          return listener({ _tag: "disconnected", reason: "stopped" })
-        case "failed":
-          return listener({ _tag: "disconnected", reason: s.message })
-      }
-    }),
-  restart: supervisor.restart.pipe(
-    Effect.mapError((e) => new GentConnectionError({ message: e.message })),
-  ),
-  // waitForWorkerRunning fails on "stopped" and "failed" to unblock waiting fibers.
-  // Swallow here so the GentLifecycle.waitForReady: Effect<void> contract holds.
-  // runWithReconnect callers handle retry/backoff on their own.
-  waitForReady: waitForWorkerRunning(supervisor).pipe(Effect.catchEager(() => Effect.void)),
-})
-
-// ---------------------------------------------------------------------------
 // WebSocket transport (internal)
 // ---------------------------------------------------------------------------
 
@@ -321,40 +254,6 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
 // Gent — unified client constructors
 // ---------------------------------------------------------------------------
 
-export interface GentSpawnOptions {
-  readonly cwd: string
-  readonly env?: Record<string, string | undefined>
-  readonly startupTimeoutMs?: number
-  readonly mode?: "default" | "debug"
-  /** Enable shared server mode (default: true). When true, checks the server
-   *  registry before spawning a new server — reuses existing if valid. */
-  readonly shared?: boolean
-  /** Database path. Used as the registry key for shared mode. */
-  readonly dbPath?: string
-  /** Home directory for registry files. Defaults to os.homedir(). */
-  readonly home?: string
-}
-
-export interface GentConnectOptions {
-  readonly url: string
-}
-
-export interface GentLocalOptions {
-  readonly cwd: string
-  readonly home?: string
-  readonly dataDir?: string
-  readonly platform?: string
-  readonly shell?: string
-  readonly osVersion?: string
-  readonly dbPath?: string
-  readonly authFilePath?: string
-  readonly authKeyPath?: string
-  readonly persistenceMode?: DependenciesConfig["persistenceMode"]
-  readonly providerMode?: DependenciesConfig["providerMode"]
-  readonly disabledExtensions?: DependenciesConfig["disabledExtensions"]
-  readonly scheduledJobCommand?: DependenciesConfig["scheduledJobCommand"]
-}
-
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
@@ -364,235 +263,33 @@ export interface GentClientBundle {
   readonly runtime: GentRuntime
 }
 
-const toConnectionError = (error: unknown) =>
-  new GentConnectionError({
-    message:
-      typeof error === "object" && error !== null && "message" in error
-        ? String((error as { readonly message: unknown }).message)
-        : String(error),
-  })
+// ---------------------------------------------------------------------------
+// Internal: WS connect helper
+// ---------------------------------------------------------------------------
 
-const LocalPlatformLayer = Layer.merge(BunServices.layer, BunFileSystem.layer)
-
-const resolveLocalDependenciesConfig = (options: GentLocalOptions): DependenciesConfig => {
-  const home = options.home ?? os.homedir()
-  const dataDir = options.dataDir ?? `${home}/.gent`
-
-  const config: DependenciesConfig = {
-    cwd: options.cwd,
-    home,
-    platform: options.platform ?? process.platform,
-    osVersion: options.osVersion ?? os.release(),
-    dbPath: options.dbPath ?? `${dataDir}/data.db`,
-    persistenceMode: options.persistenceMode ?? "disk",
-    providerMode: options.providerMode ?? "live",
-    disabledExtensions: options.disabledExtensions,
-  }
-
-  if (options.shell !== undefined) config.shell = options.shell
-  if (options.authFilePath !== undefined) config.authFilePath = options.authFilePath
-  if (options.authKeyPath !== undefined) config.authKeyPath = options.authKeyPath
-  if (options.scheduledJobCommand !== undefined) {
-    config.scheduledJobCommand = options.scheduledJobCommand
-  }
-
-  return config
-}
-
-/** Resolve the canonical DB path for registry keying. */
-const resolveDbPath = (options: GentSpawnOptions): string => {
-  const home = options.home ?? os.homedir()
-  if (options.dbPath !== undefined) return pathResolve(options.dbPath)
-  const dataDir = pathJoin(home, ".gent")
-  return pathResolve(pathJoin(dataDir, "data.db"))
-}
-
-/** Spawn a new server, write registry entry, connect. */
-const spawnAndRegister = (
-  options: GentSpawnOptions,
-  home: string,
-  dbPath: string,
-  fingerprint: string,
+const connectWs = (
+  url: string,
 ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
-    const serverId = Bun.randomUUIDv7()
-    const supervisor = yield* startWorkerSupervisor({
-      ...options,
-      shared: true,
-      env: {
-        ...options.env,
-        GENT_SERVER_ID: serverId,
-        GENT_BUILD_FINGERPRINT: fingerprint,
-        GENT_DB_PATH: dbPath,
-      },
-    }).pipe(Effect.mapError((e) => new GentConnectionError({ message: e.message })))
-
-    // Write registry entry
-    const pid = supervisor.pid()
-    if (pid !== null) {
-      writeRegistryEntry(
-        home,
-        new ServerRegistryEntry({
-          serverId,
-          pid,
-          hostname: os.hostname(),
-          rpcUrl: supervisor.url,
-          dbPath,
-          buildFingerprint: fingerprint,
-          startedAt: Date.now(),
-        }),
-      )
-    }
-
-    // Connect to the new server
     const scope = yield* Effect.scope
-    const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
+    const transport = yield* Layer.buildWithScope(WsTransport(url), scope)
     const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
     const services = yield* Effect.context<never>()
-
-    // Clean up registry on scope close
-    yield* Effect.addFinalizer(() => Effect.sync(() => removeRegistryEntry(home, dbPath, serverId)))
-
     return {
       client: makeNamespacedClient(rpcClient),
-      runtime: makeRuntime(services as Context.Context<unknown>, supervisorLifecycle(supervisor)),
+      runtime: makeRuntime(
+        services as Context.Context<unknown>,
+        staticLifecycle({ _tag: "connected", generation: 0 }),
+      ),
     }
   })
 
+// ---------------------------------------------------------------------------
+// Gent — public API
+// ---------------------------------------------------------------------------
+
 export const Gent = {
-  /** Spawn or reuse a shared server, or spawn an isolated one. */
-  spawn: (
-    options: GentSpawnOptions,
-  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
-    Effect.gen(function* () {
-      const shared = options.shared ?? true
-      if (!shared) {
-        // Isolated mode — always start a new server
-        const supervisor = yield* startWorkerSupervisor(options).pipe(
-          Effect.mapError((e) => new GentConnectionError({ message: e.message })),
-        )
-        const scope = yield* Effect.scope
-        const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
-        const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-        const services = yield* Effect.context<never>()
-        return {
-          client: makeNamespacedClient(rpcClient),
-          runtime: makeRuntime(
-            services as Context.Context<unknown>,
-            supervisorLifecycle(supervisor),
-          ),
-        }
-      }
-
-      // Shared mode — registry-aware
-      const home = options.home ?? os.homedir()
-      const dbPath = resolveDbPath(options)
-      const fingerprint = computeLocalFingerprint()
-
-      // Check existing registry entry
-      const existing = readRegistryEntry(home, dbPath)
-      if (existing !== undefined) {
-        const validation = validateRegistryEntry(existing)
-        if (validation.valid) {
-          // Check fingerprint match
-          if (existing.buildFingerprint === fingerprint) {
-            // Reuse existing server
-            return yield* Gent.connect({ url: existing.rpcUrl }).pipe(
-              Effect.catchEager(() =>
-                // Connection failed — stale entry, fall through to start new
-                spawnAndRegister(options, home, dbPath, fingerprint),
-              ),
-            )
-          }
-          // Stale fingerprint — SIGTERM the old server and start new
-          try {
-            process.kill(existing.pid, "SIGTERM")
-          } catch {
-            // Already dead
-          }
-          removeRegistryEntry(home, dbPath, existing.serverId)
-        } else {
-          // Dead/invalid — clean up
-          removeRegistryEntry(home, dbPath, existing.serverId)
-        }
-      }
-
-      // Acquire lock, start server, write registry
-      return yield* withLock(
-        home,
-        dbPath,
-        spawnAndRegister(options, home, dbPath, fingerprint),
-      ).pipe(
-        Effect.catchEager((lockErr) => {
-          // Lock contention — another process is starting. Retry registry check.
-          const retryEntry = readRegistryEntry(home, dbPath)
-          if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
-            return Gent.connect({ url: retryEntry.rpcUrl })
-          }
-          return Effect.fail(
-            new GentConnectionError({
-              message: `Failed to acquire server lock: ${String(lockErr)}`,
-            }),
-          )
-        }),
-      )
-    }),
-
-  /** Connect to an already-running server */
-  connect: (
-    options: GentConnectOptions,
-  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope
-      const transport = yield* Layer.buildWithScope(WsTransport(options.url), scope)
-      const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-      const services = yield* Effect.context<never>()
-      return {
-        client: makeNamespacedClient(rpcClient),
-        runtime: makeRuntime(
-          services as Context.Context<unknown>,
-          staticLifecycle({ _tag: "connected", generation: 0 }),
-        ),
-      }
-    }),
-
-  /** Run the live server dependency graph in-process. */
-  local: (
-    options: GentLocalOptions,
-  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
-    Effect.gen(function* () {
-      const depsLive = createDependencies(resolveLocalDependenciesConfig(options)).pipe(
-        Layer.provide(LocalPlatformLayer),
-        Layer.provide(GentLogger),
-        Layer.provide(GentLogLevel),
-        Layer.provide(GentTracerLive),
-      )
-
-      const supervisor = yield* startLocalSupervisor(
-        (scope) =>
-          Effect.gen(function* () {
-            const handlersContext = yield* Layer.buildWithScope(
-              Layer.provide(
-                Layer.provide(RpcHandlersLive, Layer.provideMerge(AppServicesLive, depsLive)),
-                LocalPlatformLayer,
-              ),
-              scope,
-            )
-
-            return yield* RpcTest.makeClient(GentRpcs).pipe(
-              Effect.provide(handlersContext),
-            ) as Effect.Effect<GentRpcClient>
-          }),
-        toConnectionError,
-      )
-      const services = yield* Effect.context<never>()
-      return {
-        client: supervisor.client,
-        runtime: makeRuntime(services as Context.Context<unknown>, supervisor.lifecycle),
-      }
-    }),
-
-  /** In-process client for tests and embedding. Fast, less isolation than spawn. */
+  /** In-process client for tests and embedding. */
   test: <E, R>(
     handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
   ): Effect.Effect<GentClientBundle, E, R | Scope.Scope> =>
@@ -610,8 +307,6 @@ export const Gent = {
         ),
       }
     }),
-
-  // ── New composable API ──
 
   /** Composable state spec factories. */
   state: stateFactories,
@@ -631,7 +326,7 @@ export const Gent = {
     Effect.gen(function* () {
       // URL shorthand → remote
       if (!("_tag" in serverOrUrl)) {
-        return yield* Gent.connect({ url: serverOrUrl.url })
+        return yield* connectWs(serverOrUrl.url)
       }
 
       switch (serverOrUrl._tag) {
@@ -657,7 +352,7 @@ export const Gent = {
         }
         case "attached":
         case "remote":
-          return yield* Gent.connect({ url: serverOrUrl.url })
+          return yield* connectWs(serverOrUrl.url)
       }
     }),
 } as const

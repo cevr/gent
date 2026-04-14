@@ -59,7 +59,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` runs the runtime locally, in-process, behind a restartable local supervisor. Multi-client / remote topology is explicit: `Gent.connect(...)` or `gent --connect <url>` attaches to a real server boundary.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })` — one server per DB, multiple clients. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for registry-aware shared, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -188,9 +188,9 @@ App entrypoints bind concrete Bun/OS behavior:
 
 Production rule:
 
-- `apps/tui/src/main.tsx` owns the local runtime by default via `Gent.local(...)`
-- remote/shared topology is explicit via `Gent.connect(...)`
-- `apps/server/src/main.ts` is the durable server boundary, not hidden default CLI plumbing
+- `apps/tui/src/main.tsx` resolves a server via `Gent.server()` + `Gent.client()`
+- `--connect <url>` attaches to a remote server via `Gent.client({ url })`
+- `apps/server/src/main.ts` is the standalone durable server boundary
 
 ## TUI
 

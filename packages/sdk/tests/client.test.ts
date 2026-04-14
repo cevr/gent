@@ -10,18 +10,13 @@ import {
 
 describe("sdk client helpers", () => {
   test("sdk entrypoint exports the public constructors", () => {
-    // New composable API
     expect(typeof Gent.server).toBe("function")
     expect(typeof Gent.client).toBe("function")
+    expect(typeof Gent.test).toBe("function")
     expect(typeof Gent.state.sqlite).toBe("function")
     expect(typeof Gent.state.memory).toBe("function")
     expect(typeof Gent.provider.live).toBe("function")
     expect(typeof Gent.provider.mock).toBe("function")
-    // Legacy (removed in Batch 9)
-    expect(typeof Gent.spawn).toBe("function")
-    expect(typeof Gent.connect).toBe("function")
-    expect(typeof Gent.local).toBe("function")
-    expect(typeof Gent.test).toBe("function")
   })
 
   test("extractText extracts text from message parts", () => {

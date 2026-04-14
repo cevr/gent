@@ -19,9 +19,6 @@ export { GentConnectionError } from "@gent/core/server/transport-contract.js"
 // Client constructors
 export {
   Gent,
-  type GentSpawnOptions,
-  type GentConnectOptions,
-  type GentLocalOptions,
   type GentServer,
   type GentServerOptions,
   type StateSpec,
