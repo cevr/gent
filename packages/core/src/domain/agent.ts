@@ -1,6 +1,7 @@
 import { Context, Schema } from "effect"
 import type * as EffectNs from "effect/Effect"
-import type { BranchId, SessionId, ToolCallId } from "./ids"
+import { ToolCallId } from "./ids.js"
+import type { BranchId, SessionId } from "./ids.js"
 import { ModelId } from "./model"
 
 // Agent definitions
@@ -214,6 +215,8 @@ export interface AgentExecutionOverrides {
   readonly systemPromptAddendum?: string
   /** Tags passed to RunContext */
   readonly tags?: ReadonlyArray<string>
+  /** Tool call that spawned this run (subagent/ephemeral) — threaded to ExtensionTurnContext */
+  readonly parentToolCallId?: ToolCallId
 }
 
 export const AgentExecutionOverridesSchema = Schema.Struct({
@@ -223,6 +226,7 @@ export const AgentExecutionOverridesSchema = Schema.Struct({
   reasoningEffort: Schema.optional(ReasoningEffort),
   systemPromptAddendum: Schema.optional(Schema.String),
   tags: Schema.optional(Schema.Array(Schema.String)),
+  parentToolCallId: Schema.optional(ToolCallId),
 })
 export type AgentExecutionOverridesSchema = typeof AgentExecutionOverridesSchema.Type
 

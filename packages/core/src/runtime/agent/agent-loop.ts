@@ -272,6 +272,7 @@ const resolveTurnContext = (params: {
       interactive: params.interactive,
       tags: params.executionOverrides?.tags,
       agentName: currentAgent,
+      parentToolCallId: params.executionOverrides?.parentToolCallId,
     })
     const extensionProjections = extensionResults.map((r) => r.projection)
 
@@ -285,6 +286,7 @@ const resolveTurnContext = (params: {
           agentName: currentAgent,
           interactive: params.interactive,
           tags: params.executionOverrides?.tags,
+          parentToolCallId: params.executionOverrides?.parentToolCallId,
         },
         extensionProjections,
       )

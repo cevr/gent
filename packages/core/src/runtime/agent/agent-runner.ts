@@ -645,6 +645,10 @@ const runEphemeralAgent = (params: {
               )
 
               return yield* Effect.gen(function* () {
+                const runOverrides =
+                  params.toolCallId !== undefined
+                    ? { ...normalizedOverrides, parentToolCallId: params.toolCallId }
+                    : normalizedOverrides
                 yield* runWithTimeout(
                   localLoop.runOnce({
                     sessionId,
@@ -652,9 +656,7 @@ const runEphemeralAgent = (params: {
                     agentName: params.agentName,
                     prompt: params.prompt,
                     interactive: false,
-                    ...(normalizedOverrides !== undefined
-                      ? { overrides: normalizedOverrides }
-                      : {}),
+                    ...(runOverrides !== undefined ? { overrides: runOverrides } : {}),
                   }),
                 )
 
@@ -841,6 +843,10 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                 })
 
+                const durableRunOverrides =
+                  params.toolCallId !== undefined
+                    ? { ...normalizedOverrides, parentToolCallId: params.toolCallId }
+                    : normalizedOverrides
                 yield* runWithTimeout(
                   loop.runOnce({
                     sessionId,
@@ -848,8 +854,8 @@ export const InProcessRunner = (
                     agentName: params.agent.name,
                     prompt: params.prompt,
                     interactive: false,
-                    ...(normalizedOverrides !== undefined
-                      ? { overrides: normalizedOverrides }
+                    ...(durableRunOverrides !== undefined
+                      ? { overrides: durableRunOverrides }
                       : {}),
                   }),
                 )
