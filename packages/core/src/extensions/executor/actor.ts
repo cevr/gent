@@ -116,7 +116,7 @@ const buildExecutorPrompt = (instructions: string): string =>
 
 // ── Projections ──
 
-const projectSnapshot = (state: MachineState): ExecutorUiModel => {
+export const projectSnapshot = (state: MachineState): ExecutorUiModel => {
   switch (state._tag) {
     case "Idle":
       return { status: "idle" }

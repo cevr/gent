@@ -31,7 +31,7 @@ const collectText = (content: ReadonlyArray<Record<string, unknown>>): string =>
   return parts.join("\n").trim()
 }
 
-const readExecutionId = (structured: unknown): string | undefined => {
+export const readExecutionId = (structured: unknown): string | undefined => {
   if (typeof structured !== "object" || structured === null || Array.isArray(structured))
     return undefined
   const obj = structured as Record<string, unknown>
