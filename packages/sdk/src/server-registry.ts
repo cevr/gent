@@ -34,7 +34,7 @@ import { Config, Effect, Option, Schema } from "effect"
  * Compute a build fingerprint from local sources (no env).
  * Priority: binary mtime → gent source git hash → "unknown"
  */
-const computeLocalFingerprint = (): string => {
+export const computeLocalFingerprint = (): string => {
   // 1. Binary mtime (compiled mode)
   try {
     const stat = statSync(process.execPath)
