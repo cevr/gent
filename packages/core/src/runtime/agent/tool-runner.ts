@@ -1,7 +1,10 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
+import {
+  ExtensionStateRuntime,
+  type ExtensionStateRuntimeService,
+} from "../extensions/state-runtime.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission } from "../../domain/permission.js"
@@ -25,14 +28,32 @@ import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { Storage } from "../../storage/sqlite-storage.js"
 import { SearchStorage } from "../../storage/search-storage.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
+import type { SessionId, ToolCallId } from "../../domain/ids.js"
+import type { StorageService } from "../../storage/sqlite-storage.js"
+import type { Option } from "effect"
+
+/** Resolve session cwd from storage. Extracted to reduce generator complexity. */
+const resolveSessionCwd = (
+  sessionId: SessionId,
+  storageOpt: Option.Option<StorageService>,
+): Effect.Effect<string | undefined> =>
+  storageOpt._tag === "Some"
+    ? storageOpt.value.getSession(sessionId).pipe(
+        Effect.map((s) => s?.cwd),
+        Effect.catchEager(() => Effect.succeed(undefined)),
+      )
+    : Effect.succeed(undefined)
 
 export interface ToolRunnerService {
   readonly run: (
     toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
-    /** Per-session registry override. When provided, tool lookup, hooks, and host
-     *  context use this instead of the server-wide registry captured at Layer construction. */
-    registryOverride?: ExtensionRegistryService,
+    /** Per-session profile override. When provided, tool lookup, hooks, host context,
+     *  and extension state runtime use this instead of the server-wide services. */
+    profileOverride?: {
+      readonly registry: ExtensionRegistryService
+      readonly stateRuntime?: ExtensionStateRuntimeService
+    },
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
 
@@ -64,12 +85,13 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const extensionStateRuntime = yield* ExtensionStateRuntime
 
       return ToolRunner.of({
-        run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, registryOverride) {
+        run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
 
-            // Use per-session registry when provided, falling back to server-wide
-            const activeRegistry = registryOverride ?? extensionRegistry
+            // Use per-session profile when provided, falling back to server-wide
+            const activeRegistry = profileOverride?.registry ?? extensionRegistry
+            const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
             const activeHooks = activeRegistry.hooks
 
             const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
@@ -164,7 +186,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const die = (label: string) => () => Effect.die(`${label} not available in ToolRunner`)
             const hostDeps: MakeExtensionHostContextDeps = {
               platform,
-              extensionStateRuntime,
+              extensionStateRuntime: activeStateRuntime,
               approvalService,
               promptPresenter:
                 lazyDeps.promptPresenter._tag === "Some"
@@ -208,20 +230,14 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                     } as MakeExtensionHostContextDeps["eventPublisher"]),
             }
 
-            // Resolve session cwd for per-session scoping
-            const toolSession =
-              lazyDeps.storage._tag === "Some"
-                ? yield* lazyDeps.storage.value
-                    .getSession(ctx.sessionId)
-                    .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
-                : undefined
+            const sessionCwd = yield* resolveSessionCwd(ctx.sessionId, lazyDeps.storage)
 
             const hostCtx = makeExtensionHostContext(
               {
                 sessionId: ctx.sessionId,
                 branchId: ctx.branchId,
                 agentName: ctx.agentName,
-                sessionCwd: toolSession?.cwd,
+                sessionCwd,
               },
               hostDeps,
             )
@@ -319,4 +335,3 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
         ),
     })
 }
-import type { ToolCallId } from "../../domain/ids.js"

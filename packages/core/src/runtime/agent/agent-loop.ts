@@ -501,6 +501,7 @@ const executeToolCalls = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
+  extensionStateRuntime?: ExtensionStateRuntimeService
   bashSemaphore: Semaphore.Semaphore
 }) =>
   Effect.forEach(
@@ -532,7 +533,10 @@ const executeToolCalls = (params: {
           turn: {} as ToolContext["turn"],
         }
         const run = params.toolRunner
-          .run(toolCall, ctx, params.extensionRegistry)
+          .run(toolCall, ctx, {
+            registry: params.extensionRegistry,
+            stateRuntime: params.extensionStateRuntime,
+          })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
         const result = yield* tool?.concurrency === "serial"
@@ -793,6 +797,7 @@ export const executeToolsPhase = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
+  extensionStateRuntime?: ExtensionStateRuntimeService
   bashSemaphore: Semaphore.Semaphore
   storage: StorageService
 }) =>
@@ -1500,7 +1505,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.gen(function* () {
                 const previous = state.currentAgent ?? DEFAULT_AGENT_NAME
                 if (previous === next) return state
-                const resolved = yield* extensionRegistry.getAgent(next)
+                // Use per-session profile registry when available
+                const { turnExtensionRegistry: switchRegistry } = yield* resolveTurnProfile
+                const resolved = yield* switchRegistry.getAgent(next)
                 if (resolved === undefined) return state
 
                 yield* publishEvent(
@@ -1565,6 +1572,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       currentTurnAgent,
                       toolRunner,
                       extensionRegistry: turnExtensionRegistry,
+                      extensionStateRuntime: turnExtensionStateRuntime,
                       bashSemaphore,
                       storage,
                     }).pipe(
@@ -1705,6 +1713,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   currentTurnAgent: resolved.currentTurnAgent,
                   toolRunner,
                   extensionRegistry: turnExtensionRegistry,
+                  extensionStateRuntime: turnExtensionStateRuntime,
                   bashSemaphore,
                   storage,
                 }).pipe(

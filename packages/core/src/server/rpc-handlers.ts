@@ -57,6 +57,26 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
+    const storageForProfile = yield* Effect.serviceOption(Storage)
+
+    /** Resolve per-session profile services. Falls back to server-wide. */
+    const resolveSessionProfile = (sessionId: string) =>
+      Effect.gen(function* () {
+        if (profileCache === undefined || storageForProfile._tag !== "Some") {
+          return { registry: extensionRegistry, stateRuntime: extensionStateRuntime }
+        }
+        const session = yield* storageForProfile.value
+          .getSession(sessionId as never)
+          .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+        if (session?.cwd === undefined) {
+          return { registry: extensionRegistry, stateRuntime: extensionStateRuntime }
+        }
+        const profile = yield* profileCache.resolve(session.cwd)
+        return {
+          registry: profile.registryService,
+          stateRuntime: profile.extensionStateRuntime,
+        }
+      })
 
     return {
       // -- session --
@@ -256,9 +276,13 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // -- extension --
       "extension.listStatus": ({ sessionId }) =>
         Effect.gen(function* () {
-          const activationStatuses = yield* extensionRegistry.listExtensionStatuses()
+          const profile =
+            sessionId !== undefined ? yield* resolveSessionProfile(sessionId) : undefined
+          const activeRegistry = profile?.registry ?? extensionRegistry
+          const activeRuntime = profile?.stateRuntime ?? extensionStateRuntime
+          const activationStatuses = yield* activeRegistry.listExtensionStatuses()
           const actorStatuses =
-            sessionId === undefined ? [] : yield* extensionStateRuntime.getActorStatuses(sessionId)
+            sessionId === undefined ? [] : yield* activeRuntime.getActorStatuses(sessionId)
           return buildExtensionHealthSnapshot(activationStatuses, actorStatuses)
         }),
 
@@ -273,7 +297,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               branchId,
             }),
           )
-          yield* extensionStateRuntime.send(sessionId, message, branchId)
+          const { stateRuntime: activeRuntime } = yield* resolveSessionProfile(sessionId)
+          yield* activeRuntime.send(sessionId, message, branchId)
           if (bus !== undefined) {
             yield* bus
               .emit({
@@ -296,7 +321,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               branchId,
             }),
           )
-          const reply = yield* extensionStateRuntime.ask(sessionId, message, branchId)
+          const { stateRuntime: askRuntime } = yield* resolveSessionProfile(sessionId)
+          const reply = yield* askRuntime.ask(sessionId, message, branchId)
           yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
             Effect.annotateLogs({
               sessionId,
@@ -316,7 +342,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "extension.invokeCommand": ({ name, args, sessionId, branchId }) =>
         Effect.gen(function* () {
-          // Resolve per-session profile for cwd-scoped registry
+          const { registry: activeRegistry, stateRuntime: activeStateRuntime } =
+            yield* resolveSessionProfile(sessionId)
+
+          // Resolve deps lazily for host context (same pattern as tool-runner)
           const lazyDeps = yield* Effect.all({
             platform: Effect.serviceOption(RuntimePlatform),
             approvalService: Effect.serviceOption(ApprovalService),
@@ -329,17 +358,11 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           })
 
           const cmdSession =
-            lazyDeps.storage._tag === "Some"
-              ? yield* lazyDeps.storage.value
+            storageForProfile._tag === "Some"
+              ? yield* storageForProfile.value
                   .getSession(sessionId)
                   .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
               : undefined
-          const cmdProfile =
-            profileCache !== undefined && cmdSession?.cwd !== undefined
-              ? yield* profileCache.resolve(cmdSession.cwd)
-              : undefined
-          const activeRegistry = cmdProfile?.registryService ?? extensionRegistry
-          const activeStateRuntime = cmdProfile?.extensionStateRuntime ?? extensionStateRuntime
 
           const cmds = yield* activeRegistry.listCommands()
           const cmd = cmds.find((c) => c.name === name)
