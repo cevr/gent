@@ -25,7 +25,7 @@ export const ExecutorExtension = extension(EXECUTOR_EXTENSION_ID, ({ ext, ctx })
       },
     })
     .command("executor-stop", {
-      description: "Disconnect and stop the local Executor sidecar.",
+      description: "Disconnect from the Executor sidecar.",
       handler: async (_args, extCtx) => {
         await extCtx.extension.send(ExecutorProtocol.Disconnect())
       },
