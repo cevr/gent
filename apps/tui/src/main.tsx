@@ -398,6 +398,7 @@ const serverStop = Command.make(
   ({ all }) =>
     Effect.gen(function* () {
       const home = os.homedir()
+      const thisHost = os.hostname()
       const entries = listRegistryEntries(home)
 
       if (entries.length === 0) {
@@ -405,16 +406,18 @@ const serverStop = Command.make(
         return
       }
 
-      const toStop = all ? entries : entries.filter((e) => validateRegistryEntry(e).valid)
+      // Only consider entries on this host — never signal cross-host PIDs
+      const localEntries = entries.filter((e) => e.hostname === thisHost)
+      const toStop = all ? localEntries : localEntries.filter((e) => isPidAlive(e.pid))
 
       if (toStop.length === 0) {
-        yield* Console.log("No live servers to stop.")
+        yield* Console.log("No live servers to stop on this host.")
         return
       }
 
+      // Signal all targets
       for (const entry of toStop) {
-        const alive = isPidAlive(entry.pid)
-        if (alive) {
+        if (isPidAlive(entry.pid)) {
           try {
             process.kill(entry.pid, "SIGTERM")
             yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
@@ -422,21 +425,24 @@ const serverStop = Command.make(
             yield* Console.log(`Failed to signal PID ${entry.pid} (${entry.serverId})`)
           }
         }
-        removeRegistryEntry(home, entry.dbPath, entry.serverId)
       }
 
-      // Wait briefly for processes to exit
-      yield* Effect.sleep("1 second")
+      // Wait for processes to exit, then cleanup registry
+      yield* Effect.sleep("2 seconds")
 
       let stillAlive = 0
       for (const entry of toStop) {
-        if (isPidAlive(entry.pid)) stillAlive++
+        if (isPidAlive(entry.pid)) {
+          stillAlive++
+        } else {
+          removeRegistryEntry(home, entry.dbPath, entry.serverId)
+        }
       }
 
       if (stillAlive > 0) {
         yield* Console.log(`\n${stillAlive} server(s) still running after SIGTERM.`)
       } else {
-        yield* Console.log(`\nAll ${toStop.length} server(s) stopped.`)
+        yield* Console.log(`\nAll ${toStop.length} server(s) stopped and cleaned up.`)
       }
     }),
 )

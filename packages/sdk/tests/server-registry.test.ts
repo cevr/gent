@@ -10,6 +10,7 @@ import {
   readRegistryEntry,
   writeRegistryEntry,
   removeRegistryEntry,
+  listRegistryEntries,
   validateRegistryEntry,
   isPidAlive,
   acquireLock,
@@ -143,6 +144,62 @@ describe("Server Registry", () => {
 
     expect(readRegistryEntry(home, "/tmp/a.db")?.serverId).toBe("s1")
     expect(readRegistryEntry(home, "/tmp/b.db")?.serverId).toBe("s2")
+  })
+})
+
+describe("listRegistryEntries", () => {
+  let home: string
+
+  beforeEach(() => {
+    home = makeTmpHome()
+  })
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  test("returns empty array when no registry dir exists", () => {
+    expect(listRegistryEntries(home)).toEqual([])
+  })
+
+  test("returns all written entries", () => {
+    const entry1 = makeEntry({ dbPath: "/tmp/a.db", serverId: "s1" })
+    const entry2 = makeEntry({ dbPath: "/tmp/b.db", serverId: "s2" })
+    writeRegistryEntry(home, entry1)
+    writeRegistryEntry(home, entry2)
+
+    const entries = listRegistryEntries(home)
+    expect(entries.length).toBe(2)
+    const ids = entries.map((e) => e.serverId).sort()
+    expect(ids).toEqual(["s1", "s2"])
+  })
+
+  test("skips corrupt files", () => {
+    const entry = makeEntry({ dbPath: "/tmp/good.db", serverId: "good" })
+    writeRegistryEntry(home, entry)
+
+    // Write a corrupt file
+    const dir = join(home, ".gent", "servers")
+    writeFileSync(join(dir, "corrupt.json"), "not json at all")
+
+    const entries = listRegistryEntries(home)
+    expect(entries.length).toBe(1)
+    expect(entries[0]!.serverId).toBe("good")
+  })
+
+  test("includes entries from other hosts", () => {
+    // listRegistryEntries returns all entries — filtering is caller's job
+    const local = makeEntry({ dbPath: "/tmp/local.db", serverId: "local" })
+    const remote = makeEntry({
+      dbPath: "/tmp/remote.db",
+      serverId: "remote",
+      hostname: "other-host",
+    })
+    writeRegistryEntry(home, local)
+    writeRegistryEntry(home, remote)
+
+    const entries = listRegistryEntries(home)
+    expect(entries.length).toBe(2)
   })
 })
 
