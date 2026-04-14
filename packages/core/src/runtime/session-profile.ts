@@ -33,6 +33,11 @@ import {
 } from "./extensions/activation.js"
 import { discoverExtensions } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
+import {
+  ExtensionStateRuntime,
+  type ExtensionStateRuntimeService,
+} from "./extensions/state-runtime.js"
+import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { buildBasePromptSections } from "../server/system-prompt.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/scheduler.js"
@@ -44,6 +49,7 @@ export interface SessionProfile {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resolved: ResolvedExtensions
   readonly registryService: ExtensionRegistryService
+  readonly extensionStateRuntime: ExtensionStateRuntimeService
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
 }
@@ -163,20 +169,24 @@ export class SessionProfileCache extends Context.Service<
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
-            // 6. Build registry + extension runtime layers from resolved
+            // 6. Build registry + extension state runtime + extension layers from resolved
             const resolved = reconciled.resolved
             const registryLayer = ExtensionRegistry.fromResolved(resolved)
+            const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(
+              resolved.extensions,
+            ).pipe(Layer.provide(ExtensionTurnControl.Live))
 
-            // Merge extension-provided layers with the registry
+            // Merge all per-profile layers
             const combinedLayer =
               extensionLayers.length > 0
-                ? Layer.mergeAll(registryLayer, ...extensionLayers)
-                : registryLayer
+                ? Layer.mergeAll(registryLayer, stateRuntimeLayer, ...extensionLayers)
+                : Layer.mergeAll(registryLayer, stateRuntimeLayer)
 
             const combinedCtx = yield* Layer.build(combinedLayer).pipe(
               Effect.provideService(Scope.Scope, serverScope),
             )
             const registryService = Context.get(combinedCtx, ExtensionRegistry)
+            const stateRuntime = Context.get(combinedCtx, ExtensionStateRuntime)
 
             // 7. Build base prompt sections for this cwd
             const instructions = yield* configService.loadInstructions(canonicalCwd)
@@ -204,6 +214,7 @@ export class SessionProfileCache extends Context.Service<
               extensions: resolved.extensions,
               resolved,
               registryService,
+              extensionStateRuntime: stateRuntime,
               baseSections,
               instructions,
             }
@@ -266,6 +277,16 @@ export class SessionProfileCache extends Context.Service<
                 Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
               ),
               ExtensionRegistry,
+            ),
+            extensionStateRuntime: Context.get(
+              Effect.runSync(
+                Layer.build(
+                  ExtensionStateRuntime.fromExtensions([]).pipe(
+                    Layer.provide(ExtensionTurnControl.Live),
+                  ),
+                ).pipe(Effect.scoped),
+              ),
+              ExtensionStateRuntime,
             ),
             baseSections: [],
             instructions: "",

@@ -1461,6 +1461,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 )
                 return {
                   turnExtensionRegistry: profile.registryService,
+                  turnExtensionStateRuntime: profile.extensionStateRuntime,
                   turnBaseSections: profile.baseSections,
                   turnHostCtx,
                 }
@@ -1468,6 +1469,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
               return {
                 turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
+                turnExtensionStateRuntime: extensionStateRuntime as ExtensionStateRuntimeService,
                 turnBaseSections: config.baseSections,
                 turnHostCtx: defaultHostCtx,
               }
@@ -1521,8 +1523,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
 
               // Resolve per-turn profile (session cwd → extension registry + baseSections)
-              const { turnExtensionRegistry, turnBaseSections, turnHostCtx } =
-                yield* resolveTurnProfile
+              const {
+                turnExtensionRegistry,
+                turnExtensionStateRuntime,
+                turnBaseSections,
+                turnHostCtx,
+              } = yield* resolveTurnProfile
 
               let step = 0
               let interrupted = yield* Ref.get(interruptedRef)
@@ -1606,7 +1612,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   storage,
                   branchId,
                   extensionRegistry: turnExtensionRegistry,
-                  extensionStateRuntime,
+                  extensionStateRuntime: turnExtensionStateRuntime,
                   sessionId,
                   publishEvent: publishEventOrDie,
                   baseSections: turnBaseSections,
