@@ -389,7 +389,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                   } as MakeExtensionHostContextDeps["eventPublisher"]),
           }
 
-          const hostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
+          // Resolve session cwd for per-session scoping
+          const cmdSession =
+            lazyDeps.storage._tag === "Some"
+              ? yield* lazyDeps.storage.value
+                  .getSession(sessionId)
+                  .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              : undefined
+
+          const hostCtx = makeExtensionHostContext(
+            { sessionId, branchId, sessionCwd: cmdSession?.cwd },
+            hostDeps,
+          )
           const ctx = toExtensionAsyncContext(hostCtx)
           yield* Effect.promise(() => Promise.resolve(cmd.handler(args, ctx)))
         }),

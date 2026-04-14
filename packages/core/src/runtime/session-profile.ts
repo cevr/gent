@@ -3,9 +3,20 @@
  *
  * Each unique session cwd gets its own extension discovery, config, prompt sections,
  * and registry. Profiles are lazily initialized on first access and cached.
+ * Profile scope is tied to the server's scope — extension lifecycle (onStartup/onShutdown)
+ * survives as long as the server does.
  */
 
-import { Context, Effect, FileSystem, Layer, Path, Ref, type Scope } from "effect"
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Scope,
+  type Scope as ScopeType,
+} from "effect"
 import { BuiltinExtensions } from "../extensions/index.js"
 import type { LoadedExtension } from "../domain/extension.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -65,7 +76,7 @@ export class SessionProfileCache extends Context.Service<
   ): Layer.Layer<
     SessionProfileCache,
     never,
-    FileSystem.FileSystem | Path.Path | ConfigService | Scope.Scope
+    FileSystem.FileSystem | Path.Path | ConfigService | ScopeType.Scope
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -74,6 +85,8 @@ export class SessionProfileCache extends Context.Service<
         const configService = yield* ConfigService
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
+        // Capture server scope — extension lifecycle (onShutdown) ties to this
+        const serverScope = yield* Scope.Scope
 
         // Capture platform services as a layer so initProfile can use functions
         // that require FileSystem | Path from the Effect context
@@ -84,23 +97,26 @@ export class SessionProfileCache extends Context.Service<
 
         const initProfile = (cwd: string) =>
           Effect.gen(function* () {
+            // Canonicalize cwd to avoid duplicate profiles for same directory
+            const canonicalCwd = pathSvc.resolve(cwd)
+
             // 1. Read disabled extensions for this cwd
             const disabledSet = yield* readDisabledExtensions({
               home: config.home,
-              cwd,
+              cwd: canonicalCwd,
               extra: config.disabledExtensions,
             })
 
             // 2. Discover project extensions
             const userExtensionsDir = pathSvc.join(config.home, ".gent", "extensions")
-            const projectExtensionsDir = pathSvc.join(cwd, ".gent", "extensions")
+            const projectExtensionsDir = pathSvc.join(canonicalCwd, ".gent", "extensions")
             const discovery = yield* discoverExtensions({
               userDir: userExtensionsDir,
               projectDir: projectExtensionsDir,
             }).pipe(
               Effect.catchEager((error) =>
                 Effect.logWarning("session-profile.extension.discovery.failed").pipe(
-                  Effect.annotateLogs({ error: String(error), cwd }),
+                  Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
                   Effect.as({ loaded: [] as const, skipped: [] as const }),
                 ),
               ),
@@ -109,26 +125,26 @@ export class SessionProfileCache extends Context.Service<
             // 3. Setup extensions
             const externalSetup = yield* setupDiscoveredExtensions({
               extensions: discovery.loaded,
-              cwd,
+              cwd: canonicalCwd,
               home: config.home,
               disabled: disabledSet,
             })
 
             const builtinSetup = yield* setupBuiltinExtensions({
               extensions: BuiltinExtensions,
-              cwd,
+              cwd: canonicalCwd,
               home: config.home,
               disabled: disabledSet,
             })
 
-            // 4. Reconcile
+            // 4. Reconcile — uses server scope so extension lifecycle survives
             const reconciled = yield* reconcileLoadedExtensions({
               extensions: [...builtinSetup.active, ...externalSetup.active],
               failedExtensions: [...builtinSetup.failed, ...externalSetup.failed],
               home: config.home,
               command: config.scheduledJobCommand,
               env: config.scheduledJobEnv,
-            })
+            }).pipe(Effect.provideService(Scope.Scope, serverScope))
 
             for (const failed of reconciled.resolved.failedExtensions) {
               yield* Effect.logWarning("session-profile.extension.failed").pipe(
@@ -136,24 +152,39 @@ export class SessionProfileCache extends Context.Service<
                   extensionId: failed.manifest.id,
                   phase: failed.phase,
                   error: failed.error,
-                  cwd,
+                  cwd: canonicalCwd,
                 }),
               )
             }
 
-            // 5. Build registry service from resolved
+            // 5. Build extension-provided service layers (Skills.Live, AutoJournal.Live, etc.)
+            const extensionLayers = reconciled.resolved.extensions
+              .filter((ext) => ext.setup.layer !== undefined)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .map((ext) => ext.setup.layer as Layer.Layer<any>)
+
+            // 6. Build registry + extension runtime layers from resolved
             const resolved = reconciled.resolved
             const registryLayer = ExtensionRegistry.fromResolved(resolved)
-            const registryCtx = yield* Layer.build(registryLayer)
-            const registryService = Context.get(registryCtx, ExtensionRegistry)
 
-            // 6. Build base prompt sections for this cwd
-            const instructions = yield* configService.loadInstructions(cwd)
-            const isGitRepo = yield* fs.exists(pathSvc.join(cwd, ".git"))
+            // Merge extension-provided layers with the registry
+            const combinedLayer =
+              extensionLayers.length > 0
+                ? Layer.mergeAll(registryLayer, ...extensionLayers)
+                : registryLayer
+
+            const combinedCtx = yield* Layer.build(combinedLayer).pipe(
+              Effect.provideService(Scope.Scope, serverScope),
+            )
+            const registryService = Context.get(combinedCtx, ExtensionRegistry)
+
+            // 7. Build base prompt sections for this cwd
+            const instructions = yield* configService.loadInstructions(canonicalCwd)
+            const isGitRepo = yield* fs.exists(pathSvc.join(canonicalCwd, ".git"))
             const extensionSections = yield* registryService.listPromptSections()
 
             const coreSections = buildBasePromptSections({
-              cwd,
+              cwd: canonicalCwd,
               platform: config.platform,
               shell: config.shell,
               osVersion: config.osVersion,
@@ -169,7 +200,7 @@ export class SessionProfileCache extends Context.Service<
             const baseSections = [...sectionMap.values()]
 
             const profile: SessionProfile = {
-              cwd,
+              cwd: canonicalCwd,
               extensions: resolved.extensions,
               resolved,
               registryService,
@@ -179,7 +210,7 @@ export class SessionProfileCache extends Context.Service<
 
             yield* Effect.logInfo("session-profile.initialized").pipe(
               Effect.annotateLogs({
-                cwd,
+                cwd: canonicalCwd,
                 extensionCount: resolved.extensions.length,
                 sectionCount: baseSections.length,
               }),
@@ -190,17 +221,20 @@ export class SessionProfileCache extends Context.Service<
 
         const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
           Effect.gen(function* () {
+            // Canonicalize before cache lookup
+            const canonicalCwd = pathSvc.resolve(cwd)
+
             // Check cache first
             const cache = yield* Ref.get(cacheRef)
-            const existing = cache.get(cwd)
+            const existing = cache.get(canonicalCwd)
             if (existing !== undefined) return existing
 
-            // Initialize profile with a fresh scope for extension lifecycle
-            const profile = yield* initProfile(cwd).pipe(Effect.scoped)
+            // Initialize — no Effect.scoped, scope tied to server via serverScope
+            const profile = yield* initProfile(canonicalCwd)
 
             yield* Ref.update(cacheRef, (m) => {
               const next = new Map(m)
-              next.set(cwd, profile)
+              next.set(canonicalCwd, profile)
               return next
             })
 
@@ -208,7 +242,7 @@ export class SessionProfileCache extends Context.Service<
           })
 
         const peek: SessionProfileCacheService["peek"] = (cwd) =>
-          Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd)))
+          Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(pathSvc.resolve(cwd))))
 
         return { resolve, peek }
       }),
