@@ -228,7 +228,10 @@ const program = Effect.scoped(
       DocsRoute,
       OpenApiJsonRoute,
       IdentityRoute,
-    ).pipe(Layer.provide(wsTracingLayer), Layer.provide(HttpRouter.cors()))
+    ).pipe(
+      Layer.provide(wsTracingLayer.pipe(Layer.provide(coreServicesLive))),
+      Layer.provide(HttpRouter.cors()),
+    )
 
     // Server
     const HttpServerLive = HttpRouter.serve(AllRoutes).pipe(
@@ -304,6 +307,4 @@ const program = Effect.scoped(
   }),
 )
 
-const MainLayer = Layer.effectDiscard(program).pipe(Layer.provide(BunFileSystem.layer))
-
-BunRuntime.runMain(Effect.scoped(Layer.launch(MainLayer)))
+BunRuntime.runMain(program.pipe(Effect.provide(BunFileSystem.layer)))
