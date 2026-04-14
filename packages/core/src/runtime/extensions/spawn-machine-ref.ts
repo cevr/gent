@@ -114,18 +114,23 @@ export const spawnMachineExtensionRef = <
               durability: {
                 save: (commit) =>
                   Effect.gen(function* () {
-                    yield* Ref.update(versionRef, (epoch) => epoch + 1)
-                    const version = yield* Ref.get(versionRef)
+                    const nextVersion = (yield* Ref.get(versionRef)) + 1
                     const encoded = codec.encode(commit.nextState)
-                    yield* storage.value
-                      .saveExtensionState({
-                        sessionId: ctx.sessionId,
-                        extensionId,
-                        stateJson: encoded,
-                        version,
-                      })
-                      .pipe(Effect.catchEager(() => Effect.void))
+                    yield* storage.value.saveExtensionState({
+                      sessionId: ctx.sessionId,
+                      extensionId,
+                      stateJson: encoded,
+                      version: nextVersion,
+                    })
+                    // Increment epoch only after successful save — keeps runtime
+                    // consistent with storage if save fails
+                    yield* Ref.set(versionRef, nextVersion)
                   }).pipe(
+                    Effect.catchEager((e) =>
+                      Effect.logWarning("extension persist failed").pipe(
+                        Effect.annotateLogs({ extensionId, error: String(e) }),
+                      ),
+                    ),
                     Effect.catchDefect((defect) =>
                       Effect.logWarning("extension persist defect").pipe(
                         Effect.annotateLogs({ extensionId, defect: String(defect) }),
