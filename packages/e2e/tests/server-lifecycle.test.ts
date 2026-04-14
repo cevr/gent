@@ -200,7 +200,8 @@ describe("server lifecycle", () => {
           // Same server — same PID
           expect(pid1).toBe(pid2)
           expect(server2._tag).toBe("attached")
-          expect(status2.connectionCount).toBeGreaterThanOrEqual(2)
+          // Owned client uses direct RPC (no WS), only attached client increments ConnectionTracker
+          expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
         }),
       ),
     )

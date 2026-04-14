@@ -57,6 +57,6 @@ export const startWorkerWithClient = (options: {
 export const startWorkerWithSupervisor = (options: WorkerSupervisorOptions) =>
   Effect.gen(function* () {
     const supervisor = yield* startWorkerSupervisor(options)
-    const bundle = yield* Gent.connect({ url: supervisor.url })
+    const bundle = yield* Gent.client({ url: supervisor.url })
     return { ...supervisor, ...bundle }
   })
