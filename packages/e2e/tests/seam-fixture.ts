@@ -50,7 +50,7 @@ export const startWorkerWithClient = (options: {
     const supervisor = yield* startWorkerSupervisor(options).pipe(
       Effect.mapError((e) => new GentConnectionError({ message: e.message })),
     )
-    return yield* Gent.connect({ url: supervisor.url })
+    return yield* Gent.client({ url: supervisor.url })
   })
 
 /** Start a raw supervisor — for tests that need lifecycle assertions. */

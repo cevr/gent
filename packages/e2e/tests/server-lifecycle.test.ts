@@ -124,7 +124,7 @@ describe("server lifecycle", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const { client } = yield* Gent.connect({ url: supervisor.url })
+          const { client } = yield* Gent.client({ url: supervisor.url })
 
           // server.status should reflect our connection
           const status = yield* client.server
@@ -164,37 +164,33 @@ describe("server lifecycle", () => {
     }
   }, 15_000)
 
-  test("two Gent.spawn calls with same dbPath share one server", async () => {
+  test("two Gent.server calls with same dbPath share one server", async () => {
     const dataDir = makeTempDir()
     const dbPath = path.join(dataDir, "data.db")
 
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          // First spawn starts a new server
-          const bundle1 = yield* Gent.spawn({
+          // First server starts owned
+          const server1 = yield* Gent.server({
             cwd: repoRoot,
-            mode: "debug",
-            shared: true,
-            dbPath,
-            home: dataDir,
-            env: { GENT_DATA_DIR: dataDir },
+            state: Gent.state.sqlite({ home: dataDir, dbPath }),
+            provider: Gent.provider.mock(),
           })
+          const bundle1 = yield* Gent.client(server1)
 
           const status1 = yield* bundle1.client.server
             .status()
             .pipe(Effect.mapError((e) => new Error(String(e))))
           const pid1 = status1.pid
 
-          // Second spawn should reuse the same server via registry
-          const bundle2 = yield* Gent.spawn({
+          // Second server should attach via registry
+          const server2 = yield* Gent.server({
             cwd: repoRoot,
-            mode: "debug",
-            shared: true,
-            dbPath,
-            home: dataDir,
-            env: { GENT_DATA_DIR: dataDir },
+            state: Gent.state.sqlite({ home: dataDir, dbPath }),
+            provider: Gent.provider.mock(),
           })
+          const bundle2 = yield* Gent.client(server2)
 
           const status2 = yield* bundle2.client.server
             .status()
@@ -203,6 +199,7 @@ describe("server lifecycle", () => {
 
           // Same server — same PID
           expect(pid1).toBe(pid2)
+          expect(server2._tag).toBe("attached")
           expect(status2.connectionCount).toBeGreaterThanOrEqual(2)
         }),
       ),
@@ -222,7 +219,7 @@ describe("server lifecycle", () => {
       // Connect a WS client with a manually managed scope so we control disconnect timing
       const clientScope = Effect.runSync(Scope.make())
       const bundle = await Effect.runPromise(
-        Gent.connect({ url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
+        Gent.client({ url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
       )
 
       // Verify connection registered

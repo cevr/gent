@@ -111,6 +111,32 @@ describe("Gent.local", () => {
     )
   })
 
+  test("Gent.server(memory) + Gent.client creates a working in-process client", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* Gent.server({
+            cwd: repoRoot,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const bundle = yield* Gent.client(server)
+
+          expect(server._tag).toBe("owned")
+
+          yield* bundle.runtime.lifecycle.waitForReady
+
+          const created = yield* bundle.client.session.create({ cwd: repoRoot })
+          expect(created.sessionId).toBeDefined()
+          expect(bundle.runtime.lifecycle.getState()).toEqual({
+            _tag: "connected",
+            generation: 0,
+          })
+        }),
+      ),
+    )
+  })
+
   test("restarts the in-process runtime and keeps the client facade alive", async () => {
     const dataDir = makeTempDir()
     const states: string[] = []
