@@ -39,6 +39,7 @@ import {
   type GentNamespacedClient,
   type GentRuntime,
 } from "./namespaced-client.js"
+import { startLocalSupervisor } from "./local-supervisor.js"
 import {
   resolveServer,
   getOwnedInternal,
@@ -264,23 +265,35 @@ export interface GentClientBundle {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: WS connect helper
+// Internal: WS connect with reconnection
 // ---------------------------------------------------------------------------
 
+/** Build a WS-backed RPC client within a given scope. */
+const buildWsRpcClient = (url: string) => (scope: Scope.Closeable) =>
+  Effect.gen(function* () {
+    const transport = yield* Layer.buildWithScope(WsTransport(url), scope)
+    return yield* makeRpcClient.pipe(Effect.provide(transport))
+  })
+
+const toConnectionError = (error: unknown) =>
+  new GentConnectionError({
+    message:
+      typeof error === "object" && error !== null && "message" in error
+        ? String((error as { readonly message: unknown }).message)
+        : String(error),
+  })
+
+/** Connect via WS with automatic reconnection. Uses the local supervisor
+ *  pattern: swappable client proxy + lifecycle transitions + generation tracking. */
 const connectWs = (
   url: string,
 ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
-    const scope = yield* Effect.scope
-    const transport = yield* Layer.buildWithScope(WsTransport(url), scope)
-    const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+    const supervisor = yield* startLocalSupervisor(buildWsRpcClient(url), toConnectionError)
     const services = yield* Effect.context<never>()
     return {
-      client: makeNamespacedClient(rpcClient),
-      runtime: makeRuntime(
-        services as Context.Context<unknown>,
-        staticLifecycle({ _tag: "connected", generation: 0 }),
-      ),
+      client: supervisor.client,
+      runtime: makeRuntime(services as Context.Context<unknown>, supervisor.lifecycle),
     }
   })
 
