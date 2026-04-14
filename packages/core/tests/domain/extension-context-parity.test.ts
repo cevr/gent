@@ -8,36 +8,42 @@
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { type ExtensionContext, toExtensionContext } from "@gent/core/domain/extension-context"
+import {
+  type ExtensionAsyncContext,
+  toExtensionAsyncContext,
+} from "@gent/core/domain/extension-context"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 
 // ── Type-level assertions ──
 // These types will cause a compile error if the two interfaces diverge.
 
 // Assert ExtensionContext has all top-level keys of ExtensionHostContext
-type AssertTopLevelKeys<_T extends Record<keyof ExtensionHostContext, unknown> = ExtensionContext> =
-  true
+type AssertTopLevelKeys<
+  _T extends Record<keyof ExtensionHostContext, unknown> = ExtensionAsyncContext,
+> = true
 
 // Assert each facet has the same method keys
 type AssertExtensionKeys<
-  _T extends Record<keyof ExtensionHostContext.Extension, unknown> = ExtensionContext.Extension,
+  _T extends Record<keyof ExtensionHostContext.Extension, unknown> =
+    ExtensionAsyncContext.Extension,
 > = true
 
 type AssertAgentKeys<
-  _T extends Record<keyof ExtensionHostContext.Agent, unknown> = ExtensionContext.Agent,
+  _T extends Record<keyof ExtensionHostContext.Agent, unknown> = ExtensionAsyncContext.Agent,
 > = true
 
 type AssertSessionKeys<
   _T extends Record<keyof ExtensionHostContext.SessionFacet, unknown> =
-    ExtensionContext.SessionFacet,
+    ExtensionAsyncContext.SessionFacet,
 > = true
 
 type AssertInteractionKeys<
-  _T extends Record<keyof ExtensionHostContext.Interaction, unknown> = ExtensionContext.Interaction,
+  _T extends Record<keyof ExtensionHostContext.Interaction, unknown> =
+    ExtensionAsyncContext.Interaction,
 > = true
 
 type AssertTurnKeys<
-  _T extends Record<keyof ExtensionHostContext.Turn, unknown> = ExtensionContext.Turn,
+  _T extends Record<keyof ExtensionHostContext.Turn, unknown> = ExtensionAsyncContext.Turn,
 > = true
 
 // Prove the type aliases are used (prevents "unused" warnings)
@@ -101,7 +107,7 @@ describe("ExtensionContext parity", () => {
       },
     } as ExtensionHostContext
 
-    const ctx = toExtensionContext(stubHost)
+    const ctx = toExtensionAsyncContext(stubHost)
 
     // Scalar props
     expect(ctx.sessionId).toBe("s")

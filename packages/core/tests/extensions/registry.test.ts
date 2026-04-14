@@ -7,14 +7,13 @@ import type {
   ProviderContribution,
   RunContext,
 } from "@gent/core/domain/extension"
-import type { AnyToolDefinition, ToolAction } from "@gent/core/domain/tool"
+import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { PromptSectionInput } from "@gent/core/domain/prompt"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
-const makeTool = (name: string, action: ToolAction = "read"): AnyToolDefinition => ({
+const makeTool = (name: string): AnyToolDefinition => ({
   name,
-  action,
   description: `test tool ${name}`,
   params: {} as never,
   execute: () => Effect.void,
@@ -67,7 +66,7 @@ describe("resolveExtensions", () => {
   test("collects tools from multiple extensions", () => {
     const resolved = resolveExtensions([
       makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
-      makeExt("b", "builtin", { tools: [makeTool("bash", "exec")] }),
+      makeExt("b", "builtin", { tools: [makeTool("bash")] }),
     ])
     expect(resolved.tools.size).toBe(3)
     expect(resolved.tools.has("read")).toBe(true)
@@ -362,8 +361,8 @@ describe("ExtensionRegistry", () => {
   })
 
   test("resolveToolPolicy filters by allowedTools", async () => {
-    const readTool = makeTool("read", "read")
-    const bashTool = makeTool("bash", "exec")
+    const readTool = makeTool("read")
+    const bashTool = makeTool("bash")
     const agent = new AgentDefinition({
       name: "explore" as never,
       allowedTools: ["read"],
@@ -379,9 +378,9 @@ describe("ExtensionRegistry", () => {
   })
 
   test("resolveToolPolicy allowedTools restricts to exact set", async () => {
-    const readTool = makeTool("read", "read")
-    const bashTool = makeTool("bash", "exec")
-    const editTool = makeTool("edit", "edit")
+    const readTool = makeTool("read")
+    const bashTool = makeTool("bash")
+    const editTool = makeTool("edit")
     const agent = new AgentDefinition({
       name: "explore" as never,
       allowedTools: ["read", "bash"],
@@ -399,8 +398,8 @@ describe("ExtensionRegistry", () => {
   })
 
   test("resolveToolPolicy applies deniedTools", async () => {
-    const readTool = makeTool("read", "read")
-    const writeTool = makeTool("write", "read")
+    const readTool = makeTool("read")
+    const writeTool = makeTool("write")
     const agent = new AgentDefinition({
       name: "cowork" as never,
       deniedTools: ["write"],
@@ -417,8 +416,8 @@ describe("ExtensionRegistry", () => {
   })
 
   test("denied tools cannot be injected via projection", async () => {
-    const readTool = makeTool("read", "read")
-    const secretTool = makeTool("secret", "read")
+    const readTool = makeTool("read")
+    const secretTool = makeTool("secret")
     const agent = new AgentDefinition({
       name: "cowork" as never,
       deniedTools: ["secret"],

@@ -126,7 +126,12 @@ export {
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 export type { AgentEvent } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
-export { type ExtensionContext, toExtensionAsyncContext } from "../domain/extension-context.js"
+export {
+  type ExtensionAsyncContext,
+  type ExtensionContext,
+  toExtensionAsyncContext,
+  toExtensionContext,
+} from "../domain/extension-context.js"
 
 // ── Simple Parameter Types ──
 

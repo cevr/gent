@@ -433,7 +433,6 @@ describe("compileHooks", () => {
     const baseToolResultInput: ToolResultInput = {
       toolCallId: "tc-1" as never,
       toolName: "read",
-      toolAction: "read",
       input: { path: "/tmp/file.txt" },
       result: { content: "hello" },
       agentName: "cowork" as never,
