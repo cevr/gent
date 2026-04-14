@@ -1,7 +1,8 @@
-import { Effect, Exit, Ref, Scope } from "effect"
+import { Effect, Exit, Option, Ref, Scope } from "effect"
 import {
   ActorScope,
   Machine,
+  type Lifecycle,
   type ProvideSlots,
   type SlotCalls,
   type SlotsDef,
@@ -88,22 +89,53 @@ export const spawnMachineExtensionRef = <
       const codec =
         actor.stateSchema !== undefined ? makePersistCodec(actor.stateSchema) : undefined
 
-      let hydratedState: State | undefined
-      let initialEpoch = 0
-      if (actor.persist === true && storage._tag === "Some" && codec !== undefined) {
-        const loaded = yield* storage.value
-          .loadExtensionState({ sessionId: ctx.sessionId, extensionId })
-          .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-        if (loaded !== undefined) {
-          const decoded = yield* codec
-            .decode(loaded.stateJson)
-            .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
-          if (decoded !== undefined) {
-            hydratedState = decoded
-            initialEpoch = loaded.version
-          }
-        }
-      }
+      // Build lifecycle — Recovery replaces manual hydration, Durability replaces
+      // manual persist. Durability.save fires for ALL transitions including
+      // .spawn() internal self.send, fixing the epoch/persist gap.
+      let loadedEpoch = 0
+      const lifecycle: Lifecycle<State, Event> | undefined =
+        actor.persist === true && storage._tag === "Some" && codec !== undefined
+          ? {
+              recovery: {
+                resolve: () =>
+                  Effect.gen(function* () {
+                    const loaded = yield* storage.value
+                      .loadExtensionState({ sessionId: ctx.sessionId, extensionId })
+                      .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+                    if (loaded === undefined) return Option.none<State>()
+                    const decoded = yield* codec
+                      .decode(loaded.stateJson)
+                      .pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))))
+                    if (decoded === undefined) return Option.none<State>()
+                    loadedEpoch = loaded.version
+                    return Option.some(decoded)
+                  }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<State>()))),
+              },
+              durability: {
+                save: (commit) =>
+                  Effect.gen(function* () {
+                    yield* Ref.update(versionRef, (epoch) => epoch + 1)
+                    const version = yield* Ref.get(versionRef)
+                    const encoded = codec.encode(commit.nextState)
+                    yield* storage.value
+                      .saveExtensionState({
+                        sessionId: ctx.sessionId,
+                        extensionId,
+                        stateJson: encoded,
+                        version,
+                      })
+                      .pipe(Effect.catchEager(() => Effect.void))
+                  }).pipe(
+                    Effect.catchDefect((defect) =>
+                      Effect.logWarning("extension persist defect").pipe(
+                        Effect.annotateLogs({ extensionId, defect: String(defect) }),
+                      ),
+                    ),
+                  ),
+                shouldSave: (nextState, previousState) => nextState !== previousState,
+              },
+            }
+          : undefined
 
       const providedSlots = actor.slots !== undefined ? yield* actor.slots(ctx) : undefined
       const slots = providedSlots !== undefined ? normalizeSlots(providedSlots) : undefined
@@ -114,25 +146,9 @@ export const spawnMachineExtensionRef = <
       const actorScope = yield* Scope.make()
       const machineRef = yield* Machine.spawn(actor.machine, {
         id: `${extensionId}-${ctx.sessionId}`,
-        ...(hydratedState !== undefined ? { hydrate: hydratedState } : {}),
         ...(providedSlots !== undefined ? { slots: providedSlots } : {}),
+        ...(lifecycle !== undefined ? { lifecycle } : {}),
       }).pipe(Effect.provideService(ActorScope, actorScope))
-
-      const persistState = (): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          if (storage._tag !== "Some" || codec === undefined) return
-          const state = yield* machineRef.snapshot
-          const version = yield* Ref.get(versionRef)
-          const encoded = codec.encode(state)
-          yield* storage.value
-            .saveExtensionState({
-              sessionId: ctx.sessionId,
-              extensionId,
-              stateJson: encoded,
-              version,
-            })
-            .pipe(Effect.catchEager(() => Effect.void))
-        })
 
       const runEffects = (
         effects: ReadonlyArray<ExtensionEffect>,
@@ -140,7 +156,7 @@ export const spawnMachineExtensionRef = <
       ) =>
         interpretEffects(effects, ctx.sessionId, branchId, {
           turnControl,
-          persistFn: actor.persist === true ? persistState : undefined,
+          // Persist effects are no-ops for machine actors — durability handles it
           busEmit:
             bus._tag === "Some"
               ? (channel, payload) =>
@@ -184,16 +200,12 @@ export const spawnMachineExtensionRef = <
               transitioned: false as const,
             }
           }
-          yield* Ref.update(versionRef, (epoch) => epoch + 1)
-          if (actor.persist === true) {
-            yield* persistState().pipe(
-              Effect.catchDefect((defect) =>
-                Effect.logWarning("extension persist defect").pipe(
-                  Effect.annotateLogs({ extensionId, defect: String(defect) }),
-                ),
-              ),
-            )
+          // Epoch increment for non-durable actors. Durable actors increment
+          // inside lifecycle.durability.save (which also fires for .spawn() internal transitions).
+          if (lifecycle === undefined) {
+            yield* Ref.update(versionRef, (epoch) => epoch + 1)
           }
+
           // Skip side effects during hydrate — replay is state reconstruction only
           if (mode === "normal" && actor.afterTransition !== undefined) {
             const effects = actor.afterTransition(result.previousState, result.newState)
@@ -211,8 +223,8 @@ export const spawnMachineExtensionRef = <
         const started = yield* Ref.get(startedRef)
         if (started) return
         yield* machineRef.start
-        if (initialEpoch > 0) {
-          yield* Ref.set(versionRef, initialEpoch)
+        if (loadedEpoch > 0) {
+          yield* Ref.set(versionRef, loadedEpoch)
         }
         if (actor.onInit !== undefined) {
           let sessionCwd: string | undefined

@@ -22,6 +22,7 @@ import { ExecutorSidecar } from "@gent/core/extensions/executor/sidecar"
 import { ExecutorProtocol } from "@gent/core/extensions/executor/protocol"
 import { ExecuteTool, ResumeTool } from "@gent/core/extensions/executor/tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStarted } from "@gent/core/domain/event"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -436,6 +437,45 @@ describe("Executor actor lifecycle", () => {
           ?.model as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
+    },
+    { timeout: 10_000 },
+  )
+
+  it.live(
+    ".spawn() internal transitions persist via durability",
+    () => {
+      const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
+      return Effect.gen(function* () {
+        const runtime = yield* ExtensionStateRuntime
+        const storage = yield* Storage
+
+        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        yield* Effect.sleep("200 millis")
+
+        // Actor should be Ready (onInit → Connect → .spawn → Connected)
+        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
+        const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
+        expect(executor).toBeDefined()
+        expect((executor!.model as ExecutorUiModel).status).toBe("ready")
+
+        // Epoch should reflect ALL transitions: Connect (1) + Connected (2)
+        // (both persisted by durability.save, including Connected from .spawn)
+        expect(executor!.epoch).toBeGreaterThanOrEqual(2)
+
+        // Storage should have the Ready state persisted
+        const loaded = yield* storage.loadExtensionState({
+          sessionId,
+          extensionId: EXECUTOR_EXTENSION_ID,
+        })
+        expect(loaded).toBeDefined()
+        expect(loaded!.version).toBeGreaterThanOrEqual(2)
+        const parsed = JSON.parse(loaded!.stateJson) as { _tag: string }
+        expect(parsed._tag).toBe("Ready")
+      }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension], withStorage: true })))
     },
     { timeout: 10_000 },
   )
