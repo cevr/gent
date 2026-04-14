@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
+import type { ToolCallId } from "@gent/core/domain/ids.js"
 import { extractText } from "@gent/sdk"
 import { transportCases, waitFor } from "./transport-harness"
 
@@ -103,6 +104,41 @@ describe("GentClient transport contract", () => {
 
           expect(queueAfterSend.followUp).toEqual([])
           expect(queueAfterSend.steering).toEqual([])
+        }),
+      )
+    }, 15_000)
+  }
+
+  for (const transport of transportCases) {
+    test(`${transport.name} message.send accepts executionOverrides`, async () => {
+      await transport.run(({ client }) =>
+        Effect.gen(function* () {
+          const { sessionId, branchId } = yield* client.session
+            .create({ cwd: process.cwd() })
+            .pipe(Effect.mapError((error) => new Error(String(error))))
+
+          // Send with executionOverrides — should not error on schema validation
+          yield* client.message
+            .send({
+              sessionId,
+              branchId,
+              content: "overrides test",
+              executionOverrides: {
+                parentToolCallId: "tc-e2e-test" as ToolCallId,
+                tags: ["e2e-transport-test"],
+              },
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error))))
+
+          // Verify the message was delivered (proves overrides didn't break the flow)
+          const messages = yield* waitFor(
+            client.message
+              .list({ branchId })
+              .pipe(Effect.mapError((error) => new Error(String(error)))),
+            (items) => items.some((m) => extractText(m.parts) === "overrides test"),
+          )
+
+          expect(messages.some((m) => extractText(m.parts) === "overrides test")).toBe(true)
         }),
       )
     }, 15_000)
