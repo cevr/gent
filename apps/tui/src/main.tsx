@@ -61,66 +61,6 @@ const LinkLayer = Layer.provide(LinkOpener.Live, OsService.Live)
 
 const makeUiLayer = () => Layer.mergeAll(PlatformLayer, LinkLayer)
 
-const parsePersistenceMode = (value: string | undefined): "disk" | "memory" | undefined => {
-  if (value === "memory") return "memory"
-  if (value === "disk") return "disk"
-  return undefined
-}
-
-const parseProviderMode = (
-  value: string | undefined,
-): "live" | "debug-scripted" | "debug-failing" | "debug-slow" | undefined => {
-  if (value === "debug-scripted") return "debug-scripted"
-  if (value === "debug-failing") return "debug-failing"
-  if (value === "debug-slow") return "debug-slow"
-  if (value === "live") return "live"
-  return undefined
-}
-
-const resolveLocalOptions = (cwd: string) =>
-  Effect.gen(function* () {
-    const homeOpt = yield* Config.option(Config.string("HOME"))
-    const shellOpt = yield* Config.option(Config.string("SHELL"))
-    const dataDirOpt = yield* Config.option(Config.string("GENT_DATA_DIR"))
-    const dbPathOpt = yield* Config.option(Config.string("GENT_DB_PATH"))
-    const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
-    const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
-    const persistenceModeOpt = yield* Config.option(Config.string("GENT_PERSISTENCE_MODE"))
-    const providerModeOpt = yield* Config.option(Config.string("GENT_PROVIDER_MODE"))
-
-    const persistenceMode = parsePersistenceMode(Option.getOrUndefined(persistenceModeOpt))
-    const providerMode = parseProviderMode(Option.getOrUndefined(providerModeOpt))
-
-    return {
-      cwd,
-      scheduledJobCommand: resolveScheduledJobCommand(),
-      ...(Option.isSome(homeOpt) ? { home: homeOpt.value } : {}),
-      ...(Option.isSome(shellOpt) ? { shell: shellOpt.value } : {}),
-      ...(Option.isSome(dataDirOpt) ? { dataDir: dataDirOpt.value } : {}),
-      ...(Option.isSome(dbPathOpt) ? { dbPath: dbPathOpt.value } : {}),
-      ...(Option.isSome(authFilePathOpt) ? { authFilePath: authFilePathOpt.value } : {}),
-      ...(Option.isSome(authKeyPathOpt) ? { authKeyPath: authKeyPathOpt.value } : {}),
-      ...(persistenceMode !== undefined ? { persistenceMode } : {}),
-      ...(providerMode !== undefined ? { providerMode } : {}),
-    }
-  })
-
-const resolveScheduledJobCommand = (): readonly [string, ...ReadonlyArray<string>] => {
-  const runtimePath = process.execPath
-  const mainEntry = typeof Bun !== "undefined" ? Bun.main : undefined
-  if (
-    mainEntry !== undefined &&
-    mainEntry.length > 0 &&
-    (mainEntry.endsWith(".ts") ||
-      mainEntry.endsWith(".tsx") ||
-      mainEntry.endsWith(".js") ||
-      mainEntry.endsWith(".mjs"))
-  ) {
-    return [runtimePath, mainEntry]
-  }
-  return [runtimePath]
-}
-
 const resolveParentSpan = () =>
   Effect.gen(function* () {
     const traceIdOpt = yield* Config.option(Config.string("GENT_TRACE_ID"))
@@ -258,22 +198,14 @@ const main = Command.make(
         }
       }
 
-      const localOptions = yield* resolveLocalOptions(cwd).pipe(
-        Effect.map((options) =>
-          debug
-            ? {
-                ...options,
-                persistenceMode: "memory" as const,
-                providerMode: "debug-scripted" as const,
-              }
-            : options,
-        ),
-      )
-
       const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.connect({ url: connect.value })
-        if (isolate || debug) return Gent.local(localOptions)
-        return Gent.spawn({ cwd })
+        if (Option.isSome(connect)) return Gent.client({ url: connect.value })
+        const serverState = debug || isolate ? Gent.state.memory() : Gent.state.sqlite()
+        const serverProvider = debug ? Gent.provider.mock() : Gent.provider.live()
+        return Effect.flatMap(
+          Gent.server({ cwd, state: serverState, provider: serverProvider, debug }),
+          Gent.client,
+        )
       }
       const bundle = yield* resolveBundle()
       const requestedAgent: AgentName | undefined =
@@ -398,10 +330,9 @@ const sessions = Command.make(
     Effect.gen(function* () {
       const cwd = process.cwd()
       const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.connect({ url: connect.value })
-        if (isolate)
-          return resolveLocalOptions(cwd).pipe(Effect.flatMap((options) => Gent.local(options)))
-        return Gent.spawn({ cwd })
+        if (Option.isSome(connect)) return Gent.client({ url: connect.value })
+        const serverState = isolate ? Gent.state.memory() : Gent.state.sqlite()
+        return Effect.flatMap(Gent.server({ cwd, state: serverState }), Gent.client)
       }
       const bundle = yield* resolveBundle()
       yield* bundle.runtime.lifecycle.waitForReady

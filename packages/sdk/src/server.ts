@@ -24,6 +24,7 @@ import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { ConnectionTracker } from "@gent/core/server/connection-tracker.js"
 import { ServerIdentity } from "@gent/core/server/server-identity.js"
 import { buildServerRoutes } from "@gent/core/server/server-routes.js"
+import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { DebugProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
 import type { Provider } from "@gent/core/providers/provider.js"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
@@ -228,9 +229,15 @@ const buildOwnedServer = (
 
       yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
 
+      // Build RPC handler context for direct in-process client
+      const handlersContext = yield* Layer.buildWithScope(
+        Layer.provide(RpcHandlersLive, coreServicesLive),
+        scope,
+      ).pipe(Effect.orDie)
+
       const server: GentServer = { _tag: "owned", url }
       ownedInternals.set(server, {
-        handlerContext: allServices as Context.Context<unknown>,
+        handlerContext: handlersContext as Context.Context<unknown>,
         port,
         serverId,
       })
