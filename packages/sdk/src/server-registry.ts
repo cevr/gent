@@ -208,11 +208,11 @@ export const releaseLock = (home: string, dbPath: string): void => {
 }
 
 /** Effect wrapper for lock acquire + body + release. */
-export const withLock = <A, E>(
+export const withLock = <A, E, R>(
   home: string,
   dbPath: string,
-  body: Effect.Effect<A, E>,
-): Effect.Effect<A, E | LockAcquireError> =>
+  body: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | LockAcquireError, R> =>
   Effect.acquireUseRelease(
     Effect.suspend(() =>
       acquireLock(home, dbPath) ? Effect.void : Effect.fail(new LockAcquireError({ dbPath })),

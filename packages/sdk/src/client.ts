@@ -1,6 +1,8 @@
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import type { Context, Scope } from "effect"
+// @effect-diagnostics nodeBuiltinImport:off
+import { resolve as pathResolve, join as pathJoin } from "node:path"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
 import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
@@ -41,6 +43,15 @@ import type {
 } from "@gent/core/domain/message.js"
 import type { QueueEntryInfo, QueueSnapshot } from "@gent/core/domain/queue.js"
 import { startWorkerSupervisor, waitForWorkerRunning, type WorkerSupervisor } from "./supervisor.js"
+import {
+  readRegistryEntry,
+  validateRegistryEntry,
+  writeRegistryEntry,
+  removeRegistryEntry,
+  ServerRegistryEntry,
+  withLock,
+  computeLocalFingerprint,
+} from "./server-registry.js"
 import { startLocalSupervisor } from "./local-supervisor.js"
 import {
   makeNamespacedClient,
@@ -304,6 +315,13 @@ export interface GentSpawnOptions {
   readonly env?: Record<string, string | undefined>
   readonly startupTimeoutMs?: number
   readonly mode?: "default" | "debug"
+  /** Enable shared server mode (default: true). When true, checks the server
+   *  registry before spawning a new server — reuses existing if valid. */
+  readonly shared?: boolean
+  /** Database path. Used as the registry key for shared mode. */
+  readonly dbPath?: string
+  /** Home directory for registry files. Defaults to os.homedir(). */
+  readonly home?: string
 }
 
 export interface GentConnectOptions {
@@ -370,23 +388,142 @@ const resolveLocalDependenciesConfig = (options: GentLocalOptions): Dependencies
   return config
 }
 
+/** Resolve the canonical DB path for registry keying. */
+const resolveDbPath = (options: GentSpawnOptions): string => {
+  const home = options.home ?? os.homedir()
+  if (options.dbPath !== undefined) return pathResolve(options.dbPath)
+  const dataDir = pathJoin(home, ".gent")
+  return pathResolve(pathJoin(dataDir, "data.db"))
+}
+
+/** Spawn a new server, write registry entry, connect. */
+const spawnAndRegister = (
+  options: GentSpawnOptions,
+  home: string,
+  dbPath: string,
+  fingerprint: string,
+): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
+  Effect.gen(function* () {
+    const serverId = Bun.randomUUIDv7()
+    const supervisor = yield* startWorkerSupervisor({
+      ...options,
+      env: {
+        ...options.env,
+        GENT_SERVER_ID: serverId,
+        GENT_BUILD_FINGERPRINT: fingerprint,
+        GENT_DB_PATH: dbPath,
+      },
+    }).pipe(Effect.mapError((e) => new GentConnectionError({ message: e.message })))
+
+    // Write registry entry
+    const pid = supervisor.pid()
+    if (pid !== null) {
+      writeRegistryEntry(
+        home,
+        new ServerRegistryEntry({
+          serverId,
+          pid,
+          hostname: os.hostname(),
+          rpcUrl: supervisor.url,
+          dbPath,
+          buildFingerprint: fingerprint,
+          startedAt: Date.now(),
+        }),
+      )
+    }
+
+    // Connect to the new server
+    const scope = yield* Effect.scope
+    const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
+    const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+    const services = yield* Effect.context<never>()
+
+    // Clean up registry on scope close
+    yield* Effect.addFinalizer(() => Effect.sync(() => removeRegistryEntry(home, dbPath, serverId)))
+
+    return {
+      client: makeNamespacedClient(rpcClient),
+      runtime: makeRuntime(services as Context.Context<unknown>, supervisorLifecycle(supervisor)),
+    }
+  })
+
 export const Gent = {
-  /** Spawn a supervised child process server and connect to it */
+  /** Spawn or reuse a shared server, or spawn an isolated one. */
   spawn: (
     options: GentSpawnOptions,
   ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
-      const supervisor = yield* startWorkerSupervisor(options).pipe(
-        Effect.mapError((e) => new GentConnectionError({ message: e.message })),
-      )
-      const scope = yield* Effect.scope
-      const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
-      const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-      const services = yield* Effect.context<never>()
-      return {
-        client: makeNamespacedClient(rpcClient),
-        runtime: makeRuntime(services as Context.Context<unknown>, supervisorLifecycle(supervisor)),
+      const shared = options.shared ?? true
+      if (!shared) {
+        // Isolated mode — always start a new server
+        const supervisor = yield* startWorkerSupervisor(options).pipe(
+          Effect.mapError((e) => new GentConnectionError({ message: e.message })),
+        )
+        const scope = yield* Effect.scope
+        const transport = yield* Layer.buildWithScope(WsTransport(supervisor.url), scope)
+        const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
+        const services = yield* Effect.context<never>()
+        return {
+          client: makeNamespacedClient(rpcClient),
+          runtime: makeRuntime(
+            services as Context.Context<unknown>,
+            supervisorLifecycle(supervisor),
+          ),
+        }
       }
+
+      // Shared mode — registry-aware
+      const home = options.home ?? os.homedir()
+      const dbPath = resolveDbPath(options)
+      const fingerprint = computeLocalFingerprint()
+
+      // Check existing registry entry
+      const existing = readRegistryEntry(home, dbPath)
+      if (existing !== undefined) {
+        const validation = validateRegistryEntry(existing)
+        if (validation.valid) {
+          // Check fingerprint match
+          if (existing.buildFingerprint === fingerprint) {
+            // Reuse existing server
+            return yield* Gent.connect({ url: existing.rpcUrl }).pipe(
+              Effect.catchEager(() =>
+                // Connection failed — stale entry, fall through to start new
+                spawnAndRegister(options, home, dbPath, fingerprint),
+              ),
+            )
+          }
+          // Stale fingerprint — SIGTERM the old server and start new
+          try {
+            process.kill(existing.pid, "SIGTERM")
+          } catch {
+            // Already dead
+          }
+          removeRegistryEntry(home, dbPath, existing.serverId)
+        } else {
+          // Dead/invalid — clean up
+          removeRegistryEntry(home, dbPath, existing.serverId)
+        }
+      }
+
+      // Acquire lock, start server, write registry
+      return yield* withLock(
+        home,
+        dbPath,
+        spawnAndRegister(options, home, dbPath, fingerprint),
+      ).pipe(
+        Effect.catchEager((lockErr) => {
+          // Lock contention — another process is starting. Retry registry check.
+          const retryEntry = readRegistryEntry(home, dbPath)
+          if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
+            return Gent.connect({ url: retryEntry.rpcUrl })
+          }
+          return Effect.fail(
+            new GentConnectionError({
+              message: `Failed to acquire server lock: ${String(lockErr)}`,
+            }),
+          )
+        }),
+      )
     }),
 
   /** Connect to an already-running server */

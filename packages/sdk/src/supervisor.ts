@@ -54,6 +54,9 @@ export interface WorkerSupervisorOptions {
   readonly env?: Record<string, string | undefined>
   readonly startupTimeoutMs?: number
   readonly mode?: "default" | "debug"
+  /** Shared mode: exit code 0 = intentional idle shutdown (no restart).
+   *  Non-zero = crash (restart). Also skips process.on("exit") SIGKILL. */
+  readonly shared?: boolean
 }
 
 const SERVER_ENTRY_PATH = new URL("../../../apps/server/src/main.ts", import.meta.url).pathname
@@ -342,11 +345,15 @@ export const startWorkerSupervisor = (
         port: assignedPort,
         restartCount,
       }
+      const isShared = options.shared === true
       const handleProcessExit = () => {
         killSubprocessSync(current)
       }
 
-      process.on("exit", handleProcessExit)
+      // In shared mode, don't kill the server when the parent exits
+      if (!isShared) {
+        process.on("exit", handleProcessExit)
+      }
 
       const emit = (next: WorkerLifecycleState) => {
         state = next
@@ -368,6 +375,14 @@ export const startWorkerSupervisor = (
         void launched.proc.exited.then(() => {
           if (stopped) return
           if (current?.pid !== launched.proc.pid) return
+
+          // Shared mode: exit code 0 is intentional idle shutdown — don't restart
+          if (isShared && launched.proc.exitCode === 0) {
+            stopped = true
+            emit({ _tag: "stopped", port: assignedPort, restartCount })
+            return
+          }
+
           void Effect.runPromiseExit(
             restartInternal({ exitCode: launched.proc.exitCode, previousPid: launched.proc.pid }),
           )
@@ -463,7 +478,7 @@ export const startWorkerSupervisor = (
         shutdownLog("supervisor.stop.enter")
         if (stopped) return
         stopped = true
-        process.off("exit", handleProcessExit)
+        if (!isShared) process.off("exit", handleProcessExit)
         const proc = current
         current = undefined
         if (proc !== undefined) yield* stopSubprocess(proc)
