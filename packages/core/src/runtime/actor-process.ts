@@ -230,9 +230,14 @@ export const LocalActorProcessLive: Layer.Layer<
         Effect.gen(function* () {
           const commandId = input.commandId ?? makeCommandId()
 
+          // Resolve session cwd for per-session scoping
+          const session = yield* storage
+            .getSession(input.sessionId)
+            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+
           // Run message.input interceptor — allows extensions to transform user input
           const hostCtx = makeExtensionHostContext(
-            { sessionId: input.sessionId, branchId: input.branchId },
+            { sessionId: input.sessionId, branchId: input.branchId, sessionCwd: session?.cwd },
             hostDeps,
           )
           const content = yield* extensionRegistry.hooks.runInterceptor(
@@ -335,8 +340,15 @@ export const LocalActorProcessLive: Layer.Layer<
           const commandId = input.commandId ?? makeCommandId()
           const toolCallId = toolCallIdForCommand(commandId)
           const currentTurnAgent = (yield* agentLoop.getState(input)).agent
+          const invokeSession = yield* storage
+            .getSession(input.sessionId)
+            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
           const invokeHostCtx = makeExtensionHostContext(
-            { sessionId: input.sessionId, branchId: input.branchId },
+            {
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              sessionCwd: invokeSession?.cwd,
+            },
             hostDeps,
           )
 

@@ -35,6 +35,7 @@ import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "./event-publisher.js"
 import { buildBasePromptSections } from "./system-prompt.js"
+import { SessionProfileCache } from "../runtime/session-profile.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
 class InteractionRecoveryTag extends Context.Service<
@@ -380,7 +381,21 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive)
+  // SessionProfileCache — lazy per-cwd extension/config/prompt profiles
+  const sessionProfileCacheLive = Layer.provide(
+    SessionProfileCache.Live({
+      home: config.home,
+      platform: config.platform,
+      shell: config.shell,
+      osVersion: config.osVersion,
+      disabledExtensions: config.disabledExtensions,
+      scheduledJobCommand: config.scheduledJobCommand,
+      scheduledJobEnv: scheduledJobEnv(config),
+    }),
+    allDeps,
+  )
+
+  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, sessionProfileCacheLive)
 
   const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
   return Layer.mergeAll(allWithRuntime, actorProcessLive, interactionRecoveryLive)

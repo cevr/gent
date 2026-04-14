@@ -203,8 +203,21 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                     } as MakeExtensionHostContextDeps["eventPublisher"]),
             }
 
+            // Resolve session cwd for per-session scoping
+            const toolSession =
+              lazyDeps.storage._tag === "Some"
+                ? yield* lazyDeps.storage.value
+                    .getSession(ctx.sessionId)
+                    .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                : undefined
+
             const hostCtx = makeExtensionHostContext(
-              { sessionId: ctx.sessionId, branchId: ctx.branchId, agentName: ctx.agentName },
+              {
+                sessionId: ctx.sessionId,
+                branchId: ctx.branchId,
+                agentName: ctx.agentName,
+                sessionCwd: toolSession?.cwd,
+              },
               hostDeps,
             )
             const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }

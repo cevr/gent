@@ -75,6 +75,7 @@ import {
 } from "../../providers/provider.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { withRetry } from "../retry"
+import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import {
   ExtensionStateRuntime,
@@ -1393,6 +1394,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               promptPresenter: Effect.serviceOption(PromptPresenter),
               searchStorage: Effect.serviceOption(SearchStorage),
               agentRunner: Effect.serviceOption(AgentRunnerService),
+              sessionProfileCache: Effect.serviceOption(SessionProfileCache),
             })
 
             const hostDeps: MakeExtensionHostContextDeps = {
@@ -1436,7 +1438,40 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               eventPublisher,
             }
 
-            const hostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
+            const defaultHostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
+
+            const profileCache =
+              lazyDeps.sessionProfileCache._tag === "Some"
+                ? lazyDeps.sessionProfileCache.value
+                : undefined
+
+            /** Resolve per-turn context: session cwd → profile → registry + baseSections + hostCtx.
+             *  Falls back to server-wide defaults when no profile cache or no session cwd. */
+            const resolveTurnProfile = Effect.gen(function* () {
+              const session = yield* storage
+                .getSession(sessionId)
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              const sessionCwd = session?.cwd
+
+              if (profileCache !== undefined && sessionCwd !== undefined) {
+                const profile = yield* profileCache.resolve(sessionCwd)
+                const turnHostCtx = makeExtensionHostContext(
+                  { sessionId, branchId, sessionCwd },
+                  { ...hostDeps, extensionRegistry: profile.registryService },
+                )
+                return {
+                  turnExtensionRegistry: profile.registryService,
+                  turnBaseSections: profile.baseSections,
+                  turnHostCtx,
+                }
+              }
+
+              return {
+                turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
+                turnBaseSections: config.baseSections,
+                turnHostCtx: defaultHostCtx,
+              }
+            })
 
             const loopScope = yield* Scope.make()
             const bashSemaphore = yield* Semaphore.make(1)
@@ -1484,6 +1519,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             // resolve → stream → tools → repeat until LLM returns no tool calls
             const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
               yield* Ref.set(turnMetricsRef, emptyTurnMetrics())
+
+              // Resolve per-turn profile (session cwd → extension registry + baseSections)
+              const { turnExtensionRegistry, turnBaseSections, turnHostCtx } =
+                yield* resolveTurnProfile
+
               let step = 0
               let interrupted = yield* Ref.get(interruptedRef)
               let streamFailed = false
@@ -1514,7 +1554,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       branchId,
                       currentTurnAgent,
                       toolRunner,
-                      extensionRegistry,
+                      extensionRegistry: turnExtensionRegistry,
                       bashSemaphore,
                       storage,
                     }).pipe(
@@ -1565,13 +1605,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   currentAgent: state.currentAgent,
                   storage,
                   branchId,
-                  extensionRegistry,
+                  extensionRegistry: turnExtensionRegistry,
                   extensionStateRuntime,
                   sessionId,
                   publishEvent: publishEventOrDie,
-                  baseSections: config.baseSections,
+                  baseSections: turnBaseSections,
                   interactive: state.interactive,
-                  hostCtx,
+                  hostCtx: turnHostCtx,
                 })
                 if (resolved === undefined) break
 
@@ -1591,7 +1631,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }
 
                 // 1b. Pre-turn hook
-                yield* runTurnBeforeHook(extensionRegistry, resolved, sessionId, branchId, hostCtx)
+                yield* runTurnBeforeHook(
+                  turnExtensionRegistry,
+                  resolved,
+                  sessionId,
+                  branchId,
+                  turnHostCtx,
+                )
 
                 // 2. Stream
                 const activeStream: ActiveStreamHandle = {
@@ -1616,8 +1662,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       : {}),
                   },
                   provider,
-                  extensionRegistry,
-                  hostCtx,
+                  extensionRegistry: turnExtensionRegistry,
+                  hostCtx: turnHostCtx,
                   publishEvent: publishEventOrDie,
                   storage,
                   sessionId,
@@ -1648,7 +1694,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   branchId,
                   currentTurnAgent: resolved.currentTurnAgent,
                   toolRunner,
-                  extensionRegistry,
+                  extensionRegistry: turnExtensionRegistry,
                   bashSemaphore,
                   storage,
                 }).pipe(
@@ -1684,9 +1730,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 turnInterrupted: interrupted,
                 streamFailed,
                 currentAgent: currentTurnAgent,
-                extensionRegistry,
+                extensionRegistry: turnExtensionRegistry,
                 turnMetrics: turnMetricsRef,
-                hostCtx,
+                hostCtx: turnHostCtx,
               })
 
               return AgentLoopEvent.TurnDone

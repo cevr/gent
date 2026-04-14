@@ -44,6 +44,8 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly agentName?: AgentName
+  /** Session-scoped cwd. Falls back to RuntimePlatform.cwd when absent. */
+  readonly sessionCwd?: string
 }
 
 export const makeExtensionHostContext = (
@@ -53,7 +55,7 @@ export const makeExtensionHostContext = (
   sessionId: runInfo.sessionId,
   branchId: runInfo.branchId,
   agentName: runInfo.agentName,
-  cwd: deps.platform.cwd,
+  cwd: runInfo.sessionCwd ?? deps.platform.cwd,
   home: deps.platform.home,
 
   extension: {
@@ -93,7 +95,7 @@ export const makeExtensionHostContext = (
         parentSessionId: runInfo.sessionId,
         parentBranchId: runInfo.branchId,
         toolCallId: params.toolCallId,
-        cwd: params.cwd ?? deps.platform.cwd,
+        cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
         overrides: params.overrides,
         persistence: params.persistence,
       }),
@@ -226,7 +228,7 @@ export const makeExtensionHostContext = (
         const session = new Session({
           id: sessionId,
           name: params.name ?? "child session",
-          cwd: params.cwd ?? deps.platform.cwd,
+          cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
           parentSessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           createdAt: now,
