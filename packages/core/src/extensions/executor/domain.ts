@@ -88,19 +88,68 @@ export class ExecutorMcpError extends Schema.TaggedErrorClass<ExecutorMcpError>(
 
 // ── MCP result types ──
 
-export interface ExecutorMcpToolResult {
-  readonly text: string
-  readonly structuredContent: unknown
-  readonly isError: boolean
-  readonly executionId?: string
-}
+/** Normalized tool result from MCP callTool — used by both execute and resume */
+export const ExecutorMcpToolResult = Schema.Struct({
+  text: Schema.String,
+  structuredContent: Schema.Unknown,
+  isError: Schema.Boolean,
+  executionId: Schema.optional(Schema.String),
+})
+export type ExecutorMcpToolResult = typeof ExecutorMcpToolResult.Type
 
-export interface ExecutorMcpInspection {
-  readonly instructions?: string
-  readonly tools: ReadonlyArray<{ name: string; description?: string }>
-}
+/** Structured content from executor — discriminated on `status` */
+export const ExecutorStructuredCompleted = Schema.Struct({
+  status: Schema.Literal("completed"),
+  result: Schema.Unknown,
+  logs: Schema.Array(Schema.String),
+})
 
-export type ResumeAction = "accept" | "decline" | "cancel"
+export const ExecutorStructuredError = Schema.Struct({
+  status: Schema.Literal("error"),
+  error: Schema.String,
+  logs: Schema.Array(Schema.String),
+})
+
+export const ExecutorInteraction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("form"),
+    message: Schema.String,
+    requestedSchema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("url"),
+    message: Schema.String,
+    url: Schema.String,
+  }),
+])
+
+export const ExecutorStructuredWaiting = Schema.Struct({
+  status: Schema.Literal("waiting_for_interaction"),
+  executionId: Schema.String,
+  interaction: ExecutorInteraction,
+})
+
+export const ExecutorStructuredContent = Schema.Union([
+  ExecutorStructuredCompleted,
+  ExecutorStructuredError,
+  ExecutorStructuredWaiting,
+])
+export type ExecutorStructuredContent = typeof ExecutorStructuredContent.Type
+
+/** MCP server info from listTools + getInstructions */
+export const ExecutorMcpToolInfo = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+})
+
+export const ExecutorMcpInspection = Schema.Struct({
+  instructions: Schema.optional(Schema.String),
+  tools: Schema.Array(ExecutorMcpToolInfo),
+})
+export type ExecutorMcpInspection = typeof ExecutorMcpInspection.Type
+
+export const ResumeAction = Schema.Literals(["accept", "decline", "cancel"])
+export type ResumeAction = typeof ResumeAction.Type
 
 // ── Constants ──
 

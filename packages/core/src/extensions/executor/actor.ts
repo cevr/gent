@@ -18,6 +18,7 @@ import type {
 import type { PromptSection } from "../../domain/prompt.js"
 import {
   ExecutorEndpoint,
+  ExecutorMcpInspection,
   ExecutorMode,
   type ResolvedExecutorSettings,
   EXECUTOR_EXTENSION_ID,
@@ -114,10 +115,10 @@ const executorMachine = Machine.make({
       const endpointRaw = yield* slots.resolveEndpoint({ cwd: state.cwd })
       const endpoint = yield* Schema.decodeUnknownEffect(ExecutorEndpoint)(endpointRaw)
 
-      const inspectionRaw = yield* slots
-        .inspectMcp({ baseUrl: endpoint.baseUrl })
-        .pipe(Effect.orElseSucceed(() => undefined))
-      const inspection = inspectionRaw as { instructions?: string } | undefined
+      const inspection = yield* slots.inspectMcp({ baseUrl: endpoint.baseUrl }).pipe(
+        Effect.flatMap((raw) => Schema.decodeUnknownEffect(ExecutorMcpInspection)(raw)),
+        Effect.orElseSucceed(() => undefined),
+      )
 
       yield* self.send(
         MachineEvent.Connected({

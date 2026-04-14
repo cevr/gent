@@ -93,11 +93,17 @@ export const ResumeTool = defineTool({
     const bridge = yield* ExecutorMcpBridge
     const contentStr = params.content
     const parsed = contentStr
-      ? yield* Effect.try({
-          try: () => JSON.parse(contentStr) as Record<string, unknown>,
-          catch: () =>
-            new ExecutorMcpError({ phase: "resume", message: "Invalid JSON in content parameter" }),
-        })
+      ? yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+        )(contentStr).pipe(
+          Effect.mapError(
+            () =>
+              new ExecutorMcpError({
+                phase: "resume",
+                message: "Invalid JSON in content parameter",
+              }),
+          ),
+        )
       : undefined
     const result = yield* bridge.resume(
       baseUrl,
