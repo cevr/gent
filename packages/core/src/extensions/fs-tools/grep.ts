@@ -1,6 +1,7 @@
-import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
+import { Effect, Option, Schema, FileSystem, Path } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { Glob } from "bun"
+import { FileIndex } from "../../domain/file-index.js"
 
 // Grep Tool Error
 
@@ -77,6 +78,7 @@ export const GrepTool = defineTool({
   execute: Effect.fn("GrepTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
+    const fileIndex = yield* FileIndex
 
     const basePath = params.path !== undefined ? pathService.resolve(params.path) : ctx.cwd
     const limit = params.limit ?? 100
@@ -142,29 +144,15 @@ export const GrepTool = defineTool({
     if (baseStat.value.type === "File") {
       yield* searchFile(basePath)
     } else {
+      // Use FileIndex for directory file discovery
+      const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
       const globPattern = params.glob ?? "**/*"
       const glob = new Glob(globPattern)
 
-      // Create stream from async iterable
-      const fileStream = Stream.fromAsyncIterable(
-        glob.scan({ cwd: basePath, absolute: true }),
-        (e) =>
-          new GrepError({
-            message: `Failed to glob: ${e}`,
-            pattern: params.pattern,
-            cause: e,
-          }),
-      )
-
-      // Collect files and search each
-      const files = yield* Stream.runCollect(fileStream)
-
-      for (const file of files) {
+      for (const file of allFiles) {
         if (matches.length >= limit) break
-        const fileStat = yield* fs.stat(file).pipe(Effect.option)
-        if (Option.isSome(fileStat) && fileStat.value.type === "File") {
-          yield* searchFile(file)
-        }
+        if (!glob.match(file.relativePath)) continue
+        yield* searchFile(file.path)
       }
     }
 

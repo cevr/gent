@@ -1,6 +1,7 @@
-import { Effect, Option, Schema, Stream, FileSystem, Path } from "effect"
+import { Effect, Schema, Path } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { Glob } from "bun"
+import { FileIndex } from "../../domain/file-index.js"
 
 // Glob Tool Error
 
@@ -46,42 +47,22 @@ export const GlobTool = defineTool({
   promptGuidelines: ["Use instead of bash find/ls"],
   params: GlobParams,
   execute: Effect.fn("GlobTool.execute")(function* (params, ctx) {
-    const fs = yield* FileSystem.FileSystem
     const pathService = yield* Path.Path
+    const fileIndex = yield* FileIndex
 
     const basePath = params.path !== undefined ? pathService.resolve(params.path) : ctx.cwd
     const limit = params.limit ?? 100
 
+    const allFiles = yield* fileIndex.listFiles({ cwd: basePath })
     const glob = new Glob(params.pattern)
 
-    // Create stream from async iterable
-    const fileStream = Stream.fromAsyncIterable(
-      glob.scan({ cwd: basePath, absolute: true }),
-      (e) =>
-        new GlobError({
-          message: `Failed to glob: ${e}`,
-          pattern: params.pattern,
-          cause: e,
-        }),
-    )
-
-    // Collect all files, stat each for mtime
-    const files = yield* Stream.runCollect(fileStream)
-
-    const matches: Array<{ path: string; mtime: number }> = []
-    for (const file of files) {
-      const statResult = yield* fs.stat(file).pipe(Effect.option)
-      if (Option.isSome(statResult)) {
-        const mtime = Option.getOrElse(statResult.value.mtime, () => new Date(0))
-        matches.push({ path: file, mtime: mtime.getTime() })
-      }
-    }
+    const matched = allFiles.filter((f) => glob.match(f.relativePath))
 
     // Sort by mtime desc
-    matches.sort((a, b) => b.mtime - a.mtime)
+    matched.sort((a, b) => b.modifiedMs - a.modifiedMs)
 
-    const truncated = matches.length > limit
-    const resultFiles = matches.slice(0, limit).map((m) => m.path)
+    const truncated = matched.length > limit
+    const resultFiles = matched.slice(0, limit).map((m) => m.path)
 
     return { files: resultFiles, truncated }
   }),

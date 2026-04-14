@@ -27,6 +27,7 @@ import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
+import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
@@ -67,6 +68,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     authStoreLive,
     authGuardLive,
     providerAuthLive,
+    FallbackFileIndexLive,
   )
 
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)

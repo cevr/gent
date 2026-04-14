@@ -47,6 +47,7 @@ import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
+import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
 /** Test-safe layer overrides for extension setup.layer fields */
 const TEST_LAYER_OVERRIDES: Record<string, () => Layer.Layer<never>> = {
@@ -176,6 +177,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         authStoreLive,
         authGuardLive,
         providerAuthLive,
+        FallbackFileIndexLive,
         ...extensionLayers,
         ...(config.extraLayers ?? []),
       )

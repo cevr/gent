@@ -36,5 +36,8 @@
     "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:",
     "effect-bun-test": "catalog:"
+  },
+  "optionalDependencies": {
+    "@ff-labs/fff-bun": "catalog:"
   }
 }

@@ -181,6 +181,23 @@ Explicit platform/runtime seams:
 - tracer/logger services
 - file system / path / OS services
 
+### FileIndex
+
+`FileIndex` — indexed file discovery backed by native Rust file finder (`@ff-labs/fff-bun`).
+
+Production stack: `NativeFileIndexLive` (FFF, per-cwd cached finders, `.gitignore`-aware) → fallback `FallbackFileIndexLive` (Bun.Glob walk + stat). Native failure (missing binary, unsupported platform) silently degrades to fallback. Layer always succeeds.
+
+GlobTool and GrepTool use `FileIndex.listFiles()` for file discovery, then filter with `Bun.Glob.match()` for pattern correctness. This replaces per-invocation directory walks with indexed lookups.
+
+Files:
+
+| File                                                       | Purpose                                           |
+| ---------------------------------------------------------- | ------------------------------------------------- |
+| `packages/core/src/domain/file-index.ts`                   | Service tag, `IndexedFile`, `FileIndexError`      |
+| `packages/core/src/runtime/file-index/native-adapter.ts`   | FFF-backed adapter (dynamic import, polling scan) |
+| `packages/core/src/runtime/file-index/fallback-adapter.ts` | Bun.Glob walk fallback                            |
+| `packages/core/src/runtime/file-index/index.ts`            | `FileIndexLive` (native-first, catch-to-fallback) |
+
 App entrypoints bind concrete Bun/OS behavior:
 
 - `apps/tui/src/main.tsx`

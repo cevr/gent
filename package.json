@@ -60,7 +60,8 @@
     "solid-js": "^1.9.11",
     "@effect/ai-anthropic": "4.0.0-beta.47",
     "@effect/ai-openai": "4.0.0-beta.47",
-    "@effect/ai-openai-compat": "4.0.0-beta.47"
+    "@effect/ai-openai-compat": "4.0.0-beta.47",
+    "@ff-labs/fff-bun": "0.5.2"
   },
   "patchedDependencies": {}
 }

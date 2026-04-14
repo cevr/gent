@@ -36,6 +36,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "./event-publisher.js"
 import { buildBasePromptSections } from "./system-prompt.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import { FileIndexLive } from "../runtime/file-index/index.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
 class InteractionRecoveryTag extends Context.Service<
@@ -257,6 +258,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     extensionRegistryLive,
     fileLockServiceLive,
     providerLive,
+    FileIndexLive,
   )
 
   const permissionLive = Layer.provide(
