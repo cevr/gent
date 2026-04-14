@@ -45,6 +45,14 @@ import {
 } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
 import { Gent, type GentClientBundle } from "@gent/sdk"
+import {
+  listRegistryEntries,
+  validateRegistryEntry,
+  removeRegistryEntry,
+  isPidAlive,
+} from "@gent/sdk/server-registry"
+// @effect-diagnostics nodeBuiltinImport:off
+import * as os from "node:os"
 
 // Clear client log on startup
 clearClientLog()
@@ -351,9 +359,96 @@ const sessions = Command.make(
     }),
 )
 
+// Server status subcommand
+const serverStatus = Command.make("status", {}, () =>
+  Effect.gen(function* () {
+    const home = os.homedir()
+    const entries = listRegistryEntries(home)
+
+    if (entries.length === 0) {
+      yield* Console.log("No registered servers.")
+      return
+    }
+
+    yield* Console.log("Registered servers:\n")
+    yield* Console.log(
+      `${"PID".padEnd(8)} ${"STATUS".padEnd(10)} ${"SERVER ID".padEnd(40)} ${"DB PATH".padEnd(40)} ${"URL"}`,
+    )
+    yield* Console.log("─".repeat(120))
+
+    for (const entry of entries) {
+      const validation = validateRegistryEntry(entry)
+      const status = validation.valid ? "alive" : `dead (${validation.reason})`
+      yield* Console.log(
+        `${String(entry.pid).padEnd(8)} ${status.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
+      )
+    }
+  }),
+)
+
+// Server stop subcommand
+const serverStop = Command.make(
+  "stop",
+  {
+    all: Flag.boolean("all").pipe(
+      Flag.withDescription("Stop all registered servers"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ all }) =>
+    Effect.gen(function* () {
+      const home = os.homedir()
+      const entries = listRegistryEntries(home)
+
+      if (entries.length === 0) {
+        yield* Console.log("No registered servers.")
+        return
+      }
+
+      const toStop = all ? entries : entries.filter((e) => validateRegistryEntry(e).valid)
+
+      if (toStop.length === 0) {
+        yield* Console.log("No live servers to stop.")
+        return
+      }
+
+      for (const entry of toStop) {
+        const alive = isPidAlive(entry.pid)
+        if (alive) {
+          try {
+            process.kill(entry.pid, "SIGTERM")
+            yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
+          } catch {
+            yield* Console.log(`Failed to signal PID ${entry.pid} (${entry.serverId})`)
+          }
+        }
+        removeRegistryEntry(home, entry.dbPath, entry.serverId)
+      }
+
+      // Wait briefly for processes to exit
+      yield* Effect.sleep("1 second")
+
+      let stillAlive = 0
+      for (const entry of toStop) {
+        if (isPidAlive(entry.pid)) stillAlive++
+      }
+
+      if (stillAlive > 0) {
+        yield* Console.log(`\n${stillAlive} server(s) still running after SIGTERM.`)
+      } else {
+        yield* Console.log(`\nAll ${toStop.length} server(s) stopped.`)
+      }
+    }),
+)
+
+// Server subcommand group
+const server = Command.make("server", {}, () =>
+  Console.log("Usage: gent server <status|stop>"),
+).pipe(Command.withSubcommands([serverStatus, serverStop]))
+
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([sessions]),
+  Command.withSubcommands([sessions, server]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 

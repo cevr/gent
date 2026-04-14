@@ -12,7 +12,15 @@ import { createHash } from "node:crypto"
 // @effect-diagnostics nodeBuiltinImport:off
 import { hostname } from "node:os"
 // @effect-diagnostics nodeBuiltinImport:off
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  unlinkSync,
+  rmdirSync,
+} from "node:fs"
 // @effect-diagnostics nodeBuiltinImport:off
 import { join, resolve } from "node:path"
 
@@ -111,6 +119,23 @@ export const validateRegistryEntry = (
     return { valid: false, reason: "dead-pid" }
   }
   return { valid: true }
+}
+
+/** List all registry entries under the given home directory. */
+export const listRegistryEntries = (home: string): ServerRegistryEntry[] => {
+  const dir = join(home, ".gent", "servers")
+  if (!existsSync(dir)) return []
+  const entries: ServerRegistryEntry[] = []
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".json")) continue
+    try {
+      const content = readFileSync(join(dir, file), "utf8")
+      entries.push(Schema.decodeUnknownSync(ServerRegistryEntryJson)(content))
+    } catch {
+      // Corrupt or unreadable — skip
+    }
+  }
+  return entries
 }
 
 // ── Cross-Process Lock ──
