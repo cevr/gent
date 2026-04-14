@@ -5,7 +5,7 @@
  * Requires real subprocess workers — cannot be tested in-process.
  */
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Exit, Scope } from "effect"
 import * as path from "node:path"
 import { Gent } from "@gent/sdk"
 import { startWorkerSupervisor } from "@gent/sdk/supervisor"
@@ -13,6 +13,72 @@ import { createTempDirFixture } from "./seam-fixture"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 const makeTempDir = createTempDirFixture("gent-lifecycle-")
+const serverEntry = path.resolve(repoRoot, "apps/server/src/main.ts")
+
+/** Spawn a raw server process with idle timeout. Returns url + pid + proc. */
+const spawnIdleServer = async (opts: {
+  dataDir: string
+  idleTimeoutMs: number
+  port: number
+}): Promise<{ url: string; proc: Bun.Subprocess }> => {
+  const proc = Bun.spawn(["bun", serverEntry], {
+    cwd: repoRoot,
+    env: {
+      ...Bun.env,
+      GENT_PORT: String(opts.port),
+      GENT_SERVER_MODE: "worker",
+      GENT_PERSISTENCE_MODE: "memory",
+      GENT_PROVIDER_MODE: "debug-scripted",
+      GENT_DATA_DIR: opts.dataDir,
+      GENT_IDLE_TIMEOUT_MS: String(opts.idleTimeoutMs),
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+
+  const url = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("server did not become ready")), 10_000)
+    const chunks: string[] = []
+    const decoder = new TextDecoder()
+    const reader = proc.stdout.getReader()
+    const pump = (): void => {
+      reader.read().then(({ value, done }) => {
+        if (done) {
+          reject(new Error("stdout closed before ready"))
+          return
+        }
+        chunks.push(decoder.decode(value))
+        const all = chunks.join("")
+        const match = all.match(/GENT_WORKER_READY (.+)/)
+        if (match) {
+          clearTimeout(timeout)
+          reader.releaseLock()
+          resolve(match[1]!.trim())
+        } else {
+          pump()
+        }
+      })
+    }
+    pump()
+  })
+
+  return { url: `${url}/rpc`, proc }
+}
+
+/** Wait for a process to exit. Returns 0 if dead within timeoutMs, -1 if still alive. */
+const waitForExit = (pid: number, timeoutMs: number): Promise<number> =>
+  new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(-1), timeoutMs)
+    const check = setInterval(() => {
+      try {
+        process.kill(pid, 0)
+      } catch {
+        clearInterval(check)
+        clearTimeout(timeout)
+        resolve(0)
+      }
+    }, 200)
+  })
 
 describe("server lifecycle", () => {
   test("identity route returns server identity", async () => {
@@ -79,72 +145,15 @@ describe("server lifecycle", () => {
     const dataDir = makeTempDir()
     const IDLE_TIMEOUT_MS = 2_000
     const port = 19_000 + Math.floor(Math.random() * 1000)
-
-    // Spawn server directly (without supervisor restart wrapper)
-    const serverEntry = path.resolve(repoRoot, "apps/server/src/main.ts")
-    const proc = Bun.spawn(["bun", serverEntry], {
-      cwd: repoRoot,
-      env: {
-        ...Bun.env,
-        GENT_PORT: String(port),
-        GENT_SERVER_MODE: "worker",
-        GENT_PERSISTENCE_MODE: "memory",
-        GENT_PROVIDER_MODE: "debug-scripted",
-        GENT_DATA_DIR: dataDir,
-        GENT_IDLE_TIMEOUT_MS: String(IDLE_TIMEOUT_MS),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
+    const { url, proc } = await spawnIdleServer({ dataDir, idleTimeoutMs: IDLE_TIMEOUT_MS, port })
 
     try {
-      // Wait for GENT_WORKER_READY from stdout
-      const readyUrl = await new Promise<string>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("server did not become ready")), 10_000)
-        const chunks: string[] = []
-        const decoder = new TextDecoder()
-        const reader = proc.stdout.getReader()
-        const pump = (): void => {
-          reader.read().then(({ value, done }) => {
-            if (done) {
-              reject(new Error("stdout closed before ready"))
-              return
-            }
-            chunks.push(decoder.decode(value))
-            const all = chunks.join("")
-            const match = all.match(/GENT_WORKER_READY (.+)/)
-            if (match) {
-              clearTimeout(timeout)
-              reader.releaseLock()
-              resolve(match[1]!.trim())
-            } else {
-              pump()
-            }
-          })
-        }
-        pump()
-      })
-      expect(readyUrl).toBeTruthy()
-
-      // Verify the server is running via identity route
-      const baseUrl = readyUrl.replace("/rpc", "")
+      const baseUrl = url.replace("/rpc", "")
       const identityResp = await fetch(`${baseUrl}/_gent/identity`)
       expect(identityResp.ok).toBe(true)
 
-      // No WS clients — server should idle-shutdown after IDLE_TIMEOUT_MS
-      const exitCode = await new Promise<number>((resolve) => {
-        const timeout = setTimeout(() => resolve(-1), IDLE_TIMEOUT_MS + 5_000)
-        const check = setInterval(() => {
-          try {
-            process.kill(proc.pid, 0)
-          } catch {
-            clearInterval(check)
-            clearTimeout(timeout)
-            resolve(0)
-          }
-        }, 200)
-      })
-
+      // No WS clients — server should idle-shutdown
+      const exitCode = await waitForExit(proc.pid, IDLE_TIMEOUT_MS + 5_000)
       expect(exitCode).toBe(0)
     } finally {
       try {
@@ -154,4 +163,49 @@ describe("server lifecycle", () => {
       }
     }
   }, 15_000)
+
+  test("WS connection resets idle timer, shutdown triggers after disconnect", async () => {
+    const dataDir = makeTempDir()
+    const IDLE_TIMEOUT_MS = 3_000
+    const port = 19_000 + Math.floor(Math.random() * 1000)
+    const { url, proc } = await spawnIdleServer({ dataDir, idleTimeoutMs: IDLE_TIMEOUT_MS, port })
+
+    try {
+      // Wait past 60% of idle timeout — timer running, countdown in progress
+      await new Promise((r) => setTimeout(r, IDLE_TIMEOUT_MS * 0.6))
+
+      // Connect a WS client with a manually managed scope so we control disconnect timing
+      const clientScope = Effect.runSync(Scope.make())
+      const bundle = await Effect.runPromise(
+        Gent.connect({ url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
+      )
+
+      // Verify connection registered
+      const status = await Effect.runPromise(
+        bundle.client.server.status().pipe(Effect.mapError((e) => new Error(String(e)))),
+      )
+      expect(status.connectionCount).toBeGreaterThanOrEqual(1)
+
+      // Hold connection past 60% of idle timeout again — server should stay alive
+      await new Promise((r) => setTimeout(r, IDLE_TIMEOUT_MS * 0.6))
+      expect(() => process.kill(proc.pid, 0)).not.toThrow()
+
+      // Disconnect by closing the scope — WS transport tears down, idle timer starts fresh
+      await Effect.runPromise(Scope.close(clientScope, Exit.void))
+
+      // Server should still be alive immediately after disconnect
+      await new Promise((r) => setTimeout(r, 500))
+      expect(() => process.kill(proc.pid, 0)).not.toThrow()
+
+      // Server should shut down after full IDLE_TIMEOUT_MS from disconnect
+      const exitCode = await waitForExit(proc.pid, IDLE_TIMEOUT_MS + 5_000)
+      expect(exitCode).toBe(0)
+    } finally {
+      try {
+        proc.kill()
+      } catch {
+        /* already dead */
+      }
+    }
+  }, 20_000)
 })
