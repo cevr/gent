@@ -15,6 +15,7 @@ import {
   Path,
   Ref,
   Scope,
+  Semaphore,
   type Scope as ScopeType,
 } from "effect"
 import { BuiltinExtensions } from "../extensions/index.js"
@@ -88,6 +89,7 @@ export class SessionProfileCache extends Context.Service<
       SessionProfileCache,
       Effect.gen(function* () {
         const cacheRef = yield* Ref.make<Map<string, SessionProfile>>(new Map())
+        const initSemaphore = yield* Semaphore.make(1)
         const configService = yield* ConfigService
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
@@ -235,21 +237,30 @@ export class SessionProfileCache extends Context.Service<
             // Canonicalize before cache lookup
             const canonicalCwd = pathSvc.resolve(cwd)
 
-            // Check cache first
+            // Fast path — no lock needed for cache hits
             const cache = yield* Ref.get(cacheRef)
             const existing = cache.get(canonicalCwd)
             if (existing !== undefined) return existing
 
-            // Initialize — no Effect.scoped, scope tied to server via serverScope
-            const profile = yield* initProfile(canonicalCwd)
+            // Serialize initialization to prevent duplicate profiles for same cwd
+            return yield* initSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                // Re-check inside critical section
+                const current = yield* Ref.get(cacheRef)
+                const found = current.get(canonicalCwd)
+                if (found !== undefined) return found
 
-            yield* Ref.update(cacheRef, (m) => {
-              const next = new Map(m)
-              next.set(canonicalCwd, profile)
-              return next
-            })
+                const profile = yield* initProfile(canonicalCwd)
 
-            return profile
+                yield* Ref.update(cacheRef, (m) => {
+                  const next = new Map(m)
+                  next.set(canonicalCwd, profile)
+                  return next
+                })
+
+                return profile
+              }),
+            )
           })
 
         const peek: SessionProfileCacheService["peek"] = (cwd) =>

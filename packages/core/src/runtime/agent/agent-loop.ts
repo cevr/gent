@@ -1457,7 +1457,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 const profile = yield* profileCache.resolve(sessionCwd)
                 const turnHostCtx = makeExtensionHostContext(
                   { sessionId, branchId, sessionCwd },
-                  { ...hostDeps, extensionRegistry: profile.registryService },
+                  {
+                    ...hostDeps,
+                    extensionRegistry: profile.registryService,
+                    extensionStateRuntime: profile.extensionStateRuntime,
+                  },
                 )
                 return {
                   turnExtensionRegistry: profile.registryService,
