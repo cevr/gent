@@ -12,6 +12,7 @@ import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testSetupCtx } from "@gent/core/test-utils"
 import { reducerActor } from "./helpers/reducer-actor"
 
 describe("extension api", () => {
@@ -32,7 +33,7 @@ describe("extension api", () => {
         }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     expect(setup.tools?.map((tool) => tool.name)).toEqual(["greet"])
     expect(setup.promptSections?.map((section) => section.id)).toEqual(["custom-rules"])
     expect(setup.agents?.map((agent) => agent.name)).toEqual(["helper"])
@@ -49,7 +50,7 @@ describe("extension api", () => {
     })
 
     await Effect.runPromise(
-      ext.setup({ cwd: "/my/project", source: "/path/to/ext.ts", home: "/tmp" }),
+      ext.setup(testSetupCtx({ cwd: "/my/project", source: "/path/to/ext.ts" })),
     )
     expect(receivedCwd).toBe("/my/project")
     expect(receivedSource).toBe("/path/to/ext.ts")
@@ -60,9 +61,7 @@ describe("extension api", () => {
       throw new Error("factory broke")
     })
 
-    const exit = await Effect.runPromiseExit(
-      ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
+    const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
     expect(exit._tag).toBe("Failure")
   })
 
@@ -76,7 +75,7 @@ describe("extension api", () => {
         .on("turn.after", async () => {}),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     expect(setup.hooks?.interceptors?.map((interceptor) => interceptor.key)).toEqual([
       "prompt.system",
       "turn.after",
@@ -96,7 +95,7 @@ describe("extension api", () => {
         }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     await Effect.runPromise(setup.onStartup!)
     await Effect.runPromise(setup.onShutdown!)
     expect(order).toEqual(["startup:sync", "startup:effect", "shutdown"])
@@ -117,7 +116,7 @@ describe("extension api", () => {
       manifest: ext.manifest,
       kind: "user" as const,
       sourcePath: "test",
-      setup: await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+      setup: await Effect.runPromise(ext.setup(testSetupCtx())),
     }
 
     const resolved = resolveExtensions([loaded])
@@ -149,7 +148,7 @@ describe("extension api", () => {
       manifest: ext.manifest,
       kind: "user" as const,
       sourcePath: "test",
-      setup: await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+      setup: await Effect.runPromise(ext.setup(testSetupCtx())),
     }
 
     const resolved = resolveExtensions([loaded])
@@ -179,7 +178,7 @@ describe("extension api", () => {
       ),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const loaded = {
       manifest: ext.manifest,
       kind: "user" as const,
@@ -226,7 +225,7 @@ describe("extension api", () => {
       }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     await Effect.runPromise(setup.onStartup!)
   })
   test("ext.exec() returns timedOut on timeout", async () => {
@@ -237,7 +236,7 @@ describe("extension api", () => {
       }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     await Effect.runPromise(setup.onStartup!)
 
     expect(result).toBeDefined()
@@ -254,7 +253,7 @@ describe("extension api", () => {
       return ext
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const loaded = {
       manifest: ext.manifest,
       kind: "user" as const,
@@ -307,7 +306,7 @@ describe("extension api", () => {
       return ext
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const resolved = resolveExtensions([
       { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
     ])
@@ -350,7 +349,7 @@ describe("extension api", () => {
       }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const resolved = resolveExtensions([
       { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
     ])
@@ -392,7 +391,7 @@ describe("extension api", () => {
       return ext
     })
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const resolved = resolveExtensions([
       { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
     ])
@@ -431,7 +430,7 @@ describe("extension api", () => {
       ),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const resolved = resolveExtensions([
       { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
     ])
@@ -468,12 +467,8 @@ describe("extension api", () => {
       ),
     )
 
-    const setup1 = await Effect.runPromise(
-      ext1.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
-    const setup2 = await Effect.runPromise(
-      ext2.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
+    const setup1 = await Effect.runPromise(ext1.setup(testSetupCtx()))
+    const setup2 = await Effect.runPromise(ext2.setup(testSetupCtx()))
     const resolved = resolveExtensions([
       { manifest: ext1.manifest, kind: "user" as const, sourcePath: "test", setup: setup1 },
       { manifest: ext2.manifest, kind: "user" as const, sourcePath: "test", setup: setup2 },
@@ -522,7 +517,7 @@ describe("extension tools through ToolRunner.run", () => {
   let layer: Layer.Layer<any>
 
   beforeAll(async () => {
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     const baseDeps = Layer.mergeAll(
       ExtensionRegistry.fromResolved(
         resolveExtensions([{ manifest: ext.manifest, kind: "user", sourcePath: "test", setup }]),
@@ -613,7 +608,7 @@ describe("state-backed extension api", () => {
       ),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     expect(setup.actor).toBeDefined()
     const actorLayer = ExtensionTurnControl.Test()
     const actor = await Effect.runPromise(
@@ -660,7 +655,7 @@ describe("state-backed extension api", () => {
       }),
     )
 
-    const setup = await Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     expect(setup.jobs?.map((job) => job.id)).toEqual(["reflect"])
   })
 })

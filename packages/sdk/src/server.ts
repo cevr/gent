@@ -164,7 +164,7 @@ const buildOwnedServer = (
       const url = `http://127.0.0.1:${port}/rpc`
       const home = resolveHome(options, stateSpec)
       const serverId = Bun.randomUUIDv7()
-      const buildFingerprint = yield* resolveBuildFingerprint
+      const buildFingerprint = yield* Effect.provide(resolveBuildFingerprint, BunServices.layer)
 
       // Build provider layer (undefined = let createDependencies resolve from auth deps)
       const providerLayer = resolveProviderLayer(providerSpec)
@@ -308,7 +308,8 @@ export const resolveServer = (
     // SQLite state: registry-aware
     const home = resolveHome(options, stateSpec)
     const dbPath = resolveDbPath(options, stateSpec)
-    const fingerprint = computeLocalFingerprint()
+    // @effect-diagnostics-next-line strictEffectProvide:off platform services for fingerprint computation
+    const fingerprint = yield* Effect.provide(computeLocalFingerprint, BunServices.layer)
 
     // Check existing registry entry
     const existing = readRegistryEntry(home, dbPath)

@@ -8,8 +8,6 @@
  */
 
 // @effect-diagnostics nodeBuiltinImport:off
-import { createHash } from "node:crypto"
-// @effect-diagnostics nodeBuiltinImport:off
 import { hostname } from "node:os"
 // @effect-diagnostics nodeBuiltinImport:off
 import {
@@ -50,7 +48,9 @@ const ServerRegistryEntryJson = Schema.fromJsonString(ServerRegistryEntry)
 const registryHash = (dbPath: string): string => {
   const host = hostname()
   const canonical = resolve(dbPath)
-  return createHash("sha256").update(`${host}\0${canonical}`).digest("hex").slice(0, 16)
+  const hasher = new Bun.CryptoHasher("sha256")
+  hasher.update(`${host}\0${canonical}`)
+  return hasher.digest("hex").slice(0, 16)
 }
 
 const ensureRegistryDir = (home: string): string => {

@@ -1,15 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { MemoryExtension } from "@gent/core/extensions/memory"
+import { testSetupCtx } from "@gent/core/test-utils"
 
 describe("memory scheduled jobs", () => {
   it.live("declares durable jobs instead of startup hooks", () =>
     Effect.gen(function* () {
-      const setup = yield* MemoryExtension.setup({
-        cwd: "/repo",
-        home: "/home/test",
-        source: "builtin",
-      })
+      const setup = yield* MemoryExtension.setup(
+        testSetupCtx({ cwd: "/repo", home: "/home/test", source: "builtin" }),
+      )
 
       expect(setup.onStartup).toBeUndefined()
       expect(setup.onShutdown).toBeUndefined()

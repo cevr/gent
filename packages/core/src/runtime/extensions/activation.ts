@@ -51,7 +51,7 @@ export const setupBuiltinExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult> =>
+}): Effect.Effect<ExtensionActivationResult, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
@@ -110,7 +110,7 @@ export const setupDiscoveredExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult> =>
+}): Effect.Effect<ExtensionActivationResult, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []

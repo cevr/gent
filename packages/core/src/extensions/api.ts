@@ -653,7 +653,13 @@ export const extension = <P = never>(
         },
       }
 
-      const extensionStorage = createExtensionStorage(id, `${ctx.home}/.gent/extensions`)
+      const extensionStorage = createExtensionStorage(
+        id,
+        `${ctx.home}/.gent/extensions`,
+        ctx.fs,
+        ctx.path,
+        ctx.runEffect,
+      )
 
       const pushEffect = (caller: string, effect: ExtensionEffect) => {
         const top = effectStack[effectStack.length - 1]

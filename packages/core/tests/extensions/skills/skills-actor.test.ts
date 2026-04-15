@@ -4,6 +4,7 @@
  * For RPC acceptance coverage, see skills-rpc.test.ts.
  */
 import { describe, it, expect } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
 import type { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
@@ -37,21 +38,24 @@ const testSkills = [
 const makeSkillsRuntimeLayer = (extensions: LoadedExtension[]) =>
   makeActorRuntimeLayer({ extensions })
 
-const setupSkillsExtension = Effect.gen(function* () {
-  const loaded = yield* setupExtension(
-    { extension: SkillsExtension, kind: "builtin", sourcePath: "builtin" },
-    "/test/cwd",
-    "/test/home",
-  )
-  // Override the live Skills layer with test data
-  return {
-    ...loaded,
-    setup: {
-      ...loaded.setup,
-      layer: Skills.Test(testSkills) as Layer.Layer<never, never, object>,
-    },
-  } satisfies LoadedExtension
-})
+const setupSkillsExtension = Effect.provide(
+  Effect.gen(function* () {
+    const loaded = yield* setupExtension(
+      { extension: SkillsExtension, kind: "builtin", sourcePath: "builtin" },
+      "/test/cwd",
+      "/test/home",
+    )
+    // Override the live Skills layer with test data
+    return {
+      ...loaded,
+      setup: {
+        ...loaded.setup,
+        layer: Skills.Test(testSkills) as Layer.Layer<never, never, object>,
+      },
+    } satisfies LoadedExtension
+  }),
+  BunServices.layer,
+)
 
 describe("SkillsExtension actor via ExtensionStateRuntime", () => {
   it.live("ListSkills returns skills from the Skills service", () =>

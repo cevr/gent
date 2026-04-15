@@ -4,14 +4,13 @@ import { SessionToolsExtension } from "@gent/core/extensions/session-tools"
 import { compileHooks } from "@gent/core/runtime/extensions/hooks"
 import { Agents } from "@gent/core/domain/agent"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testSetupCtx } from "@gent/core/test-utils"
 
 const stubCtx = {} as unknown as ExtensionHostContext
 
 describe("SessionToolsExtension", () => {
   test("injects naming instruction for interactive prompts", async () => {
-    const setup = await Effect.runPromise(
-      SessionToolsExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
+    const setup = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
     const hooks = compileHooks([
       {
         manifest: SessionToolsExtension.manifest,
@@ -34,9 +33,7 @@ describe("SessionToolsExtension", () => {
   })
 
   test("skips naming instruction for non-interactive prompts", async () => {
-    const setup = await Effect.runPromise(
-      SessionToolsExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" }),
-    )
+    const setup = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
     const hooks = compileHooks([
       {
         manifest: SessionToolsExtension.manifest,

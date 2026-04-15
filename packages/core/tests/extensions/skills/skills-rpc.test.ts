@@ -6,6 +6,7 @@
  * Gent.test → RpcServer → extension.ask → ExtensionStateRuntime.
  */
 import { describe, it, expect } from "effect-bun-test"
+import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
@@ -32,20 +33,23 @@ const testSkills = [
   }),
 ]
 
-const setupSkillsExtension = Effect.gen(function* () {
-  const loaded = yield* setupExtension(
-    { extension: SkillsExtension, kind: "builtin", sourcePath: "builtin" },
-    "/test/cwd",
-    "/test/home",
-  )
-  return {
-    ...loaded,
-    setup: {
-      ...loaded.setup,
-      layer: Skills.Test(testSkills) as Layer.Layer<never, never, object>,
-    },
-  } satisfies LoadedExtension
-})
+const setupSkillsExtension = Effect.provide(
+  Effect.gen(function* () {
+    const loaded = yield* setupExtension(
+      { extension: SkillsExtension, kind: "builtin", sourcePath: "builtin" },
+      "/test/cwd",
+      "/test/home",
+    )
+    return {
+      ...loaded,
+      setup: {
+        ...loaded.setup,
+        layer: Skills.Test(testSkills) as Layer.Layer<never, never, object>,
+      },
+    } satisfies LoadedExtension
+  }),
+  BunServices.layer,
+)
 
 describe("SkillsExtension via RPC", () => {
   it.live(

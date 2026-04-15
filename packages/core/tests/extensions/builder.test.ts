@@ -2,9 +2,9 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { testSetupCtx } from "@gent/core/test-utils"
 
-const setup = (ext: ReturnType<typeof extension>) =>
-  Effect.runPromise(ext.setup({ cwd: "/tmp", source: "test", home: "/tmp" }))
+const setup = (ext: ReturnType<typeof extension>) => Effect.runPromise(ext.setup(testSetupCtx()))
 
 describe("fluent builder", () => {
   // ── Variadic registration ──

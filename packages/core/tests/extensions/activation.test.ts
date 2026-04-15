@@ -67,7 +67,7 @@ describe("extension activation isolation", () => {
       expect(result.failed[0]!.manifest.id).toBe("bad-ext")
       expect(result.failed[0]!.phase).toBe("setup")
       expect(result.failed[0]!.error).toContain("setup boom")
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
   it.live("discovered setup failure is isolated instead of crashing activation", () =>
@@ -103,7 +103,7 @@ describe("extension activation isolation", () => {
         phase: "setup",
       })
       expect(result.failed[0]?.error).toContain("setup boom")
-    }),
+    }).pipe(Effect.provide(fsLayer)),
   )
 
   it.live(

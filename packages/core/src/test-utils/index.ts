@@ -1,4 +1,6 @@
-import { Clock, Context, Effect, Layer, Ref, Stream } from "effect"
+import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import type { ExtensionSetupContext } from "../domain/extension.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
   Provider,
@@ -254,6 +256,24 @@ export const assertSequence = (
     }
   }
 }
+
+// ── Test Extension Setup Context ──
+
+const _platformServices = Effect.runSync(Effect.scoped(Layer.build(BunServices.layer)))
+const _testFs = Context.get(_platformServices, FileSystem.FileSystem)
+const _testPath = Context.get(_platformServices, Path.Path)
+
+/** Pre-built ExtensionSetupContext for tests. Platform services are captured once at module load. */
+export const testSetupCtx = (
+  overrides?: Partial<Pick<ExtensionSetupContext, "cwd" | "source" | "home">>,
+): ExtensionSetupContext => ({
+  cwd: overrides?.cwd ?? "/tmp",
+  source: overrides?.source ?? "test",
+  home: overrides?.home ?? "/tmp",
+  fs: _testFs,
+  path: _testPath,
+  runEffect: (effect) => Effect.runPromise(Effect.provide(effect, _platformServices)),
+})
 
 // Mock Helpers
 

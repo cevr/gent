@@ -138,6 +138,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             Effect.orElseSucceed((): JournalRow[] => []),
           )
 
+        // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off preferSchemaOverJson:off — parsing user-written pointer file, errors immediately caught
         const readActivePointer = fs.readFileString(activeFilePath).pipe(
           Effect.flatMap((raw) =>
             Effect.try({

@@ -92,6 +92,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         // ── Settings ──
 
+        // @effect-diagnostics preferSchemaOverJson:off — parsing external settings files
         const readSettingsFile = (filePath: string) =>
           fs.readFileString(filePath).pipe(
             Effect.flatMap((raw) =>
@@ -201,6 +202,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           return { version: 1, sidecars: sidecars as Record<string, RegisteredSidecar> }
         }
 
+        // @effect-diagnostics preferSchemaOverJson:off — parsing sidecar registry file
         const readRegistry = fs.readFileString(registryPath).pipe(
           Effect.flatMap((raw) =>
             Effect.try({

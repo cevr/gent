@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -37,21 +38,29 @@ const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
   })
 
 describe("Build Fingerprint", () => {
-  test("computeLocalFingerprint returns a non-empty string", () => {
-    const fp = computeLocalFingerprint()
+  test("computeLocalFingerprint returns a non-empty string", async () => {
+    const fp = await Effect.runPromise(
+      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
+    )
     expect(fp).toBeTruthy()
     expect(typeof fp).toBe("string")
     expect(fp.length).toBeGreaterThan(0)
   })
 
-  test("computeLocalFingerprint is stable across calls", () => {
-    const fp1 = computeLocalFingerprint()
-    const fp2 = computeLocalFingerprint()
+  test("computeLocalFingerprint is stable across calls", async () => {
+    const fp1 = await Effect.runPromise(
+      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
+    )
+    const fp2 = await Effect.runPromise(
+      computeLocalFingerprint.pipe(Effect.provide(BunServices.layer)),
+    )
     expect(fp1).toBe(fp2)
   })
 
   test("resolveBuildFingerprint resolves to a string", async () => {
-    const fp = await Effect.runPromise(resolveBuildFingerprint)
+    const fp = await Effect.runPromise(
+      resolveBuildFingerprint.pipe(Effect.provide(BunServices.layer)),
+    )
     expect(typeof fp).toBe("string")
     expect(fp.length).toBeGreaterThan(0)
   })

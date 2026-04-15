@@ -1,4 +1,4 @@
-import type { Effect, Layer, Schema } from "effect"
+import type { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
@@ -431,6 +431,12 @@ export interface ExtensionSetupContext {
   readonly source: string
   /** User home directory (e.g. ~/.gent lives here). Defaults to os.homedir(). */
   readonly home: string
+  /** Platform FileSystem service (captured from Effect context at setup time). */
+  readonly fs: FileSystem.FileSystem
+  /** Platform Path service (captured from Effect context at setup time). */
+  readonly path: Path.Path
+  /** Run an Effect with platform services. For async extension code that needs FileSystem/Path. */
+  readonly runEffect: <A>(effect: Effect.Effect<A>) => Promise<A>
 }
 
 export interface GentExtension {

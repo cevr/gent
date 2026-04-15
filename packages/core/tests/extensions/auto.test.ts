@@ -19,6 +19,7 @@ import { AutoJournal, type JournalRow } from "@gent/core/extensions/auto-journal
 import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
+import { testSetupCtx } from "@gent/core/test-utils"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -535,7 +536,7 @@ const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(AutoExtension.setup({ cwd: "/tmp", source: "test", home: "/tmp" })),
+  setup: Effect.runSync(AutoExtension.setup(testSetupCtx())),
 }
 
 const makeLayer = () =>

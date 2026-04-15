@@ -220,4 +220,4 @@ const program = Effect.scoped(
 )
 
 // @effect-diagnostics-next-line strictEffectProvide:off
-BunRuntime.runMain(program.pipe(Effect.provide(BunFileSystem.layer)))
+BunRuntime.runMain(program.pipe(Effect.provide(PlatformLayer)))
