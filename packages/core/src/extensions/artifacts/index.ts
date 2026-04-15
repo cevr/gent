@@ -17,16 +17,17 @@ import type {
   TurnProjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import { ArtifactId } from "../../domain/ids.js"
-import type { BranchId } from "../../domain/ids.js"
+import { ArtifactId, BranchId } from "../../domain/ids.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import { extension } from "../api.js"
 import {
   ARTIFACTS_EXTENSION_ID,
   ArtifactProtocol,
+  ArtifactStatus,
+  ContentPatch,
+  ReadQuery,
   type Artifact,
   type ArtifactUiModel,
-  type ContentPatch,
   ArtifactUiModel as ArtifactUiModelSchema,
   Artifact as ArtifactSchema,
 } from "../artifacts-protocol.js"
@@ -58,35 +59,35 @@ const ArtifactsMachineEvent = MEvent({
       content: Schema.String,
       path: Schema.optional(Schema.String),
       metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-      branchId: Schema.optional(Schema.String),
+      branchId: Schema.optional(BranchId),
     },
     ArtifactSchema,
   ),
   Read: MEvent.reply(
     {
-      query: Schema.Unknown,
+      query: ReadQuery,
     },
     Schema.NullOr(ArtifactSchema),
   ),
   Update: MEvent.reply(
     {
-      id: Schema.String,
-      patch: Schema.optional(Schema.Unknown),
+      id: ArtifactId,
+      patch: Schema.optional(ContentPatch),
       metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-      status: Schema.optional(Schema.String),
+      status: Schema.optional(ArtifactStatus),
       label: Schema.optional(Schema.String),
     },
     Schema.NullOr(ArtifactSchema),
   ),
   Clear: MEvent.reply(
     {
-      id: Schema.String,
+      id: ArtifactId,
     },
     Schema.Void,
   ),
   List: MEvent.reply(
     {
-      branchId: Schema.optional(Schema.String),
+      branchId: Schema.optional(BranchId),
     },
     Schema.Array(ArtifactSchema),
   ),
@@ -102,9 +103,7 @@ const artifactsMachine = Machine.make({
   .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Save, ({ state, event }) => {
     const now = Date.now()
     const existingIdx = state.items.findIndex(
-      (a) =>
-        a.sourceTool === event.sourceTool &&
-        a.branchId === (event.branchId as BranchId | undefined),
+      (a) => a.sourceTool === event.sourceTool && a.branchId === event.branchId,
     )
     const existing = existingIdx >= 0 ? state.items[existingIdx] : undefined
     const artifact: Artifact = {
@@ -115,7 +114,7 @@ const artifactsMachine = Machine.make({
       path: event.path,
       status: "active",
       metadata: event.metadata,
-      branchId: event.branchId as BranchId | undefined,
+      branchId: event.branchId,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -126,18 +125,12 @@ const artifactsMachine = Machine.make({
     return Machine.reply(ArtifactsMachineState.Active({ items }), artifact)
   })
   .on(ArtifactsMachineState.Active, ArtifactsMachineEvent.Read, ({ state, event }) => {
-    const query = event.query as {
-      _tag: string
-      id?: string
-      sourceTool?: string
-      branchId?: string
-    }
+    const { query } = event
     let found: Artifact | undefined
     if (query._tag === "ById") {
       found = state.items.find((a) => a.id === query.id)
-    } else if (query._tag === "BySource") {
+    } else {
       const bySource = state.items.filter((a) => a.sourceTool === query.sourceTool)
-      // Prefer exact branch match, fall back to session-wide (branchId === undefined)
       found =
         query.branchId !== undefined
           ? (bySource.find((a) => a.branchId === query.branchId) ??
@@ -158,11 +151,9 @@ const artifactsMachine = Machine.make({
     const updated: Artifact = {
       ...existing,
       content:
-        event.patch !== undefined
-          ? applyPatch(existing.content, event.patch as ContentPatch)
-          : existing.content,
+        event.patch !== undefined ? applyPatch(existing.content, event.patch) : existing.content,
       metadata: event.metadata !== undefined ? event.metadata : existing.metadata,
-      status: event.status !== undefined ? (event.status as Artifact["status"]) : existing.status,
+      status: event.status !== undefined ? event.status : existing.status,
       label: event.label !== undefined ? event.label : existing.label,
       updatedAt: Date.now(),
     }

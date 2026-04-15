@@ -8,8 +8,9 @@
  */
 
 import { Clock, Context, Effect, Layer, Schema } from "effect"
-import { Task } from "../domain/task.js"
-import type { SessionId, BranchId, TaskId } from "../domain/ids.js"
+import { Task, TaskStatus } from "../domain/task.js"
+import { SessionId } from "../domain/ids.js"
+import type { BranchId, TaskId } from "../domain/ids.js"
 import { SqlClient } from "effect/unstable/sql"
 
 export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
@@ -49,6 +50,8 @@ interface TaskRow {
   updated_at: number
 }
 
+const isTaskStatus = Schema.is(TaskStatus)
+
 const taskFromRow = (row: TaskRow) =>
   new Task({
     id: row.id,
@@ -56,9 +59,9 @@ const taskFromRow = (row: TaskRow) =>
     branchId: row.branch_id,
     subject: row.subject,
     description: row.description ?? undefined,
-    status: row.status as Task["status"],
-    owner: (row.owner ?? undefined) as SessionId | undefined,
-    agentType: (row.agent_type ?? undefined) as Task["agentType"],
+    status: isTaskStatus(row.status) ? row.status : "pending",
+    owner: row.owner !== null ? SessionId.of(row.owner) : undefined,
+    agentType: row.agent_type ?? undefined,
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,
     metadata: row.metadata !== null ? safeJsonParse(row.metadata) : undefined,
