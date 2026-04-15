@@ -52,19 +52,22 @@ const resolveCredential = (
       return undefined
     }
 
-    // HTTPS URLs — try gh auth token
-    const token = yield* Effect.tryPromise({
-      try: () => $`gh auth token`.quiet().text(),
-      catch: () => undefined as string | undefined,
-    })
-    if (token !== undefined) {
-      const trimmed = token.trim()
-      if (trimmed.length > 0) {
-        return {
-          type: "Plain" as const,
-          username: "x-access-token",
-          password: trimmed,
-        } satisfies Credential
+    // HTTPS URLs — only offer gh token for GitHub hosts
+    const isGitHub = url.includes("github.com")
+    if (isGitHub) {
+      const token = yield* Effect.tryPromise({
+        try: () => $`gh auth token`.quiet().text(),
+        catch: () => undefined as string | undefined,
+      })
+      if (token !== undefined) {
+        const trimmed = token.trim()
+        if (trimmed.length > 0) {
+          return {
+            type: "Plain" as const,
+            username: "x-access-token",
+            password: trimmed,
+          } satisfies Credential
+        }
       }
     }
     return undefined
@@ -135,9 +138,9 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
               })
               const remote = repo.getRemote("origin")
               const credential = yield* cred(remote.url())
-              yield* Effect.try({
-                try: () => {
-                  remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
+              yield* Effect.tryPromise({
+                try: async () => {
+                  await remote.fetch(["refs/heads/*:refs/remotes/origin/*"], {
                     fetch: { credential },
                   })
                   const headOid = repo.revparseSingle("origin/HEAD")
@@ -156,14 +159,19 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
                 const repo = await esGit.openRepository(repoPath)
                 const oid = repo.revparseSingle(ref ?? "HEAD")
                 const commit = repo.getCommit(oid)
-                const tree = commit.tree()
                 const files: string[] = []
-                tree.walk("PreOrder", (entry) => {
-                  if (entry.type() === "Blob") {
-                    files.push(entry.name())
+                const walk = (tree: ReturnType<typeof commit.tree>, prefix: string) => {
+                  for (const entry of tree.iter()) {
+                    const fullPath = prefix ? `${prefix}/${entry.name()}` : entry.name()
+                    if (entry.type() === "Blob") {
+                      files.push(fullPath)
+                    } else if (entry.type() === "Tree") {
+                      const subtree = repo.findTree(entry.id())
+                      if (subtree !== null) walk(subtree, fullPath)
+                    }
                   }
-                  return 0
-                })
+                }
+                walk(commit.tree(), "")
                 return files
               },
               catch: (e) =>

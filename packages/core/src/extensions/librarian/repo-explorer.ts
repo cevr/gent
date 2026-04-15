@@ -204,7 +204,16 @@ export const RepoTool = defineTool({
           const exists = yield* fs.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
           if (exists) {
             if (params.update === true) {
-              yield* gitReader.fetch(cachePath).pipe(Effect.ignore)
+              yield* gitReader.fetch(cachePath).pipe(
+                Effect.mapError(
+                  (e) =>
+                    new RepoExplorerError({
+                      message: `Failed to update: ${e.message}`,
+                      spec: params.spec,
+                      cause: e,
+                    }),
+                ),
+              )
             }
           } else {
             const url = `https://github.com/${parsed.name}.git`
