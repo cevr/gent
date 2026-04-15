@@ -9,7 +9,7 @@
  */
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { HttpRouter } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context } from "effect"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off
@@ -271,13 +271,11 @@ const probeServer = (
   expected: { serverId: string; dbPath: string; buildFingerprint: string },
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
     const baseUrl = rpcUrl.replace("/rpc", "")
-    // @effect-diagnostics-next-line globalFetchInEffect:off
-    const response = yield* Effect.tryPromise(() =>
-      fetch(`${baseUrl}/_gent/identity`, { signal: AbortSignal.timeout(3000) }),
-    )
-    if (!response.ok) return false
-    const identity = (yield* Effect.tryPromise(() => response.json())) as {
+    const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
+    if (response.status >= 400) return false
+    const identity = (yield* response.json) as {
       serverId?: string
       dbPath?: string
       buildFingerprint?: string
@@ -287,7 +285,11 @@ const probeServer = (
       identity.dbPath === expected.dbPath &&
       identity.buildFingerprint === expected.buildFingerprint
     )
-  }).pipe(Effect.catchEager(() => Effect.succeed(false)))
+  }).pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime
+    Effect.provide(FetchHttpClient.layer),
+    Effect.catchEager(() => Effect.succeed(false)),
+  )
 
 // ── Main server resolver ──
 

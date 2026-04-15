@@ -1,4 +1,5 @@
 import { Config, Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model } from "../domain/model.js"
@@ -73,12 +74,18 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
   static Live: Layer.Layer<
     ModelRegistry,
     never,
-    FileSystem.FileSystem | Path.Path | RuntimePlatform | ExtensionRegistry | AuthStore
+    | FileSystem.FileSystem
+    | Path.Path
+    | RuntimePlatform
+    | ExtensionRegistry
+    | AuthStore
+    | HttpClientService.HttpClient
   > = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const http = yield* HttpClient.HttpClient
       const runtimePlatform = yield* RuntimePlatform
       const extensionRegistry = yield* ExtensionRegistry
       const authStore = yield* AuthStore
@@ -106,20 +113,11 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       )
 
       const fetchRemote = Effect.gen(function* () {
-        const res = yield* Effect.tryPromise({
-          // @effect-diagnostics-next-line globalFetchInEffect:off
-          try: () =>
-            fetch(`${MODELS_URL}/api.json`, {
-              headers: { "User-Agent": "gent" },
-              signal: AbortSignal.timeout(10_000),
-            }),
-          catch: () => undefined,
-        })
-        if (res === undefined || !res.ok) return [] as readonly Model[]
-        const text = yield* Effect.tryPromise({
-          try: () => res.text(),
-          catch: () => "",
-        })
+        const res = yield* http
+          .get(`${MODELS_URL}/api.json`, { headers: { "User-Agent": "gent" } })
+          .pipe(Effect.timeout(10_000), Effect.option)
+        if (res._tag === "None" || res.value.status >= 400) return [] as readonly Model[]
+        const text = yield* res.value.text.pipe(Effect.catchEager(() => Effect.succeed("")))
         if (text.length === 0) return [] as readonly Model[]
         const decoded = yield* decodeJson(text).pipe(Effect.catchEager(() => Effect.succeed(null)))
         const parsed = parseModelsDev(decoded)

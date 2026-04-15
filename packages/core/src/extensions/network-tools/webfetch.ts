@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { HttpClient } from "effect/unstable/http"
 import { defineTool } from "../../domain/tool.js"
 import TurndownService from "turndown"
 import { parseHTML } from "linkedom"
@@ -41,39 +42,44 @@ export const WebFetchTool = defineTool({
   promptSnippet: "Fetch a URL and convert HTML to markdown",
   params: WebFetchParams,
   execute: Effect.fn("WebFetchTool.execute")(function* (params) {
-    const response = yield* Effect.tryPromise({
-      // @effect-diagnostics-next-line globalFetchInEffect:off
-      try: () =>
-        fetch(params.url, {
-          headers: {
-            "User-Agent": "Gent/1.0 (AI Assistant)",
-            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          },
-        }),
-      catch: (e) =>
-        new WebFetchError({
-          message: `Fetch failed: ${e instanceof Error ? e.message : String(e)}`,
-          url: params.url,
-          cause: e,
-        }),
-    })
+    const http = yield* HttpClient.HttpClient
+    const response = yield* http
+      .get(params.url, {
+        headers: {
+          "User-Agent": "Gent/1.0 (AI Assistant)",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      })
+      .pipe(
+        Effect.catchEager((e) =>
+          Effect.fail(
+            new WebFetchError({
+              message: `Fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+              url: params.url,
+              cause: e,
+            }),
+          ),
+        ),
+      )
 
-    if (!response.ok) {
+    if (response.status !== 200) {
       return yield* new WebFetchError({
-        message: `HTTP ${response.status}: ${response.statusText}`,
+        message: `HTTP ${response.status}`,
         url: params.url,
       })
     }
 
-    const html = yield* Effect.tryPromise({
-      try: () => response.text(),
-      catch: (e) =>
-        new WebFetchError({
-          message: `Failed to read response: ${e instanceof Error ? e.message : String(e)}`,
-          url: params.url,
-          cause: e,
-        }),
-    })
+    const html = yield* response.text.pipe(
+      Effect.catchEager((e) =>
+        Effect.fail(
+          new WebFetchError({
+            message: `Failed to read response: ${e instanceof Error ? e.message : String(e)}`,
+            url: params.url,
+            cause: e,
+          }),
+        ),
+      ),
+    )
 
     // Parse HTML
     const { document } = parseHTML(html)
@@ -128,7 +134,7 @@ export const WebFetchTool = defineTool({
         : markdown
 
     return {
-      url: response.url, // Final URL after redirects
+      url: params.url,
       content,
       title,
     }

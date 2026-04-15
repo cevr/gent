@@ -1,4 +1,5 @@
 import { Effect, Schedule, Schema } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import * as os from "node:os"
 import { ProviderAuthError } from "../../providers/provider-auth.js"
 
@@ -321,10 +322,12 @@ const fetchOnce = (
   input: RequestInfo | URL,
   init: RequestInit | undefined,
 ): Effect.Effect<Response, FetchRetryableError> =>
-  Effect.tryPromise({
-    // @effect-diagnostics-next-line globalFetchInEffect:off
-    try: () => fetch(input, init),
-    catch: (e) => new FetchRetryableError(new Response(String(e), { status: 500 })),
+  Effect.gen(function* () {
+    const doFetch = yield* FetchHttpClient.Fetch
+    return yield* Effect.tryPromise({
+      try: () => doFetch(input, init),
+      catch: (e) => new FetchRetryableError(new Response(String(e), { status: 500 })),
+    })
   }).pipe(
     Effect.flatMap((res) =>
       res.status === 429 || res.status === 529

@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { defineTool } from "../../domain/tool.js"
 
 // WebSearch Error
@@ -106,64 +107,74 @@ export const WebSearchTool = defineTool({
       },
     }
 
-    const result = yield* Effect.tryPromise({
-      try: async () => {
-        // @effect-diagnostics-next-line globalFetchInEffect:off
-        const response = await fetch(EXA_MCP_URL, {
-          method: "POST",
-          headers: {
+    const http = yield* HttpClient.HttpClient
+    const result = yield* http
+      .execute(
+        HttpClientRequest.post(EXA_MCP_URL).pipe(
+          HttpClientRequest.setHeaders({
             accept: "application/json, text/event-stream",
             "content-type": "application/json",
-          },
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          body: JSON.stringify(searchRequest),
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        })
+          }),
+          HttpClientRequest.bodyJsonUnsafe(searchRequest),
+        ),
+      )
+      .pipe(
+        Effect.timeout(TIMEOUT_MS),
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            if (response.status >= 400) {
+              const errorText = yield* response.text
+              return yield* new WebSearchError({
+                message: `Search error (${response.status}): ${errorText}`,
+                query: params.query,
+              })
+            }
 
-        if (!response.ok) {
-          const errorText = await response.text()
-          throw new Error(`Search error (${response.status}): ${errorText}`)
-        }
+            const contentType = response.headers["content-type"] ?? ""
+            const responseText = yield* response.text
 
-        const contentType = response.headers.get("content-type") ?? ""
-        const responseText = await response.text()
+            // Handle JSON response
+            if (contentType.includes("application/json")) {
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              const data = JSON.parse(responseText) as McpResponse
+              const text = extractResult(data)
+              if (text !== undefined) return text
+              const errMsg = data.error?.message ?? "Unknown error"
+              return yield* new WebSearchError({
+                message: `Exa MCP error: ${errMsg}`,
+                query: params.query,
+              })
+            }
 
-        // Handle JSON response
-        if (contentType.includes("application/json")) {
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          const data = JSON.parse(responseText) as McpResponse
-          const text = extractResult(data)
-          if (text !== undefined) return text
-          const errMsg = data.error?.message ?? "Unknown error"
-          throw new Error(`Exa MCP error: ${errMsg}`)
-        }
+            // Handle SSE response
+            for (const line of responseText.split("\n")) {
+              if (line.startsWith("data: ")) {
+                // @effect-diagnostics-next-line preferSchemaOverJson:off
+                const data = JSON.parse(line.substring(6)) as McpResponse
+                const text = extractResult(data)
+                if (text !== undefined) return text
+              }
+            }
 
-        // Handle SSE response
-        for (const line of responseText.split("\n")) {
-          if (line.startsWith("data: ")) {
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            const data = JSON.parse(line.substring(6)) as McpResponse
-            const text = extractResult(data)
-            if (text !== undefined) return text
+            return "No search results found. Try a different query."
+          }),
+        ),
+        Effect.catchEager((e) => {
+          if ("_tag" in e && e._tag === "TimeoutError") {
+            return Effect.fail(
+              new WebSearchError({ message: "Search request timed out", query: params.query }),
+            )
           }
-        }
-
-        return "No search results found. Try a different query."
-      },
-      catch: (e) => {
-        if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
-          return new WebSearchError({
-            message: "Search request timed out",
-            query: params.query,
-          })
-        }
-        return new WebSearchError({
-          message: `Search failed: ${e instanceof Error ? e.message : String(e)}`,
-          query: params.query,
-          cause: e,
-        })
-      },
-    })
+          if ("_tag" in e && e._tag === "WebSearchError") return Effect.fail(e as WebSearchError)
+          return Effect.fail(
+            new WebSearchError({
+              message: `Search failed: ${e instanceof Error ? e.message : String(e)}`,
+              query: params.query,
+              cause: e,
+            }),
+          )
+        }),
+      )
 
     return {
       output: result,

@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Layer, Path, Context } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -254,11 +255,12 @@ export const createDependencies = (config: DependenciesConfig) => {
     authGuardLive,
     providerAuthLive,
     configServiceLive,
-    modelRegistryLive,
+    Layer.provide(modelRegistryLive, FetchHttpClient.layer),
     extensionRegistryLive,
     fileLockServiceLive,
     providerLive,
     FileIndexLive,
+    FetchHttpClient.layer,
   )
 
   const permissionLive = Layer.provide(

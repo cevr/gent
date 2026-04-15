@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
+import { HttpClient } from "effect/unstable/http"
 import { defineTool } from "../../domain/tool.js"
 import { $ } from "bun"
 
@@ -265,19 +266,19 @@ export const RepoTool = defineTool({
 
       case "info": {
         if (parsed.type === "github") {
-          const info = yield* Effect.tryPromise({
-            try: async () => {
-              // @effect-diagnostics-next-line globalFetchInEffect:off
-              const res = await fetch(`https://api.github.com/repos/${parsed.name}`)
-              return res.json() as Promise<Record<string, unknown>>
-            },
-            catch: (e) =>
-              new RepoExplorerError({
-                message: `Failed to get info: ${e}`,
-                spec: params.spec,
-                cause: e,
-              }),
-          })
+          const http = yield* HttpClient.HttpClient
+          const info = yield* http.get(`https://api.github.com/repos/${parsed.name}`).pipe(
+            Effect.flatMap((res) => res.json),
+            Effect.catchEager((e) =>
+              Effect.fail(
+                new RepoExplorerError({
+                  message: `Failed to get info: ${e}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+              ),
+            ),
+          )
           return { info }
         }
         return { message: "Info not implemented for this type" }
