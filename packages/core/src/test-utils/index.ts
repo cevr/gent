@@ -10,7 +10,8 @@ import {
   type StreamChunk,
 } from "../providers/provider.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
-import { Agents } from "../domain/agent.js"
+import { AllBuiltinAgents } from "../extensions/all-agents.js"
+import { GitReader } from "../extensions/librarian/git-reader.js"
 import {
   BaseEventStore,
   EventStore,
@@ -168,7 +169,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
         manifest: { id: "test-agents" },
         kind: "builtin",
         sourcePath: "test",
-        setup: { agents: Object.values(Agents), tools: [...tools] },
+        setup: { agents: [...AllBuiltinAgents], tools: [...tools] },
       },
     ]),
     EventStore.Test(),
@@ -177,6 +178,7 @@ export const createTestLayer = (config: TestLayerConfig = {}) => {
     ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
+    GitReader.Test,
   )
 }
 
@@ -197,13 +199,14 @@ export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recordin
         manifest: { id: "test-agents" },
         kind: "builtin",
         sourcePath: "test",
-        setup: { agents: Object.values(Agents), tools: [...tools] },
+        setup: { agents: [...AllBuiltinAgents], tools: [...tools] },
       },
     ]),
     ApprovalService.Test(approvalDecisions),
     ExtensionTurnControl.Test(),
     AgentLoop.Test(),
     RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
+    GitReader.Test,
   ).pipe(
     Layer.provideMerge(RecordingProvider(providerResponses)),
     Layer.provideMerge(RecordingEventStore),

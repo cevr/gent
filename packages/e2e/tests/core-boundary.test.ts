@@ -16,7 +16,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import { Agents } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 
 const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([

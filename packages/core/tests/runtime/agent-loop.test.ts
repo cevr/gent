@@ -19,7 +19,7 @@ import {
   type StreamChunk,
 } from "@gent/core/providers/provider"
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
-import { Agents } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import { defineTool, type AnyToolDefinition, type ToolContext } from "@gent/core/domain/tool"
 import { Permission } from "@gent/core/domain/permission"
 import {

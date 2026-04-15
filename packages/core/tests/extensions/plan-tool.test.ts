@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
+import { type AgentRunResult } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import { PlanTool } from "@gent/core/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"

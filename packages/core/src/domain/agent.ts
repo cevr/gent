@@ -121,77 +121,13 @@ export const SUMMARIZER_PROMPT = `
 Summarizer agent. Summarize prior context. Focus decisions, open questions, current state.
 `.trim()
 
-// Built-in agents
+// Built-in agents are defined in their respective extensions:
+// - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, summarizer, title
+// - @gent/research (extensions/research/index.ts): architect
+// - @gent/audit (extensions/audit/index.ts): auditor
+// - @gent/librarian (extensions/librarian/index.ts): librarian
 
-export const Agents = {
-  cowork: defineAgent({
-    name: "cowork",
-    description: "General purpose - full tool access, can execute code changes",
-    model: ModelId.of("anthropic/claude-opus-4-6"),
-    systemPromptAddendum: COWORK_PROMPT,
-    role: "primary",
-  }),
-
-  deepwork: defineAgent({
-    name: "deepwork",
-    description: "Deep analysis with thorough reasoning — alternative model perspective",
-    model: ModelId.of("openai/gpt-5.4"),
-    systemPromptAddendum: DEEPWORK_PROMPT,
-    reasoningEffort: "high",
-    role: "reviewer",
-  }),
-
-  explore: defineAgent({
-    name: "explore",
-    description: "Fast codebase exploration - finds files, searches patterns",
-    model: ModelId.of("openai/gpt-5.4-mini"),
-    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
-    systemPromptAddendum: EXPLORE_PROMPT,
-    persistence: "ephemeral",
-  }),
-
-  architect: defineAgent({
-    name: "architect",
-    description: "Designs implementation approaches",
-    model: ModelId.of("anthropic/claude-opus-4-6"),
-    allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
-    systemPromptAddendum: ARCHITECT_PROMPT,
-  }),
-
-  librarian: defineAgent({
-    name: "librarian",
-    description: "Answers questions about external repos using local cached clones",
-    model: ModelId.of("openai/gpt-5.4-mini"),
-    allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
-    systemPromptAddendum: LIBRARIAN_PROMPT,
-    persistence: "ephemeral",
-  }),
-
-  summarizer: defineAgent({
-    name: "summarizer",
-    model: ModelId.of("openai/gpt-5.4-mini"),
-    allowedTools: [],
-    systemPromptAddendum: SUMMARIZER_PROMPT,
-    persistence: "ephemeral",
-  }),
-
-  title: defineAgent({
-    name: "title",
-    model: ModelId.of("openai/gpt-5.4-mini"),
-    allowedTools: [],
-    temperature: 0.5,
-    persistence: "ephemeral",
-  }),
-
-  auditor: defineAgent({
-    name: "auditor",
-    description: "Audits code for a specific concern category",
-    model: ModelId.of("openai/gpt-5.4-mini"),
-    allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
-    systemPromptAddendum: AUDITOR_PROMPT,
-    persistence: "ephemeral",
-  }),
-} as const
+// Agent collections are in extensions/all-agents.ts — import from there for test harnesses.
 
 // Default model — used when an agent has no model set
 export const DEFAULT_MODEL_ID = ModelId.of("openai/gpt-5.4-mini")
@@ -229,8 +165,6 @@ export const AgentExecutionOverridesSchema = Schema.Struct({
   parentToolCallId: Schema.optional(ToolCallId),
 })
 export type AgentExecutionOverridesSchema = typeof AgentExecutionOverridesSchema.Type
-
-export type BuiltinAgentName = keyof typeof Agents
 
 // Agent run depth
 

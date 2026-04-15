@@ -12,12 +12,12 @@ import { Effect, Layer, Ref } from "effect"
 import { tmpdir } from "node:os"
 import { BunServices } from "@effect/platform-bun"
 import {
-  Agents,
   DEFAULT_MODEL_ID,
   AgentRunnerService,
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
+import { AllBuiltinAgents } from "../extensions/all-agents.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -77,7 +77,7 @@ export interface E2ELayerConfig {
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions
   const builtinSetup = {
-    agents: Object.values(Agents),
+    agents: [...AllBuiltinAgents],
     tools: [] as const,
   }
 

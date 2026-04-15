@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
+import { type AgentRunResult } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import { ArtifactId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/core/extensions/artifacts-protocol"
 import { ARTIFACTS_EXTENSION_ID } from "@gent/core/extensions/artifacts-protocol"

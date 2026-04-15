@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { SessionToolsExtension } from "@gent/core/extensions/session-tools"
 import { compileHooks } from "@gent/core/runtime/extensions/hooks"
-import { Agents } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { testSetupCtx } from "@gent/core/test-utils"
 

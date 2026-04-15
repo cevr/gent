@@ -7,7 +7,7 @@
 
 import { Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { Agents } from "../domain/agent.js"
+import { AllBuiltinAgents } from "../extensions/all-agents.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -29,6 +29,7 @@ import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
+import { GitReader } from "../extensions/librarian/git-reader.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
@@ -39,7 +40,7 @@ const sharedInfra = () => {
       manifest: { id: "test-agents" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { agents: Object.values(Agents), tools: [] },
+      setup: { agents: [...AllBuiltinAgents], tools: [] },
     },
   ])
 
@@ -70,6 +71,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     authGuardLive,
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
+    GitReader.Test,
   )
 
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)

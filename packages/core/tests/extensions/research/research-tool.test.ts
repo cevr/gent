@@ -8,6 +8,7 @@ import type { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { BunFileSystem } from "@effect/platform-bun"
 import { mkdirSync } from "node:fs"
+import { GitReader } from "@gent/core/extensions/librarian/git-reader"
 
 const TEST_HOME = "/tmp/test-research-" + Date.now()
 
@@ -34,7 +35,7 @@ const makeCtx = (overrides: {
     },
   })
 
-const platformLayer = Layer.merge(BunFileSystem.layer, Path.layer)
+const platformLayer = Layer.mergeAll(BunFileSystem.layer, Path.layer, GitReader.Test)
 
 describe("ResearchTool", () => {
   it.live("single repo returns direct response", () => {

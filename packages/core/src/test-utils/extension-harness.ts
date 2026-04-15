@@ -7,12 +7,13 @@
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer } from "effect"
 import {
-  Agents,
   AgentDefinition,
   AgentRunnerService,
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
+import { AllBuiltinAgents } from "../extensions/all-agents.js"
+import { GitReader } from "../extensions/librarian/git-reader.js"
 import {
   EventStore,
   StreamStarted,
@@ -210,7 +211,7 @@ export interface ToolTestLayerConfig {
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
   const builtinSetup: ExtensionSetup = {
-    agents: Object.values(Agents),
+    agents: [...AllBuiltinAgents],
     tools: [...(config.tools ?? [])],
   }
 
@@ -266,6 +267,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
         Permission.Test(),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        GitReader.Test,
       )
       const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),

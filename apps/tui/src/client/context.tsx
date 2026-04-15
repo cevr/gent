@@ -13,11 +13,16 @@ import { createStore, produce } from "solid-js/store"
 import { Effect, Fiber, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
-  Agents,
+  type AgentDefinition,
   resolveAgentModel,
   type AgentName,
   type ReasoningEffort,
 } from "@gent/core/domain/agent.js"
+import { AllBuiltinAgents } from "@gent/core/extensions/all-agents.js"
+
+const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
+  AllBuiltinAgents.map((a) => [a.name, a]),
+)
 import { calculateCost, type Model } from "@gent/core/domain/model.js"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids.js"
@@ -55,7 +60,7 @@ const resolveModelInfo = (
   agent: AgentName | undefined,
 ): Model | undefined => {
   if (agent === undefined) return undefined
-  const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agent]
+  const agentDef = AgentsByName[agent]
   return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
 }
 
@@ -534,9 +539,9 @@ export function ClientProvider(props: ClientProviderProps) {
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
-      if (agentStore.agent === undefined) return resolveAgentModel(Agents.cowork)
-      const agentDef = (Agents as Record<string, typeof Agents.cowork>)[agentStore.agent]
-      return agentDef !== undefined ? resolveAgentModel(agentDef) : resolveAgentModel(Agents.cowork)
+      const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- cowork always registered
+      return resolveAgentModel(agentDef ?? AgentsByName["cowork"]!)
     },
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",

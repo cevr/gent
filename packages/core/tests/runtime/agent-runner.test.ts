@@ -6,13 +6,13 @@ import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
-  Agents,
   resolveAgentModel,
   AgentRunnerService,
   AgentRunError,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"

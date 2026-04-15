@@ -8,7 +8,7 @@ import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-pr
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import type { Message, TextPart } from "@gent/core/domain/message"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
-import { Agents } from "@gent/core/domain/agent"
+import { Agents } from "@gent/core/extensions/all-agents"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"

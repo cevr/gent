@@ -17,6 +17,7 @@ import { SkillsExtension } from "./skills/index.js"
 import { ReviewExtension } from "./review/index.js"
 import { CounselExtension } from "./counsel/index.js"
 import { ResearchExtension } from "./research/index.js"
+import { LibrarianExtension } from "./librarian/index.js"
 // Package-based builtins
 import { AutoPackage } from "./auto-package.js"
 import { PlanPackage } from "./plan-package.js"
@@ -40,6 +41,7 @@ export {
   ReviewExtension,
   CounselExtension,
   ResearchExtension,
+  LibrarianExtension,
   AutoPackage,
   PlanPackage,
   TaskToolsPackage,
@@ -69,6 +71,7 @@ export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
   ReviewExtension,
   CounselExtension,
   ResearchExtension,
+  LibrarianExtension,
   AnthropicExtension,
   OpenAIExtension,
   BedrockExtension,

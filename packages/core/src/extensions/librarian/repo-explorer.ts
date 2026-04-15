@@ -2,6 +2,7 @@ import { Effect, FileSystem, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { defineTool } from "../../domain/tool.js"
 import { $ } from "bun"
+import { GitReader } from "./git-reader.js"
 
 // RepoExplorer Tool Error
 
@@ -21,9 +22,9 @@ export const RepoExplorerParams = Schema.Struct({
     description:
       "Repository spec: owner/repo, owner/repo@tag, npm:package, pypi:package, crates:crate",
   }),
-  action: Schema.Literals(["fetch", "path", "search", "info"]).annotate({
+  action: Schema.Literals(["fetch", "path", "search", "info", "tree", "read"]).annotate({
     description:
-      "Action: fetch (clone/download), path (get local path), search (grep), info (metadata)",
+      "Action: fetch (clone/download), path (get local path), search (grep), info (metadata), tree (list files), read (read file content)",
   }),
   query: Schema.optional(
     Schema.String.annotate({
@@ -35,6 +36,16 @@ export const RepoExplorerParams = Schema.Struct({
       description: "Update existing repo (for fetch action)",
     }),
   ),
+  ref: Schema.optional(
+    Schema.String.annotate({
+      description: "Git ref — branch, tag, or SHA (for tree/read actions). Defaults to HEAD",
+    }),
+  ),
+  filePath: Schema.optional(
+    Schema.String.annotate({
+      description: "File path within the repo (for read action)",
+    }),
+  ),
 })
 
 // RepoExplorer Tool Result
@@ -42,6 +53,10 @@ export const RepoExplorerParams = Schema.Struct({
 export const RepoExplorerResult = Schema.Struct({
   path: Schema.optional(Schema.String),
   matches: Schema.optional(Schema.Array(Schema.String)),
+  files: Schema.optional(Schema.Array(Schema.String)),
+  content: Schema.optional(Schema.String),
+  size: Schema.optional(Schema.Number),
+  isBinary: Schema.optional(Schema.Boolean),
   info: Schema.optional(Schema.Unknown),
   message: Schema.optional(Schema.String),
 })
@@ -123,6 +138,7 @@ export const getRepoCachePath = (home: string, spec: string): string => {
 export const fetchRepo = (spec: string, home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
+    const gitReader = yield* GitReader
     const cachePath = getRepoCachePath(home, spec)
     const parsed = parseSpec(spec)
 
@@ -132,22 +148,33 @@ export const fetchRepo = (spec: string, home: string) =>
     // Only auto-fetch GitHub repos — npm/pypi/crates need the full repo tool
     if (parsed.type !== "github") return cachePath
 
-    // Create parent dir — let git clone create the final directory
+    // Create parent dir — let clone create the final directory
     yield* fs
       .makeDirectory(cachePath.slice(0, cachePath.lastIndexOf("/")), { recursive: true })
       .pipe(Effect.ignore)
 
     const url = `https://github.com/${parsed.name}.git`
-    const args = ["git", "clone", "--depth", "100"]
-    if (parsed.version !== undefined) args.push("--branch", parsed.version)
-    args.push(url, cachePath)
-    yield* Effect.tryPromise({
-      try: () => $`${args}`.quiet().then(() => void 0),
-      catch: (e) => new RepoExplorerError({ message: `Failed to fetch: ${e}`, spec, cause: e }),
-    })
+    yield* gitReader
+      .clone(url, cachePath, { depth: 100, ref: parsed.version })
+      .pipe(
+        Effect.mapError(
+          (e) =>
+            new RepoExplorerError({ message: `Failed to fetch: ${e.message}`, spec, cause: e }),
+        ),
+      )
 
     return cachePath
   })
+
+const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string) =>
+  fs.exists(cachePath).pipe(
+    Effect.mapError(() => new RepoExplorerError({ message: "Failed to check path", spec })),
+    Effect.flatMap((exists) =>
+      exists
+        ? Effect.void
+        : Effect.fail(new RepoExplorerError({ message: "Not cached. Use fetch first.", spec })),
+    ),
+  )
 
 // RepoExplorer Tool
 
@@ -156,11 +183,12 @@ export const RepoTool = defineTool({
   concurrency: "serial",
   idempotent: true,
   description:
-    "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, get paths.",
+    "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",
   params: RepoExplorerParams,
   execute: Effect.fn("RepoExplorerTool.execute")(function* (params, ctx) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
+    const gitReader = yield* GitReader
     const cacheDir = path.join(ctx.home, ".cache", "repo")
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
@@ -170,64 +198,52 @@ export const RepoTool = defineTool({
 
     switch (params.action) {
       case "fetch": {
-        yield* Effect.tryPromise({
-          try: async () => {
-            await run(fs.makeDirectory(path.dirname(cachePath), { recursive: true }))
+        yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true }).pipe(Effect.ignore)
 
-            if (parsed.type === "github") {
-              const exists = await run(fs.exists(cachePath))
-              if (exists) {
-                if (params.update === true) {
-                  await $`git -C ${cachePath} pull --ff-only`.quiet()
-                }
-                return
-              } else {
-                const url = `https://github.com/${parsed.name}.git`
-                const args = ["git", "clone", "--depth", "100"]
-                if (parsed.version !== undefined) {
-                  args.push("--branch", parsed.version)
-                }
-                args.push(url, cachePath)
-                await $`${args}`.quiet()
-              }
-            } else if (parsed.type === "npm") {
-              // Use npm pack to download
+        if (parsed.type === "github") {
+          const exists = yield* fs.exists(cachePath).pipe(Effect.orElseSucceed(() => false))
+          if (exists) {
+            if (params.update === true) {
+              yield* gitReader.fetch(cachePath).pipe(Effect.ignore)
+            }
+          } else {
+            const url = `https://github.com/${parsed.name}.git`
+            yield* gitReader.clone(url, cachePath, { depth: 100, ref: parsed.version }).pipe(
+              Effect.mapError(
+                (e) =>
+                  new RepoExplorerError({
+                    message: `Failed to fetch: ${e.message}`,
+                    spec: params.spec,
+                    cause: e,
+                  }),
+              ),
+            )
+          }
+        } else if (parsed.type === "npm") {
+          yield* Effect.tryPromise({
+            try: async () => {
+              await run(fs.makeDirectory(cachePath, { recursive: true }))
               await $`npm pack ${parsed.name}${parsed.version !== undefined ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
-              // Extract
               const tarballs = await run(fs.readDirectory(cachePath))
               const tarball = tarballs.find((f) => f.endsWith(".tgz"))
               if (tarball !== undefined) {
                 await $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet()
               }
-            }
-            // pypi/crates: simplified - would need pip download / cargo fetch
-          },
-          catch: (e) =>
-            new RepoExplorerError({
-              message: `Failed to fetch: ${e}`,
-              spec: params.spec,
-              cause: e,
-            }),
-        })
+            },
+            catch: (e) =>
+              new RepoExplorerError({
+                message: `Failed to fetch npm: ${e}`,
+                spec: params.spec,
+                cause: e,
+              }),
+          })
+        }
+        // pypi/crates: simplified - would need pip download / cargo fetch
         return { path: cachePath, message: "Fetched successfully" }
       }
 
       case "path": {
-        const exists = yield* fs.exists(cachePath).pipe(
-          Effect.mapError(
-            () =>
-              new RepoExplorerError({
-                message: "Failed to check path",
-                spec: params.spec,
-              }),
-          ),
-        )
-        if (!exists) {
-          return yield* new RepoExplorerError({
-            message: "Not cached. Use fetch first.",
-            spec: params.spec,
-          })
-        }
+        yield* ensureCached(fs, cachePath, params.spec)
         return { path: cachePath }
       }
 
@@ -238,21 +254,7 @@ export const RepoTool = defineTool({
             spec: params.spec,
           })
         }
-        const exists = yield* fs.exists(cachePath).pipe(
-          Effect.mapError(
-            () =>
-              new RepoExplorerError({
-                message: "Failed to check path",
-                spec: params.spec,
-              }),
-          ),
-        )
-        if (!exists) {
-          return yield* new RepoExplorerError({
-            message: "Not cached. Use fetch first.",
-            spec: params.spec,
-          })
-        }
+        yield* ensureCached(fs, cachePath, params.spec)
 
         const result = yield* Effect.tryPromise({
           try: async () => {
@@ -262,6 +264,53 @@ export const RepoTool = defineTool({
           catch: () => [] as string[],
         })
         return { path: cachePath, matches: result }
+      }
+
+      case "tree": {
+        yield* ensureCached(fs, cachePath, params.spec)
+
+        const fileList = yield* gitReader.listFiles(cachePath, params.ref).pipe(
+          Effect.mapError(
+            (e) =>
+              new RepoExplorerError({
+                message: `Failed to list files: ${e.message}`,
+                spec: params.spec,
+                cause: e,
+              }),
+          ),
+        )
+        return { path: cachePath, files: fileList as string[] }
+      }
+
+      case "read": {
+        if (params.filePath === undefined || params.filePath === "") {
+          return yield* new RepoExplorerError({
+            message: "filePath required for read action",
+            spec: params.spec,
+          })
+        }
+        yield* ensureCached(fs, cachePath, params.spec)
+
+        const blob = yield* gitReader.readFile(cachePath, params.filePath, params.ref).pipe(
+          Effect.mapError(
+            (e) =>
+              new RepoExplorerError({
+                message: `Failed to read file: ${e.message}`,
+                spec: params.spec,
+                cause: e,
+              }),
+          ),
+        )
+
+        if (blob.isBinary) {
+          return { path: cachePath, size: blob.size, isBinary: true }
+        }
+        return {
+          path: cachePath,
+          content: new TextDecoder().decode(blob.content),
+          size: blob.size,
+          isBinary: false,
+        }
       }
 
       case "info": {
