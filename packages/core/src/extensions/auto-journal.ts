@@ -139,15 +139,20 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
           )
 
         const readActivePointer = fs.readFileString(activeFilePath).pipe(
-          Effect.map((raw) => {
-            const content = JSON.parse(raw) as Record<string, unknown>
-            if (typeof content["path"] !== "string") return undefined
-            return {
-              path: content["path"],
-              sessionId:
-                typeof content["sessionId"] === "string" ? content["sessionId"] : undefined,
-            }
-          }),
+          Effect.flatMap((raw) =>
+            Effect.try({
+              try: (): { path: string; sessionId?: string } | undefined => {
+                const content = JSON.parse(raw) as Record<string, unknown>
+                if (typeof content["path"] !== "string") return undefined
+                return {
+                  path: content["path"],
+                  sessionId:
+                    typeof content["sessionId"] === "string" ? content["sessionId"] : undefined,
+                }
+              },
+              catch: () => new Error("Invalid active pointer JSON"),
+            }),
+          ),
           Effect.orElseSucceed((): { path: string; sessionId?: string } | undefined => undefined),
         )
 

@@ -94,13 +94,22 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const readSettingsFile = (filePath: string) =>
           fs.readFileString(filePath).pipe(
-            Effect.map((raw) => {
-              const json = JSON.parse(raw) as Record<string, unknown>
-              const section = json["gentExecutor"]
-              return section && typeof section === "object"
-                ? Schema.decodeUnknownSync(ExecutorSettings)(section)
-                : ({} as typeof ExecutorSettings.Type)
-            }),
+            Effect.flatMap((raw) =>
+              Effect.try({
+                try: () => {
+                  const json = JSON.parse(raw) as Record<string, unknown>
+                  const section = json["gentExecutor"]
+                  return section && typeof section === "object"
+                    ? Schema.decodeUnknownSync(ExecutorSettings)(section)
+                    : ({} as typeof ExecutorSettings.Type)
+                },
+                catch: () =>
+                  new ExecutorSidecarError({
+                    code: "STARTUP_TIMEOUT",
+                    message: "Invalid settings JSON",
+                  }),
+              }),
+            ),
             Effect.orElseSucceed(() => ({}) as typeof ExecutorSettings.Type),
           )
 
@@ -193,7 +202,16 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         }
 
         const readRegistry = fs.readFileString(registryPath).pipe(
-          Effect.map((raw) => parseRegistry(JSON.parse(raw))),
+          Effect.flatMap((raw) =>
+            Effect.try({
+              try: () => parseRegistry(JSON.parse(raw)),
+              catch: () =>
+                new ExecutorSidecarError({
+                  code: "STARTUP_TIMEOUT",
+                  message: "Invalid registry JSON",
+                }),
+            }),
+          ),
           Effect.orElseSucceed(() => emptyRegistry),
         )
 
