@@ -226,27 +226,31 @@ export const BashTool = defineTool({
       (proc) =>
         Effect.tryPromise({
           try: async () => {
-            // @effect-diagnostics-next-line globalTimersInEffect:off
-            const timeoutId = setTimeout(() => killGracefully(proc), timeout)
-            try {
-              const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
-              const stderrStream = proc.stderr as ReadableStream<Uint8Array>
-              const [stdout, stderr] = await Promise.all([
-                new Response(stdoutStream).text(),
-                new Response(stderrStream).text(),
-              ])
-              const exitCode = await proc.exited
-              return { stdout, stderr, exitCode }
-            } finally {
-              clearTimeout(timeoutId)
-            }
+            const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
+            const stderrStream = proc.stderr as ReadableStream<Uint8Array>
+            const [stdout, stderr] = await Promise.all([
+              new Response(stdoutStream).text(),
+              new Response(stderrStream).text(),
+            ])
+            const exitCode = await proc.exited
+            return { stdout, stderr, exitCode }
           },
           catch: (e) =>
             new BashError({
               message: `Failed to execute command: ${e}`,
               command,
             }),
-        }),
+        }).pipe(
+          Effect.timeout(timeout),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.fail(
+              new BashError({
+                message: `Command timed out after ${timeout}ms`,
+                command,
+              }),
+            ),
+          ),
+        ),
       (proc) => Effect.sync(() => killGracefully(proc)),
     )
 

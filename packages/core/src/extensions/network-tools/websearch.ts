@@ -108,60 +108,50 @@ export const WebSearchTool = defineTool({
 
     const result = yield* Effect.tryPromise({
       try: async () => {
-        const controller = new AbortController()
-        // @effect-diagnostics-next-line globalTimersInEffect:off
-        const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
+        // @effect-diagnostics-next-line globalFetchInEffect:off
+        const response = await fetch(EXA_MCP_URL, {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+          },
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          body: JSON.stringify(searchRequest),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        })
 
-        try {
-          // @effect-diagnostics-next-line globalFetchInEffect:off
-          const response = await fetch(EXA_MCP_URL, {
-            method: "POST",
-            headers: {
-              accept: "application/json, text/event-stream",
-              "content-type": "application/json",
-            },
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`Search error (${response.status}): ${errorText}`)
+        }
+
+        const contentType = response.headers.get("content-type") ?? ""
+        const responseText = await response.text()
+
+        // Handle JSON response
+        if (contentType.includes("application/json")) {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          const data = JSON.parse(responseText) as McpResponse
+          const text = extractResult(data)
+          if (text !== undefined) return text
+          const errMsg = data.error?.message ?? "Unknown error"
+          throw new Error(`Exa MCP error: ${errMsg}`)
+        }
+
+        // Handle SSE response
+        for (const line of responseText.split("\n")) {
+          if (line.startsWith("data: ")) {
             // @effect-diagnostics-next-line preferSchemaOverJson:off
-            body: JSON.stringify(searchRequest),
-            signal: controller.signal,
-          })
-
-          clearTimeout(timeout)
-
-          if (!response.ok) {
-            const errorText = await response.text()
-            throw new Error(`Search error (${response.status}): ${errorText}`)
-          }
-
-          const contentType = response.headers.get("content-type") ?? ""
-          const responseText = await response.text()
-
-          // Handle JSON response
-          if (contentType.includes("application/json")) {
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            const data = JSON.parse(responseText) as McpResponse
+            const data = JSON.parse(line.substring(6)) as McpResponse
             const text = extractResult(data)
             if (text !== undefined) return text
-            const errMsg = data.error?.message ?? "Unknown error"
-            throw new Error(`Exa MCP error: ${errMsg}`)
           }
-
-          // Handle SSE response
-          for (const line of responseText.split("\n")) {
-            if (line.startsWith("data: ")) {
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              const data = JSON.parse(line.substring(6)) as McpResponse
-              const text = extractResult(data)
-              if (text !== undefined) return text
-            }
-          }
-
-          return "No search results found. Try a different query."
-        } finally {
-          clearTimeout(timeout)
         }
+
+        return "No search results found. Try a different query."
       },
       catch: (e) => {
-        if (e instanceof Error && e.name === "AbortError") {
+        if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
           return new WebSearchError({
             message: "Search request timed out",
             query: params.query,
