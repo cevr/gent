@@ -5,25 +5,32 @@
  * Falls back gracefully if the native library is unavailable.
  */
 
-// @effect-diagnostics nodeBuiltinImport:off
-import { join } from "node:path"
-// @effect-diagnostics nodeBuiltinImport:off
-import { mkdirSync } from "node:fs"
-// @effect-diagnostics nodeBuiltinImport:off
-import { homedir } from "node:os"
+import { Effect, FileSystem } from "effect"
 import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 // ---------------------------------------------------------------------------
 // Frecency DB paths — shared across sessions
 // ---------------------------------------------------------------------------
 
-function ensureDbDir(): string {
-  const dir = join(homedir(), ".gent", "fff")
+let _dbDir: string | undefined
+
+async function ensureDbDir(
+  home: string,
+  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+): Promise<string> {
+  if (_dbDir !== undefined) return _dbDir
+  const dir = `${home}/.gent/fff`
   try {
-    mkdirSync(dir, { recursive: true })
+    await runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
+      }),
+    )
   } catch {
-    // Already exists
+    // Best effort
   }
+  _dbDir = dir
   return dir
 }
 
@@ -43,17 +50,21 @@ const finders = new Map<string, FinderEntry>()
  * Get or create a FileFinder for the given working directory.
  * Returns null if the native library is unavailable or init fails.
  */
-export function ensureFinder(cwd: string): FinderEntry | null {
+export async function ensureFinder(
+  cwd: string,
+  home: string,
+  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+): Promise<FinderEntry | null> {
   const existing = finders.get(cwd)
   if (existing !== undefined) return existing
 
   if (!FileFinder.isAvailable()) return null
 
-  const dbDir = ensureDbDir()
+  const dbDir = await ensureDbDir(home, runEffect)
   const result = FileFinder.create({
     basePath: cwd,
-    frecencyDbPath: join(dbDir, "frecency.mdb"),
-    historyDbPath: join(dbDir, "history.mdb"),
+    frecencyDbPath: `${dbDir}/frecency.mdb`,
+    historyDbPath: `${dbDir}/history.mdb`,
     aiMode: true,
   })
 
@@ -84,8 +95,13 @@ export async function searchFiles(
   cwd: string,
   query: string,
   pageSize: number = 50,
+  home?: string,
+  runEffect?: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
 ): Promise<SearchResult | null> {
-  const entry = ensureFinder(cwd)
+  const entry =
+    home !== undefined && runEffect !== undefined
+      ? await ensureFinder(cwd, home, runEffect)
+      : (finders.get(cwd) ?? null)
   if (entry === null) return null
 
   // Wait for scan to complete on first search

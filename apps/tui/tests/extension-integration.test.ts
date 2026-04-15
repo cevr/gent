@@ -9,6 +9,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, Schema } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
 import { applyExtensionSnapshot, decodeExtensionAskReply } from "../src/extensions/context"
@@ -32,6 +33,9 @@ import { builtinClientModules } from "../src/extensions/builtins/index"
 
 const noopCtx: ExtensionClientContext = {
   cwd: TEST_DIR,
+  home: "/tmp",
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
   openOverlay: () => {},
   closeOverlay: () => {},
   send: () => {},
@@ -51,6 +55,9 @@ const createRecordingCtx = () => {
   const calls: string[] = []
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
+    home: "/tmp",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
     send: () => {},
@@ -71,6 +78,9 @@ const createProtocolRecordingCtx = () => {
   const sent: unknown[] = []
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
+    home: "/tmp",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
     openOverlay: () => {},
     closeOverlay: () => {},
     send: (message) => sent.push(message),

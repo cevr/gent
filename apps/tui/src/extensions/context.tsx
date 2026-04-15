@@ -37,7 +37,7 @@ import { useClient } from "../client/context"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
 
-const disabledRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
+const platformRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
 
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
@@ -206,7 +206,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       const home = workspace.home
 
       // Read disabled extensions from user + project config (shared with server)
-      const disabledSet = await disabledRuntime.runPromise(
+      const disabledSet = await platformRuntime.runPromise(
         readDisabledExtensions({ home, cwd: workspace.cwd }),
       )
 
@@ -219,6 +219,9 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         },
         {
           cwd: workspace.cwd,
+          home,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          runEffect: (effect) => platformRuntime.runPromise(effect as any),
           openOverlay: (id) => overlayDispatch().open(id),
           closeOverlay: () => overlayDispatch().close(),
           get sessionId() {
