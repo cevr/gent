@@ -10,7 +10,7 @@
  * - review: per review tool completion (peer review)
  */
 
-import { Clock, Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer, Schema } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   appendFileSync,
@@ -48,6 +48,21 @@ export interface ReviewRow {
 }
 
 export type JournalRow = ConfigRow | CheckpointRow | ReviewRow
+
+const ConfigRowSchema = Schema.Struct({
+  type: Schema.Literal("config"),
+  goal: Schema.String,
+  maxIterations: Schema.Number,
+  startedAt: Schema.Number,
+})
+
+const ActivePointerSchema = Schema.Struct({
+  path: Schema.String,
+  sessionId: Schema.optional(Schema.String),
+})
+
+const encodeConfigRowJson = Schema.encodeSync(Schema.fromJsonString(ConfigRowSchema))
+const encodeActivePointerJson = Schema.encodeSync(Schema.fromJsonString(ActivePointerSchema))
 
 // ── Service ──
 
@@ -153,12 +168,10 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             maxIterations,
             startedAt: yield* Clock.currentTimeMillis,
           }
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
-          writeFileSync(journalPath, JSON.stringify(row) + "\n")
+          writeFileSync(journalPath, encodeConfigRowJson(row) + "\n")
           writeFileSync(
             activePath,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            JSON.stringify({
+            encodeActivePointerJson({
               path: journalPath,
               ...(sessionId !== undefined ? { sessionId } : {}),
             }),

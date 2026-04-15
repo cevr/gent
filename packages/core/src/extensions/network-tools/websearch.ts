@@ -56,20 +56,19 @@ interface McpRequest {
   }
 }
 
-interface McpResponse {
-  jsonrpc: string
-  result?: {
-    content: Array<{
-      type: string
-      text: string
-    }>
-    isError?: boolean
-  }
-  error?: {
-    code: number
-    message: string
-  }
-}
+const McpResponseSchema = Schema.Struct({
+  jsonrpc: Schema.String,
+  result: Schema.optional(
+    Schema.Struct({
+      content: Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.String })),
+      isError: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  error: Schema.optional(Schema.Struct({ code: Schema.Number, message: Schema.String })),
+})
+type McpResponse = typeof McpResponseSchema.Type
+
+const decodeMcpResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(McpResponseSchema))
 
 /** Extract search result text from an MCP response object */
 function extractResult(data: McpResponse): string | undefined {
@@ -132,20 +131,21 @@ export const WebSearchTool = defineTool({
             const contentType = response.headers["content-type"] ?? ""
             const responseText = yield* response.text
 
-            const parseJson = (raw: string) =>
-              Effect.try({
-                // @effect-diagnostics-next-line preferSchemaOverJson:off
-                try: () => JSON.parse(raw) as McpResponse,
-                catch: (e) =>
-                  new WebSearchError({
-                    message: `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
-                    query: params.query,
-                  }),
-              })
+            const parseMcpJson = (raw: string) =>
+              decodeMcpResponse(raw).pipe(
+                Effect.catchEager((e) =>
+                  Effect.fail(
+                    new WebSearchError({
+                      message: `Invalid JSON: ${String(e)}`,
+                      query: params.query,
+                    }),
+                  ),
+                ),
+              )
 
             // Handle JSON response
             if (contentType.includes("application/json")) {
-              const data = yield* parseJson(responseText)
+              const data = yield* parseMcpJson(responseText)
               const text = extractResult(data)
               if (text !== undefined) return text
               const errMsg = data.error?.message ?? "Unknown error"
@@ -158,7 +158,7 @@ export const WebSearchTool = defineTool({
             // Handle SSE response
             for (const line of responseText.split("\n")) {
               if (line.startsWith("data: ")) {
-                const data = yield* parseJson(line.substring(6))
+                const data = yield* parseMcpJson(line.substring(6))
                 const text = extractResult(data)
                 if (text !== undefined) return text
               }

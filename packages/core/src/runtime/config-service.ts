@@ -85,13 +85,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               exists ? fs.readFileString(filePath) : Effect.succeed("{}"),
             ),
             Effect.flatMap((content) =>
-              Effect.try({
-                // @effect-diagnostics-next-line preferSchemaOverJson:off
-                try: () => JSON.parse(content) as unknown,
-                catch: () => ({}),
-              }),
+              Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(content),
             ),
-            Effect.flatMap((data) => Schema.decodeUnknownEffect(UserConfig)(data)),
             Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
           )
 
