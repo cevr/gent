@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Clock, Effect, Layer } from "effect"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -58,11 +58,9 @@ function ensureDbDir(): string {
 
 const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boolean> =>
   Effect.gen(function* () {
-    // @effect-diagnostics-next-line globalDateInEffect:off
-    const start = Date.now()
+    const start = yield* Clock.currentTimeMillis
     while (finder.isScanning()) {
-      // @effect-diagnostics-next-line globalDateInEffect:off
-      if (Date.now() - start > timeoutMs) return false
+      if ((yield* Clock.currentTimeMillis) - start > timeoutMs) return false
       yield* Effect.sleep(50)
     }
     return true

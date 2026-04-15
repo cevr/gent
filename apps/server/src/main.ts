@@ -2,7 +2,7 @@ import { BunHttpServer, BunRuntime, BunFileSystem, BunServices } from "@effect/p
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
 import { HttpRouter } from "effect/unstable/http"
-import { Config, Deferred, Effect, Layer, Option, Context } from "effect"
+import { Clock, Config, Deferred, Effect, Layer, Option, Context } from "effect"
 import * as os from "node:os"
 import { seedDebugSession } from "@gent/core/debug/session.js"
 import { startDebugScenario } from "./debug/scenario.js"
@@ -105,8 +105,7 @@ const program = Effect.scoped(
     )
 
     const buildFingerprint = yield* resolveBuildFingerprint
-    // @effect-diagnostics-next-line globalDateInEffect:off
-    const startedAt = Date.now()
+    const startedAt = yield* Clock.currentTimeMillis
 
     // Connection tracker for idle shutdown
     const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
@@ -192,16 +191,13 @@ const program = Effect.scoped(
             const count = yield* connectionTracker.count()
 
             if (count === 0) {
-              // @effect-diagnostics-next-line globalDateInEffect:off
-              if (idleStartMs === undefined) idleStartMs = Date.now()
-              // @effect-diagnostics-next-line globalDateInEffect:off
-              if (Date.now() - idleStartMs >= idleTimeoutMs) {
+              if (idleStartMs === undefined) idleStartMs = yield* Clock.currentTimeMillis
+              if ((yield* Clock.currentTimeMillis) - idleStartMs >= idleTimeoutMs) {
                 // Final liveness check before shutdown
                 const finalCount = yield* connectionTracker.count()
                 if (finalCount === 0) {
-                  // @effect-diagnostics-next-line globalDateInEffect:off
                   yield* Effect.logInfo("idle-shutdown.triggered").pipe(
-                    Effect.annotateLogs({ idleMs: Date.now() - idleStartMs }),
+                    Effect.annotateLogs({ idleMs: (yield* Clock.currentTimeMillis) - idleStartMs }),
                   )
                   yield* Deferred.succeed(shutdownDeferred, void 0)
                   return

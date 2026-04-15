@@ -10,7 +10,7 @@
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { HttpRouter } from "effect/unstable/http"
-import { Effect, Layer, Context } from "effect"
+import { Clock, Effect, Layer, Context } from "effect"
 import type { Scope } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off
 import { resolve as pathResolve, join as pathJoin } from "node:path"
@@ -199,8 +199,7 @@ const buildOwnedServer = (
         hostname: os.hostname(),
         dbPath: dbPath ?? ":memory:",
         buildFingerprint,
-        // @effect-diagnostics-next-line globalDateInEffect:off
-        startedAt: Date.now(),
+        startedAt: yield* Clock.currentTimeMillis,
       })
 
       // Build full service context
@@ -353,8 +352,7 @@ export const resolveServer = (
               rpcUrl: server.url,
               dbPath,
               buildFingerprint: fingerprint,
-              // @effect-diagnostics-next-line globalDateInEffect:off
-              startedAt: Date.now(),
+              startedAt: yield* Clock.currentTimeMillis,
             }),
           )
           // Clean up registry on scope close

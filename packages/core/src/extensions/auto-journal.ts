@@ -10,7 +10,7 @@
  * - review: per review tool completion (peer review)
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer } from "effect"
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   appendFileSync,
@@ -143,7 +143,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
 
     return Layer.succeed(AutoJournal, {
       start: ({ goal, maxIterations, sessionId }) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           ensureDir()
           const slug = slugify(goal)
           const journalPath = join(autoDir, `${slug}.jsonl`)
@@ -151,8 +151,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             type: "config",
             goal,
             maxIterations,
-            // @effect-diagnostics-next-line globalDateInEffect:off
-            startedAt: Date.now(),
+            startedAt: yield* Clock.currentTimeMillis,
           }
           // @effect-diagnostics-next-line preferSchemaOverJson:off
           writeFileSync(journalPath, JSON.stringify(row) + "\n")

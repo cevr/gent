@@ -5,6 +5,7 @@ import {
   Cause,
   Config,
   Console,
+  DateTime,
   Effect,
   Exit,
   Fiber,
@@ -353,8 +354,7 @@ const sessions = Command.make(
 
       yield* Console.log("Sessions:")
       for (const s of allSessions) {
-        // @effect-diagnostics-next-line globalDateInEffect:off
-        const date = yield* Effect.sync(() => new Date(s.updatedAt).toISOString())
+        const date = DateTime.formatIso(DateTime.makeUnsafe(s.updatedAt))
         yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
       }
     }),

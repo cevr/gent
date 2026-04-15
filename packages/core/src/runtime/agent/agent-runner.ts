@@ -265,13 +265,18 @@ const loadAgentRunSuccessData = (params: {
     }
   })
 
+class DebugOutputWriteError extends Schema.TaggedErrorClass<DebugOutputWriteError>()(
+  "DebugOutputWriteError",
+  { message: Schema.String },
+) {}
+
 const saveAgentRunOutput = (result: {
   text: string
   reasoning: string
   agentName: string
   sessionId: SessionId
 }) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     const fullContent = [
       result.reasoning.length > 0 ? `## Reasoning\n\n${result.reasoning}\n\n` : "",
       `## Response\n\n${result.text}`,
@@ -281,19 +286,19 @@ const saveAgentRunOutput = (result: {
 
     if (fullContent.length === 0) return undefined
 
-    try {
-      const dir = "/tmp/gent/outputs"
-      mkdirSync(dir, { recursive: true })
-      // @effect-diagnostics-next-line globalDateInEffect:off
-      const ts = new Date().toISOString().replace(/[:.]/g, "-")
-      const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
-      const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
-      const header = `# ${result.agentName} — ${result.sessionId}\n\n`
-      writeFileSync(filepath, header + fullContent, "utf-8")
-      return filepath
-    } catch {
-      return undefined
-    }
+    const ts = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-")
+    return yield* Effect.try({
+      try: () => {
+        const dir = "/tmp/gent/outputs"
+        mkdirSync(dir, { recursive: true })
+        const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
+        const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
+        const header = `# ${result.agentName} — ${result.sessionId}\n\n`
+        writeFileSync(filepath, header + fullContent, "utf-8")
+        return filepath
+      },
+      catch: (e) => new DebugOutputWriteError({ message: String(e) }),
+    }).pipe(Effect.orElseSucceed((): string | undefined => undefined))
   })
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */

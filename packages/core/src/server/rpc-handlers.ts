@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
@@ -466,8 +466,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             serverId: identity.serverId,
             pid: identity.pid,
             hostname: identity.hostname,
-            // @effect-diagnostics-next-line globalDateInEffect:off
-            uptime: Date.now() - identity.startedAt,
+            uptime: (yield* Clock.currentTimeMillis) - identity.startedAt,
             connectionCount,
             dbPath: identity.dbPath,
             buildFingerprint: identity.buildFingerprint,

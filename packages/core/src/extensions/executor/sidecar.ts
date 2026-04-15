@@ -6,7 +6,7 @@
  * PID registry, and graceful shutdown via Effect.addFinalizer.
  */
 
-import { Context, Duration, Effect, Layer, Schema, Semaphore } from "effect"
+import { Clock, Context, DateTime, Duration, Effect, Layer, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
@@ -199,8 +199,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               pid: record.pid,
               port: record.port,
               baseUrl: record.baseUrl,
-              // @effect-diagnostics-next-line globalDateInEffect:off
-              startedAt: new Date().toISOString(),
+              startedAt: DateTime.formatIso(yield* DateTime.now),
             }
             yield* writeRegistry(registry)
           })
@@ -291,10 +290,8 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const pollHealth = (baseUrl: string, cwd: string, timeoutMs: number) =>
           Effect.gen(function* () {
-            // @effect-diagnostics-next-line globalDateInEffect:off
-            const deadline = Date.now() + timeoutMs
-            // @effect-diagnostics-next-line globalDateInEffect:off
-            while (Date.now() < deadline) {
+            const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+            while ((yield* Clock.currentTimeMillis) < deadline) {
               const result = yield* fetchScope(baseUrl, HEALTH_TIMEOUT_MS).pipe(
                 Effect.map((scope) => (scope.dir === cwd ? scope : undefined)),
                 Effect.orElseSucceed(() => undefined),
