@@ -1,5 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "options": {
+    "typeAware": true
+  },
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -16,6 +19,8 @@
     "gent/no-extension-internal-imports": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
+    // TypeScript - flag unsafe type assertions (as X)
+    "typescript/no-unsafe-type-assertion": "warn",
 
     // TypeScript - no non-null assertions
     "typescript/no-non-null-assertion": "error",
@@ -42,7 +47,22 @@
     "complexity": ["error", 20],
 
     // Disabled — false positives with TS enums, type imports, etc.
-    "no-shadow": "off"
+    "no-shadow": "off",
+
+    // Type-aware rules — disable auto-enabled ones we don't want yet
+    "typescript/no-unnecessary-type-assertion": "off",
+    "typescript/no-base-to-string": "off",
+    "typescript/no-unnecessary-type-arguments": "off",
+    "typescript/consistent-return": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "typescript/no-unnecessary-boolean-literal-compare": "off",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/await-thenable": "off",
+    "typescript/no-unnecessary-type-conversion": "off",
+    "typescript/no-misused-spread": "off",
+    "typescript/no-floating-promises": "off",
+    "typescript/no-duplicate-type-constituents": "off",
+    "typescript/no-unnecessary-template-expression": "off"
   },
   "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/scripts/**"],
   "overrides": [
@@ -54,7 +74,8 @@
       "files": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "typescript/no-non-null-assertion": "off",
-        "typescript/no-explicit-any": "off"
+        "typescript/no-explicit-any": "off",
+        "typescript/no-unsafe-type-assertion": "off"
       }
     },
     {
