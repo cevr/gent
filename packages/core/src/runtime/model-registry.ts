@@ -115,7 +115,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const fetchRemote = Effect.gen(function* () {
         const res = yield* http
           .get(`${MODELS_URL}/api.json`, { headers: { "User-Agent": "gent" } })
-          .pipe(Effect.timeout(10_000), Effect.option)
+          .pipe(Effect.option)
         if (res._tag === "None" || res.value.status >= 400) return [] as readonly Model[]
         const text = yield* res.value.text.pipe(Effect.catchEager(() => Effect.succeed("")))
         if (text.length === 0) return [] as readonly Model[]
@@ -136,6 +136,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         }
         return parsed
       }).pipe(
+        Effect.timeout(10_000),
         Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
         Effect.withSpan("ModelRegistry.fetchRemote"),
       )

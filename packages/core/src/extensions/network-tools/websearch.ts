@@ -119,7 +119,6 @@ export const WebSearchTool = defineTool({
         ),
       )
       .pipe(
-        Effect.timeout(TIMEOUT_MS),
         Effect.flatMap((response) =>
           Effect.gen(function* () {
             if (response.status >= 400) {
@@ -133,10 +132,20 @@ export const WebSearchTool = defineTool({
             const contentType = response.headers["content-type"] ?? ""
             const responseText = yield* response.text
 
+            const parseJson = (raw: string) =>
+              Effect.try({
+                // @effect-diagnostics-next-line preferSchemaOverJson:off
+                try: () => JSON.parse(raw) as McpResponse,
+                catch: (e) =>
+                  new WebSearchError({
+                    message: `Invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+                    query: params.query,
+                  }),
+              })
+
             // Handle JSON response
             if (contentType.includes("application/json")) {
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              const data = JSON.parse(responseText) as McpResponse
+              const data = yield* parseJson(responseText)
               const text = extractResult(data)
               if (text !== undefined) return text
               const errMsg = data.error?.message ?? "Unknown error"
@@ -149,8 +158,7 @@ export const WebSearchTool = defineTool({
             // Handle SSE response
             for (const line of responseText.split("\n")) {
               if (line.startsWith("data: ")) {
-                // @effect-diagnostics-next-line preferSchemaOverJson:off
-                const data = JSON.parse(line.substring(6)) as McpResponse
+                const data = yield* parseJson(line.substring(6))
                 const text = extractResult(data)
                 if (text !== undefined) return text
               }
@@ -159,6 +167,7 @@ export const WebSearchTool = defineTool({
             return "No search results found. Try a different query."
           }),
         ),
+        Effect.timeout(TIMEOUT_MS),
         Effect.catchEager((e) => {
           if ("_tag" in e && e._tag === "TimeoutError") {
             return Effect.fail(

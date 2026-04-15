@@ -62,7 +62,7 @@ export const WebFetchTool = defineTool({
         ),
       )
 
-    if (response.status !== 200) {
+    if (response.status < 200 || response.status >= 300) {
       return yield* new WebFetchError({
         message: `HTTP ${response.status}`,
         url: params.url,
