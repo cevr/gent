@@ -195,32 +195,30 @@ const projectTurn = (state: MachineState, _ctx: ExtensionTurnContext): TurnProje
 
 export const ExecutorActorConfig = {
   id: EXECUTOR_EXTENSION_ID,
-  initial: { _tag: "Idle" as const } satisfies ExecutorState,
-  derive: (state: ExecutorState, ctx?: ExtensionTurnContext) =>
-    ctx ? projectTurn(state as MachineState, ctx) : {},
-  reduce: (state: ExecutorState, event: MachineEvent): { state: ExecutorState } => {
+  initial: MachineState.Idle as MachineState,
+  derive: (state: MachineState, ctx?: ExtensionTurnContext) => (ctx ? projectTurn(state, ctx) : {}),
+  reduce: (state: MachineState, event: MachineEvent): { state: MachineState } => {
     if (state._tag === "Idle" && event._tag === "Connect") {
-      return { state: { _tag: "Connecting", cwd: event.cwd } }
+      return { state: MachineState.Connecting({ cwd: event.cwd }) }
     }
     if (state._tag === "Error" && event._tag === "Connect") {
-      return { state: { _tag: "Connecting", cwd: event.cwd } }
+      return { state: MachineState.Connecting({ cwd: event.cwd }) }
     }
     if (state._tag === "Connecting" && event._tag === "Connected") {
       return {
-        state: {
-          _tag: "Ready",
+        state: MachineState.Ready({
           mode: event.mode,
           baseUrl: event.baseUrl,
           scopeId: event.scopeId,
           executorPrompt: event.executorPrompt,
-        },
+        }),
       }
     }
     if (state._tag === "Connecting" && event._tag === "ConnectionFailed") {
-      return { state: { _tag: "Error", message: event.message } }
+      return { state: MachineState.Error({ message: event.message }) }
     }
     if (state._tag === "Ready" && event._tag === "Disconnect") {
-      return { state: { _tag: "Idle" } }
+      return { state: MachineState.Idle }
     }
     return { state }
   },

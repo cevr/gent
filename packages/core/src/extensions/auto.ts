@@ -483,9 +483,9 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 
 export const AutoActorConfig = {
   id: AUTO_EXTENSION_ID,
-  initial: { _tag: "Inactive" as const } satisfies AutoState,
-  derive: (state: AutoState, ctx?: ExtensionTurnContext) => derive(state as MachineState, ctx),
-  reduce: (state: AutoState, event: AgentEvent): { state: AutoState } => {
+  initial: MachineState.Inactive({}) as MachineState,
+  derive: (state: MachineState, ctx?: ExtensionTurnContext) => derive(state, ctx),
+  reduce: (state: MachineState, event: AgentEvent): { state: MachineState } => {
     const mapped = mapEvent(event)
     if (mapped === undefined) return { state }
 
@@ -493,15 +493,14 @@ export const AutoActorConfig = {
     if (state._tag === "Inactive") {
       if (mapped._tag === "StartAuto") {
         return {
-          state: {
-            _tag: "Working",
+          state: MachineState.Working({
             iteration: 1,
             maxIterations: mapped.maxIterations ?? DEFAULT_MAX_ITERATIONS,
             goal: mapped.goal,
             learnings: [],
             metrics: [],
             turnsSinceCheckpoint: 0,
-          },
+          }),
         }
       }
       return { state }
@@ -520,27 +519,24 @@ export const AutoActorConfig = {
 
         if (mapped.status === "complete") {
           return {
-            state: {
-              _tag: "Inactive",
-              reason: "completed" as const,
+            state: MachineState.Inactive({
+              reason: "completed",
               finalLearnings: newLearnings,
               finalMetrics: newMetrics,
-            },
+            }),
           }
         }
         if (mapped.status === "abandon") {
           return {
-            state: {
-              _tag: "Inactive",
-              reason: "abandoned" as const,
+            state: MachineState.Inactive({
+              reason: "abandoned",
               finalLearnings: newLearnings,
               finalMetrics: newMetrics,
-            },
+            }),
           }
         }
         return {
-          state: {
-            _tag: "AwaitingReview",
+          state: MachineState.AwaitingReview({
             iteration: state.iteration,
             maxIterations: state.maxIterations,
             goal: state.goal,
@@ -548,18 +544,18 @@ export const AutoActorConfig = {
             metrics: newMetrics,
             lastSummary: mapped.summary,
             nextIdea: mapped.nextIdea,
-          },
+          }),
         }
       }
       if (mapped._tag === "TurnTick") {
         const next = state.turnsSinceCheckpoint + 1
         if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
-          return { state: { _tag: "Inactive", reason: "wedged" as const } }
+          return { state: MachineState.Inactive({ reason: "wedged" }) }
         }
-        return { state: { ...state, turnsSinceCheckpoint: next } }
+        return { state: MachineState.Working.derive(state, { turnsSinceCheckpoint: next }) }
       }
       if (mapped._tag === "CancelAuto") {
-        return { state: { _tag: "Inactive", reason: "cancelled" as const } }
+        return { state: MachineState.Inactive({ reason: "cancelled" }) }
       }
       return { state }
     }
@@ -568,17 +564,15 @@ export const AutoActorConfig = {
       if (mapped._tag === "ReviewSignal") {
         if (state.iteration >= state.maxIterations) {
           return {
-            state: {
-              _tag: "Inactive",
-              reason: "completed" as const,
+            state: MachineState.Inactive({
+              reason: "completed",
               finalLearnings: state.learnings,
               finalMetrics: state.metrics,
-            },
+            }),
           }
         }
         return {
-          state: {
-            _tag: "Working",
+          state: MachineState.Working({
             iteration: state.iteration + 1,
             maxIterations: state.maxIterations,
             goal: state.goal,
@@ -587,52 +581,50 @@ export const AutoActorConfig = {
             turnsSinceCheckpoint: 0,
             lastSummary: state.lastSummary,
             nextIdea: state.nextIdea,
-          },
+          }),
         }
       }
       if (mapped._tag === "CancelAuto") {
-        return { state: { _tag: "Inactive", reason: "cancelled" as const } }
+        return { state: MachineState.Inactive({ reason: "cancelled" }) }
       }
       return { state }
     }
 
     return { state }
   },
-  receive: (state: AutoState, message: AutoIntent): { state: AutoState } => {
+  receive: (state: MachineState, message: AutoIntent): { state: MachineState } => {
     switch (message._tag) {
       case "StartAuto": {
         if (state._tag !== "Inactive") return { state }
         return {
-          state: {
-            _tag: "Working",
+          state: MachineState.Working({
             iteration: 1,
             maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
             goal: message.goal,
             learnings: [],
             metrics: [],
             turnsSinceCheckpoint: 0,
-          },
+          }),
         }
       }
       case "CancelAuto": {
         if (state._tag === "Inactive") return { state }
-        return { state: { _tag: "Inactive", reason: "cancelled" as const } }
+        return { state: MachineState.Inactive({ reason: "cancelled" }) }
       }
       case "ToggleAuto": {
         if (state._tag === "Inactive") {
           return {
-            state: {
-              _tag: "Working",
+            state: MachineState.Working({
               iteration: 1,
               maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
               goal: message.goal ?? "Continue working autonomously",
               learnings: [],
               metrics: [],
               turnsSinceCheckpoint: 0,
-            },
+            }),
           }
         }
-        return { state: { _tag: "Inactive", reason: "cancelled" as const } }
+        return { state: MachineState.Inactive({ reason: "cancelled" }) }
       }
     }
   },
@@ -712,7 +704,7 @@ const autoActor: ExtensionActorDefinition<
       if (!ancestorIds.has(replaySeed.sessionId)) return
 
       // Check if current state is already non-Inactive (hydrated from persistence)
-      const current = (yield* ctx.snapshot) as MachineState
+      const current = yield* ctx.snapshot
       if (current._tag !== "Inactive") return
 
       // Start the machine
