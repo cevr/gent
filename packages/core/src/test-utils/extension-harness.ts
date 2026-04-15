@@ -122,7 +122,7 @@ export interface ActorHarnessResult<State, Message = void> {
 
 export interface ActorHarnessConfig<State, Message = void> {
   readonly id: string
-  readonly initial: State
+  readonly initial: NoInfer<State>
   readonly reduce: (
     state: State,
     event: AgentEvent,

@@ -483,7 +483,7 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 
 export const AutoActorConfig = {
   id: AUTO_EXTENSION_ID,
-  initial: MachineState.Inactive({}) as MachineState,
+  initial: MachineState.Inactive({}),
   derive: (state: MachineState, ctx?: ExtensionTurnContext) => derive(state, ctx),
   reduce: (state: MachineState, event: AgentEvent): { state: MachineState } => {
     const mapped = mapEvent(event)

@@ -195,7 +195,7 @@ const projectTurn = (state: MachineState, _ctx: ExtensionTurnContext): TurnProje
 
 export const ExecutorActorConfig = {
   id: EXECUTOR_EXTENSION_ID,
-  initial: MachineState.Idle as MachineState,
+  initial: MachineState.Idle,
   derive: (state: MachineState, ctx?: ExtensionTurnContext) => (ctx ? projectTurn(state, ctx) : {}),
   reduce: (state: MachineState, event: MachineEvent): { state: MachineState } => {
     if (state._tag === "Idle" && event._tag === "Connect") {
