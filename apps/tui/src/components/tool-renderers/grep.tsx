@@ -29,7 +29,11 @@ function parseGrepOutput(output: string | undefined): GrepOutput | null {
   if (parsed === undefined || !Array.isArray(parsed["matches"])) return null
   const rawMatches = parsed["matches"]
   const matches: GrepMatch[] = rawMatches.filter(
-    (m: unknown): m is GrepMatch => isRecord(m) && typeof m["file"] === "string",
+    (m: unknown): m is GrepMatch =>
+      isRecord(m) &&
+      typeof m["file"] === "string" &&
+      typeof m["line"] === "number" &&
+      typeof m["content"] === "string",
   )
   return { matches, truncated: parsed["truncated"] === true }
 }
