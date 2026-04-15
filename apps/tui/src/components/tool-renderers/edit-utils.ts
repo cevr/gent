@@ -1,4 +1,5 @@
 import { createPatch } from "diff"
+import { isRecord } from "@gent/core/domain/guards.js"
 
 /**
  * Detect filetype from path extension
@@ -54,11 +55,10 @@ export interface EditDiffResult {
  * Generate unified diff from edit input for <diff> component
  */
 export function getEditUnifiedDiff(input: unknown): EditDiffResult | null {
-  if (input === null || input === undefined || typeof input !== "object") return null
-  const obj = input as Record<string, unknown>
-  const path = obj["path"]
-  const oldStr = obj["oldString"] ?? obj["old_string"]
-  const newStr = obj["newString"] ?? obj["new_string"]
+  if (!isRecord(input)) return null
+  const path = input["path"]
+  const oldStr = input["oldString"] ?? input["old_string"]
+  const newStr = input["newString"] ?? input["new_string"]
   if (typeof path !== "string" || typeof oldStr !== "string" || typeof newStr !== "string")
     return null
 

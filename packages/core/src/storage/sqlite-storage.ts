@@ -1,9 +1,10 @@
 import type { PlatformError } from "effect"
 import { Clock, Context, Effect, Layer, Schema, FileSystem, Path } from "effect"
-import { Message, Session, Branch, MessagePart } from "../domain/message.js"
-import { AgentEvent, EventEnvelope, getEventSessionId } from "../domain/event.js"
+import { Message, Session, Branch, MessagePart, MessageMetadata } from "../domain/message.js"
+import { AgentEvent, EventEnvelope, EventId, getEventSessionId } from "../domain/event.js"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
-import type { ReasoningEffort } from "../domain/agent.js"
+import { ReasoningEffort } from "../domain/agent.js"
+import { isRecord } from "../domain/guards.js"
 import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { CheckpointStorage } from "./checkpoint-storage.js"
@@ -19,6 +20,19 @@ const encodeEvent = Schema.encodeEffect(EventJson)
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
 
+const safeJsonParse = (s: string): unknown => {
+  try {
+    return JSON.parse(s) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+const decodeMessageMetadata = (raw: string): MessageMetadata | undefined => {
+  const parsed = safeJsonParse(raw)
+  return isRecord(parsed) ? Schema.decodeUnknownSync(MessageMetadata)(parsed) : undefined
+}
+
 const LEGACY_EVENT_TAGS = {
   AgentRunSpawned: ["AgentRunSpawned", "SubagentSpawned"],
   AgentRunSucceeded: ["AgentRunSucceeded", "SubagentSucceeded"],
@@ -26,8 +40,8 @@ const LEGACY_EVENT_TAGS = {
 } as const satisfies Record<string, readonly string[]>
 
 const normalizeLegacyAgentEvent = (value: unknown): unknown => {
-  if (typeof value !== "object" || value === null) return value
-  const record = value as Record<string, unknown>
+  if (!isRecord(value)) return value
+  const record = value
   switch (record["_tag"]) {
     case "SubagentSpawned":
       return { ...record, _tag: "AgentRunSpawned" }
@@ -206,7 +220,7 @@ interface EventRow {
   trace_id: string | null
 }
 
-const VALID_REASONING = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
+const isReasoningEffort = Schema.is(ReasoningEffort)
 
 const sessionFromRow = (row: SessionRow) =>
   new Session({
@@ -214,8 +228,8 @@ const sessionFromRow = (row: SessionRow) =>
     name: row.name ?? undefined,
     cwd: row.cwd ?? undefined,
     reasoningLevel:
-      row.reasoning_level !== null && VALID_REASONING.has(row.reasoning_level)
-        ? (row.reasoning_level as ReasoningEffort)
+      row.reasoning_level !== null && isReasoningEffort(row.reasoning_level)
+        ? row.reasoning_level
         : undefined,
     activeBranchId: row.active_branch_id ?? undefined,
     parentSessionId: row.parent_session_id ?? undefined,
@@ -245,17 +259,8 @@ const messageFromRow = (row: MessageRow, parts: ReadonlyArray<MessagePart>) =>
     parts,
     createdAt: new Date(row.created_at),
     turnDurationMs: row.turn_duration_ms ?? undefined,
-    metadata:
-      row.metadata !== null ? (safeJsonParse(row.metadata) as Message["metadata"]) : undefined,
+    metadata: row.metadata !== null ? decodeMessageMetadata(row.metadata) : undefined,
   })
-
-const safeJsonParse = (s: string): unknown => {
-  try {
-    return JSON.parse(s)
-  } catch {
-    return undefined
-  }
-}
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -693,7 +698,7 @@ const makeStorage = Effect.gen(function* () {
         const rows = yield* sql<{ id: number }>`SELECT last_insert_rowid() as id`
         const id = rows[0]?.id ?? 0
         return new EventEnvelope({
-          id: id as EventEnvelope["id"],
+          id: EventId.of(id),
           event,
           createdAt,
           ...(traceId !== undefined ? { traceId } : {}),
@@ -715,7 +720,7 @@ const makeStorage = Effect.gen(function* () {
           if (decoded._tag === "Some") {
             envelopes.push(
               new EventEnvelope({
-                id: row.id as EventEnvelope["id"],
+                id: EventId.of(row.id),
                 event: decoded.value,
                 createdAt: row.created_at,
                 ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),

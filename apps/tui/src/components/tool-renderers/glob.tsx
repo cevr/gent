@@ -10,6 +10,7 @@ import { headTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GlobOutput {
@@ -18,28 +19,17 @@ interface GlobOutput {
 }
 
 function parseGlobOutput(output: string | undefined): GlobOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as { files?: unknown; truncated?: unknown } | null
-    if (parsed !== null && typeof parsed === "object" && Array.isArray(parsed.files)) {
-      return {
-        files: parsed.files as string[],
-        truncated: parsed.truncated === true,
-      }
-    }
-  } catch {
-    // ignore
+  const parsed = parseToolOutput(output)
+  if (parsed === undefined || !Array.isArray(parsed["files"])) return null
+  const rawFiles = parsed["files"]
+  return {
+    files: rawFiles.filter((f: unknown): f is string => typeof f === "string"),
+    truncated: parsed["truncated"] === true,
   }
-  return null
 }
 
 function getPattern(input: unknown): string {
-  if (input !== null && typeof input === "object" && "pattern" in input) {
-    return typeof (input as { pattern: unknown }).pattern === "string"
-      ? (input as { pattern: string }).pattern
-      : ""
-  }
-  return ""
+  return getString(input, "pattern")
 }
 
 export function GlobToolRenderer(props: ToolRendererProps) {

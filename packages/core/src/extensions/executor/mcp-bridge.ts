@@ -8,6 +8,7 @@
  */
 
 import { Context, Effect, Layer } from "effect"
+import { isRecord, isRecordArray } from "../../domain/guards.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {
@@ -32,11 +33,10 @@ const collectText = (content: ReadonlyArray<Record<string, unknown>>): string =>
 }
 
 export const readExecutionId = (structured: unknown): string | undefined => {
-  if (typeof structured !== "object" || structured === null || Array.isArray(structured))
-    return undefined
-  const obj = structured as Record<string, unknown>
-  return obj["status"] === "waiting_for_interaction" && typeof obj["executionId"] === "string"
-    ? (obj["executionId"] as string)
+  if (!isRecord(structured)) return undefined
+  return structured["status"] === "waiting_for_interaction" &&
+    typeof structured["executionId"] === "string"
+    ? structured["executionId"]
     : undefined
 }
 
@@ -53,9 +53,9 @@ export const normalizeToolResult = (
     }
   }
 
-  const content = raw.content as ReadonlyArray<Record<string, unknown>>
-  const structured = raw.structuredContent
-    ? (JSON.parse(JSON.stringify(raw.structuredContent)) as unknown)
+  const content = isRecordArray(raw.content) ? raw.content : []
+  const structured: unknown = raw.structuredContent
+    ? JSON.parse(JSON.stringify(raw.structuredContent))
     : undefined
   const text = collectText(content)
 

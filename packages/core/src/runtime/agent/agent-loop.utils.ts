@@ -1,3 +1,4 @@
+import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition } from "../../domain/agent.js"
 import {
   type ReasoningPart,
@@ -7,12 +8,13 @@ import {
   type ToolResultPart,
 } from "../../domain/message.js"
 import { MessageId } from "../../domain/ids.js"
+import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { compileSystemPrompt, type PromptSection } from "../../server/system-prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
-const VALID_REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"])
+const isReasoningEffort = Schema.is(ReasoningEffort)
 
 /**
  * Build a per-turn system prompt from base sections, agent addendum, and active tools.
@@ -100,8 +102,8 @@ export const resolveReasoning = (
   agent: AgentDefinition,
   sessionOverride?: string,
 ): ProviderRequest["reasoning"] | undefined => {
-  if (sessionOverride !== undefined && VALID_REASONING_LEVELS.has(sessionOverride)) {
-    return sessionOverride as ProviderRequest["reasoning"]
+  if (sessionOverride !== undefined && isReasoningEffort(sessionOverride)) {
+    return sessionOverride
   }
   return agent.reasoningEffort
 }

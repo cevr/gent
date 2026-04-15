@@ -53,6 +53,9 @@ export const MemoryEntrySchema = Schema.Struct({
 
 // ── Frontmatter parsing ──
 
+const isMemoryScope = Schema.is(MemoryScope)
+const isMemorySource = Schema.is(MemorySource)
+
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/
 
 export const parseFrontmatter = (
@@ -81,13 +84,20 @@ export const parseFrontmatter = (
     fm[key] = value
   }
 
+  const scope =
+    typeof fm["scope"] === "string" && isMemoryScope(fm["scope"]) ? fm["scope"] : "global"
+  const source =
+    typeof fm["source"] === "string" && isMemorySource(fm["source"]) ? fm["source"] : "agent"
+
   return {
     frontmatter: {
-      scope: (fm["scope"] as MemoryScope) ?? "global",
-      tags: (fm["tags"] as string[]) ?? [],
-      created: (fm["created"] as string) ?? new Date().toISOString(),
-      updated: (fm["updated"] as string) ?? new Date().toISOString(),
-      source: (fm["source"] as MemorySource) ?? "agent",
+      scope,
+      tags: Array.isArray(fm["tags"])
+        ? fm["tags"].filter((t): t is string => typeof t === "string")
+        : [],
+      created: typeof fm["created"] === "string" ? fm["created"] : new Date().toISOString(),
+      updated: typeof fm["updated"] === "string" ? fm["updated"] : new Date().toISOString(),
+      source,
     },
     body,
   }

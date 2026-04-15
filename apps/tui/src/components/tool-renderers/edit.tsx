@@ -11,16 +11,12 @@ import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 import { getEditUnifiedDiff } from "./edit-utils"
 
 function getPath(input: unknown): string {
-  if (input !== null && typeof input === "object" && "path" in input) {
-    return typeof (input as { path: unknown }).path === "string"
-      ? (input as { path: string }).path
-      : ""
-  }
-  return ""
+  return getString(input, "path")
 }
 
 type DiffLine =

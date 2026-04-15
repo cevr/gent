@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
-import { ToolCallId, type ToolCallId as ToolCallIdType } from "../domain/ids.js"
+import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
 import type { ProviderAuthInfo, ProviderHints } from "../domain/extension.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry"
@@ -345,7 +345,7 @@ export const toStreamChunk =
       case "tool-call":
         return Effect.succeed<StreamChunk>(
           new ToolCallChunk({
-            toolCallId: part.id as ToolCallIdType,
+            toolCallId: ToolCallId.of(part.id),
             toolName: part.name,
             input: part.params,
           }),

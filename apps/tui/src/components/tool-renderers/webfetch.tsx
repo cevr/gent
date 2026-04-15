@@ -8,6 +8,7 @@
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface WebfetchOutput {
@@ -17,36 +18,23 @@ interface WebfetchOutput {
 }
 
 function parseWebfetchOutput(output: string | undefined): WebfetchOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as {
-      url?: unknown
-      content?: unknown
-      title?: unknown
-    } | null
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      typeof parsed.url === "string" &&
-      typeof parsed.content === "string"
-    ) {
-      return {
-        url: parsed.url,
-        content: parsed.content,
-        title: typeof parsed.title === "string" ? parsed.title : undefined,
-      }
+  const parsed = parseToolOutput(output)
+  if (
+    parsed !== undefined &&
+    typeof parsed["url"] === "string" &&
+    typeof parsed["content"] === "string"
+  ) {
+    return {
+      url: parsed["url"],
+      content: parsed["content"],
+      title: typeof parsed["title"] === "string" ? parsed["title"] : undefined,
     }
-  } catch {
-    // ignore
   }
   return null
 }
 
 function getUrl(input: unknown): string {
-  if (input !== null && typeof input === "object" && "url" in input) {
-    return typeof (input as { url: unknown }).url === "string" ? (input as { url: string }).url : ""
-  }
-  return ""
+  return getString(input, "url")
 }
 
 export function WebfetchToolRenderer(props: ToolRendererProps) {

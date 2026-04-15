@@ -9,6 +9,7 @@
  */
 
 import { Context, Effect, Layer } from "effect"
+import { isRecord } from "../domain/guards.js"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { InteractionPresented, type EventStoreError } from "../domain/event.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
@@ -78,8 +79,8 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
    *  - all other requests (approval, confirm, review) → approved */
   static LiveAutoResolve: Layer.Layer<ApprovalService> = Layer.succeed(ApprovalService, {
     present: (params) => {
-      const meta = params.metadata as { type?: string } | undefined
-      const isAskUser = meta?.type === "ask-user"
+      const meta = isRecord(params.metadata) ? params.metadata : undefined
+      const isAskUser = meta?.["type"] === "ask-user"
       return Effect.succeed(isAskUser ? { approved: false } : { approved: true })
     },
     storeResolution: () => {},

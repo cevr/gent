@@ -1,6 +1,7 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface SessionResult {
@@ -18,27 +19,22 @@ interface SearchOutput {
 }
 
 function parseOutput(output: string | undefined): SearchOutput | undefined {
-  if (output === undefined) return undefined
-  try {
-    return JSON.parse(output) as SearchOutput
-  } catch {
-    return undefined
-  }
+  return parseToolOutput(output) as SearchOutput | undefined
 }
 
-function parseInput(input: unknown): { query?: string } | undefined {
-  if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { query?: string }
+function getQuery(input: unknown): string | undefined {
+  const q = getString(input, "query")
+  return q !== "" ? q : undefined
 }
 
 export function SearchSessionsToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const input = () => parseInput(props.toolCall.input)
+  const query = () => getQuery(props.toolCall.input)
   const output = () => parseOutput(props.toolCall.output)
 
   const subtitle = () => {
-    const q = input()?.query
+    const q = query()
     if (q === undefined) return undefined
     return q.length > 60 ? q.slice(0, 60) + "…" : q
   }

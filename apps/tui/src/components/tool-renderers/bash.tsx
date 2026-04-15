@@ -9,6 +9,7 @@ import { Show, createMemo } from "solid-js"
 import { formatHeadTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface BashOutput {
@@ -18,33 +19,19 @@ interface BashOutput {
 }
 
 function parseBashOutput(output: string | undefined): BashOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as {
-      stdout?: unknown
-      stderr?: unknown
-      exitCode?: unknown
-    } | null
-    if (parsed !== null && typeof parsed === "object" && typeof parsed.exitCode === "number") {
-      return {
-        stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
-        stderr: typeof parsed.stderr === "string" ? parsed.stderr : "",
-        exitCode: parsed.exitCode,
-      }
+  const parsed = parseToolOutput(output)
+  if (parsed !== undefined && typeof parsed["exitCode"] === "number") {
+    return {
+      stdout: typeof parsed["stdout"] === "string" ? parsed["stdout"] : "",
+      stderr: typeof parsed["stderr"] === "string" ? parsed["stderr"] : "",
+      exitCode: parsed["exitCode"],
     }
-  } catch {
-    // not JSON — treat as raw text
   }
   return null
 }
 
 function getCommand(input: unknown): string {
-  if (input !== null && typeof input === "object" && "command" in input) {
-    return typeof (input as { command: unknown }).command === "string"
-      ? (input as { command: string }).command
-      : ""
-  }
-  return ""
+  return getString(input, "command")
 }
 
 export function BashToolRenderer(props: ToolRendererProps) {

@@ -10,7 +10,7 @@
  * - review: per review tool completion (peer review)
  */
 
-import { Clock, Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Clock, Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 
 // ── Row types ──
 
@@ -126,7 +126,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
               content
                 .split("\n")
                 .filter((line) => line.trim() !== "")
-                .map((line) => {
+                .map((line): JournalRow | undefined => {
                   try {
                     return JSON.parse(line) as JournalRow
                   } catch {
@@ -138,23 +138,11 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             Effect.orElseSucceed((): JournalRow[] => []),
           )
 
-        // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off preferSchemaOverJson:off — parsing user-written pointer file, errors immediately caught
         const readActivePointer = fs.readFileString(activeFilePath).pipe(
-          Effect.flatMap((raw) =>
-            Effect.try({
-              try: (): { path: string; sessionId?: string } | undefined => {
-                const content = JSON.parse(raw) as Record<string, unknown>
-                if (typeof content["path"] !== "string") return undefined
-                return {
-                  path: content["path"],
-                  sessionId:
-                    typeof content["sessionId"] === "string" ? content["sessionId"] : undefined,
-                }
-              },
-              catch: () => new Error("Invalid active pointer JSON"),
-            }),
-          ),
-          Effect.orElseSucceed((): { path: string; sessionId?: string } | undefined => undefined),
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ActivePointerSchema))),
+          Effect.map((pointer): { path: string; sessionId?: string } => pointer),
+          Effect.option,
+          Effect.map(Option.getOrUndefined),
         )
 
         return AutoJournal.of({

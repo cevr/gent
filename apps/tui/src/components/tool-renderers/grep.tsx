@@ -9,6 +9,8 @@ import { For, Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
+import { isRecord } from "@gent/core/domain/guards.js"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GrepMatch {
@@ -23,28 +25,17 @@ interface GrepOutput {
 }
 
 function parseGrepOutput(output: string | undefined): GrepOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as { matches?: unknown; truncated?: unknown } | null
-    if (parsed !== null && typeof parsed === "object" && Array.isArray(parsed.matches)) {
-      return {
-        matches: parsed.matches as GrepMatch[],
-        truncated: parsed.truncated === true,
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null
+  const parsed = parseToolOutput(output)
+  if (parsed === undefined || !Array.isArray(parsed["matches"])) return null
+  const rawMatches = parsed["matches"]
+  const matches: GrepMatch[] = rawMatches.filter(
+    (m: unknown): m is GrepMatch => isRecord(m) && typeof m["file"] === "string",
+  )
+  return { matches, truncated: parsed["truncated"] === true }
 }
 
 function getPattern(input: unknown): string {
-  if (input !== null && typeof input === "object" && "pattern" in input) {
-    return typeof (input as { pattern: unknown }).pattern === "string"
-      ? (input as { pattern: string }).pattern
-      : ""
-  }
-  return ""
+  return getString(input, "pattern")
 }
 
 /** Group matches by file */

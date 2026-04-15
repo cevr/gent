@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface ReadSessionOutput {
@@ -14,29 +15,23 @@ interface ReadSessionOutput {
 }
 
 function parseOutput(output: string | undefined): ReadSessionOutput | undefined {
-  if (output === undefined) return undefined
-  try {
-    return JSON.parse(output) as ReadSessionOutput
-  } catch {
-    return undefined
-  }
+  return parseToolOutput(output) as ReadSessionOutput | undefined
 }
 
-function parseInput(input: unknown): { sessionId?: string; goal?: string } | undefined {
-  if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { sessionId?: string; goal?: string }
+function getInputField(input: unknown, key: string): string | undefined {
+  const val = getString(input, key)
+  return val !== "" ? val : undefined
 }
 
 export function ReadSessionToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const input = () => parseInput(props.toolCall.input)
   const output = () => parseOutput(props.toolCall.output)
 
   const subtitle = () => {
-    const sid = input()?.sessionId
+    const sid = getInputField(props.toolCall.input, "sessionId")
     if (sid === undefined) return undefined
-    const goal = input()?.goal
+    const goal = getInputField(props.toolCall.input, "goal")
     if (goal !== undefined) return `${sid.slice(0, 8)}… — ${goal.slice(0, 40)}`
     return sid.slice(0, 8) + "…"
   }

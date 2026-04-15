@@ -19,6 +19,7 @@ import {
   Semaphore,
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
+import { isRecord } from "../../domain/guards.js"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
 import {
@@ -98,11 +99,12 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             Effect.flatMap((raw) =>
               Effect.try({
                 try: () => {
-                  const json = JSON.parse(raw) as Record<string, unknown>
+                  const json: unknown = JSON.parse(raw)
+                  if (!isRecord(json)) return Schema.decodeUnknownSync(ExecutorSettings)({})
                   const section = json["gentExecutor"]
                   return section && typeof section === "object"
                     ? Schema.decodeUnknownSync(ExecutorSettings)(section)
-                    : ({} as typeof ExecutorSettings.Type)
+                    : Schema.decodeUnknownSync(ExecutorSettings)({})
                 },
                 catch: () =>
                   new ExecutorSidecarError({
@@ -111,7 +113,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
                   }),
               }),
             ),
-            Effect.orElseSucceed(() => ({}) as typeof ExecutorSettings.Type),
+            Effect.orElseSucceed(() => Schema.decodeUnknownSync(ExecutorSettings)({})),
           )
 
         const loadSettings = (cwd: string) =>
@@ -194,11 +196,9 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const emptyRegistry: SidecarRegistryFile = { version: 1, sidecars: {} }
 
         const parseRegistry = (raw: unknown): SidecarRegistryFile => {
-          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return emptyRegistry
-          const obj = raw as Record<string, unknown>
-          const sidecars = obj["sidecars"]
-          if (typeof sidecars !== "object" || sidecars === null || Array.isArray(sidecars))
-            return emptyRegistry
+          if (!isRecord(raw)) return emptyRegistry
+          const sidecars = raw["sidecars"]
+          if (!isRecord(sidecars)) return emptyRegistry
           return { version: 1, sidecars: sidecars as Record<string, RegisteredSidecar> }
         }
 

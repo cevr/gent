@@ -1,6 +1,7 @@
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { AgentTree } from "./agent-tree"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface ReviewComment {
@@ -20,17 +21,12 @@ interface ReviewOutput {
 }
 
 function parseOutput(output: string | undefined): ReviewOutput | undefined {
-  if (output === undefined) return undefined
-  try {
-    return JSON.parse(output) as ReviewOutput
-  } catch {
-    return undefined
-  }
+  return parseToolOutput(output) as ReviewOutput | undefined
 }
 
-function parseInput(input: unknown): { description?: string } | undefined {
-  if (input === null || input === undefined || typeof input !== "object") return undefined
-  return input as { description?: string }
+function getDescription(input: unknown): string | undefined {
+  const desc = getString(input, "description")
+  return desc !== "" ? desc : undefined
 }
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -53,11 +49,11 @@ function formatSummary(s: { critical: number; high: number; medium: number; low:
 export function ReviewToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const input = () => parseInput(props.toolCall.input)
+  const description = () => getDescription(props.toolCall.input)
   const output = () => parseOutput(props.toolCall.output)
 
   const subtitle = () => {
-    const d = input()?.description
+    const d = description()
     if (d === undefined) return undefined
     return d.length > 60 ? d.slice(0, 60) + "…" : d
   }

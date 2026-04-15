@@ -75,6 +75,7 @@ import {
   type StreamChunk as ProviderStreamChunk,
 } from "../../providers/provider.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
+import { hasMessage } from "../../domain/guards.js"
 import { withRetry } from "../retry"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
@@ -131,9 +132,7 @@ import {
 
 const formatStreamErrorMessage = (streamError: unknown) => {
   if (streamError instanceof Error) return streamError.message
-  if ("message" in (streamError as Record<string, unknown>)) {
-    return String((streamError as Record<string, unknown>)["message"])
-  }
+  if (hasMessage(streamError)) return streamError.message
   return String(streamError)
 }
 

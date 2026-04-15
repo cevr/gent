@@ -18,7 +18,7 @@ import { ToolCallTree } from "./tool-call-tree"
 import { LiveChildTree } from "./live-child-tree"
 import type { ToolCall } from "./types"
 import type { ChildSessionEntry } from "../../services/child-session-tracker"
-import type { BranchId } from "@gent/core/domain/ids.js"
+import { BranchId } from "@gent/core/domain/ids.js"
 
 interface AgentTreeProps {
   /** Tool display name */
@@ -110,7 +110,10 @@ export function AgentTree(props: AgentTreeProps) {
   })
 
   // Fetch structured messages (reasoning + text) on completion
-  const childBranchId = () => completedChild()?.childBranchId as BranchId | undefined
+  const childBranchId = () => {
+    const id = completedChild()?.childBranchId
+    return id !== undefined ? BranchId.of(id) : undefined
+  }
   const fetchKey = () => {
     if (props.toolCall.status === "running") return undefined
     return childBranchId()

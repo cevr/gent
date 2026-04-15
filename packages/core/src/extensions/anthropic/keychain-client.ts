@@ -12,6 +12,7 @@
  */
 
 import { Effect, Layer, Stream } from "effect"
+import { isRecord, isRecordArray } from "../../domain/guards.js"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
@@ -39,10 +40,10 @@ const transformMessages = (
   messages: ReadonlyArray<Record<string, unknown>>,
 ): ReadonlyArray<Record<string, unknown>> =>
   messages.map((msg) => {
-    if (!Array.isArray(msg["content"])) return msg
+    if (!isRecordArray(msg["content"])) return msg
     return {
       ...msg,
-      content: (msg["content"] as ReadonlyArray<Record<string, unknown>>).map((block) => {
+      content: msg["content"].map((block) => {
         if (block["type"] === "tool_use" && typeof block["name"] === "string") {
           return { ...block, name: prefixName(block["name"]) }
         }
@@ -53,12 +54,9 @@ const transformMessages = (
 
 /** Prefix tool name in tool_choice if it specifies a particular tool */
 const transformToolChoice = (toolChoice: unknown): unknown => {
-  if (toolChoice === null || toolChoice === undefined || typeof toolChoice !== "object") {
-    return toolChoice
-  }
-  const tc = toolChoice as Record<string, unknown>
-  if (tc["type"] === "tool" && typeof tc["name"] === "string") {
-    return { ...tc, name: prefixName(tc["name"]) }
+  if (!isRecord(toolChoice)) return toolChoice
+  if (toolChoice["type"] === "tool" && typeof toolChoice["name"] === "string") {
+    return { ...toolChoice, name: prefixName(toolChoice["name"]) }
   }
   return toolChoice
 }
@@ -73,12 +71,11 @@ export const transformSystem = (system: unknown): unknown => {
   }
 
   if (Array.isArray(system)) {
-    const blocks = system as ReadonlyArray<Record<string, unknown>>
-    const hasPrefix = blocks.some(
-      (entry) =>
-        typeof entry["text"] === "string" &&
-        (entry["text"] as string).includes(SYSTEM_IDENTITY_PREFIX),
-    )
+    const blocks = isRecordArray(system) ? system : []
+    const hasPrefix = blocks.some((entry) => {
+      const text = entry["text"]
+      return typeof text === "string" && text.includes(SYSTEM_IDENTITY_PREFIX)
+    })
 
     const withIdentity: ReadonlyArray<Record<string, unknown>> = hasPrefix
       ? blocks
@@ -98,14 +95,12 @@ export const transformSystem = (system: unknown): unknown => {
 export const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
   const result: Record<string, unknown> = { ...payload }
 
-  if (Array.isArray(result["tools"])) {
-    result["tools"] = transformTools(result["tools"] as ReadonlyArray<Record<string, unknown>>)
+  if (isRecordArray(result["tools"])) {
+    result["tools"] = transformTools(result["tools"])
   }
 
-  if (Array.isArray(result["messages"])) {
-    result["messages"] = transformMessages(
-      result["messages"] as ReadonlyArray<Record<string, unknown>>,
-    )
+  if (isRecordArray(result["messages"])) {
+    result["messages"] = transformMessages(result["messages"])
   }
 
   if ("tool_choice" in result) {
@@ -141,7 +136,8 @@ export const transformStreamEvent = (
   // content_block_start has type: "content_block_start" and content_block with the block data
   const e = event as Record<string, unknown>
   if (e["type"] !== "content_block_start") return event
-  const block = e["content_block"] as Record<string, unknown> | undefined
+  const rawBlock = e["content_block"]
+  const block = isRecord(rawBlock) ? rawBlock : undefined
   if (block?.["type"] === "tool_use" && typeof block["name"] === "string") {
     return {
       ...event,
@@ -181,12 +177,11 @@ export const keychainClient: Layer.Layer<
           .pipe(
             Effect.map(([body, response]) => {
               const b = body as Record<string, unknown>
-              if (Array.isArray(b["content"])) {
+              const content = b["content"]
+              if (isRecordArray(content)) {
                 const transformed = {
                   ...b,
-                  content: transformResponseContent(
-                    b["content"] as ReadonlyArray<Record<string, unknown>>,
-                  ),
+                  content: transformResponseContent(content),
                 }
                 return [transformed as typeof body, response] as [typeof body, typeof response]
               }

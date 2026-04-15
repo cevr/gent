@@ -10,6 +10,7 @@ import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { parseToolOutput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface WriteOutput {
@@ -18,19 +19,13 @@ interface WriteOutput {
 }
 
 function parseWriteOutput(output: string | undefined): WriteOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as { path?: unknown; bytesWritten?: unknown } | null
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      typeof parsed.path === "string" &&
-      typeof parsed.bytesWritten === "number"
-    ) {
-      return { path: parsed.path, bytesWritten: parsed.bytesWritten }
-    }
-  } catch {
-    // ignore
+  const parsed = parseToolOutput(output)
+  if (
+    parsed !== undefined &&
+    typeof parsed["path"] === "string" &&
+    typeof parsed["bytesWritten"] === "number"
+  ) {
+    return { path: parsed["path"], bytesWritten: parsed["bytesWritten"] }
   }
   return null
 }

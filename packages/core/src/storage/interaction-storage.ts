@@ -1,9 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import type {
-  InteractionRequestRecord,
-  InteractionRequestStatus,
-} from "../domain/interaction-request.js"
+import type { InteractionRequestRecord } from "../domain/interaction-request.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
 import { StorageError } from "./sqlite-storage.js"
 
@@ -17,13 +14,16 @@ interface InteractionRequestRow {
   created_at: number
 }
 
+const isStatus = (s: string): s is InteractionRequestRecord["status"] =>
+  s === "pending" || s === "resolved"
+
 const fromRow = (row: InteractionRequestRow): InteractionRequestRecord => ({
   requestId: row.request_id,
-  type: row.type as InteractionRequestRecord["type"],
+  type: row.type,
   sessionId: row.session_id,
   branchId: row.branch_id,
   paramsJson: row.params_json,
-  status: row.status as InteractionRequestStatus,
+  status: isStatus(row.status) ? row.status : "pending",
   createdAt: row.created_at,
 })
 

@@ -12,6 +12,7 @@ import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
+import { parseToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 type WindowedLine =
@@ -26,35 +27,20 @@ interface ReadOutput {
 }
 
 function parseReadOutput(output: string | undefined): ReadOutput | null {
-  if (output === undefined) return null
-  try {
-    const parsed = JSON.parse(output) as {
-      content?: unknown
-      path?: unknown
-      lineCount?: unknown
-      truncated?: unknown
-    } | null
-    if (parsed !== null && typeof parsed === "object" && typeof parsed.content === "string") {
-      return {
-        content: parsed.content,
-        path: typeof parsed.path === "string" ? parsed.path : "",
-        lineCount: typeof parsed.lineCount === "number" ? parsed.lineCount : 0,
-        truncated: parsed.truncated === true,
-      }
+  const parsed = parseToolOutput(output)
+  if (parsed !== undefined && typeof parsed["content"] === "string") {
+    return {
+      content: parsed["content"],
+      path: typeof parsed["path"] === "string" ? parsed["path"] : "",
+      lineCount: typeof parsed["lineCount"] === "number" ? parsed["lineCount"] : 0,
+      truncated: parsed["truncated"] === true,
     }
-  } catch {
-    // ignore
   }
   return null
 }
 
 function getPath(input: unknown): string {
-  if (input !== null && typeof input === "object" && "path" in input) {
-    return typeof (input as { path: unknown }).path === "string"
-      ? (input as { path: string }).path
-      : ""
-  }
-  return ""
+  return getString(input, "path")
 }
 
 /** Parse line-numbered content (tab-separated: "  1\tcontent") into lines */
