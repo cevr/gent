@@ -15,6 +15,10 @@ const TestRuntimePlatform = RuntimePlatform.Test({
   home: "/tmp",
   platform: "test",
 })
+const FallbackLayer = Layer.merge(
+  PlatformLayer,
+  Layer.provide(FallbackFileIndexLive, PlatformLayer),
+)
 
 // ---------------------------------------------------------------------------
 // Fallback adapter
@@ -35,7 +39,7 @@ describe("FileIndex.Fallback", () => {
       expect(files.every((f) => f.path.startsWith(tmpDir))).toBe(true)
       expect(files.every((f) => f.modifiedMs > 0)).toBe(true)
       expect(files.every((f) => f.size > 0)).toBe(true)
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("listFiles includes dotfiles", () =>
@@ -51,7 +55,7 @@ describe("FileIndex.Fallback", () => {
 
       expect(names).toContain(".gitignore")
       expect(names).toContain("readme.md")
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("listFiles respects gitignore", () =>
@@ -69,7 +73,7 @@ describe("FileIndex.Fallback", () => {
       expect(names).toContain("kept.txt")
       expect(names).toContain(".gitignore")
       expect(names).not.toContain("ignored.txt")
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.scopedLive("listFiles returns full file list (no early break)", () =>
@@ -84,7 +88,7 @@ describe("FileIndex.Fallback", () => {
       const files = yield* fileIndex.listFiles({ cwd: tmpDir })
 
       expect(files.length).toBe(50)
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 
   it.live("searchFiles returns empty (no fuzzy in fallback)", () =>
@@ -93,7 +97,7 @@ describe("FileIndex.Fallback", () => {
       const results = yield* fileIndex.searchFiles({ cwd: "/tmp", query: "anything" })
 
       expect(results.length).toBe(0)
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 })
 
@@ -182,6 +186,6 @@ describe("withFallback composite", () => {
 
       expect(files.length).toBe(1)
       expect(files[0]!.fileName).toBe("hello.txt")
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FallbackFileIndexLive))),
+    }).pipe(Effect.provide(FallbackLayer)),
   )
 })

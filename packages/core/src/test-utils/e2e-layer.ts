@@ -177,7 +177,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         authStoreLive,
         authGuardLive,
         providerAuthLive,
-        FallbackFileIndexLive,
+        Layer.provide(FallbackFileIndexLive, BunServices.layer),
         ...extensionLayers,
         ...(config.extraLayers ?? []),
       )

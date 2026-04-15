@@ -5,6 +5,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   ManagedRuntime,
   Schema,
@@ -52,8 +53,6 @@ import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdirSync, writeFileSync } from "node:fs"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -265,11 +264,6 @@ const loadAgentRunSuccessData = (params: {
     }
   })
 
-class DebugOutputWriteError extends Schema.TaggedErrorClass<DebugOutputWriteError>()(
-  "DebugOutputWriteError",
-  { message: Schema.String },
-) {}
-
 const saveAgentRunOutput = (result: {
   text: string
   reasoning: string
@@ -286,19 +280,19 @@ const saveAgentRunOutput = (result: {
 
     if (fullContent.length === 0) return undefined
 
+    const fs = yield* Effect.serviceOption(FileSystem.FileSystem)
+    if (fs._tag === "None") return undefined
+
     const ts = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-")
-    return yield* Effect.try({
-      try: () => {
-        const dir = "/tmp/gent/outputs"
-        mkdirSync(dir, { recursive: true })
-        const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
-        const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
-        const header = `# ${result.agentName} — ${result.sessionId}\n\n`
-        writeFileSync(filepath, header + fullContent, "utf-8")
-        return filepath
-      },
-      catch: (e) => new DebugOutputWriteError({ message: String(e) }),
-    }).pipe(Effect.orElseSucceed((): string | undefined => undefined))
+    const dir = "/tmp/gent/outputs"
+    yield* fs.value.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
+    const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
+    const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`
+    const header = `# ${result.agentName} — ${result.sessionId}\n\n`
+    return yield* fs.value.writeFileString(filepath, header + fullContent).pipe(
+      Effect.as(filepath as string | undefined),
+      Effect.orElseSucceed((): string | undefined => undefined),
+    )
   })
 
 /** Compute nesting depth of a session from its persisted parent chain. Root sessions have depth 0. */

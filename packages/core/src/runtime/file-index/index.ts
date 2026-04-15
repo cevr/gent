@@ -40,7 +40,9 @@ export const FileIndexLive: Layer.Layer<
   FileSystem.FileSystem | Path.Path | RuntimePlatform
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const fallback = makeFallbackService()
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
+    const fallback = makeFallbackService(fs, path)
 
     // Try loading native module
     const mod = yield* loadNativeModule.pipe(Effect.option)
@@ -48,8 +50,6 @@ export const FileIndexLive: Layer.Layer<
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
     const { home } = yield* RuntimePlatform
     const dbDir = yield* ensureDbDir(home, path, fs)
 

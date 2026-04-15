@@ -25,7 +25,7 @@ const PlatformLayer = Layer.mergeAll(
     home: "/tmp/test-home",
     platform: "test",
   }),
-  FallbackFileIndexLive,
+  Layer.provide(FallbackFileIndexLive, BunServices.layer),
 )
 
 describe("GlobTool", () => {

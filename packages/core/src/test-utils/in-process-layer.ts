@@ -6,6 +6,7 @@
  */
 
 import { Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { Agents } from "../domain/agent.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -68,7 +69,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     authStoreLive,
     authGuardLive,
     providerAuthLive,
-    FallbackFileIndexLive,
+    Layer.provide(FallbackFileIndexLive, BunServices.layer),
   )
 
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)

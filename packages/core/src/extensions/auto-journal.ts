@@ -10,18 +10,7 @@
  * - review: per review tool completion (peer review)
  */
 
-import { Clock, Context, Effect, Layer, Schema } from "effect"
-// @effect-diagnostics nodeBuiltinImport:off
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-} from "node:fs"
-// @effect-diagnostics nodeBuiltinImport:off
-import { join } from "node:path"
+import { Clock, Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 
 // ── Row types ──
 
@@ -107,109 +96,112 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
     getActivePath: (): Effect.Effect<string | undefined> => Effect.void.pipe(Effect.as(undefined)),
   } satisfies AutoJournalService)
 
-  static Live = (params: { cwd: string }): Layer.Layer<AutoJournal> => {
-    const autoDir = join(params.cwd, ".gent", "auto")
-    const activePath = join(autoDir, "active.json")
+  static Live = (params: {
+    cwd: string
+  }): Layer.Layer<AutoJournal, never, FileSystem.FileSystem | Path.Path> =>
+    Layer.effect(
+      AutoJournal,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
 
-    const ensureDir = () => {
-      if (!existsSync(autoDir)) mkdirSync(autoDir, { recursive: true })
-    }
+        const autoDir = path.join(params.cwd, ".gent", "auto")
+        const activeFilePath = path.join(autoDir, "active.json")
 
-    const slugify = (text: string): string =>
-      text
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 60)
+        const ensureDir = fs.makeDirectory(autoDir, { recursive: true }).pipe(Effect.ignore)
 
-    const appendRow = (path: string, row: JournalRow) => {
-      appendFileSync(path, JSON.stringify(row) + "\n")
-    }
+        const slugify = (text: string): string =>
+          text
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "")
+            .slice(0, 60)
 
-    const readRows = (path: string): JournalRow[] => {
-      if (!existsSync(path)) return []
-      const content = readFileSync(path, "utf8")
-      return content
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .map((line) => {
-          try {
-            return JSON.parse(line) as JournalRow
-          } catch {
-            return undefined
-          }
-        })
-        .filter((row): row is JournalRow => row !== undefined)
-    }
+        const appendRow = (filePath: string, row: JournalRow) =>
+          fs.writeFileString(filePath, JSON.stringify(row) + "\n", { flag: "a" })
 
-    const readActivePointerSync = (): { path: string; sessionId?: string } | undefined => {
-      if (!existsSync(activePath)) return undefined
-      try {
-        const content = JSON.parse(readFileSync(activePath, "utf8"))
-        if (typeof content.path !== "string") return undefined
-        return {
-          path: content.path,
-          sessionId: typeof content.sessionId === "string" ? content.sessionId : undefined,
-        }
-      } catch {
-        return undefined
-      }
-    }
-
-    return Layer.succeed(AutoJournal, {
-      start: ({ goal, maxIterations, sessionId }) =>
-        Effect.gen(function* () {
-          ensureDir()
-          const slug = slugify(goal)
-          const journalPath = join(autoDir, `${slug}.jsonl`)
-          const row: ConfigRow = {
-            type: "config",
-            goal,
-            maxIterations,
-            startedAt: yield* Clock.currentTimeMillis,
-          }
-          writeFileSync(journalPath, encodeConfigRowJson(row) + "\n")
-          writeFileSync(
-            activePath,
-            encodeActivePointerJson({
-              path: journalPath,
-              ...(sessionId !== undefined ? { sessionId } : {}),
-            }),
+        const readRows = (filePath: string) =>
+          fs.readFileString(filePath).pipe(
+            Effect.map((content) =>
+              content
+                .split("\n")
+                .filter((line) => line.trim() !== "")
+                .map((line) => {
+                  try {
+                    return JSON.parse(line) as JournalRow
+                  } catch {
+                    return undefined
+                  }
+                })
+                .filter((row): row is JournalRow => row !== undefined),
+            ),
+            Effect.orElseSucceed((): JournalRow[] => []),
           )
-          return journalPath
-        }),
 
-      appendCheckpoint: (params) =>
-        Effect.sync(() => {
-          const active = readActivePointerSync()?.path
-          if (active === undefined) return
-          appendRow(active, { type: "checkpoint", ...params })
-        }),
+        const readActivePointer = fs.readFileString(activeFilePath).pipe(
+          Effect.map((raw) => {
+            const content = JSON.parse(raw) as Record<string, unknown>
+            if (typeof content["path"] !== "string") return undefined
+            return {
+              path: content["path"],
+              sessionId:
+                typeof content["sessionId"] === "string" ? content["sessionId"] : undefined,
+            }
+          }),
+          Effect.orElseSucceed((): { path: string; sessionId?: string } | undefined => undefined),
+        )
 
-      appendReview: (iteration) =>
-        Effect.sync(() => {
-          const active = readActivePointerSync()?.path
-          if (active === undefined) return
-          appendRow(active, { type: "review", iteration })
-        }),
+        return AutoJournal.of({
+          start: ({ goal, maxIterations, sessionId }) =>
+            Effect.gen(function* () {
+              yield* ensureDir
+              const slug = slugify(goal)
+              const journalPath = path.join(autoDir, `${slug}.jsonl`)
+              const row: ConfigRow = {
+                type: "config",
+                goal,
+                maxIterations,
+                startedAt: yield* Clock.currentTimeMillis,
+              }
+              yield* fs.writeFileString(journalPath, encodeConfigRowJson(row) + "\n")
+              yield* fs.writeFileString(
+                activeFilePath,
+                encodeActivePointerJson({
+                  path: journalPath,
+                  ...(sessionId !== undefined ? { sessionId } : {}),
+                }),
+              )
+              return journalPath
+            }).pipe(Effect.orDie),
 
-      finish: () =>
-        Effect.sync(() => {
-          if (existsSync(activePath)) unlinkSync(activePath)
-        }),
+          appendCheckpoint: (params) =>
+            Effect.gen(function* () {
+              const active = yield* readActivePointer
+              if (active === undefined) return
+              yield* appendRow(active.path, { type: "checkpoint", ...params })
+            }).pipe(Effect.orDie),
 
-      readActive: () =>
-        Effect.sync(() => {
-          const active = readActivePointerSync()
-          if (active === undefined || !existsSync(active.path)) return undefined
-          return {
-            rows: readRows(active.path),
-            path: active.path,
-            sessionId: active.sessionId,
-          }
-        }),
+          appendReview: (iteration) =>
+            Effect.gen(function* () {
+              const active = yield* readActivePointer
+              if (active === undefined) return
+              yield* appendRow(active.path, { type: "review", iteration })
+            }).pipe(Effect.orDie),
 
-      getActivePath: () => Effect.sync(() => readActivePointerSync()?.path),
-    } satisfies AutoJournalService)
-  }
+          finish: () => fs.remove(activeFilePath).pipe(Effect.ignore),
+
+          readActive: () =>
+            Effect.gen(function* () {
+              const active = yield* readActivePointer
+              if (active === undefined) return undefined
+              const exists = yield* fs.exists(active.path)
+              if (!exists) return undefined
+              const rows = yield* readRows(active.path)
+              return { rows, path: active.path, sessionId: active.sessionId }
+            }).pipe(Effect.orDie),
+
+          getActivePath: () => readActivePointer.pipe(Effect.map((a) => a?.path)),
+        } satisfies AutoJournalService)
+      }),
+    )
 }

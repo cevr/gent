@@ -29,7 +29,7 @@ import {
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { BunServices } from "@effect/platform-bun"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 
 const bashStubTool = defineTool({
@@ -186,6 +186,7 @@ describe("AgentRunner", () => {
       recorderLayer,
       eventStoreLayer,
       eventPublisherLayer,
+      BunFileSystem.layer,
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -723,6 +724,7 @@ describe("AgentRunner", () => {
       mockLoop,
       eventStoreLayer,
       eventPublisherLayer,
+      BunFileSystem.layer,
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -804,6 +806,7 @@ describe("AgentRunner", () => {
       mockLoop,
       eventStoreLayer,
       eventPublisherLayer,
+      BunFileSystem.layer,
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -880,6 +883,7 @@ describe("AgentRunner", () => {
       mockLoop,
       eventStoreLayer,
       eventPublisherLayer,
+      BunFileSystem.layer,
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),

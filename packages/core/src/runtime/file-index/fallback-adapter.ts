@@ -1,9 +1,5 @@
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { Glob } from "bun"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { statSync, readFileSync } from "node:fs"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { join, basename } from "node:path"
 import {
   FileIndex,
   FileIndexError,
@@ -47,18 +43,19 @@ const isGitignored = (path: string, patterns: Glob[]): boolean =>
 
 const gitignoreCache = new Map<string, Glob[]>()
 
-const loadGitignore = (cwd: string): Glob[] => {
+const loadGitignore = (
+  cwd: string,
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+): Effect.Effect<Glob[]> => {
   const cached = gitignoreCache.get(cwd)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) return Effect.succeed(cached)
 
-  let patterns: Glob[] = []
-  try {
-    patterns = parseGitignorePatterns(readFileSync(join(cwd, ".gitignore"), "utf-8"))
-  } catch {
-    // No .gitignore or unreadable
-  }
-  gitignoreCache.set(cwd, patterns)
-  return patterns
+  return fs.readFileString(path.join(cwd, ".gitignore")).pipe(
+    Effect.map((content) => parseGitignorePatterns(content)),
+    Effect.orElseSucceed(() => [] as Glob[]),
+    Effect.tap((patterns) => Effect.sync(() => gitignoreCache.set(cwd, patterns))),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -67,46 +64,62 @@ const loadGitignore = (cwd: string): Glob[] => {
 
 const FILE_GLOB = new Glob("**/*")
 
-async function scanAllFiles(cwd: string): Promise<IndexedFile[]> {
-  const ignorePatterns = loadGitignore(cwd)
-  const files: IndexedFile[] = []
+const scanAllFiles = (cwd: string, fs: FileSystem.FileSystem, pathService: Path.Path) =>
+  Effect.gen(function* () {
+    const ignorePatterns = yield* loadGitignore(cwd, fs, pathService)
 
-  for await (const relativePath of FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })) {
-    if (isGitignored(relativePath, ignorePatterns)) continue
+    // Collect glob results first (async iterator), then stat each file via Effect
+    const relativePaths: string[] = []
+    yield* Effect.tryPromise({
+      try: async () => {
+        for await (const rp of FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })) {
+          if (!isGitignored(rp, ignorePatterns)) relativePaths.push(rp)
+        }
+      },
+      catch: () => new FileIndexError({ message: "glob scan failed", cwd }),
+    })
 
-    const absPath = join(cwd, relativePath)
-    try {
-      const stat = statSync(absPath)
+    const files: IndexedFile[] = []
+    for (const relativePath of relativePaths) {
+      const absPath = pathService.join(cwd, relativePath)
+      const info = yield* fs.stat(absPath).pipe(Effect.option)
+      if (info._tag === "None") continue
+
       files.push({
         path: absPath,
         relativePath,
-        fileName: basename(relativePath),
-        size: stat.size,
-        modifiedMs: stat.mtimeMs,
+        fileName: pathService.basename(relativePath),
+        size: Number(info.value.size),
+        modifiedMs: Option.match(info.value.mtime, {
+          onNone: () => 0,
+          onSome: (d) => d.getTime(),
+        }),
       })
-    } catch {
-      // File may have been deleted between scan and stat
     }
-  }
 
-  return files
-}
+    return files
+  })
 
 // ---------------------------------------------------------------------------
 // Fallback FileIndex implementation
 // ---------------------------------------------------------------------------
 
-export const makeFallbackService = (): FileIndexService => ({
+export const makeFallbackService = (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+): FileIndexService => ({
   listFiles: (params) =>
-    Effect.tryPromise({
-      try: () => scanAllFiles(params.cwd),
-      catch: (e) =>
-        new FileIndexError({
-          message: `fallback scan failed: ${e}`,
-          cwd: params.cwd,
-          cause: e,
-        }),
-    }),
+    scanAllFiles(params.cwd, fs, path).pipe(
+      Effect.catchEager((e) =>
+        Effect.fail(
+          new FileIndexError({
+            message: `fallback scan failed: ${e}`,
+            cwd: params.cwd,
+            cause: e,
+          }),
+        ),
+      ),
+    ),
 
   searchFiles: () =>
     // Fallback does not support fuzzy search — returns empty
@@ -119,7 +132,15 @@ export const makeFallbackService = (): FileIndexService => ({
 // Layer
 // ---------------------------------------------------------------------------
 
-export const FallbackFileIndexLive: Layer.Layer<FileIndex> = Layer.succeed(
+export const FallbackFileIndexLive: Layer.Layer<
   FileIndex,
-  makeFallbackService(),
+  never,
+  FileSystem.FileSystem | Path.Path
+> = Layer.effect(
+  FileIndex,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    return makeFallbackService(fs, path)
+  }),
 )
