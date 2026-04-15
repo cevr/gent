@@ -220,8 +220,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         {
           cwd: workspace.cwd,
           home,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          runEffect: (effect) => platformRuntime.runPromise(effect as any),
+          runEffect: (effect) => platformRuntime.runPromise(effect),
           openOverlay: (id) => overlayDispatch().open(id),
           closeOverlay: () => overlayDispatch().close(),
           get sessionId() {

@@ -56,8 +56,7 @@ const createRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
+    runEffect: (effect) => Effect.runPromise(Effect.provide(effect, BunServices.layer)),
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
     send: () => {},
@@ -79,8 +78,7 @@ const createProtocolRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
+    runEffect: (effect) => Effect.runPromise(Effect.provide(effect, BunServices.layer)),
     openOverlay: () => {},
     closeOverlay: () => {},
     send: (message) => sent.push(message),

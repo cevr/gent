@@ -4,7 +4,7 @@
 // The TUI discovers *.client.{tsx,ts,js,mjs} files from extension directories,
 // imports them, and resolves contributions with scope precedence (project > user > builtin).
 
-import type { Effect, Schema } from "effect"
+import type { Effect, FileSystem, Path, Schema } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
 import type {
   AnyExtensionCommandMessage,
@@ -140,8 +140,10 @@ export interface ExtensionClientContext {
   readonly cwd: string
   /** User home directory */
   readonly home: string
-  /** Run an Effect with platform services (FileSystem, Path). For async TUI extension code. */
-  readonly runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>
+  /** Run an Effect with platform services (FileSystem, Path). Rejects on error. */
+  readonly runEffect: <A, E>(
+    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  ) => Promise<A>
   readonly openOverlay: (id: string) => void
   readonly closeOverlay: () => void
   /** Current session ID (reactive — may be undefined before session is active) */

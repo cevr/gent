@@ -81,7 +81,7 @@ export const discoverTuiExtensions = async (
     readonly userDir: string
     readonly projectDir: string
   },
-  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) => Promise<A>,
 ): Promise<ReadonlyArray<DiscoveredTuiExtension>> => {
   const [user, project] = await runEffect(
     Effect.gen(function* () {

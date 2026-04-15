@@ -49,7 +49,7 @@ const gitignoreCache = new Map<string, Glob[]>()
 
 export const loadGitignore = async (
   cwd: string,
-  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
 ): Promise<Glob[]> => {
   const cached = gitignoreCache.get(cwd)
   if (cached !== undefined) return cached
@@ -80,7 +80,7 @@ export async function fallbackSearch(
   cwd: string,
   filter: string,
   maxResults: number,
-  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
 ): Promise<ReadonlyArray<{ path: string; name: string }>> {
   const ignorePatterns = await loadGitignore(cwd, runEffect)
   const matches: Array<{ path: string; name: string; score: number }> = []

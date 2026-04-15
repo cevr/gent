@@ -16,7 +16,7 @@ let _dbDir: string | undefined
 
 async function ensureDbDir(
   home: string,
-  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
 ): Promise<string> {
   if (_dbDir !== undefined) return _dbDir
   const dir = `${home}/.gent/fff`
@@ -53,7 +53,7 @@ const finders = new Map<string, FinderEntry>()
 export async function ensureFinder(
   cwd: string,
   home: string,
-  runEffect: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
 ): Promise<FinderEntry | null> {
   const existing = finders.get(cwd)
   if (existing !== undefined) return existing
@@ -96,7 +96,7 @@ export async function searchFiles(
   query: string,
   pageSize: number = 50,
   home?: string,
-  runEffect?: <A, E = never, R = never>(effect: Effect.Effect<A, E, R>) => Promise<A>,
+  runEffect?: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
 ): Promise<SearchResult | null> {
   const entry =
     home !== undefined && runEffect !== undefined
