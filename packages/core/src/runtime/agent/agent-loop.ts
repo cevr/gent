@@ -57,6 +57,7 @@ import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
   makeExtensionHostContext,
+  unavailableHostDeps,
   type MakeExtensionHostContextDeps,
 } from "../make-extension-host-context.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
@@ -1392,7 +1393,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             // Resolve services lazily — by the time makeLoop runs, all services
             // exist in the ambient scope (including AgentRunnerService, which
             // depends on AgentLoop and would create a circular Layer dep)
-            const hostDie = (label: string) => () => Effect.die(`${label} not available`)
+            const fallback = unavailableHostDeps("agent-loop")
             const lazyDeps = yield* Effect.all({
               platform: Effect.serviceOption(RuntimePlatform),
               approvalService: Effect.serviceOption(ApprovalService),
@@ -1404,42 +1405,27 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
             const hostDeps: MakeExtensionHostContextDeps = {
               platform:
-                lazyDeps.platform._tag === "Some"
-                  ? lazyDeps.platform.value
-                  : ({ cwd: "", home: "" } as MakeExtensionHostContextDeps["platform"]),
+                lazyDeps.platform._tag === "Some" ? lazyDeps.platform.value : fallback.platform,
               extensionStateRuntime,
               approvalService:
                 lazyDeps.approvalService._tag === "Some"
                   ? lazyDeps.approvalService.value
-                  : ({
-                      present: hostDie("ApprovalService"),
-                      storeResolution: () => {},
-                      respond: hostDie("ApprovalService"),
-                      rehydrate: hostDie("ApprovalService"),
-                    } as MakeExtensionHostContextDeps["approvalService"]),
+                  : fallback.approvalService,
               promptPresenter:
                 lazyDeps.promptPresenter._tag === "Some"
                   ? lazyDeps.promptPresenter.value
-                  : ({
-                      present: hostDie("PromptPresenter"),
-                      confirm: hostDie("PromptPresenter"),
-                      review: hostDie("PromptPresenter"),
-                    } as MakeExtensionHostContextDeps["promptPresenter"]),
+                  : fallback.promptPresenter,
               extensionRegistry,
               turnControl: extensionTurnControl,
               storage,
               searchStorage:
                 lazyDeps.searchStorage._tag === "Some"
                   ? lazyDeps.searchStorage.value
-                  : ({
-                      searchMessages: () => Effect.succeed([]),
-                    } as MakeExtensionHostContextDeps["searchStorage"]),
+                  : fallback.searchStorage,
               agentRunner:
                 lazyDeps.agentRunner._tag === "Some"
                   ? lazyDeps.agentRunner.value
-                  : ({
-                      run: hostDie("AgentRunnerService"),
-                    } as MakeExtensionHostContextDeps["agentRunner"]),
+                  : fallback.agentRunner,
               eventPublisher,
             }
 

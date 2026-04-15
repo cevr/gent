@@ -48,6 +48,59 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
+/** Keys of MakeExtensionHostContextDeps that callers may need fallback stubs for. */
+export type OptionalHostDeps = Pick<
+  MakeExtensionHostContextDeps,
+  | "platform"
+  | "approvalService"
+  | "promptPresenter"
+  | "searchStorage"
+  | "agentRunner"
+  | "turnControl"
+  | "storage"
+  | "eventPublisher"
+>
+
+/** Typed die-on-call stubs for optional host deps that may be absent. */
+export const unavailableHostDeps = (label: string): OptionalHostDeps => {
+  const die = (service: string) => () => Effect.die(`${service} not available (${label})`)
+  return {
+    platform: { cwd: "", home: "", platform: "unknown" },
+    approvalService: {
+      present: die("ApprovalService"),
+      storeResolution: () => {},
+      respond: die("ApprovalService"),
+      rehydrate: die("ApprovalService"),
+    },
+    promptPresenter: {
+      present: die("PromptPresenter"),
+      confirm: die("PromptPresenter"),
+      review: die("PromptPresenter"),
+    },
+    turnControl: {
+      queueFollowUp: die("TurnControl"),
+      interject: die("TurnControl"),
+      bind: die("TurnControl"),
+    },
+    storage: new Proxy({} as StorageService, {
+      get: (_target, prop) => {
+        if (typeof prop === "string") return die(`Storage.${prop}`)
+        return undefined
+      },
+    }),
+    searchStorage: {
+      searchMessages: () => Effect.succeed([]),
+    },
+    agentRunner: {
+      run: die("AgentRunnerService"),
+    },
+    eventPublisher: {
+      publish: () => Effect.void,
+      terminateSession: die("EventPublisher"),
+    },
+  }
+}
+
 export const makeExtensionHostContext = (
   runInfo: MakeExtensionHostContextRunInfo,
   deps: MakeExtensionHostContextDeps,

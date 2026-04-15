@@ -20,6 +20,7 @@ import {
 } from "../wide-event-boundary"
 import {
   makeExtensionHostContext,
+  unavailableHostDeps,
   type MakeExtensionHostContextDeps,
 } from "../make-extension-host-context.js"
 import { AgentRunnerService } from "../../domain/agent.js"
@@ -183,7 +184,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               eventPublisherSvc: Effect.serviceOption(EventPublisher),
             })
 
-            const die = (label: string) => () => Effect.die(`${label} not available in ToolRunner`)
+            const fallback = unavailableHostDeps("ToolRunner")
             const hostDeps: MakeExtensionHostContextDeps = {
               platform,
               extensionStateRuntime: activeStateRuntime,
@@ -191,43 +192,25 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               promptPresenter:
                 lazyDeps.promptPresenter._tag === "Some"
                   ? lazyDeps.promptPresenter.value
-                  : ({
-                      present: die("PromptPresenter"),
-                      confirm: die("PromptPresenter"),
-                      review: die("PromptPresenter"),
-                    } as MakeExtensionHostContextDeps["promptPresenter"]),
+                  : fallback.promptPresenter,
               extensionRegistry: activeRegistry,
               turnControl:
                 lazyDeps.turnControl._tag === "Some"
                   ? lazyDeps.turnControl.value
-                  : ({
-                      queueFollowUp: die("TurnControl"),
-                      interject: die("TurnControl"),
-                      bind: die("TurnControl"),
-                    } as MakeExtensionHostContextDeps["turnControl"]),
-              storage:
-                lazyDeps.storage._tag === "Some"
-                  ? lazyDeps.storage.value
-                  : ({} as MakeExtensionHostContextDeps["storage"]),
+                  : fallback.turnControl,
+              storage: lazyDeps.storage._tag === "Some" ? lazyDeps.storage.value : fallback.storage,
               searchStorage:
                 lazyDeps.searchStorage._tag === "Some"
                   ? lazyDeps.searchStorage.value
-                  : ({
-                      searchMessages: () => Effect.succeed([]),
-                    } as MakeExtensionHostContextDeps["searchStorage"]),
+                  : fallback.searchStorage,
               agentRunner:
                 lazyDeps.agentRunner._tag === "Some"
                   ? lazyDeps.agentRunner.value
-                  : ({
-                      run: die("AgentRunnerService"),
-                    } as MakeExtensionHostContextDeps["agentRunner"]),
+                  : fallback.agentRunner,
               eventPublisher:
                 lazyDeps.eventPublisherSvc._tag === "Some"
                   ? lazyDeps.eventPublisherSvc.value
-                  : ({
-                      publish: () => Effect.void,
-                      terminateSession: die("EventPublisher"),
-                    } as MakeExtensionHostContextDeps["eventPublisher"]),
+                  : fallback.eventPublisher,
             }
 
             const sessionCwd = yield* resolveSessionCwd(ctx.sessionId, lazyDeps.storage)
