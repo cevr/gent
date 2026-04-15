@@ -6,8 +6,8 @@
  * on every query with no index or caching.
  */
 
-import { Effect, FileSystem } from "effect"
 import { Glob } from "bun"
+import type { AsyncFileSystem } from "@gent/core/domain/extension-client"
 import { fuzzyScore } from "./fuzzy-score"
 
 // ---------------------------------------------------------------------------
@@ -47,21 +47,13 @@ export const isGitignored = (path: string, patterns: Glob[]): boolean =>
 
 const gitignoreCache = new Map<string, Glob[]>()
 
-export const loadGitignore = async (
-  cwd: string,
-  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
-): Promise<Glob[]> => {
+export const loadGitignore = async (cwd: string, fs: AsyncFileSystem): Promise<Glob[]> => {
   const cached = gitignoreCache.get(cwd)
   if (cached !== undefined) return cached
 
   let patterns: Glob[] = []
   try {
-    const content = await runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        return yield* fs.readFileString(`${cwd}/.gitignore`)
-      }),
-    )
+    const content = await fs.readFileString(`${cwd}/.gitignore`)
     patterns = parseGitignorePatterns(content)
   } catch {
     // No .gitignore or unreadable
@@ -80,9 +72,9 @@ export async function fallbackSearch(
   cwd: string,
   filter: string,
   maxResults: number,
-  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
+  fs: AsyncFileSystem,
 ): Promise<ReadonlyArray<{ path: string; name: string }>> {
-  const ignorePatterns = await loadGitignore(cwd, runEffect)
+  const ignorePatterns = await loadGitignore(cwd, fs)
   const matches: Array<{ path: string; name: string; score: number }> = []
 
   for await (const path of FILE_GLOB.scan({ cwd, onlyFiles: true })) {

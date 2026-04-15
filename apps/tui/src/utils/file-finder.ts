@@ -5,7 +5,7 @@
  * Falls back gracefully if the native library is unavailable.
  */
 
-import { Effect, FileSystem } from "effect"
+import type { AsyncFileSystem } from "@gent/core/domain/extension-client"
 import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 // ---------------------------------------------------------------------------
@@ -14,19 +14,11 @@ import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 
 let _dbDir: string | undefined
 
-async function ensureDbDir(
-  home: string,
-  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
-): Promise<string> {
+async function ensureDbDir(home: string, fs: AsyncFileSystem): Promise<string> {
   if (_dbDir !== undefined) return _dbDir
   const dir = `${home}/.gent/fff`
   try {
-    await runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
-      }),
-    )
+    await fs.makeDirectory(dir, { recursive: true })
   } catch {
     // Best effort
   }
@@ -53,14 +45,14 @@ const finders = new Map<string, FinderEntry>()
 export async function ensureFinder(
   cwd: string,
   home: string,
-  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
+  fs: AsyncFileSystem,
 ): Promise<FinderEntry | null> {
   const existing = finders.get(cwd)
   if (existing !== undefined) return existing
 
   if (!FileFinder.isAvailable()) return null
 
-  const dbDir = await ensureDbDir(home, runEffect)
+  const dbDir = await ensureDbDir(home, fs)
   const result = FileFinder.create({
     basePath: cwd,
     frecencyDbPath: `${dbDir}/frecency.mdb`,
@@ -73,8 +65,6 @@ export async function ensureFinder(
   const finder = result.value
   // Start scan in background — don't block
   const scanPromise = new Promise<void>((resolve) => {
-    // waitForScan is blocking in the native layer, so run via setTimeout
-    // to avoid blocking the event loop during init
     setTimeout(() => {
       const scan = finder.waitForScan(15_000)
       if (scan.ok) entry.ready = true
@@ -96,15 +86,14 @@ export async function searchFiles(
   query: string,
   pageSize: number = 50,
   home?: string,
-  runEffect?: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Promise<A>,
+  fs?: AsyncFileSystem,
 ): Promise<SearchResult | null> {
   const entry =
-    home !== undefined && runEffect !== undefined
-      ? await ensureFinder(cwd, home, runEffect)
+    home !== undefined && fs !== undefined
+      ? await ensureFinder(cwd, home, fs)
       : (finders.get(cwd) ?? null)
   if (entry === null) return null
 
-  // Wait for scan to complete on first search
   if (!entry.ready) await entry.scanPromise
 
   const result = entry.finder.fileSearch(query, { pageSize })
@@ -112,32 +101,26 @@ export async function searchFiles(
   return result.value
 }
 
-/**
- * Track a selection for frecency learning.
- */
+/** Track a selection for frecency learning. */
 export function trackSelection(cwd: string, query: string, filePath: string): void {
   const entry = finders.get(cwd)
   if (entry === undefined) return
   entry.finder.trackQuery(query, filePath)
 }
 
-/**
- * Destroy all finder instances. Call on process exit.
- */
+/** Destroy all finder instances. */
 export function destroyAll(): void {
   for (const [, entry] of finders) {
     try {
       entry.finder.destroy()
     } catch {
-      // Ignore cleanup errors
+      // Ignore
     }
   }
   finders.clear()
 }
 
-/**
- * Destroy the finder for a specific cwd.
- */
+/** Destroy the finder for a specific cwd. */
 export function destroyFinder(cwd: string): void {
   const entry = finders.get(cwd)
   if (entry === undefined) return

@@ -8,8 +8,9 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Effect, Schema } from "effect"
-import { BunServices } from "@effect/platform-bun"
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
 import { applyExtensionSnapshot, decodeExtensionAskReply } from "../src/extensions/context"
@@ -31,11 +32,25 @@ const PROJECT_DIR = join(TEST_DIR, "project")
 // Use the same barrel as production context.tsx
 import { builtinClientModules } from "../src/extensions/builtins/index"
 
+const { _testFsRaw, _testPath } = Effect.runSync(
+  Effect.provide(
+    Effect.gen(function* () {
+      const _testFsRaw = yield* FileSystem.FileSystem
+      const _testPath = yield* Path.Path
+      return { _testFsRaw, _testPath }
+    }),
+    Layer.merge(BunFileSystem.layer, BunServices.layer),
+  ),
+)
+const _testFs = makeAsyncFs(_testFsRaw, (effect) =>
+  Effect.runPromise(Effect.provide(effect, BunServices.layer)),
+)
+
 const noopCtx: ExtensionClientContext = {
   cwd: TEST_DIR,
   home: "/tmp",
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runEffect: (effect) => Effect.runPromise(Effect.provide(effect as any, BunServices.layer)),
+  fs: _testFs,
+  path: _testPath,
   openOverlay: () => {},
   closeOverlay: () => {},
   send: () => {},
@@ -56,7 +71,8 @@ const createRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    runEffect: (effect) => Effect.runPromise(Effect.provide(effect, BunServices.layer)),
+    fs: _testFs,
+    path: _testPath,
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
     send: () => {},
@@ -78,7 +94,8 @@ const createProtocolRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    runEffect: (effect) => Effect.runPromise(Effect.provide(effect, BunServices.layer)),
+    fs: _testFs,
+    path: _testPath,
     openOverlay: () => {},
     closeOverlay: () => {},
     send: (message) => sent.push(message),

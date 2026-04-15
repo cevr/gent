@@ -60,7 +60,7 @@ export const loadTuiExtensions = async (
   ctx: ExtensionClientContext,
 ): Promise<ResolvedTuiExtensions> => {
   const disabledSet = new Set(opts.disabled ?? [])
-  const discovered = await discoverTuiExtensions(opts, ctx.runEffect)
+  const discovered = await discoverTuiExtensions(opts, ctx.fs, ctx.path)
 
   // Import user/project modules, then filter by disabled before calling setup()
   const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))

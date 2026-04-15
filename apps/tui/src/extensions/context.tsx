@@ -15,9 +15,10 @@ import {
   type Accessor,
   type JSX,
 } from "solid-js"
-import { Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
+import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import type { JSX as _JSX } from "@opentui/solid"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
@@ -38,6 +39,17 @@ import { useClient } from "../client/context"
 type SolidComponent = (props?: any) => _JSX.Element
 
 const platformRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
+const { _fsInstance, _pathInstance } = Effect.runSync(
+  Effect.provide(
+    Effect.gen(function* () {
+      const _fsInstance = yield* FileSystem.FileSystem
+      const _pathInstance = yield* Path.Path
+      return { _fsInstance, _pathInstance }
+    }),
+    Layer.merge(BunFileSystem.layer, BunServices.layer),
+  ),
+)
+const _asyncFs = makeAsyncFs(_fsInstance, (effect) => platformRuntime.runPromise(effect))
 
 /** Server-projected UI snapshot from extension state machines */
 export interface ExtensionSnapshot {
@@ -220,7 +232,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         {
           cwd: workspace.cwd,
           home,
-          runEffect: (effect) => platformRuntime.runPromise(effect),
+          fs: _asyncFs,
+          path: _pathInstance,
           openOverlay: (id) => overlayDispatch().open(id),
           closeOverlay: () => overlayDispatch().close(),
           get sessionId() {

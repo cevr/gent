@@ -5,7 +5,8 @@
  * Files are tagged with "user" or "project" scope based on their source directory.
  */
 
-import { Effect, FileSystem, Path } from "effect"
+import type { AsyncFileSystem } from "@gent/core/domain/extension-client"
+import type { Path } from "effect"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
@@ -21,76 +22,78 @@ const CLIENT_INDEX_PATTERN = /^client\.(?:[tj]sx?|mjs)$/
 const isClientFile = (entry: string): boolean =>
   CLIENT_FILE_PATTERN.test(entry) || CLIENT_INDEX_PATTERN.test(entry)
 
-const discoverDir = (
+const discoverDir = async (
   dir: string,
   kind: DiscoveredTuiExtension["kind"],
-  fs: FileSystem.FileSystem,
+  fs: AsyncFileSystem,
   path: Path.Path,
-): Effect.Effect<DiscoveredTuiExtension[]> =>
-  Effect.gen(function* () {
-    const exists = yield* fs.exists(dir)
-    if (!exists) return []
+): Promise<DiscoveredTuiExtension[]> => {
+  const exists = await fs.exists(dir)
+  if (!exists) return []
 
-    const entries = yield* fs.readDirectory(dir)
-    const results: DiscoveredTuiExtension[] = []
+  let entries: string[]
+  try {
+    entries = await fs.readDirectory(dir)
+  } catch {
+    return []
+  }
 
-    for (const entry of entries) {
-      if (
-        entry.startsWith(".") ||
-        entry.startsWith("_") ||
-        entry === "__tests__" ||
-        entry === "node_modules"
-      )
-        continue
+  const results: DiscoveredTuiExtension[] = []
 
-      const filePath = path.join(dir, entry)
-      const info = yield* fs.stat(filePath).pipe(Effect.option)
-      if (info._tag === "None") continue
+  for (const entry of entries) {
+    if (
+      entry.startsWith(".") ||
+      entry.startsWith("_") ||
+      entry === "__tests__" ||
+      entry === "node_modules"
+    )
+      continue
 
-      if (info.value.type === "File" && isClientFile(entry)) {
-        results.push({ filePath, kind })
-      } else if (info.value.type === "Directory") {
-        // Check for client.{tsx,ts,js,jsx,mjs} in subdirectory
-        const subEntries = yield* fs
-          .readDirectory(filePath)
-          .pipe(Effect.orElseSucceed((): string[] => []))
-        const clientFiles = subEntries.filter((e) => CLIENT_INDEX_PATTERN.test(e)).sort()
-        if (clientFiles.length > 1) {
-          yield* Effect.logWarning("multiple client entrypoints").pipe(
-            Effect.annotateLogs({
-              dir: filePath,
-              files: clientFiles.join(", "),
-              using: clientFiles[0] ?? "",
-            }),
-          )
-        }
-        const firstClient = clientFiles[0]
-        if (firstClient !== undefined) {
-          results.push({ filePath: path.join(filePath, firstClient), kind })
-        }
-      }
+    const filePath = path.join(dir, entry)
+    let info: { type: string }
+    try {
+      info = await fs.stat(filePath) // oxlint-disable-line no-await-in-loop -- sequential: type determines action
+    } catch {
+      continue
     }
 
-    return results.sort((a, b) => a.filePath.localeCompare(b.filePath))
-  }).pipe(Effect.orElseSucceed((): DiscoveredTuiExtension[] => []))
+    if (info.type === "File" && isClientFile(entry)) {
+      results.push({ filePath, kind })
+    } else if (info.type === "Directory") {
+      let subEntries: string[]
+      try {
+        subEntries = await fs.readDirectory(filePath) // oxlint-disable-line no-await-in-loop
+      } catch {
+        continue
+      }
+      const clientFiles = subEntries.filter((e) => CLIENT_INDEX_PATTERN.test(e)).sort()
+      if (clientFiles.length > 1) {
+        console.log(
+          `[tui-ext] Warning: multiple client entrypoints in ${filePath}: ${clientFiles.join(", ")}. Using ${clientFiles[0]}.`,
+        )
+      }
+      const firstClient = clientFiles[0]
+      if (firstClient !== undefined) {
+        results.push({ filePath: path.join(filePath, firstClient), kind })
+      }
+    }
+  }
 
-/** Discover TUI extension files from user and project directories.
- *  Builtins are provided as pre-imported modules — see loader.ts. */
+  return results.sort((a, b) => a.filePath.localeCompare(b.filePath))
+}
+
+/** Discover TUI extension files from user and project directories. */
 export const discoverTuiExtensions = async (
   opts: {
     readonly userDir: string
     readonly projectDir: string
   },
-  runEffect: <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) => Promise<A>,
+  fs: AsyncFileSystem,
+  path: Path.Path,
 ): Promise<ReadonlyArray<DiscoveredTuiExtension>> => {
-  const [user, project] = await runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const userExts = yield* discoverDir(opts.userDir, "user", fs, path)
-      const projectExts = yield* discoverDir(opts.projectDir, "project", fs, path)
-      return [userExts, projectExts] as const
-    }),
-  )
+  const [user, project] = await Promise.all([
+    discoverDir(opts.userDir, "user", fs, path),
+    discoverDir(opts.projectDir, "project", fs, path),
+  ])
   return [...user, ...project]
 }

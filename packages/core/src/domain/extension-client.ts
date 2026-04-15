@@ -134,16 +134,28 @@ export interface ExtensionClientSetup<TComponent = unknown> {
   readonly autocompleteItems?: ReadonlyArray<AutocompleteContribution>
 }
 
+/**
+ * Async filesystem proxy — every method that returns Effect<A, E> returns Promise<A> instead.
+ * Built via `new Proxy` over Effect's FileSystem at setup time.
+ */
+export type AsyncFileSystem = {
+  [K in keyof FileSystem.FileSystem]: FileSystem.FileSystem[K] extends (
+    ...args: infer Args
+  ) => Effect.Effect<infer A, infer _E, infer _R>
+    ? (...args: Args) => Promise<A>
+    : FileSystem.FileSystem[K]
+}
+
 /** Runtime API provided to extensions during setup */
 export interface ExtensionClientContext {
   /** Working directory for the current workspace */
   readonly cwd: string
   /** User home directory */
   readonly home: string
-  /** Run an Effect with platform services (FileSystem, Path). Rejects on error. */
-  readonly runEffect: <A, E>(
-    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
-  ) => Promise<A>
+  /** Async file system — same shape as Effect FileSystem, but returns Promises. */
+  readonly fs: AsyncFileSystem
+  /** Sync path utilities (join, resolve, dirname, basename, etc). */
+  readonly path: Path.Path
   readonly openOverlay: (id: string) => void
   readonly closeOverlay: () => void
   /** Current session ID (reactive — may be undefined before session is active) */

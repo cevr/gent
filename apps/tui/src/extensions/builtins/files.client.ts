@@ -1,4 +1,3 @@
-import { Effect, FileSystem } from "effect"
 import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
@@ -26,14 +25,9 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
 
         // Empty filter: list top-level directory entries
         if (filter.length === 0) {
-          const ignorePatterns = await loadGitignore(cwd, ctx.runEffect)
+          const ignorePatterns = await loadGitignore(cwd, ctx.fs)
           try {
-            const entries = await ctx.runEffect(
-              Effect.gen(function* () {
-                const fs = yield* FileSystem.FileSystem
-                return yield* fs.readDirectory(cwd)
-              }),
-            )
+            const entries = await ctx.fs.readDirectory(cwd)
             return entries
               .filter((name) => !name.startsWith(".") && !isGitignored(name, ignorePatterns))
               .sort()
@@ -45,7 +39,7 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
         }
 
         // Try native FFF search first
-        const fffResult = await searchFiles(cwd, filter, MAX_RESULTS, ctx.home, ctx.runEffect)
+        const fffResult = await searchFiles(cwd, filter, MAX_RESULTS, ctx.home, ctx.fs)
         if (fffResult !== null) {
           return fffResult.items.map((item) =>
             formatMatch({ path: item.relativePath, name: item.fileName }),
@@ -53,7 +47,7 @@ export default ExtensionPackage.tui("@gent/files-ui", (ctx) => ({
         }
 
         // Fallback: Bun Glob + fuzzyScore
-        return (await fallbackSearch(cwd, filter, MAX_RESULTS, ctx.runEffect)).map(formatMatch)
+        return (await fallbackSearch(cwd, filter, MAX_RESULTS, ctx.fs)).map(formatMatch)
       },
       onSelect: (id: string, filter: string) => {
         trackSelection(ctx.cwd, filter, id)
