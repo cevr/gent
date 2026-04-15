@@ -6,12 +6,21 @@
  * PID registry, and graceful shutdown via Effect.addFinalizer.
  */
 
-import { Clock, Context, DateTime, Duration, Effect, Layer, Schema, Semaphore } from "effect"
+import {
+  Clock,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+  Semaphore,
+} from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { dirname, join, resolve } from "node:path"
 import {
   type ExecutorEndpoint,
   type ResolvedExecutorSettings,
@@ -75,25 +84,30 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
     Layer.effect(
       ExecutorSidecar,
       Effect.gen(function* () {
+        const path = yield* Path.Path
+        const fs = yield* FileSystem.FileSystem
         const require_ = createRequire(import.meta.url)
         const sidecarsByCwd = new Map<string, SidecarRecord>()
         const spawnMutex = yield* Semaphore.make(1)
 
         // ── Settings ──
 
-        const readSettingsFile = (path: string) =>
-          Effect.tryPromise(async () => {
-            const json = (await Bun.file(path).json()) as Record<string, unknown>
-            const section = json["gentExecutor"]
-            return section && typeof section === "object"
-              ? Schema.decodeUnknownSync(ExecutorSettings)(section)
-              : ({} as typeof ExecutorSettings.Type)
-          }).pipe(Effect.orElseSucceed(() => ({}) as typeof ExecutorSettings.Type))
+        const readSettingsFile = (filePath: string) =>
+          fs.readFileString(filePath).pipe(
+            Effect.map((raw) => {
+              const json = JSON.parse(raw) as Record<string, unknown>
+              const section = json["gentExecutor"]
+              return section && typeof section === "object"
+                ? Schema.decodeUnknownSync(ExecutorSettings)(section)
+                : ({} as typeof ExecutorSettings.Type)
+            }),
+            Effect.orElseSucceed(() => ({}) as typeof ExecutorSettings.Type),
+          )
 
         const loadSettings = (cwd: string) =>
           Effect.gen(function* () {
-            const globalPath = join(home, ".gent", "executor", "settings.json")
-            const projectPath = join(resolve(cwd), ".gent", "executor", "settings.json")
+            const globalPath = path.join(home, ".gent", "executor", "settings.json")
+            const projectPath = path.join(path.resolve(cwd), ".gent", "executor", "settings.json")
             const [globalSettings, projectSettings] = yield* Effect.all([
               readSettingsFile(globalPath),
               readSettingsFile(projectPath),
@@ -166,7 +180,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         // ── PID registry ──
 
-        const registryPath = join(home, ".gent", "executor-sidecars.json")
+        const registryPath = path.join(home, ".gent", "executor-sidecars.json")
         const emptyRegistry: SidecarRegistryFile = { version: 1, sidecars: {} }
 
         const parseRegistry = (raw: unknown): SidecarRegistryFile => {
@@ -178,17 +192,18 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           return { version: 1, sidecars: sidecars as Record<string, RegisteredSidecar> }
         }
 
-        const readRegistry = Effect.tryPromise(async () =>
-          parseRegistry(await Bun.file(registryPath).json()),
-        ).pipe(Effect.orElseSucceed(() => emptyRegistry))
+        const readRegistry = fs.readFileString(registryPath).pipe(
+          Effect.map((raw) => parseRegistry(JSON.parse(raw))),
+          Effect.orElseSucceed(() => emptyRegistry),
+        )
 
         const writeRegistry = (registry: SidecarRegistryFile) =>
-          Effect.tryPromise(async () => {
-            const { mkdir } = await import("node:fs/promises")
-            await mkdir(dirname(registryPath), { recursive: true })
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            await Bun.write(registryPath, JSON.stringify(registry, null, 2) + "\n")
-          }).pipe(Effect.orElseSucceed(() => {}))
+          fs.makeDirectory(path.dirname(registryPath), { recursive: true }).pipe(
+            Effect.andThen(
+              fs.writeFileString(registryPath, JSON.stringify(registry, null, 2) + "\n"),
+            ),
+            Effect.orElseSucceed(() => {}),
+          )
 
         const registerSidecar = (record: SidecarRecord) =>
           Effect.gen(function* () {
@@ -225,36 +240,56 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           if (fromPath) return fromPath
 
           // Fallback: require.resolve → bootstrap if needed
-          return yield* Effect.tryPromise({
-            try: async () => {
-              const pkgPath = require_.resolve("executor/package.json")
-              const pkgRoot = dirname(pkgPath)
-              const binaryName = process.platform === "win32" ? "executor.exe" : "executor"
-              const runtimePath = join(pkgRoot, "bin", "runtime", binaryName)
+          const pkgPath = yield* Effect.try({
+            try: () => require_.resolve("executor/package.json"),
+            catch: (e) =>
+              new ExecutorSidecarError({
+                code: "PACKAGE_RESOLUTION_FAILED",
+                message: `Could not resolve executor: ${e instanceof Error ? e.message : String(e)}`,
+              }),
+          })
+          const pkgRoot = path.dirname(pkgPath)
+          const binaryName = process.platform === "win32" ? "executor.exe" : "executor"
+          const runtimePath = path.join(pkgRoot, "bin", "runtime", binaryName)
 
-              const file = Bun.file(runtimePath)
-              if (!(await file.exists())) {
-                // Run postinstall to bootstrap
-                const installerPath = join(pkgRoot, "postinstall.cjs")
+          const exists = yield* fs.exists(runtimePath)
+          if (!exists) {
+            // Run postinstall to bootstrap
+            const installerPath = path.join(pkgRoot, "postinstall.cjs")
+            yield* Effect.tryPromise({
+              try: async () => {
                 const proc = Bun.spawn([process.execPath, installerPath], { cwd: pkgRoot })
                 await proc.exited
                 if (proc.exitCode !== 0) {
                   throw new Error(`Bootstrap failed with exit code ${proc.exitCode}`)
                 }
-                // Verify after bootstrap
-                if (!(await Bun.file(runtimePath).exists())) {
-                  throw new Error(`Runtime missing after bootstrap at ${runtimePath}`)
-                }
-              }
-              return runtimePath
-            },
-            catch: (e) =>
+              },
+              catch: (e) =>
+                new ExecutorSidecarError({
+                  code: "BOOTSTRAP_FAILED",
+                  message: `Bootstrap failed: ${e instanceof Error ? e.message : String(e)}`,
+                }),
+            })
+            // Verify after bootstrap
+            const existsAfter = yield* fs.exists(runtimePath)
+            if (!existsAfter) {
+              return yield* new ExecutorSidecarError({
+                code: "PACKAGE_RESOLUTION_FAILED",
+                message: `Runtime missing after bootstrap at ${runtimePath}`,
+              })
+            }
+          }
+          return runtimePath
+        }).pipe(
+          Effect.catchTag("PlatformError", (e) =>
+            Effect.fail(
               new ExecutorSidecarError({
                 code: "PACKAGE_RESOLUTION_FAILED",
-                message: `Could not resolve executor binary: ${e instanceof Error ? e.message : String(e)}`,
+                message: `File system error: ${e.message}`,
               }),
-          })
-        })
+            ),
+          ),
+        )
 
         // ── Spawn + health poll ──
 
@@ -371,7 +406,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const findRunning = (cwd: string) =>
           Effect.gen(function* () {
-            const normalized = resolve(cwd)
+            const normalized = path.resolve(cwd)
             const cached = sidecarsByCwd.get(normalized)
             if (cached) {
               const health = yield* fetchScope(cached.baseUrl).pipe(
@@ -404,7 +439,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
         const ensureSidecar = (cwd: string) =>
           spawnMutex.withPermits(1)(
             Effect.gen(function* () {
-              const normalized = resolve(cwd)
+              const normalized = path.resolve(cwd)
 
               const running = yield* findRunning(normalized)
               if (running) return running
@@ -476,7 +511,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
           stop: (cwd) =>
             Effect.gen(function* () {
-              const normalized = resolve(cwd)
+              const normalized = path.resolve(cwd)
               const running = yield* findRunning(normalized)
               if (running) {
                 yield* killRecord(running)
