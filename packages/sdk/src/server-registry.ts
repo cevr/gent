@@ -98,6 +98,9 @@ export const removeRegistryEntry = (home: string, dbPath: string, serverId: stri
   }
 }
 
+/** Get the local hostname — uses node:os.hostname() (already in the keep list). */
+export const getLocalHostname = (): string => hostname()
+
 /** Check if a PID is alive on the local machine. */
 export const isPidAlive = (pid: number): boolean => {
   try {

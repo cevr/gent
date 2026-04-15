@@ -13,6 +13,7 @@ export interface GitStatus {
 
 interface WorkspaceContextValue {
   cwd: string
+  home: string
   gitRoot: () => string | null
   gitStatus: () => GitStatus | null
   isGitRepo: () => boolean
@@ -29,6 +30,7 @@ export function useWorkspace(): WorkspaceContextValue {
 
 interface WorkspaceProviderProps {
   cwd: string
+  home: string
   children: JSX.Element
   services?: Context.Context<unknown>
 }
@@ -171,6 +173,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
 
   const value: WorkspaceContextValue = {
     cwd: props.cwd,
+    home: props.home,
     gitRoot: () => gitInfo()?.root ?? null,
     gitStatus: () => gitInfo()?.status ?? null,
     isGitRepo: () => gitInfo() !== null,

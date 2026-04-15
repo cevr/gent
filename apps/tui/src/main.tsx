@@ -51,9 +51,8 @@ import {
   validateRegistryEntry,
   removeRegistryEntry,
   isPidAlive,
+  getLocalHostname,
 } from "@gent/sdk/server-registry"
-// @effect-diagnostics nodeBuiltinImport:off
-import * as os from "node:os"
 
 class ServerSignalError extends Schema.TaggedErrorClass<ServerSignalError>()("ServerSignalError", {
   pid: Schema.Number,
@@ -183,6 +182,7 @@ const main = Command.make(
   }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
+      const home = yield* Config.string("HOME")
       const scope = yield* Effect.scope
       const uiServices = (yield* Layer.buildWithScope(
         makeUiLayer(),
@@ -295,7 +295,7 @@ const main = Command.make(
       yield* Effect.promise(() =>
         render(() => (
           <EnvProvider env={envWithShutdown}>
-            <WorkspaceProvider cwd={cwd} services={uiServices}>
+            <WorkspaceProvider cwd={cwd} home={home} services={uiServices}>
               <RegistryProvider services={uiServices} maxEntries={ATOM_CACHE_MAX}>
                 <ClientProvider
                   client={bundle.client}
@@ -368,7 +368,7 @@ const sessions = Command.make(
 // Server status subcommand
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
-    const home = os.homedir()
+    const home = yield* Config.string("HOME")
     const entries = listRegistryEntries(home)
 
     if (entries.length === 0) {
@@ -403,8 +403,8 @@ const serverStop = Command.make(
   },
   ({ all }) =>
     Effect.gen(function* () {
-      const home = os.homedir()
-      const thisHost = os.hostname()
+      const home = yield* Config.string("HOME")
+      const thisHost = getLocalHostname()
       const entries = listRegistryEntries(home)
 
       if (entries.length === 0) {

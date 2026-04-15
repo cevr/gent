@@ -223,6 +223,7 @@ export const renderWithProviders = async (
                   >
                     <WorkspaceProvider
                       cwd={options?.cwd ?? defaultWorkspaceCwd}
+                      home="/tmp"
                       services={services}
                     >
                       <ExtensionUIProvider>{node()}</ExtensionUIProvider>

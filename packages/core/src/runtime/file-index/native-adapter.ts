@@ -1,15 +1,11 @@
-import { Clock, Effect, Layer } from "effect"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { join } from "node:path"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { mkdirSync } from "node:fs"
-import { homedir } from "node:os"
+import { Clock, Effect, FileSystem, Layer, Path } from "effect"
 import {
   FileIndex,
   FileIndexError,
   type FileIndexService,
   type IndexedFile,
 } from "../../domain/file-index.js"
+import { RuntimePlatform } from "../runtime-platform.js"
 
 // ---------------------------------------------------------------------------
 // Dynamic import — fails gracefully when @ff-labs/fff-bun is not installed.
@@ -42,15 +38,16 @@ interface FinderEntry {
   scanned: boolean
 }
 
-function ensureDbDir(): string {
-  const dir = join(homedir(), ".gent", "fff")
-  try {
-    mkdirSync(dir, { recursive: true })
-  } catch {
-    // Already exists
-  }
-  return dir
-}
+export const ensureDbDir = (
+  home: string,
+  path: Path.Path,
+  fs: FileSystem.FileSystem,
+): Effect.Effect<string> =>
+  Effect.gen(function* () {
+    const dir = path.join(home, ".gent", "fff")
+    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.ignore)
+    return dir
+  })
 
 // ---------------------------------------------------------------------------
 // Poll-based scan wait (non-blocking)
@@ -88,18 +85,22 @@ const toIndexedFile = (item: {
 // Native FileIndex implementation
 // ---------------------------------------------------------------------------
 
-const makeNativeService = (finders: Map<string, FinderEntry>, mod: FffModule): FileIndexService => {
+const makeNativeService = (
+  finders: Map<string, FinderEntry>,
+  mod: FffModule,
+  dbDir: string,
+  path: Path.Path,
+): FileIndexService => {
   const FF = mod.FileFinder
 
   const getOrCreate = (cwd: string): FinderEntry | undefined => {
     const existing = finders.get(cwd)
     if (existing !== undefined) return existing
 
-    const dbDir = ensureDbDir()
     const result = FF.create({
       basePath: cwd,
-      frecencyDbPath: join(dbDir, "frecency.mdb"),
-      historyDbPath: join(dbDir, "history.mdb"),
+      frecencyDbPath: path.join(dbDir, "frecency.mdb"),
+      historyDbPath: path.join(dbDir, "history.mdb"),
       aiMode: true,
     })
 
@@ -200,10 +201,12 @@ const makeNativeService = (finders: Map<string, FinderEntry>, mod: FffModule): F
 /** Create a native service + finalizer from a loaded module. */
 export const makeNativeServiceFromModule = (
   mod: FffModule,
+  dbDir: string,
+  path: Path.Path,
 ): { service: FileIndexService; finalize: Effect.Effect<void> } => {
   const finders = new Map<string, FinderEntry>()
   return {
-    service: makeNativeService(finders, mod),
+    service: makeNativeService(finders, mod, dbDir, path),
     finalize: Effect.sync(() => {
       for (const [, entry] of finders) {
         try {
@@ -221,7 +224,11 @@ export const makeNativeServiceFromModule = (
 // Layer (standalone native, no fallback)
 // ---------------------------------------------------------------------------
 
-export const NativeFileIndexLive: Layer.Layer<FileIndex, FileIndexError> = Layer.unwrap(
+export const NativeFileIndexLive: Layer.Layer<
+  FileIndex,
+  FileIndexError,
+  FileSystem.FileSystem | Path.Path | RuntimePlatform
+> = Layer.unwrap(
   Effect.gen(function* () {
     const mod = yield* loadNativeModule
 
@@ -229,7 +236,12 @@ export const NativeFileIndexLive: Layer.Layer<FileIndex, FileIndexError> = Layer
       return yield* new FileIndexError({ message: "native binary not available", cwd: "" })
     }
 
-    const { service, finalize } = makeNativeServiceFromModule(mod)
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
+    const { home } = yield* RuntimePlatform
+    const dbDir = yield* ensureDbDir(home, path, fs)
+
+    const { service, finalize } = makeNativeServiceFromModule(mod, dbDir, path)
     yield* Effect.addFinalizer(() => finalize)
 
     return Layer.succeed(FileIndex, service)

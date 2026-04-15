@@ -259,7 +259,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     extensionRegistryLive,
     fileLockServiceLive,
     providerLive,
-    FileIndexLive,
+    Layer.provide(FileIndexLive, runtimePlatformLive),
     FetchHttpClient.layer,
   )
 

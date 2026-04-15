@@ -18,8 +18,6 @@ import {
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
-// @effect-diagnostics nodeBuiltinImport:off
-import { homedir } from "node:os"
 import type { JSX as _JSX } from "@opentui/solid"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
@@ -205,7 +203,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
   onMount(async () => {
     try {
-      const home = homedir()
+      const home = workspace.home
 
       // Read disabled extensions from user + project config (shared with server)
       const disabledSet = await disabledRuntime.runPromise(

@@ -1,7 +1,8 @@
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer, Path } from "effect"
 import { FileIndex, FileIndexError, type FileIndexService } from "../../domain/file-index.js"
-import { loadNativeModule, makeNativeServiceFromModule } from "./native-adapter.js"
+import { loadNativeModule, makeNativeServiceFromModule, ensureDbDir } from "./native-adapter.js"
 import { FallbackFileIndexLive, makeFallbackService } from "./fallback-adapter.js"
+import { RuntimePlatform } from "../runtime-platform.js"
 
 export {
   FileIndex,
@@ -33,7 +34,11 @@ const withFallback = (primary: FileIndexService, fallback: FileIndexService): Fi
  * - Per-method native failure (create, scan timeout, search) → fallback for that call
  * - Finder lifecycle cleanup on scope close
  */
-export const FileIndexLive: Layer.Layer<FileIndex> = Layer.unwrap(
+export const FileIndexLive: Layer.Layer<
+  FileIndex,
+  never,
+  FileSystem.FileSystem | Path.Path | RuntimePlatform
+> = Layer.unwrap(
   Effect.gen(function* () {
     const fallback = makeFallbackService()
 
@@ -43,7 +48,12 @@ export const FileIndexLive: Layer.Layer<FileIndex> = Layer.unwrap(
       return Layer.succeed(FileIndex, fallback)
     }
 
-    const { service, finalize } = makeNativeServiceFromModule(mod.value)
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
+    const { home } = yield* RuntimePlatform
+    const dbDir = yield* ensureDbDir(home, path, fs)
+
+    const { service, finalize } = makeNativeServiceFromModule(mod.value, dbDir, path)
 
     yield* Effect.addFinalizer(() => finalize)
 

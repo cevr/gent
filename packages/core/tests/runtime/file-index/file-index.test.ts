@@ -7,8 +7,14 @@ import {
   FallbackFileIndexLive,
   FileIndexLive,
 } from "@gent/core/runtime/file-index/index"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const PlatformLayer = BunServices.layer
+const TestRuntimePlatform = RuntimePlatform.Test({
+  cwd: process.cwd(),
+  home: "/tmp",
+  platform: "test",
+})
 
 // ---------------------------------------------------------------------------
 // Fallback adapter
@@ -103,7 +109,14 @@ describe("FileIndex.Live", () => {
       expect(typeof fileIndex.listFiles).toBe("function")
       expect(typeof fileIndex.searchFiles).toBe("function")
       expect(typeof fileIndex.trackSelection).toBe("function")
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FileIndexLive))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          PlatformLayer,
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+        ),
+      ),
+    ),
   )
 
   it.scopedLive("listFiles returns results for cwd", () =>
@@ -115,7 +128,14 @@ describe("FileIndex.Live", () => {
       expect(files[0]!.path.length).toBeGreaterThan(0)
       expect(files[0]!.relativePath.length).toBeGreaterThan(0)
       expect(files[0]!.modifiedMs).toBeGreaterThan(0)
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FileIndexLive))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          PlatformLayer,
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+        ),
+      ),
+    ),
   )
 
   it.scopedLive("per-method fallback: invalid cwd yields FileIndexError", () =>
@@ -131,7 +151,14 @@ describe("FileIndex.Live", () => {
       } else {
         expect(result.caught).toBeDefined()
       }
-    }).pipe(Effect.provide(Layer.merge(PlatformLayer, FileIndexLive))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          PlatformLayer,
+          Layer.provide(FileIndexLive, Layer.merge(PlatformLayer, TestRuntimePlatform)),
+        ),
+      ),
+    ),
   )
 })
 

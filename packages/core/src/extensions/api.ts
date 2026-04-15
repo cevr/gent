@@ -73,8 +73,6 @@ import {
   createExtensionStorage,
   type ExtensionStorage,
 } from "../runtime/extensions/extension-storage.js"
-// @effect-diagnostics-next-line nodeBuiltinImport:off
-import { join as joinPath } from "node:path"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -655,7 +653,7 @@ export const extension = <P = never>(
         },
       }
 
-      const extensionStorage = createExtensionStorage(id, joinPath(ctx.home, ".gent", "extensions"))
+      const extensionStorage = createExtensionStorage(id, `${ctx.home}/.gent/extensions`)
 
       const pushEffect = (caller: string, effect: ExtensionEffect) => {
         const top = effectStack[effectStack.length - 1]
