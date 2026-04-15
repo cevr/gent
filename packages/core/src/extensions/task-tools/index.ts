@@ -330,41 +330,14 @@ const taskListActor: ExtensionActorDefinition<
   slots: () => provideTaskMachineSlots,
   mapEvent: (event) => TaskMachineEvent.Published({ event }),
   mapRequest: (message) => {
-    if (message.extensionId !== TASK_TOOLS_EXTENSION_ID) return undefined
-    switch (message._tag) {
-      case "CreateTask": {
-        const request = message as ReturnType<typeof TaskProtocol.CreateTask>
-        return TaskMachineEvent.CreateTask(request)
-      }
-      case "GetTask": {
-        const request = message as ReturnType<typeof TaskProtocol.GetTask>
-        return TaskMachineEvent.GetTask(request)
-      }
-      case "ListTasks": {
-        const request = message as ReturnType<typeof TaskProtocol.ListTasks>
-        return TaskMachineEvent.ListTasks(request)
-      }
-      case "UpdateTask": {
-        const request = message as ReturnType<typeof TaskProtocol.UpdateTask>
-        return TaskMachineEvent.UpdateTask(request)
-      }
-      case "DeleteTask": {
-        const request = message as ReturnType<typeof TaskProtocol.DeleteTask>
-        return TaskMachineEvent.DeleteTask(request)
-      }
-      case "AddDependency": {
-        const request = message as ReturnType<typeof TaskProtocol.AddDependency>
-        return TaskMachineEvent.AddDependency(request)
-      }
-      case "RemoveDependency": {
-        const request = message as ReturnType<typeof TaskProtocol.RemoveDependency>
-        return TaskMachineEvent.RemoveDependency(request)
-      }
-      case "GetDependencies": {
-        const request = message as ReturnType<typeof TaskProtocol.GetDependencies>
-        return TaskMachineEvent.GetDependencies(request)
-      }
-    }
+    if (TaskProtocol.CreateTask.is(message)) return TaskMachineEvent.CreateTask(message)
+    if (TaskProtocol.GetTask.is(message)) return TaskMachineEvent.GetTask(message)
+    if (TaskProtocol.ListTasks.is(message)) return TaskMachineEvent.ListTasks(message)
+    if (TaskProtocol.UpdateTask.is(message)) return TaskMachineEvent.UpdateTask(message)
+    if (TaskProtocol.DeleteTask.is(message)) return TaskMachineEvent.DeleteTask(message)
+    if (TaskProtocol.AddDependency.is(message)) return TaskMachineEvent.AddDependency(message)
+    if (TaskProtocol.RemoveDependency.is(message)) return TaskMachineEvent.RemoveDependency(message)
+    if (TaskProtocol.GetDependencies.is(message)) return TaskMachineEvent.GetDependencies(message)
   },
   snapshot: {
     schema: TaskListStateSchema,

@@ -219,29 +219,12 @@ const artifactsActor: ExtensionActorDefinition<
 > = {
   machine: artifactsMachine,
   mapRequest: (message) => {
-    if (message.extensionId !== ARTIFACTS_EXTENSION_ID) return undefined
-    switch (message._tag) {
-      case "Save": {
-        const m = message as ReturnType<typeof ArtifactProtocol.Save>
-        return ArtifactsMachineEvent.Save(m)
-      }
-      case "Read": {
-        const m = message as ReturnType<typeof ArtifactProtocol.Read>
-        return ArtifactsMachineEvent.Read({ query: m.query })
-      }
-      case "Update": {
-        const m = message as ReturnType<typeof ArtifactProtocol.Update>
-        return ArtifactsMachineEvent.Update(m)
-      }
-      case "Clear": {
-        const m = message as ReturnType<typeof ArtifactProtocol.Clear>
-        return ArtifactsMachineEvent.Clear(m)
-      }
-      case "List": {
-        const m = message as ReturnType<typeof ArtifactProtocol.List>
-        return ArtifactsMachineEvent.List(m)
-      }
-    }
+    if (ArtifactProtocol.Save.is(message)) return ArtifactsMachineEvent.Save(message)
+    if (ArtifactProtocol.Read.is(message))
+      return ArtifactsMachineEvent.Read({ query: message.query })
+    if (ArtifactProtocol.Update.is(message)) return ArtifactsMachineEvent.Update(message)
+    if (ArtifactProtocol.Clear.is(message)) return ArtifactsMachineEvent.Clear(message)
+    if (ArtifactProtocol.List.is(message)) return ArtifactsMachineEvent.List(message)
   },
   snapshot: {
     schema: ArtifactUiModelSchema,

@@ -73,6 +73,7 @@ export type ExtensionCommandDefinition<
   readonly kind: "command"
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly schema: Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
+  readonly is: (message: AnyExtensionMessage) => message is ExtensionCommandMessage<Id, Tag, F>
 }
 
 export type ExtensionRequestDefinition<
@@ -88,6 +89,7 @@ export type ExtensionRequestDefinition<
   readonly replySchema: Schema.Codec<R, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<R>
   readonly schema: Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
+  readonly is: (message: AnyExtensionMessage) => message is ExtensionRequestMessage<Id, Tag, F, R>
 }
 
 export type AnyExtensionCommandDefinition = ExtensionCommandDefinition<
@@ -189,12 +191,16 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
       metadata,
     )) as unknown as ExtensionCommandDefinition<Id, Tag, F>
 
+  const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
+    message.extensionId === extensionId && message._tag === tag
+
   return Object.assign(make, {
     extensionId,
     _tag: tag,
     kind: "command" as const,
     payloadSchema,
     schema,
+    is,
   })
 }
 
@@ -237,6 +243,11 @@ const createRequest = <
       metadata,
     )) as unknown as ExtensionRequestDefinition<Id, Tag, F, Schema.Schema.Type<RS>>
 
+  const is = (
+    message: AnyExtensionMessage,
+  ): message is ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>> =>
+    message.extensionId === extensionId && message._tag === tag
+
   return Object.assign(make, {
     extensionId,
     _tag: tag,
@@ -245,6 +256,7 @@ const createRequest = <
     replySchema,
     replyDecoder: metadata.replyDecoder,
     schema,
+    is,
   })
 }
 

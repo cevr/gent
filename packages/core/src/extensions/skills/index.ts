@@ -6,7 +6,7 @@ import { Skills, formatSkillsForPrompt } from "./skills.js"
 import type { ExtensionActorDefinition } from "../../domain/extension.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
-import { SKILLS_EXTENSION_ID, SkillsProtocol, SkillEntry } from "./protocol.js"
+import { SkillsProtocol, SkillEntry } from "./protocol.js"
 
 // ── Machine for extension protocol ──
 
@@ -83,15 +83,9 @@ const skillsActor: ExtensionActorDefinition<
       }
     }),
   mapRequest: (message) => {
-    if (message.extensionId !== SKILLS_EXTENSION_ID) return undefined
-    switch (message._tag) {
-      case "ListSkills":
-        return SkillsMachineEvent.ListSkills
-      case "GetSkillContent": {
-        const request = message as ReturnType<typeof SkillsProtocol.GetSkillContent>
-        return SkillsMachineEvent.GetSkillContent(request)
-      }
-    }
+    if (SkillsProtocol.ListSkills.is(message)) return SkillsMachineEvent.ListSkills
+    if (SkillsProtocol.GetSkillContent.is(message))
+      return SkillsMachineEvent.GetSkillContent(message)
   },
   protocols: SkillsProtocol,
 }
