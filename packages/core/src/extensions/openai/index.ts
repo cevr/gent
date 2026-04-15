@@ -147,6 +147,7 @@ export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
       if (authInfo?.type !== "oauth") return baseCatalog
       return baseCatalog
         .filter((model) => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           const m = model as { provider?: string; id?: string }
           if (m.provider !== "openai") return true
           const parts = String(m.id ?? "").split("/", 2)
@@ -154,6 +155,7 @@ export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
           return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
         })
         .map((model) => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           const m = model as { provider?: string; pricing?: unknown }
           if (m.provider !== "openai") return model
           return { ...m, pricing: { input: 0, output: 0 } }

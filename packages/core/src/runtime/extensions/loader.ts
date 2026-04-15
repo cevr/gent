@@ -128,9 +128,11 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
 /** Type guard for GentExtension shape */
 const isGentExtension = (value: unknown): value is GentExtension => {
   if (typeof value !== "object" || value === null) return false
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const obj = value as Record<string, unknown>
   if (!("manifest" in obj) || typeof obj["manifest"] !== "object" || obj["manifest"] === null)
     return false
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const manifest = obj["manifest"] as Record<string, unknown>
   if (!("id" in manifest) || typeof manifest["id"] !== "string") return false
   if (!("setup" in obj) || typeof obj["setup"] !== "function") return false
@@ -140,6 +142,7 @@ const isGentExtension = (value: unknown): value is GentExtension => {
 /** Type guard for ExtensionPackage shape — has `id` + `server` (which is a GentExtension). */
 const isExtensionPackageShape = (value: unknown): value is ExtensionPackage => {
   if (typeof value !== "object" || value === null) return false
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const obj = value as Record<string, unknown>
   if (!("id" in obj) || typeof obj["id"] !== "string") return false
   if (!("server" in obj) || !isGentExtension(obj["server"])) return false

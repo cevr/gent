@@ -82,6 +82,7 @@ export const unavailableHostDeps = (label: string): OptionalHostDeps => {
       interject: die("TurnControl"),
       bind: die("TurnControl"),
     },
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     storage: new Proxy({} as StorageService, {
       get: (_target, prop) => {
         if (typeof prop === "string") return die(`Storage.${prop}`)
@@ -124,6 +125,7 @@ export const makeExtensionHostContext = (
         .pipe(
           Effect.map((snapshots) => {
             const match = snapshots.find((s) => s.extensionId === extensionId)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             return match?.model as T | undefined
           }),
         ),

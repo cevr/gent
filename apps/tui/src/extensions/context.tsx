@@ -85,7 +85,8 @@ export const decodeExtensionAskReply = <M extends AnyExtensionRequestMessage>(
 ) => {
   const replyDecoder = getExtensionReplyDecoder(message)
   return replyDecoder === undefined
-    ? Effect.succeed(reply as ExtractExtensionReply<M>)
+    ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      Effect.succeed(reply as ExtractExtensionReply<M>)
     : Schema.decodeUnknownEffect(replyDecoder)(reply)
 }
 

@@ -5,8 +5,9 @@ export const branded =
   <B extends string>(brand: B) =>
   <S extends Schema.Top>(schema: S) => {
     const result = schema.pipe(Schema.brand(brand))
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     ;(result as any)["of"] = (value: any) => value
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return result as typeof result & {
       readonly of: (value: (typeof result)["Encoded"]) => (typeof result)["Type"]
     }

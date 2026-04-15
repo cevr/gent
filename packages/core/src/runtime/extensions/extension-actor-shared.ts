@@ -21,9 +21,11 @@ export class CurrentMailboxSession extends Context.Service<
  * Eliminates `as Schema.Any` + `as State` cast pairs in from-machine and from-reducer.
  */
 export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const jsonCodec = Schema.fromJsonString(schema as Schema.Any)
   return {
     decode: (json: string) =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       Schema.decodeUnknownEffect(jsonCodec)(json) as Effect.Effect<S, Schema.SchemaError>,
     encode: (state: S) => Schema.encodeSync(jsonCodec)(state) as string,
   }

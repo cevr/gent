@@ -67,8 +67,10 @@ export function Session(props: SessionProps) {
         text: theme.text,
         textMuted: theme.textMuted,
       }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return (colorMap[color] ?? theme.text) as typeof theme.text
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return color as typeof theme.text
   }
 

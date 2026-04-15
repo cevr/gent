@@ -240,6 +240,7 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     ctx.agent.run({
       agent: params.worker,
       prompt,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       toolCallId: params.toolCallId as never,
       overrides: { ...reviewOverrides, modelId },
     })

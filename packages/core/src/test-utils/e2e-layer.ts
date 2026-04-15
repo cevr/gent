@@ -131,6 +131,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         .map(
           (ext) =>
             Layer.provide(
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               ext.setup.layer as Layer.Layer<never>,
               storageLayer,
             ) as Layer.Layer<never>,

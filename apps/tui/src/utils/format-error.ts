@@ -50,7 +50,8 @@ const extractUnknownMessage = (error: unknown): string => {
 export const formatConnectionIssue = (error: unknown): string => {
   const message =
     error !== null && typeof error === "object" && "_tag" in error
-      ? formatError(error as UiError)
+      ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        formatError(error as UiError)
       : extractUnknownMessage(error)
 
   const normalized = message.toLowerCase()

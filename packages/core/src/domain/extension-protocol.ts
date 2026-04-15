@@ -167,6 +167,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
 ): ExtensionCommandDefinition<Id, Tag, F> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const schema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
@@ -181,8 +182,10 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
     schema,
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const make = ((payload?: PayloadType<F>) =>
     attachMetadata(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       {
         extensionId,
         _tag: tag,
@@ -217,6 +220,7 @@ const createRequest = <
 ): ExtensionRequestDefinition<Id, Tag, F, Schema.Schema.Type<RS>> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const schema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
@@ -230,11 +234,14 @@ const createRequest = <
     payloadSchema,
     schema,
     replySchema,
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     replyDecoder: replySchema as Schema.Decoder<Schema.Schema.Type<RS>>,
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const make = ((payload?: PayloadType<F>) =>
     attachMetadata(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       {
         extensionId,
         _tag: tag,
@@ -268,6 +275,7 @@ export const getExtensionMessageMetadata = (
   message: unknown,
 ): ExtensionMessageMetadata | undefined => {
   if (typeof message !== "object" || message === null) return undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return (message as Record<PropertyKey, unknown>)[ExtensionMessageMetadataSymbol] as
     | ExtensionMessageMetadata
     | undefined
@@ -278,6 +286,7 @@ export const getExtensionReplySchema = <M>(
 ): Schema.Schema<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
   if (metadata?.kind !== "request") return undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return metadata.replySchema as Schema.Schema<ExtractExtensionReply<M>>
 }
 
@@ -286,6 +295,7 @@ export const getExtensionReplyDecoder = <M>(
 ): Schema.Decoder<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
   if (metadata?.kind !== "request") return undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return metadata.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>
 }
 
@@ -306,6 +316,7 @@ export const listExtensionProtocolDefinitions = (
         message: `protocol entry "${key}" is not a message definition`,
       })
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const definition = value as Partial<AnyExtensionMessageDefinition>
     if (
       typeof definition.extensionId !== "string" ||
@@ -328,6 +339,7 @@ export const listExtensionProtocolDefinitions = (
         message: `request protocol entry "${key}" is missing a reply schema`,
       })
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return definition as AnyExtensionMessageDefinition
   })
 

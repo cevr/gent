@@ -168,7 +168,7 @@ export class SessionProfileCache extends Context.Service<
             // 5. Build extension-provided service layers (Skills.Live, AutoJournal.Live, etc.)
             const extensionLayers = reconciled.resolved.extensions
               .filter((ext) => ext.setup.layer !== undefined)
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
               .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
             // 6. Build registry + extension state runtime + extension layers from resolved

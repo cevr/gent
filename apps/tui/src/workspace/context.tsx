@@ -111,6 +111,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     if (currentFiber !== null) {
       Effect.runFork(Fiber.interrupt(currentFiber))
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const gitServices = services as Context.Context<ChildProcessSpawner.ChildProcessSpawner>
     currentFiber = Effect.runForkWith(gitServices)(
       getGitInfo(props.cwd).pipe(

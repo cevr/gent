@@ -119,6 +119,7 @@ export const RecordingEventStore: Layer.Layer<
         const createdAt = yield* Clock.currentTimeMillis
         events.push(
           new EventEnvelope({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             id: nextId as EventEnvelope["id"],
             event,
             createdAt,
@@ -232,6 +233,7 @@ export const assertSequence = (
       const call = actual[actualIdx]
       if (call !== undefined && call.service === exp.service && call.method === exp.method) {
         if (exp.match !== undefined) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           const argsObj = call.args as Record<string, unknown> | undefined
           if (argsObj !== undefined) {
             const matches = Object.entries(exp.match).every(([k, v]) => argsObj[k] === v)

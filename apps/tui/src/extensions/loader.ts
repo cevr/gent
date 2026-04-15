@@ -29,6 +29,7 @@ const importExtension = async (
 ): Promise<ImportedExtension | undefined> => {
   try {
     const mod = await import(entry.filePath)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const clientModule = (mod.default ?? mod) as ExtensionClientModule
 
     if (typeof clientModule.setup !== "function" || typeof clientModule.id !== "string") {

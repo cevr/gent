@@ -49,6 +49,7 @@ const parseCheckpointParams = (
     status,
     summary: typeof input["summary"] === "string" ? input["summary"] : "Checkpoint",
     learnings: typeof input["learnings"] === "string" ? input["learnings"] : undefined,
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     metrics: isRecord(input["metrics"]) ? (input["metrics"] as Record<string, number>) : undefined,
     nextIdea: typeof input["nextIdea"] === "string" ? input["nextIdea"] : undefined,
   }
@@ -706,6 +707,7 @@ const autoActor: ExtensionActorDefinition<
   turn: {
     project: projectTurn,
   },
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
   afterTransition,
   onInit: (ctx) =>

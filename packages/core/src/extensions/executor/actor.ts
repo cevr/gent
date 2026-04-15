@@ -247,6 +247,7 @@ export const executorActor: ExtensionActorDefinition<
     if (message.extensionId !== EXECUTOR_EXTENSION_ID) return undefined
     switch (message._tag) {
       case "Connect":
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         return MachineEvent.Connect({ cwd: (message["cwd"] as string | undefined) ?? "/" })
       case "Disconnect":
         return MachineEvent.Disconnect
@@ -261,6 +262,7 @@ export const executorActor: ExtensionActorDefinition<
   turn: {
     project: projectTurn,
   },
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   stateSchema: MachineState.plain as Schema.Schema<MachineState>,
   protocols: ExecutorProtocol,
   onInit: (ctx) =>
@@ -271,6 +273,7 @@ export const executorActor: ExtensionActorDefinition<
 
       // Check autoStart setting
       const settingsRaw = yield* ctx.slots.resolveSettings({ cwd: ctx.sessionCwd ?? "/" })
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       const settings = settingsRaw as ResolvedExecutorSettings
       if (!settings.autoStart) return
 

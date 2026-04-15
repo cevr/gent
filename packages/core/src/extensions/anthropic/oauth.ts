@@ -75,6 +75,7 @@ const spawnSecurity = (
       return raw.trim()
     },
     catch: (e) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       const error = e as { exitCode?: number; killed?: boolean; code?: string }
       if (error.killed || error.code === "ETIMEDOUT") {
         return new ProviderAuthError({
@@ -130,7 +131,9 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
       // eslint-disable-next-line no-process-env
       const env = { ...process.env, TERM: "dumb" }
       const proc = Bun.spawn(["claude", "-p", ".", "--model", "haiku"], {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         stdout: "ignore" as unknown as "pipe",
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         stderr: "ignore" as unknown as "pipe",
         env,
         timeout: 60_000,

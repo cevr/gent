@@ -22,7 +22,7 @@ export interface RegistryOptions {
 
 export const make = (options?: RegistryOptions): Registry =>
   new RegistryImpl(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     options?.services ?? (Context.empty() as Context.Context<any>),
     options?.maxEntries,
   )
@@ -72,6 +72,7 @@ class RegistryImpl implements Registry {
     if (!("set" in instance)) {
       throw new Error("Atom is not writable")
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     ;(instance as WritableInstance<R, W>).set(value)
   }
 
@@ -113,6 +114,7 @@ class RegistryImpl implements Registry {
     const existing = this.instances.get(atom as Atom<unknown>)
     if (existing !== undefined) {
       this.touch(atom as Atom<unknown>, existing)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return existing as AtomInstance<A>
     }
     const created = runWithOwner(this.owner, () => atom.build(this))

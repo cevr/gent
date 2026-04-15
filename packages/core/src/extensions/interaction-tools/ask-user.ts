@@ -6,6 +6,7 @@ const parseAnswers = (notes: string): string[][] => {
   try {
     const parsed = JSON.parse(notes) as unknown
     if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return parsed as string[][]
     }
     return [[notes]]

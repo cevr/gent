@@ -110,8 +110,10 @@ export function ThemeProvider(props: ThemeProviderProps) {
   })
 
   // Create a reactive proxy for the theme
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const themeProxy = new Proxy({} as Theme, {
     get(_, prop) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return (values() as unknown as Record<string, unknown>)[prop as string]
     },
   })

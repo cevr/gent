@@ -161,13 +161,14 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       // Collect extension-provided layers (setup.layer — default phase)
       const extensionLayers = reconciled.resolved.extensions
         .filter((ext) => ext.setup.layer !== undefined)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
         .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
       // Collect bus subscriptions from extensions
       const busSubscriptions = reconciled.resolved.extensions.flatMap((ext) =>
         (ext.setup.busSubscriptions ?? []).map((sub) => ({
           pattern: sub.pattern,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           handler: sub.handler as (envelope: {
             channel: string
             payload: unknown

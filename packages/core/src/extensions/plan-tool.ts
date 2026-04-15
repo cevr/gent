@@ -125,6 +125,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     ctx.agent.run({
       agent: params.architect,
       prompt,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       toolCallId: params.toolCallId as never,
       overrides: { modelId },
     })

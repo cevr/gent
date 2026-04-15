@@ -165,7 +165,9 @@ export const BashTool = defineTool({
       const bgEffect = Effect.gen(function* () {
         const bgResult = yield* Effect.tryPromise({
           try: async () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const stderrStream = proc.stderr as ReadableStream<Uint8Array>
             const [stdout, stderr] = await Promise.all([
               new Response(stdoutStream).text(),
@@ -226,7 +228,9 @@ export const BashTool = defineTool({
       (proc) =>
         Effect.tryPromise({
           try: async () => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const stdoutStream = proc.stdout as ReadableStream<Uint8Array>
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const stderrStream = proc.stderr as ReadableStream<Uint8Array>
             const [stdout, stderr] = await Promise.all([
               new Response(stdoutStream).text(),

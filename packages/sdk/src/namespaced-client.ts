@@ -66,6 +66,7 @@ export type { GentConnectionError, GentLifecycle, ConnectionState }
 export function makeNamespacedClient(flat: FlatRpcClient): GentNamespacedClient {
   const cache = new Map<string, Record<string, unknown>>()
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return new Proxy({} as GentNamespacedClient, {
     get(_target, ns: string) {
       const cached = cache.get(ns)

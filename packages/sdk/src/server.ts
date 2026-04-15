@@ -254,6 +254,7 @@ const buildOwnedServer = (
 
       const server: GentServer = { _tag: "owned", url }
       ownedInternals.set(server, {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         handlerContext: handlersContext as Context.Context<unknown>,
         port,
         serverId,
@@ -275,6 +276,7 @@ const probeServer = (
     const baseUrl = rpcUrl.replace("/rpc", "")
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const identity = (yield* response.json) as {
       serverId?: string
       dbPath?: string

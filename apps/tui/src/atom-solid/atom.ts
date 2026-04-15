@@ -37,6 +37,7 @@ export const state = <A>(initialValue: A): Writable<A> =>
     const [value, setValue] = createSignal(initialValue)
     const set = (next: A | ((value: A) => A)) => {
       if (typeof next === "function") {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         setValue(next as (value: A) => A)
         return
       }
@@ -69,6 +70,7 @@ export const effect = <A, E, R>(
     const get = <T>(atom: Atom<T>) => registry.read(atom)()
 
     const runEffect = (eff: Effect.Effect<A, E, R>) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       const services = registry.services as Context.Context<R>
       let cancelled = false
       const fiber = Effect.runForkWith(services)(eff)

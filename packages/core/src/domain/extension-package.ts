@@ -57,6 +57,7 @@ export const defineExtensionPackage = <TSnapshot = never>(
     ): ExtensionClientModule<TComponent> => ({
       id: pkg.id,
       setup: (ctx: ExtensionClientContext) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const pairedGetSnapshot = ((...args: readonly unknown[]) => {
           if (args.length === 0) {
             // Zero-arg: pre-bound to own package snapshot
@@ -64,6 +65,7 @@ export const defineExtensionPackage = <TSnapshot = never>(
             return ctx.getSnapshot(pkg.id, pkg.snapshot)
           }
           // Two-arg: delegate to base context
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           return ctx.getSnapshot(args[0] as string, args[1] as Schema.Decoder<unknown>)
         }) as PairedTuiContext<TSnapshot>["getSnapshot"]
 

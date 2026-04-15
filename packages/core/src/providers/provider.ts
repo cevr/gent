@@ -95,6 +95,7 @@ const makeModelResolver = (
     }
 
     const resolved = yield* Effect.try({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       try: () => extensionProvider.resolveModel(modelName, authParam, hints) as ProviderResolution,
       catch: (e) =>
         new ProviderError({
@@ -270,15 +271,18 @@ function flattenAllOf(schema: Record<string, unknown>): Record<string, unknown> 
     if (key === "allOf" && Array.isArray(value)) {
       for (const entry of value) {
         if (typeof entry === "object" && entry !== null) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           Object.assign(result, flattenAllOf(entry as Record<string, unknown>))
         }
       }
     } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       result[key] = flattenAllOf(value as Record<string, unknown>)
     } else if (Array.isArray(value)) {
       result[key] = value.map((item) =>
         typeof item === "object" && item !== null && !Array.isArray(item)
-          ? flattenAllOf(item as Record<string, unknown>)
+          ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            flattenAllOf(item as Record<string, unknown>)
           : item,
       )
     } else {
@@ -290,6 +294,7 @@ function flattenAllOf(schema: Record<string, unknown>): Record<string, unknown> 
 }
 
 function buildToolJsonSchema(t: AnyToolDefinition): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
   const merged =
     Object.keys(doc.definitions).length > 0 ? { ...doc.schema, $defs: doc.definitions } : doc.schema

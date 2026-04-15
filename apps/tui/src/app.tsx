@@ -22,6 +22,7 @@ function AppContent(props: AppProps) {
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
         <Match
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}
           keyed
         >
@@ -37,6 +38,7 @@ function AppContent(props: AppProps) {
         </Match>
         <Match
           when={
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             isRoute.branchPicker(router.route()) ? (router.route() as BranchPickerRoute) : false
           }
         >

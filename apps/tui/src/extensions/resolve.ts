@@ -102,6 +102,7 @@ const resolveWidgets = (
         id: entry.id,
         slot: entry.slot,
         priority: entry.priority ?? 100,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         component: entry.component as SolidComponent,
       })
       scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
@@ -183,6 +184,7 @@ const resolveOverlays = (
   for (const ext of sorted) {
     for (const entry of ext.setup.overlays ?? []) {
       checkCollision(scopes.get(entry.id), ext, "overlay", entry.id)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       overlays.set(entry.id, entry.component as SolidComponent)
       scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
     }
@@ -221,6 +223,7 @@ const resolveComposerSurface = (
     if (winnerScope !== undefined) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     winner = ext.setup.composerSurface as SolidComponent
     winnerScope = { kind: ext.kind, source: ext.filePath }
   }

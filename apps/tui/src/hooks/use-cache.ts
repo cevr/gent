@@ -18,6 +18,7 @@ export function cached<A, E>(
   run: () => [Accessor<Result<A, E>>, () => void],
 ): Accessor<Result<A, E>> {
   if (cache.has(key)) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return cache.get(key) as Accessor<Result<A, E>>
   }
 

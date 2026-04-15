@@ -100,6 +100,7 @@ const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventE
     case "ToolCallStarted":
       state.started.set(env.event.toolCallId, {
         toolName: env.event.toolName,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         args: (env.event.input ?? {}) as Record<string, unknown>,
       })
       return
@@ -455,6 +456,7 @@ const buildEphemeralLayer = (params: {
   const busSubscriptions = resolved.extensions.flatMap((ext) =>
     (ext.setup.busSubscriptions ?? []).map((sub) => ({
       pattern: sub.pattern,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       handler: sub.handler as (envelope: {
         channel: string
         payload: unknown
@@ -483,7 +485,7 @@ const buildEphemeralLayer = (params: {
   // Extension-contributed layers (forwarded from parent — these are startup-built, typically read-only)
   const extensionLayers = resolved.extensions
     .filter((ext) => ext.setup.layer !== undefined)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
   // Registry (forwarded from parent — read-only resolved data)
@@ -557,7 +559,7 @@ const runEphemeralAgent = (params: {
     parentServices: params.parentServices,
     extensionRegistry: params.extensionRegistry,
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
   const ephemeralRuntime = ManagedRuntime.make(ephemeralLayer as Layer.Layer<any>)
 
   const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>

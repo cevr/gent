@@ -124,6 +124,7 @@ const resolveCronRuntime = (): CronRuntime | undefined => {
   if (typeof bunLike.Bun !== "object" || bunLike.Bun === null) return undefined
   const cron = (bunLike.Bun as { readonly cron?: unknown }).cron
   if (typeof cron !== "function") return undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const cronWithRemove = cron as ((entryPath: string, schedule: string, name: string) => void) & {
     readonly remove?: (name: string) => void
   }

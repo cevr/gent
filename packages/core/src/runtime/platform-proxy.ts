@@ -14,6 +14,7 @@ export const makeAsyncFs = (
   fs: FileSystem.FileSystem,
   run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
 ): AsyncFileSystem =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   new Proxy(fs, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver)
@@ -23,6 +24,7 @@ export const makeAsyncFs = (
         // If the result is an Effect (has [Symbol] from Effect), run it
         if (result !== null && typeof result === "object" && Effect.isEffect(result)) {
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off — dynamic proxy, types erased at runtime
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           return run(result as Effect.Effect<unknown, unknown>)
         }
         return result

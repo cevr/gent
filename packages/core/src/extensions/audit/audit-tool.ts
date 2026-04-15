@@ -219,6 +219,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     ctx.agent.run({
       agent,
       prompt,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       toolCallId: params.toolCallId as never,
       overrides: { ...auditOverrides, modelId },
     })

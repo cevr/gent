@@ -247,6 +247,7 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
     const rpcClient = yield* RpcClient.make(GentRpcs)
     // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
     // defines GentRpcError as the error schema. The cast narrows to our specific error type.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return rpcClient as unknown as GentRpcClient
   })
 
@@ -335,6 +336,7 @@ const connectWs = (
 
     return {
       client: makeNamespacedClient(rpcClient),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       runtime: makeRuntime(services as Context.Context<unknown>, lifecycle),
     }
   })
@@ -350,6 +352,7 @@ export const Gent = {
   ): Effect.Effect<GentClientBundle, E, R | Scope.Scope> =>
     Effect.gen(function* () {
       const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
         Effect.provide(context),
       ) as Effect.Effect<GentRpcClient>
@@ -357,6 +360,7 @@ export const Gent = {
       return {
         client: makeNamespacedClient(rpcClient),
         runtime: makeRuntime(
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           services as Context.Context<unknown>,
           staticLifecycle({ _tag: "connected", generation: 0 }),
         ),
@@ -400,6 +404,7 @@ export const Gent = {
           return {
             client: makeNamespacedClient(rpcClient),
             runtime: makeRuntime(
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               services as Context.Context<unknown>,
               staticLifecycle({ _tag: "connected", generation: 0 }),
             ),

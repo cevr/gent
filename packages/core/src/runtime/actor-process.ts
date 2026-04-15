@@ -189,6 +189,7 @@ export const LocalActorProcessLive: Layer.Layer<
     const opt = <T>(
       svc: { _tag: "Some"; value: T } | { _tag: "None" },
       fallback: Record<string, unknown>,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     ) => (svc._tag === "Some" ? svc.value : (fallback as unknown as T))
     const hostDeps: MakeExtensionHostContextDeps = {
       platform: opt(yield* Effect.serviceOption(RuntimePlatform), {

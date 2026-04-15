@@ -147,6 +147,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, "Permission denied")
             }
 
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const toolDefinition = tool as ToolDefinition<
               string,
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,6 +239,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   branchId: ctx.branchId,
                 },
                 () =>
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                   toolDefinition.execute(decodedInput.success, richCtx) as Effect.Effect<unknown>,
                 richCtx,
               )

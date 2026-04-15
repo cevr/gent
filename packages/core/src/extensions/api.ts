@@ -396,7 +396,7 @@ const schemaTypeMap: Record<string, Schema.Schema<unknown>> = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> => {
   if (params === undefined || Object.keys(params).length === 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     return Schema.Struct({}) as unknown as Schema.Decoder<any, never>
   }
   const fields: Record<string, Schema.Schema<unknown>> = {}
@@ -404,7 +404,7 @@ const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> =>
     const base = schemaTypeMap[param.type] ?? Schema.Unknown
     fields[key] = param.optional === true ? Schema.optional(base) : base
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
   return Schema.Struct(fields) as unknown as Schema.Decoder<any, never>
 }
 
@@ -716,8 +716,10 @@ export const extension = <P = never>(
           _agents = []
           for (const def of defs) {
             if (AgentDefinitionBrand in def || "_tag" in def) {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               _agents.push(def as AgentDefinition)
             } else {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               _agents.push(convertSimpleAgent(def as SimpleAgentDef))
             }
           }
@@ -731,6 +733,7 @@ export const extension = <P = never>(
 
         promptSections: (...sections) => {
           guardSingle("promptSections", _promptSections)
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           _promptSections = sections.map((s) => s as PromptSectionInput)
           return builder
         },
@@ -741,7 +744,9 @@ export const extension = <P = never>(
           return builder
         },
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         on: (<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           _interceptors.push(defineInterceptor(key, handler as never))
           return builder
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -826,6 +831,7 @@ export const extension = <P = never>(
 
         layer: (l) => {
           guardSingle("layer", _layer)
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           _layer = l as Layer.Layer<never, never, object>
           return builder
         },
@@ -852,13 +858,14 @@ export const extension = <P = never>(
           return builder
         },
         async: {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
             if (key === "turn.before" || key === "turn.after" || key === "message.output") {
               _interceptors.push(
                 defineInterceptor(
                   key,
                   wrapFireAndForgetHandler(
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
                     handler as AsyncFireAndForgetHandler<any>,
                     key,
                     effectBinder,
@@ -869,6 +876,7 @@ export const extension = <P = never>(
               _interceptors.push(
                 defineInterceptor(
                   key,
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                   wrapTransformHandler(
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     handler as AsyncTransformHandler<any, any>,
@@ -886,13 +894,16 @@ export const extension = <P = never>(
 
       // Run factory — sync factories stay sync (no Promise.resolve tick)
       const factoryResult = Effect.try({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         try: () => factory({ ext: builder as ExtensionBuilder<never>, ctx }),
         catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
       })
       const result = yield* factoryResult
       // If factory returned a Promise, await it
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       if (result !== undefined && typeof (result as Promise<unknown>).then === "function") {
         yield* Effect.tryPromise({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           try: () => result as Promise<unknown>,
           catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
         })

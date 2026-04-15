@@ -128,6 +128,7 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
                 .filter((line) => line.trim() !== "")
                 .map((line): JournalRow | undefined => {
                   try {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                     return JSON.parse(line) as JournalRow
                   } catch {
                     return undefined

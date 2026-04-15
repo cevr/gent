@@ -24,6 +24,7 @@ export function LiveChildTree(props: { childSessions: ChildSessionEntry[] }) {
         const items = () =>
           entry.toolCalls.map((tc) => ({
             toolName: tc.toolName,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             args: (tc.input !== undefined && tc.input !== null ? tc.input : {}) as Record<
               string,
               unknown

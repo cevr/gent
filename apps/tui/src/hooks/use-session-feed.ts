@@ -329,6 +329,7 @@ export function useSessionFeed(
                 const interactionSnap = snapshot.extensionSnapshots?.find(
                   (s) => s.extensionId === "@gent/interaction-tools",
                 )
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 const interactionModel = interactionSnap?.model as
                   | { requestId?: string; text?: string; metadata?: unknown }
                   | undefined

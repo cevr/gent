@@ -304,11 +304,13 @@ export const toWaitingForInteractionState = (params: {
 // ── Queue helpers on state ──
 
 export const updateQueueOnState = <S extends LoopState>(state: S, queue: LoopQueueState): S =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   AgentLoopState.derive(state, { queue } as Partial<Omit<S, "_tag">>)
 
 export const updateCurrentAgentOnState = <S extends LoopState>(
   state: S,
   currentAgent: AgentNameType,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
 ): S => AgentLoopState.derive(state, { currentAgent } as Partial<Omit<S, "_tag">>)
 
 export const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>

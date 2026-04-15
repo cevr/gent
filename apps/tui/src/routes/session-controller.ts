@@ -261,7 +261,8 @@ export function createSessionController(props: {
             Effect.sync(() => {
               client.setError(
                 typeof error === "object" && error !== null
-                  ? formatError(error as UiError)
+                  ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                    formatError(error as UiError)
                   : String(error),
               )
             }),
@@ -542,6 +543,7 @@ export function createSessionController(props: {
         }
         cast(
           client
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             .updateSessionReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort))
             .pipe(
               Effect.catchEager((error) =>

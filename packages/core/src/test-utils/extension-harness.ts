@@ -156,6 +156,7 @@ export function createActorHarness<State, Message = void>(
   const deriveCtx: ExtensionTurnContext = {
     sessionId: ctx.sessionId,
     branchId: BranchId.of(ctx.branchId ?? "test-branch"),
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
     interactive: true,
@@ -180,6 +181,7 @@ export function createActorHarness<State, Message = void>(
         (state: State, message: any): ReduceResult<State> => receiveHandler(state, message)
       : undefined
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return {
     reduce,
     derive,

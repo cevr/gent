@@ -25,6 +25,7 @@ const makeSwappableClient = (
   clientRef: Ref.Ref<GentRpcClient | undefined>,
   stateRef: Ref.Ref<ConnectionState>,
 ): GentNamespacedClient => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const flatClient = new Proxy({} as GentRpcClient, {
     get(_target, key: string) {
       return (...args: ReadonlyArray<unknown>) => {
@@ -41,6 +42,7 @@ const makeSwappableClient = (
         if (typeof method !== "function") {
           return Effect.fail(new GentConnectionError({ message: `rpc method missing: ${key}` }))
         }
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         return (method as (...methodArgs: ReadonlyArray<unknown>) => unknown)(...args)
       }
     },

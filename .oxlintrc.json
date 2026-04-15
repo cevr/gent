@@ -20,7 +20,7 @@
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
-    "typescript/no-unsafe-type-assertion": "warn",
+    "typescript/no-unsafe-type-assertion": "error",
 
     // TypeScript - no non-null assertions
     "typescript/no-non-null-assertion": "error",

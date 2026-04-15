@@ -15,7 +15,7 @@ import type { Result } from "./result"
 let _defaultRegistry: Registry.Registry | undefined
 const defaultRegistry = (() => {
   if (_defaultRegistry === undefined) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     _defaultRegistry = Registry.make({ services: Context.empty() as Context.Context<any> })
   }
   return _defaultRegistry
@@ -42,7 +42,7 @@ export interface RegistryProviderProps extends ParentProps {
 }
 
 export const RegistryProvider = (props: RegistryProviderProps) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
   const services = props.services ?? (Context.empty() as Context.Context<any>)
   const registry = props.registry ?? Registry.make({ services, maxEntries: props.maxEntries })
   const shouldDispose = props.registry === undefined

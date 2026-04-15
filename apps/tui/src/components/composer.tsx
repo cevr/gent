@@ -85,6 +85,7 @@ export function Composer(props: ComposerProps) {
             setDraft: (text: string) => sc.onComposerInteraction({ _tag: "RestoreDraft", text }),
             submit: () => controller.handleSubmitFromTextarea(),
             focused: controller.inputFocused(),
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             mode: controller.mode() as "editing" | "shell",
           })
         }

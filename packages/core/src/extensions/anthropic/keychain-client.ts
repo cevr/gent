@@ -139,6 +139,7 @@ export const transformStreamEvent = (
   const rawBlock = e["content_block"]
   const block = isRecord(rawBlock) ? rawBlock : undefined
   if (block?.["type"] === "tool_use" && typeof block["name"] === "string") {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return {
       ...event,
       content_block: { ...block, name: stripPrefix(block["name"]) },
@@ -170,6 +171,7 @@ export const keychainClient: Layer.Layer<
         inner
           .createMessage({
             ...options,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             payload: transformPayload(
               options.payload as Record<string, unknown>,
             ) as typeof options.payload,
@@ -183,6 +185,7 @@ export const keychainClient: Layer.Layer<
                   ...b,
                   content: transformResponseContent(content),
                 }
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 return [transformed as typeof body, response] as [typeof body, typeof response]
               }
               return [body, response] as [typeof body, typeof response]
@@ -193,6 +196,7 @@ export const keychainClient: Layer.Layer<
         inner
           .createMessageStream({
             ...options,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             payload: transformPayload(
               options.payload as Record<string, unknown>,
             ) as typeof options.payload,

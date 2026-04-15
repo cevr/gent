@@ -182,6 +182,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
 
       const applyFilters = (models: readonly Model[]) =>
         extensionRegistry.filterProviderModels(models, resolveAuth).pipe(
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           Effect.map((filtered) => filtered as readonly Model[]),
           Effect.catchEager(() => Effect.succeed(models)),
         )

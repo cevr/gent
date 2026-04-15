@@ -229,6 +229,7 @@ const taskMachine = Machine.make({
 })
   .onAny(TaskMachineEvent.Published, ({ state, event }) =>
     TaskMachineState.Active({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       tasks: reduce({ tasks: state.tasks }, event.event, {} as never).state.tasks,
     }),
   )

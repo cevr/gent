@@ -62,6 +62,7 @@ const decodeEvent = (json: string) =>
 
 const expandEventTags = (tags: ReadonlyArray<string>) => [
   ...new Set(
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     tags.flatMap((tag) => LEGACY_EVENT_TAGS[tag as keyof typeof LEGACY_EVENT_TAGS] ?? [tag]),
   ),
 ]

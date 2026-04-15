@@ -123,6 +123,7 @@ const memoryMachine = Machine.make({
 })
   .on(MemoryMachineState.Active, MemoryMachineEvent.Published, ({ state, event }) => {
     const nextMemory = reduce(state.memory as MemoryState, event.event, {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       sessionId: "" as never,
       branchId: undefined,
     }).state

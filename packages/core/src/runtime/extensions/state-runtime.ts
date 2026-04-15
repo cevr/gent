@@ -258,6 +258,7 @@ export class ExtensionStateRuntime extends Context.Service<
 
               const spawnExit = yield* Effect.exit(
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 (
                   spawnMachineExtensionRef(spec.extensionId, spec.actor, {
                     sessionId,
@@ -546,6 +547,7 @@ export class ExtensionStateRuntime extends Context.Service<
                 )
               }
               return yield* Schema.decodeUnknownEffect(definition.schema)(message).pipe(
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 Effect.map((value) => value as M),
                 Effect.mapError((error) =>
                   protocolError(message.extensionId, message._tag, expectedKind, error.message),
@@ -674,6 +676,7 @@ export class ExtensionStateRuntime extends Context.Service<
                 decoded._tag,
                 definition.replySchema,
                 replyResult.value,
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               ).pipe(Effect.map((value) => value as ExtractExtensionReply<M>))
             })
 
@@ -856,6 +859,7 @@ export class ExtensionStateRuntime extends Context.Service<
                     const { state } = snapshot
                     if (state === undefined) continue
                     const turnExit = yield* Effect.exit(
+                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                       Effect.sync(() => turnProject(state as { readonly _tag: string }, ctx)),
                     )
                     const derived =
@@ -920,6 +924,7 @@ export class ExtensionStateRuntime extends Context.Service<
                   if (Schema.is(ExtensionProtocolError)(result)) {
                     return yield* result
                   }
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                   return result as ExtractExtensionReply<M>
                 }),
               ),
@@ -955,6 +960,7 @@ export class ExtensionStateRuntime extends Context.Service<
                       snapshotConfig.project ??
                       ((value: { readonly _tag: string }) => value as unknown)
                     const snapshotProjectExit = yield* Effect.exit(
+                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                       Effect.sync(() => project(state as { readonly _tag: string })),
                     )
                     let model =
@@ -966,6 +972,7 @@ export class ExtensionStateRuntime extends Context.Service<
                           }).pipe(Effect.as(undefined))
                     if (model !== undefined && snapshotConfig.schema !== undefined) {
                       model = yield* Schema.decodeUnknownEffect(
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                         snapshotConfig.schema as Schema.Any,
                       )(model).pipe(
                         Effect.catchEager(() =>

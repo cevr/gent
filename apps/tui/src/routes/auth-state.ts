@@ -370,6 +370,7 @@ const transitionByTag = {
 }
 
 export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const handler = transitionByTag[event._tag] as (state: AuthState, event: AuthEvent) => AuthState
   return handler(state, event)
 }

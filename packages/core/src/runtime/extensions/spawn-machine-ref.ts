@@ -51,11 +51,13 @@ export const spawnMachineExtensionRef = <
             name,
             (params: unknown) =>
               Effect.suspend(() => {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                 const result = handler(params as never)
                 return Effect.isEffect(result) ? result : Effect.succeed(result)
               }),
           ]),
         )
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         return normalized as SlotCalls<Defs>
       }
 
@@ -249,6 +251,7 @@ export const spawnMachineExtensionRef = <
                 Effect.catchEager(() => Effect.succeed(false)),
               ),
             sessionCwd,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             parentSessionId: parentSessionId as typeof ctx.sessionId | undefined,
             getSessionAncestors: () =>
               storage._tag === "Some"
@@ -316,6 +319,7 @@ export const spawnMachineExtensionRef = <
                 `extension "${extensionId}" did not reply to request "${message._tag}"`,
               )
             }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             return result.reply as never
           }),
         snapshot: Effect.gen(function* () {

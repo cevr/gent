@@ -62,12 +62,14 @@ const composeInterceptors = <K extends keyof ExtensionInterceptorMap>(
   let next: (input: InterceptorInput<K>) => InterceptorOutput<K> = base
   for (const interceptor of chain) {
     const previous = next
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const run = interceptor as unknown as (
       input: InterceptorInput<K>,
       next: (input: InterceptorInput<K>) => InterceptorOutput<K>,
       ctx: ExtensionHostContext,
     ) => InterceptorOutput<K>
     next = (input) =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       Effect.suspend(() => run(input, previous, ctx) as Effect.Effect<unknown>).pipe(
         Effect.catchDefect((defect) =>
           Effect.logWarning("extension.interceptor.defect").pipe(

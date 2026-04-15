@@ -527,10 +527,15 @@ const executeToolCalls = (params: {
           agentName: params.currentTurnAgent,
           cwd: "",
           home: "",
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           extension: {} as ToolContext["extension"],
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           agent: {} as ToolContext["agent"],
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           session: {} as ToolContext["session"],
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           interaction: {} as ToolContext["interaction"],
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           turn: {} as ToolContext["turn"],
         }
         const run = params.toolRunner
