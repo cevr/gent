@@ -18,7 +18,7 @@ import {
   Semaphore,
   type Scope as ScopeType,
 } from "effect"
-import { BuiltinExtensions } from "../extensions/index.js"
+import type { ExtensionInput } from "../domain/extension-package.js"
 import type { LoadedExtension } from "../domain/extension.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
@@ -65,6 +65,7 @@ export interface SessionProfileCacheConfig {
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>
+  readonly extensions: ReadonlyArray<ExtensionInput>
 }
 
 export interface SessionProfileCacheService {
@@ -139,7 +140,7 @@ export class SessionProfileCache extends Context.Service<
             })
 
             const builtinSetup = yield* setupBuiltinExtensions({
-              extensions: BuiltinExtensions,
+              extensions: config.extensions,
               cwd: canonicalCwd,
               home: config.home,
               disabled: disabledSet,

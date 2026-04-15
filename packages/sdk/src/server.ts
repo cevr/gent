@@ -18,6 +18,7 @@ import { resolve as pathResolve, join as pathJoin } from "node:path"
 import * as os from "node:os"
 
 import { createDependencies } from "@gent/core/server/dependencies.js"
+import { BuiltinExtensions } from "@gent/core/extensions/index.js"
 import { AppServicesLive } from "@gent/core/server/index.js"
 import { GentLogger, GentLogLevel } from "@gent/core/runtime/logger.js"
 import { GentTracerLive } from "@gent/core/runtime/tracer.js"
@@ -179,6 +180,7 @@ const buildOwnedServer = (
         dbPath,
         persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
         sharedServerUrl: url,
+        extensions: BuiltinExtensions,
         ...(providerLayer !== undefined ? { providerLayerOverride: providerLayer } : {}),
       }).pipe(
         Layer.provide(LocalPlatformLayer),

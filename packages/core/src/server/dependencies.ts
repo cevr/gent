@@ -8,7 +8,7 @@ import { FileLockService } from "../domain/file-lock.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
-import { BuiltinExtensions } from "../extensions/index.js"
+import type { ExtensionInput } from "../domain/extension-package.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
@@ -64,6 +64,8 @@ export interface DependenciesConfig {
   /** Provider layer override. When set, bypasses providerMode string and uses this layer directly.
    *  Must be a fully-provided layer (no requirements, no errors). */
   providerLayerOverride?: Layer.Layer<Provider, never, never>
+  /** Extensions to load. Composition roots pass this in. */
+  extensions: ReadonlyArray<ExtensionInput>
 }
 
 import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
@@ -127,7 +129,7 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       })
 
       const builtinSetup = yield* setupBuiltinExtensions({
-        extensions: BuiltinExtensions,
+        extensions: config.extensions,
         cwd: config.cwd,
         home: config.home,
         disabled: disabledSet,
@@ -410,6 +412,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       disabledExtensions: config.disabledExtensions,
       scheduledJobCommand: config.scheduledJobCommand,
       scheduledJobEnv: scheduledJobEnv(config),
+      extensions: config.extensions,
     }),
     allDeps,
   )

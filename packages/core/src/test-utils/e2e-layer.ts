@@ -14,6 +14,7 @@ import { BunServices } from "@effect/platform-bun"
 import {
   DEFAULT_MODEL_ID,
   AgentRunnerService,
+  type AgentDefinition,
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
@@ -22,6 +23,7 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { LoadedExtension } from "../domain/extension.js"
+import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { BuiltinExtensions } from "../extensions/index.js"
@@ -63,6 +65,10 @@ export interface E2ELayerConfig {
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+  /** Agents to register. Default: AllBuiltinAgents */
+  readonly agents?: ReadonlyArray<AgentDefinition>
+  /** Extension inputs for setup. Default: BuiltinExtensions */
+  readonly extensionInputs?: ReadonlyArray<ExtensionInput>
 }
 
 /**
@@ -76,8 +82,9 @@ export interface E2ELayerConfig {
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions
+  const agents = config.agents ?? AllBuiltinAgents
   const builtinSetup = {
-    agents: [...AllBuiltinAgents],
+    agents: [...agents],
     tools: [] as const,
   }
 
@@ -86,7 +93,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const setupResult = config.extensions
         ? { active: config.extensions, failed: [] as const }
         : yield* setupBuiltinExtensions({
-            extensions: BuiltinExtensions,
+            extensions: config.extensionInputs ?? BuiltinExtensions,
             cwd: "/tmp",
             home: "/tmp",
             disabled: new Set(),
