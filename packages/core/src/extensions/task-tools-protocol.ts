@@ -1,8 +1,13 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "../domain/extension-protocol.js"
-import { Task, TaskStatus } from "../domain/task.js"
-import { TaskId, SessionId, BranchId } from "../domain/ids.js"
-import { AgentName } from "../domain/agent.js"
+import {
+  ExtensionMessage,
+  Task,
+  TaskStatus,
+  TaskId,
+  SessionId,
+  BranchId,
+  AgentName,
+} from "./api.js"
 
 export const TASK_TOOLS_EXTENSION_ID = "@gent/task-tools"
 

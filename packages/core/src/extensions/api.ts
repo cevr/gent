@@ -85,12 +85,33 @@ export {
   type AnyToolDefinition,
   type ToolContext,
 } from "../domain/tool.js"
-export { defineAgent, AgentDefinition, AgentDefinitionBrand } from "../domain/agent.js"
+export {
+  defineAgent,
+  AgentDefinition,
+  AgentDefinitionBrand,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  AUDITOR_PROMPT,
+  LIBRARIAN_PROMPT,
+  ARCHITECT_PROMPT,
+  COWORK_PROMPT,
+  DEEPWORK_PROMPT,
+  EXPLORE_PROMPT,
+  SUMMARIZER_PROMPT,
+  getDurableAgentRunSessionId,
+  AgentRunError,
+  type AgentRunResult,
+} from "../domain/agent.js"
 export {
   defineInterceptor,
   type ExtensionInterceptorDescriptor,
   type ExtensionInterceptorKey,
   type ExtensionInterceptorMap,
+  type ExtensionActorDefinition,
+  type AnyExtensionActorDefinition,
+  type TurnProjection,
+  type ProviderAuthInfo,
+  type ProviderHints,
   type ProviderContribution,
   type ScheduledJobContribution,
   type CommandContribution,
@@ -125,7 +146,18 @@ export {
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
-export type { AgentEvent } from "../domain/event.js"
+export {
+  AgentEvent,
+  type Question,
+  QuestionSchema,
+  QuestionOptionSchema,
+  TaskCreated,
+  TaskUpdated,
+  TaskCompleted,
+  TaskFailed,
+  TaskStopped,
+  TaskDeleted,
+} from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 export {
   type ExtensionAsyncContext,
@@ -133,6 +165,31 @@ export {
   toExtensionAsyncContext,
   toExtensionContext,
 } from "../domain/extension-context.js"
+export { SessionId, BranchId, TaskId, ArtifactId, MessageId, ToolCallId } from "../domain/ids.js"
+export { ModelId } from "../domain/model.js"
+export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
+export { AuthMethod } from "../domain/auth-method.js"
+export { AuthOauth } from "../domain/auth-store.js"
+export {
+  type Message,
+  type MessagePart,
+  type MessageMetadata,
+  type Branch,
+} from "../domain/message.js"
+export { PermissionRule, type PermissionResult } from "../domain/permission.js"
+export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
+export type { ExtensionHostContext } from "../domain/extension-host-context.js"
+export { isRecord, isRecordArray } from "../domain/guards.js"
+export { EventPublisher } from "../domain/event-publisher.js"
+export { FileIndex } from "../domain/file-index.js"
+export { FileLockService } from "../domain/file-lock.js"
+export {
+  defineExtensionPackage,
+  type ExtensionPackage,
+  type ExtensionInput,
+} from "../domain/extension-package.js"
+export type { ProviderResolution } from "../providers/provider.js"
+export { ProviderAuthError } from "../providers/provider-auth.js"
 
 // ── Simple Parameter Types ──
 

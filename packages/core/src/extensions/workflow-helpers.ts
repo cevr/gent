@@ -3,8 +3,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { AgentRunError } from "../domain/agent.js"
-import type { AgentRunResult } from "../domain/agent.js"
+import { AgentRunError, type AgentRunResult } from "./api.js"
 
 // ── Shell Command Runner ──
 

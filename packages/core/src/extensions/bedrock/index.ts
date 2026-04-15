@@ -1,5 +1,4 @@
-import { extension } from "../api.js"
-import type { ProviderContribution } from "../../domain/extension.js"
+import { extension, type ProviderContribution } from "../api.js"
 
 export const BedrockExtension = extension("@gent/provider-bedrock", ({ ext }) => {
   const bedrockProvider: ProviderContribution = {

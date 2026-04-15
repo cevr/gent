@@ -258,7 +258,7 @@ export class ExtensionStateRuntime extends Context.Service<
 
               const spawnExit = yield* Effect.exit(
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration
                 (
                   spawnMachineExtensionRef(spec.extensionId, spec.actor, {
                     sessionId,

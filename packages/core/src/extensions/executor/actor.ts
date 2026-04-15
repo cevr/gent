@@ -14,12 +14,12 @@ import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 class ActorDefectError extends Schema.TaggedErrorClass<ActorDefectError>()("ActorDefectError", {
   message: Schema.String,
 }) {}
-import type {
-  ExtensionActorDefinition,
-  ExtensionTurnContext,
-  TurnProjection,
-} from "../../domain/extension.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import {
+  type ExtensionActorDefinition,
+  type ExtensionTurnContext,
+  type TurnProjection,
+  type PromptSection,
+} from "../api.js"
 import {
   ExecutorEndpoint,
   ExecutorMcpInspection,

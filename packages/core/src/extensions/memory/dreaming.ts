@@ -1,5 +1,4 @@
-import type { AgentName } from "../../domain/agent.js"
-import type { ScheduledJobContribution } from "../../domain/extension.js"
+import { type AgentName, type ScheduledJobContribution } from "../api.js"
 
 /**
  * Durable host-owned jobs for memory consolidation.

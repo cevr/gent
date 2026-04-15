@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 import { $ } from "bun"
 import { GitReader } from "./git-reader.js"
 

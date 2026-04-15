@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 import TurndownService from "turndown"
 import { parseHTML } from "linkedom"
 

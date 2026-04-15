@@ -1,6 +1,4 @@
-import { extension } from "../api.js"
-import { defineAgent, AUDITOR_PROMPT } from "../../domain/agent.js"
-import { ModelId } from "../../domain/model.js"
+import { extension, defineAgent, AUDITOR_PROMPT, ModelId } from "../api.js"
 import { AuditTool } from "./audit-tool.js"
 
 export const auditor = defineAgent({

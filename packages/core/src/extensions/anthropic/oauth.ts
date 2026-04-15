@@ -1,7 +1,7 @@
 import { Effect, Schedule, Schema } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import * as os from "node:os"
-import { ProviderAuthError } from "../../providers/provider-auth.js"
+import { ProviderAuthError } from "../api.js"
 
 // ── Claude Code Keychain Reader ──
 

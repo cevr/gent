@@ -1,4 +1,4 @@
-import type { ExtensionInput } from "../domain/extension-package.js"
+import { type ExtensionInput } from "./api.js"
 import { FsToolsExtension } from "./fs-tools/index.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { NetworkToolsExtension } from "./network-tools/index.js"

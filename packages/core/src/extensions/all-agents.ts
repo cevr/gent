@@ -6,7 +6,7 @@
  * to register agents. Use the extension API instead.
  */
 
-import type { AgentDefinition } from "../domain/agent.js"
+import { type AgentDefinition } from "./api.js"
 import { CoreAgents } from "./agents.js"
 import { architect } from "./research/index.js"
 import { auditor } from "./audit/index.js"

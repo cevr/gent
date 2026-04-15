@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 
 // Read Tool Error
 

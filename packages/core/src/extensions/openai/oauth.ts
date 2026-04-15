@@ -1,4 +1,4 @@
-import type { AuthOauth } from "../../domain/auth-store.js"
+import { type AuthOauth } from "../api.js"
 import { Buffer } from "node:buffer"
 import * as os from "node:os"
 

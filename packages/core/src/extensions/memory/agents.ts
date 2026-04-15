@@ -5,8 +5,7 @@
  * (`gent -H -a memory:reflect "..."`).
  */
 
-import { defineAgent, type AgentName } from "../../domain/agent.js"
-import { ModelId } from "../../domain/model.js"
+import { defineAgent, ModelId, type AgentName } from "../api.js"
 
 // ── Reflect Agent ──
 

@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent } from "../../domain/agent.js"
-import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { defineAgent, defineTool, type ToolContext } from "../api.js"
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,

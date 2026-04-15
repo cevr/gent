@@ -1,22 +1,25 @@
 import { Effect, Layer, Schema } from "effect"
 import { Event as MEvent, Machine, Slot, State as MState, type ProvideSlots } from "effect-machine"
-import { extension } from "../api.js"
+import {
+  extension,
+  AgentEvent,
+  Task,
+  TaskStatus,
+  BranchId,
+  SessionId,
+  TaskId,
+  EventPublisher,
+  type ExtensionActorDefinition,
+  type ExtensionReduceContext,
+  type ReduceResult,
+} from "../api.js"
 import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
 import { TaskUpdateTool } from "./task-update.js"
 import { TaskStorage } from "../task-tools-storage.js"
 import { TaskService } from "../task-tools-service.js"
-import { AgentEvent } from "../../domain/event.js"
-import { Task, TaskStatus } from "../../domain/task.js"
-import { BranchId, SessionId, TaskId } from "../../domain/ids.js"
-import type {
-  ExtensionActorDefinition,
-  ExtensionReduceContext,
-  ReduceResult,
-} from "../../domain/extension.js"
 import { TASK_TOOLS_EXTENSION_ID, TaskProtocol, TaskUiModel } from "../task-tools-protocol.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
 
 // ── Task list actor — projects task state as extension UI snapshot ──
 

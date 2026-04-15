@@ -1,7 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../../domain/tool.js"
-import { AgentName } from "../../domain/agent.js"
-import { TaskId } from "../../domain/ids.js"
+import { defineTool, AgentName, TaskId } from "../api.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskCreateParams = Schema.Struct({

@@ -2,8 +2,7 @@
  * Memory extension projections.
  */
 
-import type { TurnProjection } from "../../domain/extension.js"
-import type { PromptSection } from "../../domain/prompt.js"
+import { type TurnProjection, type PromptSection } from "../api.js"
 import type { MemoryState } from "./state.js"
 import { projectDisplayName } from "./vault.js"
 import { Schema } from "effect"

@@ -7,8 +7,7 @@
  */
 
 import { Schema } from "effect"
-import type { AgentEvent } from "../../domain/event.js"
-import type { ExtensionReduceContext, ReduceResult } from "../../domain/extension.js"
+import { type AgentEvent, type ExtensionReduceContext, type ReduceResult } from "../api.js"
 import {
   MemoryEntrySchema,
   type MemoryEntry,

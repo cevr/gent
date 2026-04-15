@@ -9,10 +9,13 @@
 
 import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, Slot, State as MState } from "effect-machine"
-import type { ReduceResult, ExtensionActorDefinition } from "../../domain/extension.js"
-import type { AnyToolDefinition } from "../../domain/tool.js"
-import { AgentEvent } from "../../domain/event.js"
-import { extension } from "../api.js"
+import {
+  extension,
+  AgentEvent,
+  type ReduceResult,
+  type ExtensionActorDefinition,
+  type AnyToolDefinition,
+} from "../api.js"
 import {
   type MemoryState,
   type SessionMemory,

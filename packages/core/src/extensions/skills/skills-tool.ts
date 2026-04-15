@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Skills, resolveSkillName } from "./skills.js"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 
 export const SkillsParams = Schema.Struct({
   names: Schema.Union([Schema.Array(Schema.String), Schema.Literal("all")]).annotate({

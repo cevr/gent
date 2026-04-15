@@ -1,12 +1,12 @@
-import { extension } from "./api.js"
 import {
+  extension,
   defineAgent,
   COWORK_PROMPT,
   DEEPWORK_PROMPT,
   EXPLORE_PROMPT,
   SUMMARIZER_PROMPT,
-} from "../domain/agent.js"
-import { ModelId } from "../domain/model.js"
+  ModelId,
+} from "./api.js"
 
 const cowork = defineAgent({
   name: "cowork",

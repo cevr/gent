@@ -1,22 +1,21 @@
 import { Context, DateTime, Effect, Layer, Option } from "effect"
-import { EventPublisher } from "../domain/event-publisher.js"
 import {
+  EventPublisher,
   Task,
   TaskTransitionError,
   isValidTaskTransition,
-  type TaskStatus,
-} from "../domain/task.js"
-import {
   TaskCreated,
   TaskUpdated,
   TaskCompleted,
   TaskFailed,
   TaskStopped,
   TaskDeleted,
-} from "../domain/event.js"
-import type { AgentName } from "../domain/agent.js"
-import { TaskId } from "../domain/ids.js"
-import type { SessionId, BranchId } from "../domain/ids.js"
+  TaskId,
+  type TaskStatus,
+  type AgentName,
+  type SessionId,
+  type BranchId,
+} from "./api.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.

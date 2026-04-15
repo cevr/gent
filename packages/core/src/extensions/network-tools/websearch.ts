@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 
 // WebSearch Error
 

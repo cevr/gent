@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { InteractionToolsExtension } from "./interaction-tools/index.js"
 
 export const InteractionToolsPackage = defineExtensionPackage({

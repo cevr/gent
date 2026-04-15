@@ -1,9 +1,7 @@
-import { Effect, Layer, Path, Schema } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
+import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
-import { extension } from "../api.js"
+import { extension, type ExtensionActorDefinition } from "../api.js"
 import { Skills, formatSkillsForPrompt } from "./skills.js"
-import type { ExtensionActorDefinition } from "../../domain/extension.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
 import { SkillsProtocol, SkillEntry } from "./protocol.js"
@@ -94,12 +92,7 @@ const skillsActor: ExtensionActorDefinition<
 
 export const SkillsExtension = extension("@gent/skills", ({ ext, ctx }) =>
   ext
-    .layer(
-      Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(
-        Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
-        Layer.orDie,
-      ),
-    )
+    .layer(Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie))
     .tools(SkillsTool, SearchSkillsTool)
     .actor(skillsActor)
     .promptSections({

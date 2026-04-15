@@ -16,22 +16,21 @@
 import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
+  extension,
+  isRecord,
   type ExtensionActorDefinition,
   type ExtensionTurnContext,
   type ExtensionEffect,
   type ToolResultInput,
   type TurnAfterInput,
   type TurnProjection,
-} from "../domain/extension.js"
-import type { AgentEvent } from "../domain/event.js"
-import type { PromptSection } from "../domain/prompt.js"
-import { extension } from "./api.js"
+  type AgentEvent,
+  type PromptSection,
+  type ExtensionHostContext,
+} from "./api.js"
 import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import { DEFAULTS } from "../domain/defaults.js"
-import { isRecord } from "../domain/guards.js"
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -836,7 +835,7 @@ const autoHandoffImpl = (
 
     // Estimate context fill
     const contextPercent = yield* ctx.session.estimateContextPercent()
-    if (contextPercent < DEFAULTS.handoffThresholdPercent) return
+    if (contextPercent < 85) return
 
     yield* Effect.logInfo("auto.handoff.threshold").pipe(
       Effect.annotateLogs({ contextPercent, iteration: uiModel.iteration }),

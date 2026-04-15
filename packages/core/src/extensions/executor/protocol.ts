@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "../../domain/extension-protocol.js"
+import { ExtensionMessage } from "../api.js"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
 export const ExecutorProtocol = {

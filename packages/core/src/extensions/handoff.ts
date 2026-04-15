@@ -1,10 +1,12 @@
 import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
-import type { ExtensionActorDefinition, TurnAfterInput } from "../domain/extension.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import type { Message } from "../domain/message.js"
+import {
+  type ExtensionActorDefinition,
+  type TurnAfterInput,
+  type ExtensionHostContext,
+  type Message,
+} from "./api.js"
 import { HandoffTool } from "./handoff-tool.js"
-import { DEFAULTS } from "../domain/defaults.js"
 import { extension } from "./api.js"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
 import { AutoProtocol } from "./auto-protocol.js"
@@ -102,12 +104,13 @@ const autoHandoffImpl = (
     if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
 
     const contextPercent = yield* ctx.session.estimateContextPercent()
-    if (contextPercent < DEFAULTS.handoffThresholdPercent) return
+    const handoffThreshold = 85
+    if (contextPercent < handoffThreshold) return
 
     yield* Effect.logInfo("auto-handoff.threshold").pipe(
       Effect.annotateLogs({
         contextPercent,
-        threshold: DEFAULTS.handoffThresholdPercent,
+        threshold: handoffThreshold,
       }),
     )
 
@@ -117,7 +120,7 @@ const autoHandoffImpl = (
         text: summarizeRecentMessages(allMessages),
         metadata: {
           type: "handoff",
-          reason: `Context at ${contextPercent}% (threshold: ${DEFAULTS.handoffThresholdPercent}%)`,
+          reason: `Context at ${contextPercent}% (threshold: ${handoffThreshold}%)`,
         },
       })
       .pipe(Effect.catchEager(() => Effect.succeed({ approved: false })))

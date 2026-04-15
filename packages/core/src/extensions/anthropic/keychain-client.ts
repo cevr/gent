@@ -12,7 +12,7 @@
  */
 
 import { Effect, Layer, Stream } from "effect"
-import { isRecord, isRecordArray } from "../../domain/guards.js"
+import { isRecord, isRecordArray } from "../api.js"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"

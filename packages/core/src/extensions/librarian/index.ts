@@ -1,6 +1,4 @@
-import { extension } from "../api.js"
-import { defineAgent, LIBRARIAN_PROMPT } from "../../domain/agent.js"
-import { ModelId } from "../../domain/model.js"
+import { extension, defineAgent, LIBRARIAN_PROMPT, ModelId } from "../api.js"
 import { RepoTool } from "./repo-explorer.js"
 import { GitReader } from "./git-reader.js"
 

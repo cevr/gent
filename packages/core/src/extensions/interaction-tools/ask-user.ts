@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../../domain/tool.js"
-import { type Question, QuestionSchema, QuestionOptionSchema } from "../../domain/event.js"
+import { defineTool, QuestionSchema, QuestionOptionSchema, type Question } from "../api.js"
 
 const parseAnswers = (notes: string): string[][] => {
   try {

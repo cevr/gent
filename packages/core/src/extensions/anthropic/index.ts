@@ -1,11 +1,12 @@
 import { Clock, Effect, Layer, Redacted } from "effect"
-import { extension } from "../api.js"
-import type {
-  ProviderAuthInfo,
-  ProviderContribution,
-  ProviderHints,
-} from "../../domain/extension.js"
-import type { ProviderResolution } from "../../providers/provider.js"
+import {
+  extension,
+  AuthMethod,
+  type ProviderAuthInfo,
+  type ProviderContribution,
+  type ProviderHints,
+  type ProviderResolution,
+} from "../api.js"
 import {
   createAnthropicKeychainFetch,
   initAnthropicKeychainEnv,
@@ -13,7 +14,6 @@ import {
   refreshClaudeCodeCredentials,
   type AnthropicKeychainEnv,
 } from "./oauth.js"
-import { AuthMethod } from "../../domain/auth-method.js"
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { FetchHttpClient } from "effect/unstable/http"
 import { keychainClient } from "./keychain-client.js"

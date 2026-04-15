@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../domain/tool.js"
+import { defineTool } from "./api.js"
 
 /**
  * Signal tool for the auto loop extension.

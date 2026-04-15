@@ -9,7 +9,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 import {
   type ExecutorMcpToolResult,
   type ResumeAction,

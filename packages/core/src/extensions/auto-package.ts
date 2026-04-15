@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { AutoExtension, AutoUiModel } from "./auto.js"
 
 export const AutoPackage = defineExtensionPackage({

@@ -1,19 +1,19 @@
 import { Effect, Layer, Redacted } from "effect"
-import { extension } from "../api.js"
-import type {
-  ProviderAuthInfo,
-  ProviderContribution,
-  ProviderHints,
-} from "../../domain/extension.js"
-import type { ProviderResolution } from "../../providers/provider.js"
+import {
+  extension,
+  AuthOauth,
+  AuthMethod,
+  type ProviderAuthInfo,
+  type ProviderContribution,
+  type ProviderHints,
+  type ProviderResolution,
+} from "../api.js"
 import {
   authorizeOpenAI,
   createOpenAIOAuthFetch,
   refreshOpenAIOauth,
   OPENAI_OAUTH_ALLOWED_MODELS,
 } from "./oauth.js"
-import { AuthOauth } from "../../domain/auth-store.js"
-import { AuthMethod } from "../../domain/auth-method.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import { FetchHttpClient } from "effect/unstable/http"
 

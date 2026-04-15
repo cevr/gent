@@ -1,6 +1,5 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "../domain/extension-protocol.js"
-import { ArtifactId, BranchId } from "../domain/ids.js"
+import { ExtensionMessage, ArtifactId, BranchId } from "./api.js"
 
 export const ARTIFACTS_EXTENSION_ID = "@gent/artifacts"
 

@@ -1,7 +1,11 @@
 import { Effect, Schema } from "effect"
-import { DEFAULT_AGENT_NAME, type AgentDefinition } from "../domain/agent.js"
-import { defineTool, type ToolContext } from "../domain/tool.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import {
+  DEFAULT_AGENT_NAME,
+  defineTool,
+  type AgentDefinition,
+  type ToolContext,
+  type ExtensionHostContext,
+} from "./api.js"
 import { requireText } from "./workflow-helpers.js"
 import { ArtifactProtocol } from "./artifacts-protocol.js"
 

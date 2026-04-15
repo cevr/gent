@@ -1,14 +1,14 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "../../domain/tool.js"
 import {
+  defineTool,
   AgentName,
   getDurableAgentRunSessionId,
+  TaskId,
   type AgentRunError,
   type AgentRunResult,
-} from "../../domain/agent.js"
-import { TaskId } from "../../domain/ids.js"
-import type { SessionId } from "../../domain/ids.js"
-import type { Task } from "../../domain/task.js"
+  type SessionId,
+  type Task,
+} from "../api.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 const MAX_PARALLEL_TASKS = 8

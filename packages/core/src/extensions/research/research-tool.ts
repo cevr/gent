@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent } from "../../domain/agent.js"
-import { defineTool, type ToolContext } from "../../domain/tool.js"
+import { defineAgent, defineTool, type ToolContext } from "../api.js"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
 

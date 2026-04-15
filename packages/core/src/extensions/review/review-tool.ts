@@ -3,10 +3,11 @@ import {
   DEFAULT_AGENT_NAME,
   defineAgent,
   getDurableAgentRunSessionId,
+  defineTool,
   type AgentDefinition,
-} from "../../domain/agent.js"
-import { defineTool, type ToolContext } from "../../domain/tool.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+  type ToolContext,
+  type ExtensionHostContext,
+} from "../api.js"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
 import { ArtifactProtocol } from "../artifacts-protocol.js"
 

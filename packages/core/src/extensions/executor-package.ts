@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { ExecutorExtension, ExecutorUiModel } from "./executor/index.js"
 
 export const ExecutorPackage = defineExtensionPackage({

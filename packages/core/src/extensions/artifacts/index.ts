@@ -11,15 +11,17 @@
 
 import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
-import type {
-  ExtensionActorDefinition,
-  ExtensionTurnContext,
-  TurnProjection,
-} from "../../domain/extension.js"
-import type { PromptSection } from "../../domain/prompt.js"
-import { ArtifactId, BranchId } from "../../domain/ids.js"
-import { defineTool, type ToolContext } from "../../domain/tool.js"
-import { extension } from "../api.js"
+import {
+  extension,
+  ArtifactId,
+  BranchId,
+  defineTool,
+  type ExtensionActorDefinition,
+  type ExtensionTurnContext,
+  type TurnProjection,
+  type PromptSection,
+  type ToolContext,
+} from "../api.js"
 import {
   ARTIFACTS_EXTENSION_ID,
   ArtifactProtocol,

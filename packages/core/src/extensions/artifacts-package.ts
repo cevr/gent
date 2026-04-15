@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { ArtifactsExtension } from "./artifacts/index.js"
 import { ArtifactUiModel } from "./artifacts-protocol.js"
 

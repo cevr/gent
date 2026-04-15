@@ -1,6 +1,4 @@
-import { extension } from "../api.js"
-import { defineAgent, ARCHITECT_PROMPT } from "../../domain/agent.js"
-import { ModelId } from "../../domain/model.js"
+import { extension, defineAgent, ARCHITECT_PROMPT, ModelId } from "../api.js"
 import { ResearchTool } from "./research-tool.js"
 
 export const architect = defineAgent({

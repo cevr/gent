@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { TaskExtension } from "./task-tools/index.js"
 import { TaskUiModel } from "./task-tools-protocol.js"
 

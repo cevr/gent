@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { HandoffExtension } from "./handoff.js"
 
 export const HandoffPackage = defineExtensionPackage({

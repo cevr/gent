@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ExtensionMessage } from "../domain/extension-protocol.js"
+import { ExtensionMessage } from "./api.js"
 
 export const HANDOFF_EXTENSION_ID = "@gent/handoff"
 

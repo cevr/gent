@@ -19,7 +19,7 @@ import {
   Semaphore,
 } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
-import { isRecord } from "../../domain/guards.js"
+import { isRecord } from "../api.js"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
 import {

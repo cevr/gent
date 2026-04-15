@@ -1,8 +1,11 @@
 import { Layer, Redacted } from "effect"
-import { extension } from "../api.js"
-import type { ProviderContribution, ProviderHints } from "../../domain/extension.js"
-import type { ProviderResolution } from "../../providers/provider.js"
-import { AuthMethod } from "../../domain/auth-method.js"
+import {
+  extension,
+  AuthMethod,
+  type ProviderContribution,
+  type ProviderHints,
+  type ProviderResolution,
+} from "../api.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import { FetchHttpClient } from "effect/unstable/http"
 

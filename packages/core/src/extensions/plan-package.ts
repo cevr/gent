@@ -1,4 +1,4 @@
-import { defineExtensionPackage } from "../domain/extension-package.js"
+import { defineExtensionPackage } from "./api.js"
 import { PlanExtension } from "./plan.js"
 
 export const PlanPackage = defineExtensionPackage({

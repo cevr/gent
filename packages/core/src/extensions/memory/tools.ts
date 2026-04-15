@@ -6,7 +6,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool } from "../api.js"
 import { MemoryVault } from "./vault.js"
 import { memoryPath, newFrontmatter } from "./state.js"
 

@@ -1,7 +1,6 @@
 import { Effect, Option, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "../../domain/tool.js"
+import { defineTool, FileIndex } from "../api.js"
 import { Glob } from "bun"
-import { FileIndex } from "../../domain/file-index.js"
 
 // Grep Tool Error
 

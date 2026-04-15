@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
-import type { ExtensionActorDefinition } from "../../domain/extension.js"
-import { extension } from "../api.js"
+import { extension, type ExtensionActorDefinition } from "../api.js"
 import { AskUserTool } from "./ask-user.js"
 import { PromptTool } from "./prompt.js"
 
