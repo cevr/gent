@@ -63,6 +63,9 @@ import { toExtensionAsyncContext, type ExtensionContext } from "../domain/extens
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
+import { isRecord } from "../domain/guards.js"
+import { SessionId, BranchId } from "../domain/ids.js"
+import { ModelId } from "../domain/model.js"
 import type { PermissionRule, PermissionResult } from "../domain/permission.js"
 import type { Message, MessageMetadata } from "../domain/message.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
@@ -425,7 +428,7 @@ const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
 const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
   defineAgent({
     name: def.name,
-    model: def.model as never,
+    model: ModelId.of(def.model),
     systemPromptAddendum: def.systemPromptAddendum,
     description: def.description,
     allowedTools: def.allowedTools,
@@ -438,10 +441,10 @@ const extractContext = (
   _key: string,
   input: unknown,
 ): { sessionId?: string; branchId?: string } => {
-  const record = input as Record<string, unknown>
+  if (!isRecord(input)) return {}
   return {
-    sessionId: record["sessionId"] as string | undefined,
-    branchId: record["branchId"] as string | undefined,
+    sessionId: typeof input["sessionId"] === "string" ? input["sessionId"] : undefined,
+    branchId: typeof input["branchId"] === "string" ? input["branchId"] : undefined,
   }
 }
 
@@ -469,26 +472,31 @@ const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknow
     if (tc._tag === "Some" && ctx.sessionId !== undefined) {
       const bus = yield* Effect.serviceOption(ExtensionEventBus)
       const stateRuntime = yield* Effect.serviceOption(ExtensionStateRuntime)
-      yield* interpretEffects(effects, ctx.sessionId as never, ctx.branchId as never, {
-        turnControl: tc.value,
-        busEmit:
-          bus._tag === "Some"
-            ? (channel, payload) =>
-                bus.value.emit({
-                  channel,
-                  payload,
-                  sessionId: ctx.sessionId as never,
-                  branchId: ctx.branchId as never,
-                })
-            : undefined,
-        send:
-          stateRuntime._tag === "Some"
-            ? (sessionId, message) =>
-                stateRuntime.value
-                  .send(sessionId, message)
-                  .pipe(Effect.catchEager(() => Effect.void))
-            : undefined,
-      }).pipe(Effect.catchDefect(() => Effect.void))
+      yield* interpretEffects(
+        effects,
+        SessionId.of(ctx.sessionId ?? ""),
+        BranchId.of(ctx.branchId ?? ""),
+        {
+          turnControl: tc.value,
+          busEmit:
+            bus._tag === "Some"
+              ? (channel, payload) =>
+                  bus.value.emit({
+                    channel,
+                    payload,
+                    sessionId: SessionId.of(ctx.sessionId ?? ""),
+                    branchId: BranchId.of(ctx.branchId ?? ""),
+                  })
+              : undefined,
+          send:
+            stateRuntime._tag === "Some"
+              ? (sessionId, message) =>
+                  stateRuntime.value
+                    .send(sessionId, message)
+                    .pipe(Effect.catchEager(() => Effect.void))
+              : undefined,
+        },
+      ).pipe(Effect.catchDefect(() => Effect.void))
     }
   })
 
