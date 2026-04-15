@@ -5,27 +5,29 @@
  * Expanded: full file list with head/tail truncation
  */
 
+import { Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
 import { headTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GlobOutput {
-  files: string[]
-  truncated: boolean
+  readonly files: readonly string[]
+  readonly truncated: boolean
 }
 
-function parseGlobOutput(output: string | undefined): GlobOutput | null {
-  const parsed = parseToolOutput(output)
-  if (parsed === undefined || !Array.isArray(parsed["files"])) return null
-  const rawFiles = parsed["files"]
-  return {
-    files: rawFiles.filter((f: unknown): f is string => typeof f === "string"),
-    truncated: parsed["truncated"] === true,
-  }
+const GlobOutputSchema = Schema.Struct({
+  files: Schema.Array(Schema.String),
+  truncated: Schema.optional(Schema.Boolean),
+})
+
+function parseGlobOutput(output: string | undefined): GlobOutput | undefined {
+  const d = decodeToolOutput(GlobOutputSchema, output)
+  if (d === undefined) return undefined
+  return { files: d["files"], truncated: d["truncated"] ?? false }
 }
 
 function getPattern(input: unknown): string {
@@ -40,13 +42,13 @@ export function GlobToolRenderer(props: ToolRendererProps) {
 
   const collapsedFiles = createMemo(() => {
     const d = data()
-    if (d === null) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
+    if (d === undefined) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
     return headTail(d.files, 6)
   })
 
   const expandedFiles = createMemo(() => {
     const d = data()
-    if (d === null) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
+    if (d === undefined) return { head: [] as string[], tail: [] as string[], truncatedCount: 0 }
     return headTail(d.files, 50)
   })
 

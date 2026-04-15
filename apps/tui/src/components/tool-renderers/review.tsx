@@ -1,28 +1,53 @@
+import { Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { AgentTree } from "./agent-tree"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface ReviewComment {
-  file: string
-  line?: number
-  severity: "critical" | "high" | "medium" | "low"
-  type: "bug" | "suggestion" | "style"
-  text: string
-  fix?: string
+  readonly file: string
+  readonly line?: number
+  readonly severity: "critical" | "high" | "medium" | "low"
+  readonly type: "bug" | "suggestion" | "style"
+  readonly text: string
+  readonly fix?: string
 }
 
 interface ReviewOutput {
-  comments?: ReviewComment[]
-  summary?: { critical: number; high: number; medium: number; low: number }
-  raw?: string
-  error?: string
+  readonly comments?: readonly ReviewComment[]
+  readonly summary?: {
+    readonly critical: number
+    readonly high: number
+    readonly medium: number
+    readonly low: number
+  }
+  readonly raw?: string
+  readonly error?: string
 }
 
-function parseOutput(output: string | undefined): ReviewOutput | undefined {
-  return parseToolOutput(output) as ReviewOutput | undefined
-}
+const ReviewCommentSchema = Schema.Struct({
+  file: Schema.String,
+  line: Schema.optional(Schema.Number),
+  severity: Schema.Literals(["critical", "high", "medium", "low"]),
+  type: Schema.Literals(["bug", "suggestion", "style"]),
+  text: Schema.String,
+  fix: Schema.optional(Schema.String),
+})
+
+const ReviewOutputSchema = Schema.Struct({
+  comments: Schema.optional(Schema.Array(ReviewCommentSchema)),
+  summary: Schema.optional(
+    Schema.Struct({
+      critical: Schema.Number,
+      high: Schema.Number,
+      medium: Schema.Number,
+      low: Schema.Number,
+    }),
+  ),
+  raw: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+})
 
 function getDescription(input: unknown): string | undefined {
   const desc = getString(input, "description")
@@ -50,7 +75,8 @@ export function ReviewToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const description = () => getDescription(props.toolCall.input)
-  const output = () => parseOutput(props.toolCall.output)
+  const output = () =>
+    decodeToolOutput(ReviewOutputSchema, props.toolCall.output) as ReviewOutput | undefined
 
   const subtitle = () => {
     const d = description()

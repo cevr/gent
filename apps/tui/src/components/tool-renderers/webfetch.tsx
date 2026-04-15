@@ -5,33 +5,18 @@
  * Expanded: full markdown content
  */
 
+import { Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
-interface WebfetchOutput {
-  url: string
-  content: string
-  title?: string
-}
-
-function parseWebfetchOutput(output: string | undefined): WebfetchOutput | null {
-  const parsed = parseToolOutput(output)
-  if (
-    parsed !== undefined &&
-    typeof parsed["url"] === "string" &&
-    typeof parsed["content"] === "string"
-  ) {
-    return {
-      url: parsed["url"],
-      content: parsed["content"],
-      title: typeof parsed["title"] === "string" ? parsed["title"] : undefined,
-    }
-  }
-  return null
-}
+const WebfetchOutputSchema = Schema.Struct({
+  url: Schema.String,
+  content: Schema.String,
+  title: Schema.optional(Schema.String),
+})
 
 function getUrl(input: unknown): string {
   return getString(input, "url")
@@ -40,12 +25,12 @@ function getUrl(input: unknown): string {
 export function WebfetchToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const data = createMemo(() => parseWebfetchOutput(props.toolCall.output))
+  const data = createMemo(() => decodeToolOutput(WebfetchOutputSchema, props.toolCall.output))
   const url = createMemo(() => getUrl(props.toolCall.input))
 
   const contentLines = createMemo(() => {
     const d = data()
-    if (d === null) return 0
+    if (d === undefined) return 0
     return d.content.split("\n").length
   })
 

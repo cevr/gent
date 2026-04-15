@@ -5,37 +5,40 @@
  * Expanded: all matches with line numbers per file
  */
 
+import { Schema } from "effect"
 import { For, Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
-import { isRecord } from "@gent/core/domain/guards.js"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface GrepMatch {
-  file: string
-  line: number
-  content: string
+  readonly file: string
+  readonly line: number
+  readonly content: string
 }
 
 interface GrepOutput {
-  matches: GrepMatch[]
-  truncated: boolean
+  readonly matches: GrepMatch[]
+  readonly truncated: boolean
 }
 
-function parseGrepOutput(output: string | undefined): GrepOutput | null {
-  const parsed = parseToolOutput(output)
-  if (parsed === undefined || !Array.isArray(parsed["matches"])) return null
-  const rawMatches = parsed["matches"]
-  const matches: GrepMatch[] = rawMatches.filter(
-    (m: unknown): m is GrepMatch =>
-      isRecord(m) &&
-      typeof m["file"] === "string" &&
-      typeof m["line"] === "number" &&
-      typeof m["content"] === "string",
-  )
-  return { matches, truncated: parsed["truncated"] === true }
+const GrepMatchSchema = Schema.Struct({
+  file: Schema.String,
+  line: Schema.Number,
+  content: Schema.String,
+})
+
+const GrepOutputSchema = Schema.Struct({
+  matches: Schema.Array(GrepMatchSchema),
+  truncated: Schema.optional(Schema.Boolean),
+})
+
+function parseGrepOutput(output: string | undefined): GrepOutput | undefined {
+  const d = decodeToolOutput(GrepOutputSchema, output)
+  if (d === undefined) return undefined
+  return { matches: d["matches"] as GrepMatch[], truncated: d["truncated"] ?? false }
 }
 
 function getPattern(input: unknown): string {
@@ -63,7 +66,7 @@ export function GrepToolRenderer(props: ToolRendererProps) {
   const pattern = createMemo(() => getPattern(props.toolCall.input))
   const grouped = createMemo(() => {
     const d = data()
-    if (d === null) return new Map<string, GrepMatch[]>()
+    if (d === undefined) return new Map<string, GrepMatch[]>()
     return groupByFile(d.matches)
   })
 

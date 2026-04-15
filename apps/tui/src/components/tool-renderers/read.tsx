@@ -5,6 +5,7 @@
  * Expanded: line-numbered content with GutterText
  */
 
+import { Schema } from "effect"
 import { Show, For, createMemo } from "solid-js"
 import { windowItems, headTailExcerpts } from "@gent/core/domain/windowing.js"
 import { useTheme } from "../../theme/index"
@@ -12,7 +13,7 @@ import { ToolFrame } from "../tool-frame"
 import { GutterText } from "../gutter-text"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 type WindowedLine =
@@ -20,23 +21,28 @@ type WindowedLine =
   | { _tag: "elision"; count: number }
 
 interface ReadOutput {
-  content: string
-  path: string
-  lineCount: number
-  truncated: boolean
+  readonly content: string
+  readonly path: string
+  readonly lineCount: number
+  readonly truncated: boolean
 }
 
-function parseReadOutput(output: string | undefined): ReadOutput | null {
-  const parsed = parseToolOutput(output)
-  if (parsed !== undefined && typeof parsed["content"] === "string") {
-    return {
-      content: parsed["content"],
-      path: typeof parsed["path"] === "string" ? parsed["path"] : "",
-      lineCount: typeof parsed["lineCount"] === "number" ? parsed["lineCount"] : 0,
-      truncated: parsed["truncated"] === true,
-    }
+const ReadOutputSchema = Schema.Struct({
+  content: Schema.String,
+  path: Schema.optional(Schema.String),
+  lineCount: Schema.optional(Schema.Number),
+  truncated: Schema.optional(Schema.Boolean),
+})
+
+function parseReadOutput(output: string | undefined): ReadOutput | undefined {
+  const d = decodeToolOutput(ReadOutputSchema, output)
+  if (d === undefined) return undefined
+  return {
+    content: d["content"],
+    path: d["path"] ?? "",
+    lineCount: d["lineCount"] ?? 0,
+    truncated: d["truncated"] ?? false,
   }
-  return null
 }
 
 function getPath(input: unknown): string {
@@ -69,13 +75,13 @@ export function ReadToolRenderer(props: ToolRendererProps) {
 
   const contentLines = createMemo(() => {
     const d = data()
-    if (d === null) return []
+    if (d === undefined) return []
     return parseContentLines(d.content)
   })
 
   const startLine = createMemo(() => {
     const d = data()
-    if (d === null) return 1
+    if (d === undefined) return 1
     return getStartLine(d.content)
   })
 

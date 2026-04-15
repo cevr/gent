@@ -5,29 +5,34 @@
  * Expanded: full head-50/tail-50 with OutputBuffer
  */
 
+import { Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { formatHeadTail } from "@gent/core/domain/output-buffer.js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface BashOutput {
-  stdout: string
-  stderr: string
-  exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+  readonly exitCode: number
 }
 
-function parseBashOutput(output: string | undefined): BashOutput | null {
-  const parsed = parseToolOutput(output)
-  if (parsed !== undefined && typeof parsed["exitCode"] === "number") {
-    return {
-      stdout: typeof parsed["stdout"] === "string" ? parsed["stdout"] : "",
-      stderr: typeof parsed["stderr"] === "string" ? parsed["stderr"] : "",
-      exitCode: parsed["exitCode"],
-    }
+const BashOutputSchema = Schema.Struct({
+  stdout: Schema.optional(Schema.String),
+  stderr: Schema.optional(Schema.String),
+  exitCode: Schema.Number,
+})
+
+function parseBashOutput(output: string | undefined): BashOutput | undefined {
+  const decoded = decodeToolOutput(BashOutputSchema, output)
+  if (decoded === undefined) return undefined
+  return {
+    stdout: decoded["stdout"] ?? "",
+    stderr: decoded["stderr"] ?? "",
+    exitCode: decoded["exitCode"],
   }
-  return null
 }
 
 function getCommand(input: unknown): string {
@@ -42,7 +47,7 @@ export function BashToolRenderer(props: ToolRendererProps) {
 
   const lines = createMemo(() => {
     const d = data()
-    if (d === null) return []
+    if (d === undefined) return []
     const combined = d.stderr.length > 0 ? `${d.stdout}\n${d.stderr}` : d.stdout
     return combined.split("\n").filter((l) => l.length > 0)
   })
@@ -52,7 +57,7 @@ export function BashToolRenderer(props: ToolRendererProps) {
 
   const exitCodeColor = () => {
     const d = data()
-    if (d === null) return theme.textMuted
+    if (d === undefined) return theme.textMuted
     return d.exitCode === 0 ? theme.success : theme.error
   }
 

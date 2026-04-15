@@ -1,26 +1,37 @@
+import { Schema } from "effect"
 import { Show, For } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface SessionResult {
-  sessionId: string
-  name: string
-  lastActivity: string
-  excerpts: string[]
+  readonly sessionId: string
+  readonly name: string
+  readonly lastActivity: string
+  readonly excerpts: readonly string[]
 }
 
 interface SearchOutput {
-  query?: string
-  totalMatches?: number
-  sessions?: SessionResult[]
-  error?: string
+  readonly query?: string
+  readonly totalMatches?: number
+  readonly sessions?: readonly SessionResult[]
+  readonly error?: string
 }
 
-function parseOutput(output: string | undefined): SearchOutput | undefined {
-  return parseToolOutput(output) as SearchOutput | undefined
-}
+const SessionResultSchema = Schema.Struct({
+  sessionId: Schema.String,
+  name: Schema.String,
+  lastActivity: Schema.String,
+  excerpts: Schema.Array(Schema.String),
+})
+
+const SearchOutputSchema = Schema.Struct({
+  query: Schema.optional(Schema.String),
+  totalMatches: Schema.optional(Schema.Number),
+  sessions: Schema.optional(Schema.Array(SessionResultSchema)),
+  error: Schema.optional(Schema.String),
+})
 
 function getQuery(input: unknown): string | undefined {
   const q = getString(input, "query")
@@ -31,7 +42,8 @@ export function SearchSessionsToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
   const query = () => getQuery(props.toolCall.input)
-  const output = () => parseOutput(props.toolCall.output)
+  const output = () =>
+    decodeToolOutput(SearchOutputSchema, props.toolCall.output) as SearchOutput | undefined
 
   const subtitle = () => {
     const q = query()

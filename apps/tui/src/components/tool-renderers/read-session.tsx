@@ -1,22 +1,29 @@
+import { Schema } from "effect"
 import { Show } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
-import { parseToolOutput, getString } from "../../utils/parse-tool-output"
+import { decodeToolOutput, getString } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
 interface ReadSessionOutput {
-  sessionId?: string
-  content?: string
-  extracted?: boolean
-  goal?: string
-  messageCount?: number
-  branchCount?: number
-  error?: string
+  readonly sessionId?: string
+  readonly content?: string
+  readonly extracted?: boolean
+  readonly goal?: string
+  readonly messageCount?: number
+  readonly branchCount?: number
+  readonly error?: string
 }
 
-function parseOutput(output: string | undefined): ReadSessionOutput | undefined {
-  return parseToolOutput(output) as ReadSessionOutput | undefined
-}
+const ReadSessionOutputSchema = Schema.Struct({
+  sessionId: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  extracted: Schema.optional(Schema.Boolean),
+  goal: Schema.optional(Schema.String),
+  messageCount: Schema.optional(Schema.Number),
+  branchCount: Schema.optional(Schema.Number),
+  error: Schema.optional(Schema.String),
+})
 
 function getInputField(input: unknown, key: string): string | undefined {
   const val = getString(input, key)
@@ -26,7 +33,10 @@ function getInputField(input: unknown, key: string): string | undefined {
 export function ReadSessionToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const output = () => parseOutput(props.toolCall.output)
+  const output = () =>
+    decodeToolOutput(ReadSessionOutputSchema, props.toolCall.output) as
+      | ReadSessionOutput
+      | undefined
 
   const subtitle = () => {
     const sid = getInputField(props.toolCall.input, "sessionId")

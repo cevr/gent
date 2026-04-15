@@ -5,30 +5,19 @@
  * Expanded: same (write has no content preview in output)
  */
 
+import { Schema } from "effect"
 import { Show, createMemo } from "solid-js"
 import { useTheme } from "../../theme/index"
 import { ToolFrame } from "../tool-frame"
 import { truncatePath } from "../message-list-utils"
 import { fileUrl, isAbsPath } from "../../utils/file-url"
-import { parseToolOutput } from "../../utils/parse-tool-output"
+import { decodeToolOutput } from "../../utils/parse-tool-output"
 import type { ToolRendererProps } from "./types"
 
-interface WriteOutput {
-  path: string
-  bytesWritten: number
-}
-
-function parseWriteOutput(output: string | undefined): WriteOutput | null {
-  const parsed = parseToolOutput(output)
-  if (
-    parsed !== undefined &&
-    typeof parsed["path"] === "string" &&
-    typeof parsed["bytesWritten"] === "number"
-  ) {
-    return { path: parsed["path"], bytesWritten: parsed["bytesWritten"] }
-  }
-  return null
-}
+const WriteOutputSchema = Schema.Struct({
+  path: Schema.String,
+  bytesWritten: Schema.Number,
+})
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
@@ -39,7 +28,7 @@ function formatBytes(bytes: number): string {
 export function WriteToolRenderer(props: ToolRendererProps) {
   const { theme } = useTheme()
 
-  const data = createMemo(() => parseWriteOutput(props.toolCall.output))
+  const data = createMemo(() => decodeToolOutput(WriteOutputSchema, props.toolCall.output))
   const path = createMemo(() => data()?.path ?? "")
 
   return (
