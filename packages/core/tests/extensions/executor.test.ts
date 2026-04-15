@@ -4,8 +4,8 @@ import type { ExtensionTurnContext } from "@gent/core/domain/extension"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import {
   ExecutorActorConfig,
+  ExecutorState,
   projectSnapshot,
-  type ExecutorState,
 } from "@gent/core/extensions/executor/actor"
 import {
   resolveSettings,
@@ -113,30 +113,28 @@ describe("Executor turn projection", () => {
   })
 
   test("Error → exclude [execute, resume]", () => {
-    const error: ExecutorState = { _tag: "Error", message: "failed" }
+    const error = ExecutorState.Error({ message: "failed" })
     const result = derive(error)
     expect(result.toolPolicy?.exclude).toEqual(["execute", "resume"])
   })
 
   test("Ready → no exclusions (both tools visible)", () => {
-    const ready: ExecutorState = {
-      _tag: "Ready",
+    const ready = ExecutorState.Ready({
       mode: "local",
       baseUrl: "http://127.0.0.1:4788",
       scopeId: "s1",
-    }
+    })
     const result = derive(ready)
     expect(result.toolPolicy).toBeUndefined()
   })
 
   test("Ready + executorPrompt → prompt section at priority 85", () => {
-    const ready: ExecutorState = {
-      _tag: "Ready",
+    const ready = ExecutorState.Ready({
       mode: "local",
       baseUrl: "http://127.0.0.1:4788",
       scopeId: "s1",
       executorPrompt: "Use tools.search to discover APIs",
-    }
+    })
     const result = derive(ready)
     expect(result.promptSections).toHaveLength(1)
     expect(result.promptSections![0]!.id).toBe("executor-guidance")
@@ -145,12 +143,11 @@ describe("Executor turn projection", () => {
   })
 
   test("Ready without executorPrompt → no prompt sections", () => {
-    const ready: ExecutorState = {
-      _tag: "Ready",
+    const ready = ExecutorState.Ready({
       mode: "local",
       baseUrl: "http://127.0.0.1:4788",
       scopeId: "s1",
-    }
+    })
     const result = derive(ready)
     expect(result.promptSections ?? []).toHaveLength(0)
   })

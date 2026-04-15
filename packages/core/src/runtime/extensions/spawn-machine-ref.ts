@@ -1,12 +1,5 @@
 import { Effect, Exit, Option, Ref, Scope } from "effect"
-import {
-  ActorScope,
-  Machine,
-  type Lifecycle,
-  type ProvideSlots,
-  type SlotCalls,
-  type SlotsDef,
-} from "effect-machine"
+import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
 import type {
   ExtensionActorDefinition,
   ExtensionEffect,
@@ -43,24 +36,6 @@ export const spawnMachineExtensionRef = <
 ): Effect.Effect<ExtensionRef, never, ExtensionTurnControl | SlotsR> =>
   Effect.withSpan("spawnMachineExtensionRef", { attributes: { "extension.id": extensionId } })(
     Effect.gen(function* () {
-      const normalizeSlots = <Defs extends SlotsDef>(
-        provided: ProvideSlots<Defs>,
-      ): SlotCalls<Defs> => {
-        const normalized = Object.fromEntries(
-          Object.entries(provided).map(([name, handler]) => [
-            name,
-            (params: unknown) =>
-              Effect.suspend(() => {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                const result = handler(params as never)
-                return Effect.isEffect(result) ? result : Effect.succeed(result)
-              }),
-          ]),
-        )
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        return normalized as SlotCalls<Defs>
-      }
-
       const turnControl = yield* ExtensionTurnControl
       const storage = yield* Effect.serviceOption(Storage)
       const bus = yield* Effect.serviceOption(ExtensionEventBus)
@@ -145,7 +120,10 @@ export const spawnMachineExtensionRef = <
           : undefined
 
       const providedSlots = actor.slots !== undefined ? yield* actor.slots(ctx) : undefined
-      const slots = providedSlots !== undefined ? normalizeSlots(providedSlots) : undefined
+      const slots =
+        providedSlots !== undefined && actor.machine.slotsSchema !== undefined
+          ? Slot.of(actor.machine.slotsSchema, providedSlots)
+          : undefined
 
       // Provide a dedicated ActorScope so Machine.spawn attaches cleanup to it.
       // Extension actors are long-lived and managed explicitly by

@@ -119,9 +119,8 @@ const MachineState = MState({
 })
 type MachineState = typeof MachineState.Type
 
-/** Unbranded state schema for persistence/transport. Derived from MachineState.plain. */
-export const AutoState = MachineState.plain
-export type AutoState = typeof AutoState.Type
+export const AutoState = MachineState
+export type AutoState = typeof MachineState.Type
 
 // ── Machine Events ──
 
@@ -575,7 +574,7 @@ export const AutoActorConfig = {
         if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
           return { state: MachineState.Inactive({ reason: "wedged" }) }
         }
-        return { state: MachineState.Working.derive(state, { turnsSinceCheckpoint: next }) }
+        return { state: MachineState.Working.with(state, { turnsSinceCheckpoint: next }) }
       }
       if (mapped._tag === "CancelAuto") {
         return { state: MachineState.Inactive({ reason: "cancelled" }) }
@@ -707,8 +706,7 @@ const autoActor: ExtensionActorDefinition<
   turn: {
     project: projectTurn,
   },
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  stateSchema: MachineState.plain as Schema.Schema<MachineState>,
+  stateSchema: MachineState.schema,
   afterTransition,
   onInit: (ctx) =>
     Effect.gen(function* () {

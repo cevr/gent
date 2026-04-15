@@ -1847,7 +1847,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 Effect.gen(function* () {
                   // Transition to Running with interrupt set — task will finalize immediately
                   yield* Ref.set(interruptedRef, true)
-                  return AgentLoopState.Running.derive(state, {
+                  return AgentLoopState.Running.with(state, {
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
@@ -1861,7 +1861,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 AgentLoopState.WaitingForInteraction,
                 AgentLoopEvent.InteractionResponded,
                 ({ state }) =>
-                  AgentLoopState.Running.derive(state, {
+                  AgentLoopState.Running.with(state, {
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,

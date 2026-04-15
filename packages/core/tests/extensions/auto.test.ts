@@ -12,7 +12,7 @@ import {
   AUTO_EXTENSION_ID,
   AutoActorConfig,
   AutoExtension,
-  type AutoState,
+  AutoState,
   type AutoUiModel,
 } from "@gent/core/extensions/auto"
 import { AutoJournal, type JournalRow } from "@gent/core/extensions/auto-journal"
@@ -60,29 +60,27 @@ describe("Auto pure reducer", () => {
     })
 
     test("StartAuto when already active → no-op", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 10,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = receive!(state, { _tag: "StartAuto", goal: "new goal" })
       expect(result.state).toBe(state)
     })
 
     test("Working + AutoSignal(continue) → AwaitingReview", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 5,
         goal: "audit code",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 2,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -106,15 +104,14 @@ describe("Auto pure reducer", () => {
     })
 
     test("Working + AutoSignal(complete) → Inactive", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 3,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -126,15 +123,14 @@ describe("Auto pure reducer", () => {
     })
 
     test("Working + AutoSignal(abandon) → Inactive", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -146,8 +142,7 @@ describe("Auto pure reducer", () => {
     })
 
     test("AwaitingReview + ReviewSignal → Working { iteration: N+1 }", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 2,
         maxIterations: 5,
         goal: "audit",
@@ -155,7 +150,7 @@ describe("Auto pure reducer", () => {
         metrics: [],
         lastSummary: "prev summary",
         nextIdea: "try this",
-      }
+      })
       const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Working")
       if (result.state._tag === "Working") {
@@ -168,47 +163,44 @@ describe("Auto pure reducer", () => {
     })
 
     test("AwaitingReview at maxIterations + ReviewSignal → Inactive", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 5,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
-      }
+      })
       const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Inactive")
     })
 
     test("Working + CancelAuto → Inactive", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 3,
         maxIterations: 10,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state._tag).toBe("Inactive")
     })
 
     test("AwaitingReview + CancelAuto → Inactive", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
-      }
+      })
       const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state._tag).toBe("Inactive")
     })
 
     test("CancelAuto when Inactive → no-op", () => {
-      const state: AutoState = { _tag: "Inactive" }
+      const state = AutoState.Inactive
       const result = receive!(state, { _tag: "CancelAuto" })
       expect(result.state).toBe(state)
     })
@@ -218,15 +210,14 @@ describe("Auto pure reducer", () => {
 
   describe("wedge prevention", () => {
     test("TurnCompleted increments turnsSinceCheckpoint", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 2,
-      }
+      })
       const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
       if (result.state._tag === "Working") {
         expect(result.state.turnsSinceCheckpoint).toBe(3)
@@ -234,15 +225,14 @@ describe("Auto pure reducer", () => {
     })
 
     test("turnsSinceCheckpoint >= 5 → Inactive (wedge auto-cancel)", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 10,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 4,
-      }
+      })
       const result = reduce(state, events.turnCompleted({ durationMs: 100 }))
       expect(result.state._tag).toBe("Inactive")
     })
@@ -252,15 +242,14 @@ describe("Auto pure reducer", () => {
 
   describe("mapEvent filtering", () => {
     test("auto_checkpoint while Working → AutoSignal", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 3,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -272,14 +261,13 @@ describe("Auto pure reducer", () => {
     })
 
     test("auto_checkpoint while AwaitingReview → ignored (must review first)", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 1,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -292,48 +280,45 @@ describe("Auto pure reducer", () => {
     })
 
     test("review while AwaitingReview → ReviewSignal", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 1,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
-      }
+      })
       const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state._tag).toBe("Working")
     })
 
     test("review while Working → ignored (ReviewSignal not handled in Working)", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(state, events.toolCallSucceeded({ toolName: "review" }))
       expect(result.state).toBe(state)
     })
 
     test("unrelated tool does not advance", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 1,
         maxIterations: 3,
         goal: "test",
         learnings: [],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(state, events.toolCallSucceeded({ toolName: "read" }))
       expect(result.state).toBe(state)
     })
 
     test("Inactive ignores all events", () => {
-      const state: AutoState = { _tag: "Inactive" }
+      const state = AutoState.Inactive
       const r1 = reduce(state, events.turnCompleted({ durationMs: 100 }))
       expect(r1.state).toBe(state)
       const r2 = reduce(
@@ -351,15 +336,14 @@ describe("Auto pure reducer", () => {
 
   describe("learnings", () => {
     test("learnings from AutoSignal are appended, not overwritten", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [{ iteration: 1, content: "first insight" }],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -380,15 +364,14 @@ describe("Auto pure reducer", () => {
     })
 
     test("no learnings field → existing learnings preserved", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [{ iteration: 1, content: "existing" }],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -403,15 +386,14 @@ describe("Auto pure reducer", () => {
     })
 
     test("metrics are accumulated across iterations", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [],
         metrics: [{ iteration: 1, values: { findings: 3 } }],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const result = reduce(
         state,
         events.toolCallSucceeded({
@@ -443,8 +425,7 @@ describe("Auto pure reducer", () => {
     })
 
     test("Working — injects prompt section with goal + checkpoint instruction", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 2,
         maxIterations: 5,
         goal: "audit code quality",
@@ -453,7 +434,7 @@ describe("Auto pure reducer", () => {
         turnsSinceCheckpoint: 1,
         lastSummary: "found issues",
         nextIdea: "check error handling",
-      }
+      })
       const projection = derive(state)
       expect(projection.promptSections).toBeDefined()
       expect(projection.promptSections!.length).toBe(1)
@@ -471,8 +452,7 @@ describe("Auto pure reducer", () => {
     })
 
     test("Working — ui model shows working phase", () => {
-      const state: AutoState = {
-        _tag: "Working",
+      const state = AutoState.Working({
         iteration: 3,
         maxIterations: 10,
         goal: "fix bugs",
@@ -482,7 +462,7 @@ describe("Auto pure reducer", () => {
         ],
         metrics: [],
         turnsSinceCheckpoint: 0,
-      }
+      })
       const projection = derive(state)
       const ui = projection.uiModel as AutoUiModel
       expect(ui.active).toBe(true)
@@ -494,14 +474,13 @@ describe("Auto pure reducer", () => {
     })
 
     test("AwaitingReview — injects review requirement prompt", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 2,
         maxIterations: 5,
         goal: "audit",
         learnings: [],
         metrics: [],
-      }
+      })
       const projection = derive(state)
       expect(projection.promptSections).toBeDefined()
       const section = projection.promptSections![0]!
@@ -510,14 +489,13 @@ describe("Auto pure reducer", () => {
     })
 
     test("AwaitingReview — ui model shows awaiting-review phase", () => {
-      const state: AutoState = {
-        _tag: "AwaitingReview",
+      const state = AutoState.AwaitingReview({
         iteration: 2,
         maxIterations: 5,
         goal: "test",
         learnings: [{ iteration: 1, content: "x" }],
         metrics: [],
-      }
+      })
       const projection = derive(state)
       const ui = projection.uiModel as AutoUiModel
       expect(ui.active).toBe(true)

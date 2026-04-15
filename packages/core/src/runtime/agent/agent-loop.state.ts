@@ -293,7 +293,7 @@ export const toWaitingForInteractionState = (params: {
   pendingRequestId: string
   pendingToolCallId: string
 }): WaitingForInteractionState =>
-  AgentLoopState.WaitingForInteraction.derive(params.state, {
+  AgentLoopState.WaitingForInteraction.with(params.state, {
     currentTurnAgent: params.currentTurnAgent,
     draft: params.draft,
     completedToolResults: [...params.completedToolResults],
@@ -304,14 +304,12 @@ export const toWaitingForInteractionState = (params: {
 // ── Queue helpers on state ──
 
 export const updateQueueOnState = <S extends LoopState>(state: S, queue: LoopQueueState): S =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  AgentLoopState.derive(state, { queue } as Partial<Omit<S, "_tag">>)
+  AgentLoopState.with(state, { queue })
 
 export const updateCurrentAgentOnState = <S extends LoopState>(
   state: S,
   currentAgent: AgentNameType,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-): S => AgentLoopState.derive(state, { currentAgent } as Partial<Omit<S, "_tag">>)
+): S => AgentLoopState.with(state, { currentAgent })
 
 export const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>
   toQueueSnapshot(state.queue.steering, state.queue.followUp)

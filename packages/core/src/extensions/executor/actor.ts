@@ -46,8 +46,8 @@ const MachineState = MState({
 })
 type MachineState = typeof MachineState.Type
 
-export const ExecutorState = MachineState.plain
-export type ExecutorState = typeof ExecutorState.Type
+export const ExecutorState = MachineState
+export type ExecutorState = typeof MachineState.Type
 
 // ── Events ──
 
@@ -262,8 +262,7 @@ export const executorActor: ExtensionActorDefinition<
   turn: {
     project: projectTurn,
   },
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  stateSchema: MachineState.plain as Schema.Schema<MachineState>,
+  stateSchema: MachineState.schema,
   protocols: ExecutorProtocol,
   onInit: (ctx) =>
     Effect.gen(function* () {
