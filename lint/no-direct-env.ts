@@ -57,7 +57,7 @@ const plugin: Plugin = {
         const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers)\//
 
         // Allowed @gent/core subpaths (everything else is forbidden)
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api/
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
 
         return {
           ImportDeclaration(node: { source: { value: string }; type: string }) {
