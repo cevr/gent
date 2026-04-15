@@ -325,12 +325,10 @@ export const resolveServer = (
       }
       // Stale — kill and clean up
       if (existing.hostname === os.hostname() && isPidAlive(existing.pid)) {
-        // @effect-diagnostics-next-line tryCatchInEffectGen:off
-        try {
-          process.kill(existing.pid, "SIGTERM")
-        } catch {
-          // Already dead
-        }
+        yield* Effect.try({
+          try: () => process.kill(existing.pid, "SIGTERM"),
+          catch: () => undefined,
+        }).pipe(Effect.ignore)
       }
       removeRegistryEntry(home, dbPath, existing.serverId)
     }

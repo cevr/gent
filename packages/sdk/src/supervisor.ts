@@ -453,18 +453,19 @@ export const startWorkerSupervisor = (
             yield* launchCurrent
           }).pipe(
             Effect.catchEager((error) =>
-              // @effect-diagnostics-next-line lazyPromiseInEffectSync:off
-              Effect.sync(() => {
-                restartPromise = undefined
-                emit({
-                  _tag: "failed",
-                  port: assignedPort,
-                  restartCount,
-                  message: error.message,
-                  exitCode: input?.exitCode ?? current?.exitCode ?? null,
-                })
-                throw error
-              }),
+              Effect.andThen(
+                Effect.sync(() => {
+                  restartPromise = undefined
+                  emit({
+                    _tag: "failed",
+                    port: assignedPort,
+                    restartCount,
+                    message: error.message,
+                    exitCode: input?.exitCode ?? current?.exitCode ?? null,
+                  })
+                }),
+                Effect.fail(error),
+              ),
             ),
           ),
         )

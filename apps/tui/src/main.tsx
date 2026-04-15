@@ -55,6 +55,11 @@ import {
 // @effect-diagnostics nodeBuiltinImport:off
 import * as os from "node:os"
 
+class ServerSignalError extends Schema.TaggedErrorClass<ServerSignalError>()("ServerSignalError", {
+  pid: Schema.Number,
+  serverId: Schema.String,
+}) {}
+
 // Clear client log on startup
 clearClientLog()
 
@@ -419,13 +424,15 @@ const serverStop = Command.make(
       // Signal all targets
       for (const entry of toStop) {
         if (isPidAlive(entry.pid)) {
-          // @effect-diagnostics-next-line tryCatchInEffectGen:off
-          try {
-            process.kill(entry.pid, "SIGTERM")
-            yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
-          } catch {
-            yield* Console.log(`Failed to signal PID ${entry.pid} (${entry.serverId})`)
-          }
+          yield* Effect.try({
+            try: () => process.kill(entry.pid, "SIGTERM"),
+            catch: () => new ServerSignalError({ pid: entry.pid, serverId: entry.serverId }),
+          }).pipe(
+            Effect.andThen(Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)),
+            Effect.catchTag("ServerSignalError", (e) =>
+              Console.log(`Failed to signal PID ${e.pid} (${e.serverId})`),
+            ),
+          )
         }
       }
 
