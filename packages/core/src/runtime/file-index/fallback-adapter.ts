@@ -71,7 +71,7 @@ async function scanAllFiles(cwd: string): Promise<IndexedFile[]> {
   const ignorePatterns = loadGitignore(cwd)
   const files: IndexedFile[] = []
 
-  for await (const relativePath of FILE_GLOB.scan({ cwd, onlyFiles: true })) {
+  for await (const relativePath of FILE_GLOB.scan({ cwd, onlyFiles: true, dot: true })) {
     if (isGitignored(relativePath, ignorePatterns)) continue
 
     const absPath = join(cwd, relativePath)
