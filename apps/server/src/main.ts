@@ -105,6 +105,7 @@ const program = Effect.scoped(
     )
 
     const buildFingerprint = yield* resolveBuildFingerprint
+    // @effect-diagnostics-next-line globalDateInEffect:off
     const startedAt = Date.now()
 
     // Connection tracker for idle shutdown
@@ -191,11 +192,14 @@ const program = Effect.scoped(
             const count = yield* connectionTracker.count()
 
             if (count === 0) {
+              // @effect-diagnostics-next-line globalDateInEffect:off
               if (idleStartMs === undefined) idleStartMs = Date.now()
+              // @effect-diagnostics-next-line globalDateInEffect:off
               if (Date.now() - idleStartMs >= idleTimeoutMs) {
                 // Final liveness check before shutdown
                 const finalCount = yield* connectionTracker.count()
                 if (finalCount === 0) {
+                  // @effect-diagnostics-next-line globalDateInEffect:off
                   yield* Effect.logInfo("idle-shutdown.triggered").pipe(
                     Effect.annotateLogs({ idleMs: Date.now() - idleStartMs }),
                   )
@@ -219,4 +223,5 @@ const program = Effect.scoped(
   }),
 )
 
+// @effect-diagnostics-next-line strictEffectProvide:off
 BunRuntime.runMain(program.pipe(Effect.provide(BunFileSystem.layer)))

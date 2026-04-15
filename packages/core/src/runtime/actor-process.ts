@@ -236,7 +236,7 @@ export const LocalActorProcessLive: Layer.Layer<
           // Resolve per-session profile for cwd-scoped registry/hooks
           const session = yield* storage
             .getSession(input.sessionId)
-            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+            .pipe(Effect.orElseSucceed(() => undefined))
           const profile =
             profileCache !== undefined && session?.cwd !== undefined
               ? yield* profileCache.resolve(session.cwd)
@@ -351,7 +351,7 @@ export const LocalActorProcessLive: Layer.Layer<
           // Resolve per-session profile for cwd-scoped registry
           const invokeSession = yield* storage
             .getSession(input.sessionId)
-            .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+            .pipe(Effect.orElseSucceed(() => undefined))
           const invokeProfile =
             profileCache !== undefined && invokeSession?.cwd !== undefined
               ? yield* profileCache.resolve(invokeSession.cwd)

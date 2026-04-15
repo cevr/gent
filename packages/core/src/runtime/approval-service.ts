@@ -40,7 +40,7 @@ export interface ApprovalServiceShape {
 }
 
 export class ApprovalService extends Context.Service<ApprovalService, ApprovalServiceShape>()(
-  "@gent/core/runtime/approval-service/ApprovalService",
+  "@gent/core/src/runtime/approval-service/ApprovalService",
 ) {
   static Live: Layer.Layer<ApprovalService, never, EventPublisher> = Layer.effect(
     ApprovalService,

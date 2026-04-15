@@ -50,7 +50,7 @@ export interface FileIndexService {
 }
 
 export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
-  "@gent/core/runtime/file-index/FileIndex",
+  "@gent/core/src/domain/file-index/FileIndex",
 ) {
   static Test = (impl: FileIndexService): Layer.Layer<FileIndex> => Layer.succeed(FileIndex, impl)
 }

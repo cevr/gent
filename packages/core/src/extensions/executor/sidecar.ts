@@ -10,6 +10,7 @@ import { Context, Duration, Effect, Layer, Schema, Semaphore } from "effect"
 import { FetchHttpClient, HttpClient, HttpIncomingMessage } from "effect/unstable/http"
 import { createRequire } from "node:module"
 import { createServer } from "node:net"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join, resolve } from "node:path"
 import {
   type ExecutorEndpoint,
@@ -68,7 +69,7 @@ export interface ExecutorSidecarService {
 }
 
 export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSidecarService>()(
-  "@gent/executor/Sidecar",
+  "@gent/core/src/extensions/executor/sidecar/ExecutorSidecar",
 ) {
   static Live = (home: string) =>
     Layer.effect(
@@ -185,6 +186,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           Effect.tryPromise(async () => {
             const { mkdir } = await import("node:fs/promises")
             await mkdir(dirname(registryPath), { recursive: true })
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             await Bun.write(registryPath, JSON.stringify(registry, null, 2) + "\n")
           }).pipe(Effect.orElseSucceed(() => {}))
 
@@ -197,6 +199,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               pid: record.pid,
               port: record.port,
               baseUrl: record.baseUrl,
+              // @effect-diagnostics-next-line globalDateInEffect:off
               startedAt: new Date().toISOString(),
             }
             yield* writeRegistry(registry)
@@ -288,11 +291,13 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
 
         const pollHealth = (baseUrl: string, cwd: string, timeoutMs: number) =>
           Effect.gen(function* () {
+            // @effect-diagnostics-next-line globalDateInEffect:off
             const deadline = Date.now() + timeoutMs
+            // @effect-diagnostics-next-line globalDateInEffect:off
             while (Date.now() < deadline) {
               const result = yield* fetchScope(baseUrl, HEALTH_TIMEOUT_MS).pipe(
                 Effect.map((scope) => (scope.dir === cwd ? scope : undefined)),
-                Effect.catchEager(() => Effect.succeed(undefined)),
+                Effect.orElseSucceed(() => undefined),
               )
               if (result) return result
               yield* Effect.promise(() => new Promise<void>((r) => setTimeout(r, 100)))
@@ -374,7 +379,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
             if (cached) {
               const health = yield* fetchScope(cached.baseUrl).pipe(
                 Effect.map((scope) => (scope.dir === normalized ? scope : undefined)),
-                Effect.catchEager(() => Effect.succeed(undefined)),
+                Effect.orElseSucceed(() => undefined),
               )
               if (health) return cached
               sidecarsByCwd.delete(normalized)

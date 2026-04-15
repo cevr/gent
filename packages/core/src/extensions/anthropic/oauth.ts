@@ -322,6 +322,7 @@ const fetchOnce = (
   init: RequestInit | undefined,
 ): Effect.Effect<Response, FetchRetryableError> =>
   Effect.tryPromise({
+    // @effect-diagnostics-next-line globalFetchInEffect:off
     try: () => fetch(input, init),
     catch: (e) => new FetchRetryableError(new Response(String(e), { status: 500 })),
   }).pipe(

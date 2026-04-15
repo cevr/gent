@@ -42,7 +42,7 @@ export interface CheckpointStorageService {
 export class CheckpointStorage extends Context.Service<
   CheckpointStorage,
   CheckpointStorageService
->()("@gent/core/storage/CheckpointStorage") {
+>()("@gent/core/src/storage/checkpoint-storage/CheckpointStorage") {
   static Live: Layer.Layer<CheckpointStorage, never, SqlClient.SqlClient> = Layer.effect(
     CheckpointStorage,
     Effect.gen(function* () {

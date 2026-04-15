@@ -1,5 +1,7 @@
 import { Effect, Layer } from "effect"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import {
@@ -22,7 +24,7 @@ type FffModule = typeof import("@ff-labs/fff-bun")
 
 let _mod: FffModule | undefined
 
-const loadModule: Effect.Effect<FffModule, FileIndexError> = Effect.tryPromise({
+export const loadNativeModule: Effect.Effect<FffModule, FileIndexError> = Effect.tryPromise({
   try: async () => {
     if (_mod !== undefined) return _mod
     _mod = await import("@ff-labs/fff-bun")
@@ -56,8 +58,10 @@ function ensureDbDir(): string {
 
 const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boolean> =>
   Effect.gen(function* () {
+    // @effect-diagnostics-next-line globalDateInEffect:off
     const start = Date.now()
     while (finder.isScanning()) {
+      // @effect-diagnostics-next-line globalDateInEffect:off
       if (Date.now() - start > timeoutMs) return false
       yield* Effect.sleep(50)
     }
@@ -117,7 +121,13 @@ const makeNativeService = (finders: Map<string, FinderEntry>, mod: FffModule): F
         }
 
         if (!entry.scanned) {
-          yield* waitForScan(entry.finder, params.waitForScanMs ?? 5000)
+          const completed = yield* waitForScan(entry.finder, params.waitForScanMs ?? 5000)
+          if (!completed) {
+            return yield* new FileIndexError({
+              message: "scan timed out",
+              cwd: params.cwd,
+            })
+          }
           entry.scanned = true
         }
 
@@ -156,7 +166,10 @@ const makeNativeService = (finders: Map<string, FinderEntry>, mod: FffModule): F
         }
 
         if (!entry.scanned) {
-          yield* waitForScan(entry.finder, 5000)
+          const completed = yield* waitForScan(entry.finder, 5000)
+          if (!completed) {
+            return yield* new FileIndexError({ message: "scan timed out", cwd: params.cwd })
+          }
           entry.scanned = true
         }
 
@@ -183,32 +196,44 @@ const makeNativeService = (finders: Map<string, FinderEntry>, mod: FffModule): F
 }
 
 // ---------------------------------------------------------------------------
-// Layer
+// Factory for composite usage
+// ---------------------------------------------------------------------------
+
+/** Create a native service + finalizer from a loaded module. */
+export const makeNativeServiceFromModule = (
+  mod: FffModule,
+): { service: FileIndexService; finalize: Effect.Effect<void> } => {
+  const finders = new Map<string, FinderEntry>()
+  return {
+    service: makeNativeService(finders, mod),
+    finalize: Effect.sync(() => {
+      for (const [, entry] of finders) {
+        try {
+          entry.finder.destroy()
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      finders.clear()
+    }),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Layer (standalone native, no fallback)
 // ---------------------------------------------------------------------------
 
 export const NativeFileIndexLive: Layer.Layer<FileIndex, FileIndexError> = Layer.unwrap(
   Effect.gen(function* () {
-    const mod = yield* loadModule
+    const mod = yield* loadNativeModule
 
     if (!mod.FileFinder.isAvailable()) {
       return yield* new FileIndexError({ message: "native binary not available", cwd: "" })
     }
 
-    const finders = new Map<string, FinderEntry>()
+    const { service, finalize } = makeNativeServiceFromModule(mod)
+    yield* Effect.addFinalizer(() => finalize)
 
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const [, entry] of finders) {
-          try {
-            entry.finder.destroy()
-          } catch {
-            // Ignore cleanup errors
-          }
-        }
-        finders.clear()
-      }),
-    )
-
-    return Layer.succeed(FileIndex, makeNativeService(finders, mod))
+    return Layer.succeed(FileIndex, service)
   }),
 )

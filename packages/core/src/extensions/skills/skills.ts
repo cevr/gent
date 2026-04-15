@@ -25,7 +25,7 @@ export interface SkillsService {
 // Skills Service Tag
 
 export class Skills extends Context.Service<Skills, SkillsService>()(
-  "@gent/core/src/domain/skills",
+  "@gent/core/src/extensions/skills/skills",
 ) {
   static Live = (options: {
     cwd: string

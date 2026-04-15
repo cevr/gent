@@ -230,7 +230,11 @@ export class SessionProfileCache extends Context.Service<
             )
 
             return profile
-          }).pipe(Effect.provide(platformLayer), Effect.orDie)
+          }).pipe(
+            // @effect-diagnostics-next-line strictEffectProvide:off
+            Effect.provide(platformLayer),
+            Effect.orDie,
+          )
 
         const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
           Effect.gen(function* () {

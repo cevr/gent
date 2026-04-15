@@ -151,11 +151,14 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
             type: "config",
             goal,
             maxIterations,
+            // @effect-diagnostics-next-line globalDateInEffect:off
             startedAt: Date.now(),
           }
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
           writeFileSync(journalPath, JSON.stringify(row) + "\n")
           writeFileSync(
             activePath,
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               path: journalPath,
               ...(sessionId !== undefined ? { sessionId } : {}),

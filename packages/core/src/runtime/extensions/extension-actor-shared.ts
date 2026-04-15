@@ -9,12 +9,12 @@ import type { ExtensionTurnControlService } from "./turn-control.js"
 export class CurrentExtensionSession extends Context.Service<
   CurrentExtensionSession,
   { readonly sessionId: SessionId }
->()("@gent/core/src/runtime/extensions/CurrentExtensionSession") {}
+>()("@gent/core/src/runtime/extensions/extension-actor-shared/CurrentExtensionSession") {}
 
 export class CurrentMailboxSession extends Context.Service<
   CurrentMailboxSession,
   { readonly sessionId: SessionId }
->()("@gent/core/src/runtime/extensions/CurrentMailboxSession") {}
+>()("@gent/core/src/runtime/extensions/extension-actor-shared/CurrentMailboxSession") {}
 
 /**
  * Typed persistence codec — wraps Schema.fromJsonString preserving the State type.

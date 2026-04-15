@@ -128,7 +128,7 @@ const withConnection = <A>(
 export class ExecutorMcpBridge extends Context.Service<
   ExecutorMcpBridge,
   ExecutorMcpBridgeService
->()("@gent/executor/McpBridge") {
+>()("@gent/core/src/extensions/executor/mcp-bridge/ExecutorMcpBridge") {
   static Live = Layer.succeed(
     ExecutorMcpBridge,
     ExecutorMcpBridge.of({
@@ -188,6 +188,7 @@ export class ExecutorMcpBridge extends Context.Service<
                   arguments: {
                     executionId,
                     action,
+                    // @effect-diagnostics-next-line preferSchemaOverJson:off
                     content: content ? JSON.stringify(content) : "{}",
                   },
                 }),

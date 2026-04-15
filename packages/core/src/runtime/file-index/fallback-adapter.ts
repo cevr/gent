@@ -1,6 +1,8 @@
 import { Effect, Layer } from "effect"
 import { Glob } from "bun"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { statSync, readFileSync } from "node:fs"
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, basename } from "node:path"
 import {
   FileIndex,
@@ -70,8 +72,6 @@ async function scanAllFiles(cwd: string): Promise<IndexedFile[]> {
   const files: IndexedFile[] = []
 
   for await (const relativePath of FILE_GLOB.scan({ cwd, onlyFiles: true })) {
-    // Skip hidden files
-    if (relativePath.startsWith(".") || relativePath.includes("/.")) continue
     if (isGitignored(relativePath, ignorePatterns)) continue
 
     const absPath = join(cwd, relativePath)
@@ -96,7 +96,7 @@ async function scanAllFiles(cwd: string): Promise<IndexedFile[]> {
 // Fallback FileIndex implementation
 // ---------------------------------------------------------------------------
 
-const makeFallbackService = (): FileIndexService => ({
+export const makeFallbackService = (): FileIndexService => ({
   listFiles: (params) =>
     Effect.tryPromise({
       try: () => scanAllFiles(params.cwd),

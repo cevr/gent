@@ -107,6 +107,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
 
       const fetchRemote = Effect.gen(function* () {
         const res = yield* Effect.tryPromise({
+          // @effect-diagnostics-next-line globalFetchInEffect:off
           try: () =>
             fetch(`${MODELS_URL}/api.json`, {
               headers: { "User-Agent": "gent" },

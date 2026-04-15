@@ -44,7 +44,7 @@ export interface InteractionStorageService {
 export class InteractionStorage extends Context.Service<
   InteractionStorage,
   InteractionStorageService
->()("@gent/core/storage/InteractionStorage") {
+>()("@gent/core/src/storage/interaction-storage/InteractionStorage") {
   static Live: Layer.Layer<InteractionStorage, never, SqlClient.SqlClient> = Layer.effect(
     InteractionStorage,
     Effect.gen(function* () {

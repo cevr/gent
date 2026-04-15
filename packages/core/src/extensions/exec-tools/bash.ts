@@ -226,6 +226,7 @@ export const BashTool = defineTool({
       (proc) =>
         Effect.tryPromise({
           try: async () => {
+            // @effect-diagnostics-next-line globalTimersInEffect:off
             const timeoutId = setTimeout(() => killGracefully(proc), timeout)
             try {
               const stdoutStream = proc.stdout as ReadableStream<Uint8Array>

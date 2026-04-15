@@ -129,6 +129,7 @@ const executorMachine = Machine.make({
         }),
       )
     }).pipe(
+      // @effect-diagnostics-next-line globalErrorInEffectFailure:off
       Effect.catchDefect((e) => Effect.fail(e instanceof Error ? e : new Error(String(e)))),
       Effect.catchEager((e) =>
         self.send(
@@ -275,6 +276,7 @@ export const executorActor: ExtensionActorDefinition<
       // Send Connect — .spawn(Connecting) handles the rest
       yield* ctx.send(MachineEvent.Connect({ cwd: ctx.sessionCwd ?? "/" }))
     }).pipe(
+      // @effect-diagnostics-next-line globalErrorInEffectFailure:off
       Effect.catchDefect((e) => Effect.fail(e instanceof Error ? e : new Error(String(e)))),
       Effect.catchEager(() => Effect.void),
     ),

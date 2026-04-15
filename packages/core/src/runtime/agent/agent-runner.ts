@@ -284,6 +284,7 @@ const saveAgentRunOutput = (result: {
     try {
       const dir = "/tmp/gent/outputs"
       mkdirSync(dir, { recursive: true })
+      // @effect-diagnostics-next-line globalDateInEffect:off
       const ts = new Date().toISOString().replace(/[:.]/g, "-")
       const safe = result.agentName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40)
       const filepath = `${dir}/${safe}_${result.sessionId.slice(0, 13)}_${ts}.md`

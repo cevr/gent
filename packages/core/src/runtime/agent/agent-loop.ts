@@ -1455,7 +1455,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const resolveTurnProfile = Effect.gen(function* () {
               const session = yield* storage
                 .getSession(sessionId)
-                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                .pipe(Effect.orElseSucceed(() => undefined))
               const sessionCwd = session?.cwd
 
               if (profileCache !== undefined && sessionCwd !== undefined) {

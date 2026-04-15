@@ -69,7 +69,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }
         const session = yield* storageForProfile.value
           .getSession(sessionId as never)
-          .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+          .pipe(Effect.orElseSucceed(() => undefined))
         if (session?.cwd === undefined) {
           return { registry: extensionRegistry, stateRuntime: extensionStateRuntime }
         }
@@ -363,7 +363,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             storageForProfile._tag === "Some"
               ? yield* storageForProfile.value
                   .getSession(sessionId)
-                  .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+                  .pipe(Effect.orElseSucceed(() => undefined))
               : undefined
 
           const cmds = yield* activeRegistry.listCommands()
@@ -466,6 +466,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             serverId: identity.serverId,
             pid: identity.pid,
             hostname: identity.hostname,
+            // @effect-diagnostics-next-line globalDateInEffect:off
             uptime: Date.now() - identity.startedAt,
             connectionCount,
             dbPath: identity.dbPath,

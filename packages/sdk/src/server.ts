@@ -151,6 +151,7 @@ const buildOwnedServer = (
   stateSpec: StateSpec,
   providerSpec: ProviderSpec,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.provide(
     Effect.gen(function* () {
       const scope = yield* Effect.scope
@@ -198,6 +199,7 @@ const buildOwnedServer = (
         hostname: os.hostname(),
         dbPath: dbPath ?? ":memory:",
         buildFingerprint,
+        // @effect-diagnostics-next-line globalDateInEffect:off
         startedAt: Date.now(),
       })
 
@@ -238,6 +240,7 @@ const buildOwnedServer = (
 
       // Seed debug session if requested
       if (options.debug === true) {
+        // @effect-diagnostics-next-line strictEffectProvide:off
         yield* seedDebugSession(options.cwd).pipe(
           Effect.provide(coreServicesLive),
           Effect.catchEager(() => Effect.void),
@@ -270,6 +273,7 @@ const probeServer = (
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const baseUrl = rpcUrl.replace("/rpc", "")
+    // @effect-diagnostics-next-line globalFetchInEffect:off
     const response = yield* Effect.tryPromise(() =>
       fetch(`${baseUrl}/_gent/identity`, { signal: AbortSignal.timeout(3000) }),
     )
@@ -322,6 +326,7 @@ export const resolveServer = (
       }
       // Stale — kill and clean up
       if (existing.hostname === os.hostname() && isPidAlive(existing.pid)) {
+        // @effect-diagnostics-next-line tryCatchInEffectGen:off
         try {
           process.kill(existing.pid, "SIGTERM")
         } catch {
@@ -348,6 +353,7 @@ export const resolveServer = (
               rpcUrl: server.url,
               dbPath,
               buildFingerprint: fingerprint,
+              // @effect-diagnostics-next-line globalDateInEffect:off
               startedAt: Date.now(),
             }),
           )

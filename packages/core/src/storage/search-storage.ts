@@ -40,7 +40,7 @@ export interface SearchStorageService {
 }
 
 export class SearchStorage extends Context.Service<SearchStorage, SearchStorageService>()(
-  "@gent/core/storage/SearchStorage",
+  "@gent/core/src/storage/search-storage/SearchStorage",
 ) {
   static Live: Layer.Layer<SearchStorage, never, SqlClient.SqlClient> = Layer.effect(
     SearchStorage,

@@ -453,6 +453,7 @@ export const startWorkerSupervisor = (
             yield* launchCurrent
           }).pipe(
             Effect.catchEager((error) =>
+              // @effect-diagnostics-next-line lazyPromiseInEffectSync:off
               Effect.sync(() => {
                 restartPromise = undefined
                 emit({

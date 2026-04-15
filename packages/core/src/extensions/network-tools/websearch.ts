@@ -109,15 +109,18 @@ export const WebSearchTool = defineTool({
     const result = yield* Effect.tryPromise({
       try: async () => {
         const controller = new AbortController()
+        // @effect-diagnostics-next-line globalTimersInEffect:off
         const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
         try {
+          // @effect-diagnostics-next-line globalFetchInEffect:off
           const response = await fetch(EXA_MCP_URL, {
             method: "POST",
             headers: {
               accept: "application/json, text/event-stream",
               "content-type": "application/json",
             },
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify(searchRequest),
             signal: controller.signal,
           })
@@ -134,6 +137,7 @@ export const WebSearchTool = defineTool({
 
           // Handle JSON response
           if (contentType.includes("application/json")) {
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             const data = JSON.parse(responseText) as McpResponse
             const text = extractResult(data)
             if (text !== undefined) return text
@@ -144,6 +148,7 @@ export const WebSearchTool = defineTool({
           // Handle SSE response
           for (const line of responseText.split("\n")) {
             if (line.startsWith("data: ")) {
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
               const data = JSON.parse(line.substring(6)) as McpResponse
               const text = extractResult(data)
               if (text !== undefined) return text

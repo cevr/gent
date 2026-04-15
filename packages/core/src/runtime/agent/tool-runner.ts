@@ -40,9 +40,9 @@ const resolveSessionCwd = (
   storageOpt._tag === "Some"
     ? storageOpt.value.getSession(sessionId).pipe(
         Effect.map((s) => s?.cwd),
-        Effect.catchEager(() => Effect.succeed(undefined)),
+        Effect.orElseSucceed(() => undefined),
       )
-    : Effect.succeed(undefined)
+    : Effect.void.pipe(Effect.as(undefined as string | undefined))
 
 export interface ToolRunnerService {
   readonly run: (

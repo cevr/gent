@@ -286,7 +286,7 @@ const main = Command.make(
         },
       }
 
-      yield* Effect.sync(() =>
+      yield* Effect.promise(() =>
         render(() => (
           <EnvProvider env={envWithShutdown}>
             <WorkspaceProvider cwd={cwd} services={uiServices}>
@@ -353,6 +353,7 @@ const sessions = Command.make(
 
       yield* Console.log("Sessions:")
       for (const s of allSessions) {
+        // @effect-diagnostics-next-line globalDateInEffect:off
         const date = yield* Effect.sync(() => new Date(s.updatedAt).toISOString())
         yield* Console.log(`  ${s.id} - ${s.name ?? "Unnamed"} (${date})`)
       }
@@ -418,6 +419,7 @@ const serverStop = Command.make(
       // Signal all targets
       for (const entry of toStop) {
         if (isPidAlive(entry.pid)) {
+          // @effect-diagnostics-next-line tryCatchInEffectGen:off
           try {
             process.kill(entry.pid, "SIGTERM")
             yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)

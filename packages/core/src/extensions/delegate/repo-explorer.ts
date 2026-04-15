@@ -267,6 +267,7 @@ export const RepoTool = defineTool({
         if (parsed.type === "github") {
           const info = yield* Effect.tryPromise({
             try: async () => {
+              // @effect-diagnostics-next-line globalFetchInEffect:off
               const res = await fetch(`https://api.github.com/repos/${parsed.name}`)
               return res.json() as Promise<Record<string, unknown>>
             },

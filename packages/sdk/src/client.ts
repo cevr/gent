@@ -389,9 +389,9 @@ export const Gent = {
           // Direct in-process RPC — zero network
           const internal = getOwnedInternal(serverOrUrl)
           if (internal === undefined) {
-            return yield* Effect.fail(
-              new GentConnectionError({ message: "owned server internal state missing" }),
-            )
+            return yield* new GentConnectionError({
+              message: "owned server internal state missing",
+            })
           }
           const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
             Effect.provide(internal.handlerContext),

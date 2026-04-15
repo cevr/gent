@@ -42,6 +42,7 @@ export const WebFetchTool = defineTool({
   params: WebFetchParams,
   execute: Effect.fn("WebFetchTool.execute")(function* (params) {
     const response = yield* Effect.tryPromise({
+      // @effect-diagnostics-next-line globalFetchInEffect:off
       try: () =>
         fetch(params.url, {
           headers: {

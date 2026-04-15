@@ -86,6 +86,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             ),
             Effect.flatMap((content) =>
               Effect.try({
+                // @effect-diagnostics-next-line preferSchemaOverJson:off
                 try: () => JSON.parse(content) as unknown,
                 catch: () => ({}),
               }),
