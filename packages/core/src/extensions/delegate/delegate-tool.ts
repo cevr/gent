@@ -171,7 +171,7 @@ export const DelegateTool = defineTool({
           }),
           ctx.branchId,
         )
-        .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
+        .pipe(Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)))
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
 
@@ -201,7 +201,7 @@ export const DelegateTool = defineTool({
             }),
             ctx.branchId,
           )
-          .pipe(Effect.catchDefect(() => Effect.void as Effect.Effect<Task | undefined>))
+          .pipe(Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)))
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }

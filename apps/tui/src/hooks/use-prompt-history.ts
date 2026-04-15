@@ -6,6 +6,7 @@
  */
 
 import { createSignal } from "solid-js"
+import { isRecord } from "@gent/core/domain/guards.js"
 import { homedir } from "os"
 import { makeDirectory, writeFileString } from "../platform/fs-runtime"
 import { joinPath } from "../platform/path-runtime"
@@ -89,9 +90,10 @@ export function usePromptHistory(): PromptHistory {
       if (!(await file.exists())) return
       const raw = await file.text()
       if (raw.length === 0) return
-      const data = JSON.parse(raw) as HistoryStore
-      if (Array.isArray(data.entries)) {
-        store.setEntries(data.entries.slice(0, MAX_ENTRIES))
+      const data: unknown = JSON.parse(raw)
+      if (isRecord(data) && Array.isArray(data["entries"])) {
+        const entries = data["entries"].filter((e: unknown): e is string => typeof e === "string")
+        store.setEntries(entries.slice(0, MAX_ENTRIES))
       }
     } catch {
       // No file or bad JSON — start fresh

@@ -28,9 +28,31 @@ import type { PromptSection } from "../domain/prompt.js"
 import { extension } from "./api.js"
 import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
-import { AutoJournal, type CheckpointRow } from "./auto-journal.js"
+import { AutoJournal } from "./auto-journal.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { DEFAULTS } from "../domain/defaults.js"
+import { isRecord } from "../domain/guards.js"
+
+const parseCheckpointParams = (
+  input: Record<string, unknown>,
+): {
+  status: "continue" | "complete" | "abandon"
+  summary: string
+  learnings: string | undefined
+  metrics: Record<string, number> | undefined
+  nextIdea: string | undefined
+} => {
+  const raw = typeof input["status"] === "string" ? input["status"] : "continue"
+  const status: "continue" | "complete" | "abandon" =
+    raw === "continue" || raw === "complete" || raw === "abandon" ? raw : "continue"
+  return {
+    status,
+    summary: typeof input["summary"] === "string" ? input["summary"] : "Checkpoint",
+    learnings: typeof input["learnings"] === "string" ? input["learnings"] : undefined,
+    metrics: isRecord(input["metrics"]) ? (input["metrics"] as Record<string, number>) : undefined,
+    nextIdea: typeof input["nextIdea"] === "string" ? input["nextIdea"] : undefined,
+  }
+}
 
 // ── Constants ──
 
@@ -764,14 +786,8 @@ const journalInterceptorImpl = (
         .pipe(Effect.catchEager(() => Effect.void))
       if (uiModel === undefined || !uiModel.active) return
 
-      if (input.toolName === "auto_checkpoint") {
-        const params = input.input as {
-          status?: string
-          summary?: string
-          learnings?: string
-          metrics?: Record<string, number>
-          nextIdea?: string
-        }
+      if (input.toolName === "auto_checkpoint" && isRecord(input.input)) {
+        const cp = parseCheckpointParams(input.input)
 
         const activePath = yield* journal.value.getActivePath()
         if (activePath === undefined && uiModel.goal !== undefined) {
@@ -784,14 +800,10 @@ const journalInterceptorImpl = (
 
         yield* journal.value.appendCheckpoint({
           iteration: uiModel.iteration ?? 1,
-          status: (params.status ?? "continue") as CheckpointRow["status"],
-          summary: params.summary ?? "Checkpoint",
-          learnings: params.learnings,
-          metrics: params.metrics,
-          nextIdea: params.nextIdea,
+          ...cp,
         })
 
-        if (params.status === "complete" || params.status === "abandon") {
+        if (cp.status === "complete" || cp.status === "abandon") {
           yield* journal.value.finish()
         }
       }

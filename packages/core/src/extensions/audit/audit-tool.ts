@@ -172,11 +172,14 @@ const parseFindings = (text: string): AuditFinding[] => {
   for (const line of text.split("\n")) {
     const match = line.match(/^\d+\.\s*\[(critical|warning|suggestion)\]\s*(\S+)\s*[-–—]\s*(.+)$/i)
     if (match?.[1] !== undefined && match[2] !== undefined && match[3] !== undefined) {
-      findings.push({
-        file: match[2].trim(),
-        description: match[3].trim(),
-        severity: match[1].toLowerCase() as AuditFinding["severity"],
-      })
+      const sev = match[1].toLowerCase()
+      if (sev === "critical" || sev === "warning" || sev === "suggestion") {
+        findings.push({
+          file: match[2].trim(),
+          description: match[3].trim(),
+          severity: sev,
+        })
+      }
     }
   }
   return findings

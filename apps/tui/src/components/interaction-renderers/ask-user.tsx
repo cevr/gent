@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { createSignal, Show } from "solid-js"
+import { isRecord } from "@gent/core/domain/guards.js"
 import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
 import type { Question } from "@gent/core/domain/event.js"
 import { OptionList } from "./option-list"
@@ -11,10 +12,9 @@ interface AskUserMetadata {
 }
 
 const parseMetadata = (metadata: unknown): AskUserMetadata | undefined => {
-  if (metadata === null || metadata === undefined || typeof metadata !== "object") return undefined
-  const m = metadata as Record<string, unknown>
-  if (m["type"] !== "ask-user" || !Array.isArray(m["questions"])) return undefined
-  return m as unknown as AskUserMetadata
+  if (!isRecord(metadata)) return undefined
+  if (metadata["type"] !== "ask-user" || !Array.isArray(metadata["questions"])) return undefined
+  return { type: "ask-user", questions: metadata["questions"] as ReadonlyArray<Question> }
 }
 
 export function AskUserRenderer(props: InteractionRendererProps) {

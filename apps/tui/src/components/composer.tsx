@@ -43,12 +43,10 @@ export function Composer(props: ComposerProps) {
     const interaction = activeInteraction()
     if (interaction === undefined) return undefined
     // Route by metadata.type if present, fall back to default renderer (undefined key)
+    const meta = interaction.metadata
     const metadataType =
-      interaction.metadata !== undefined &&
-      typeof interaction.metadata === "object" &&
-      interaction.metadata !== null &&
-      "type" in interaction.metadata
-        ? String((interaction.metadata as { type: string }).type)
+      meta !== undefined && typeof meta === "object" && meta !== null && "type" in meta
+        ? String((meta as Record<string, unknown>)["type"])
         : undefined
     return ext.interactionRenderers().get(metadataType) ?? ext.interactionRenderers().get(undefined)
   }

@@ -405,7 +405,11 @@ export const createAnthropicKeychainFetch = (
     let modelId = "unknown"
     if (bodyStr !== undefined) {
       try {
-        modelId = (JSON.parse(bodyStr) as { model?: string }).model ?? "unknown"
+        const body: unknown = JSON.parse(bodyStr)
+        if (typeof body === "object" && body !== null && "model" in body) {
+          const m = (body as Record<string, unknown>)["model"]
+          if (typeof m === "string") modelId = m
+        }
       } catch {
         // ignore
       }

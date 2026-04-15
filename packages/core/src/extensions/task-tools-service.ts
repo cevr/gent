@@ -89,9 +89,9 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
   /** No-op TaskService returned when @gent/task-tools is disabled (TaskStorage absent) */
   private static readonly Noop: TaskServiceFallbackApi = {
     create: () => Effect.die("TaskStorage not available — @gent/task-tools is disabled"),
-    get: () => Effect.void as Effect.Effect<Task | undefined>,
-    list: () => Effect.succeed([] as ReadonlyArray<Task>),
-    update: () => Effect.void as Effect.Effect<Task | undefined>,
+    get: () => Effect.succeed<Task | undefined>(undefined),
+    list: () => Effect.succeed<ReadonlyArray<Task>>([]),
+    update: () => Effect.succeed<Task | undefined>(undefined),
     remove: () => Effect.void,
     addDep: () => Effect.void,
     removeDep: () => Effect.void,

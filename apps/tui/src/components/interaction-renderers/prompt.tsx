@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
+import { isRecord } from "@gent/core/domain/guards.js"
 import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
 import { OptionList } from "./option-list"
 
@@ -11,10 +12,18 @@ interface PromptMetadata {
 }
 
 const parseMetadata = (metadata: unknown): PromptMetadata | undefined => {
-  if (metadata === null || metadata === undefined || typeof metadata !== "object") return undefined
-  const m = metadata as Record<string, unknown>
-  if (m["type"] !== "prompt") return undefined
-  return m as unknown as PromptMetadata
+  if (!isRecord(metadata) || metadata["type"] !== "prompt") return undefined
+  return {
+    type: "prompt",
+    mode:
+      metadata["mode"] === "present" ||
+      metadata["mode"] === "confirm" ||
+      metadata["mode"] === "review"
+        ? metadata["mode"]
+        : undefined,
+    title: typeof metadata["title"] === "string" ? metadata["title"] : undefined,
+    path: typeof metadata["path"] === "string" ? metadata["path"] : undefined,
+  }
 }
 
 export function PromptRenderer(props: InteractionRendererProps) {

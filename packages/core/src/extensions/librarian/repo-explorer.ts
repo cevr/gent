@@ -288,7 +288,7 @@ export const RepoTool = defineTool({
               }),
           ),
         )
-        return { path: cachePath, files: fileList as string[] }
+        return { path: cachePath, files: [...fileList] }
       }
 
       case "read": {
