@@ -14,7 +14,7 @@ import {
   ToolResultPart,
 } from "../domain/message.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 
 export interface DebugSessionInfo {
   readonly sessionId: SessionId
@@ -25,7 +25,7 @@ export interface DebugSessionInfo {
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const asToolCallId = (value: string) => value as ToolCallId
+const asToolCallId = (value: string) => ToolCallId.of(value)
 
 const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
   new ToolResultPart({
@@ -39,8 +39,8 @@ const nowPlus = (offsetMs: number) => new Date(Date.now() + offsetMs)
 
 export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
   const storage = yield* Storage
-  const sessionId = Bun.randomUUIDv7() as SessionId
-  const branchId = Bun.randomUUIDv7() as BranchId
+  const sessionId = SessionId.of(Bun.randomUUIDv7())
+  const branchId = BranchId.of(Bun.randomUUIDv7())
 
   const session = new Session({
     id: sessionId,
@@ -59,7 +59,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   yield* storage.createBranch(branch)
 
   const user1 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -69,7 +69,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant1 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -124,7 +124,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults1 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "tool",
@@ -173,7 +173,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant2 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -184,7 +184,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user2 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -194,7 +194,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant3 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -207,7 +207,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user3 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -217,7 +217,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant4 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -273,7 +273,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults2 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "tool",
@@ -308,7 +308,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant5 = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",

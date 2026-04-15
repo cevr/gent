@@ -14,7 +14,7 @@ import type {
 import { defineInterceptor } from "@gent/core/domain/extension"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { Message, TextPart } from "@gent/core/domain/message"
-import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { compileHooks } from "@gent/core/runtime/extensions/hooks"
 
 const stubCtx = {
@@ -199,9 +199,9 @@ describe("compileHooks", () => {
   describe("context.messages", () => {
     const makeMessage = (role: "user" | "assistant", text: string) =>
       new Message({
-        id: `msg-${text}` as MessageId,
-        sessionId: "test-session" as SessionId,
-        branchId: "test-branch" as BranchId,
+        id: MessageId.of(`msg-${text}`),
+        sessionId: SessionId.of("test-session"),
+        branchId: BranchId.of("test-branch"),
         role,
         parts: [new TextPart({ type: "text", text })],
         createdAt: new Date(),
@@ -210,8 +210,8 @@ describe("compileHooks", () => {
     const baseInput: ContextMessagesInput = {
       messages: [makeMessage("user", "hello"), makeMessage("assistant", "hi")],
       agent: Agents.cowork,
-      sessionId: "test-session" as SessionId,
-      branchId: "test-branch" as BranchId,
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
     }
 
     it.live("passes through when no interceptors", () => {
@@ -306,8 +306,8 @@ describe("compileHooks", () => {
 
   describe("turn.before", () => {
     const baseTurnBeforeInput: TurnBeforeInput = {
-      sessionId: "test-session" as SessionId,
-      branchId: "test-branch" as BranchId,
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
       agentName: "cowork" as never,
       toolCount: 5,
       systemPromptLength: 1200,
@@ -372,8 +372,8 @@ describe("compileHooks", () => {
             compiled.runInterceptor(
               "turn.after",
               {
-                sessionId: "test-session" as SessionId,
-                branchId: "test-branch" as BranchId,
+                sessionId: SessionId.of("test-session"),
+                branchId: BranchId.of("test-branch"),
                 durationMs: 1500,
                 agentName: "cowork" as never,
                 interrupted: false,
@@ -393,8 +393,8 @@ describe("compileHooks", () => {
 
   describe("turn.after", () => {
     const baseTurnInput: TurnAfterInput = {
-      sessionId: "test-session" as SessionId,
-      branchId: "test-branch" as BranchId,
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
       durationMs: 1500,
       agentName: "cowork" as never,
       interrupted: false,
@@ -436,8 +436,8 @@ describe("compileHooks", () => {
       input: { path: "/tmp/file.txt" },
       result: { content: "hello" },
       agentName: "cowork" as never,
-      sessionId: "test-session" as SessionId,
-      branchId: "test-branch" as BranchId,
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
     }
 
     it.live("enriches tool result", () => {
@@ -545,8 +545,8 @@ describe("compileHooks", () => {
 
   describe("message.output", () => {
     const baseMessageOutputInput: MessageOutputInput = {
-      sessionId: "test-session" as SessionId,
-      branchId: "test-branch" as BranchId,
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
       agentName: "cowork" as never,
       parts: [new TextPart({ type: "text", text: "Hello world" })],
     }

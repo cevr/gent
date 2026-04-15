@@ -51,7 +51,8 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
-import { SessionId, BranchId, type MessageId, type ToolCallId } from "../../domain/ids.js"
+import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
+import type { ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
@@ -2057,7 +2058,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const service: AgentLoopService = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
             const userMessage = new Message({
-              id: Bun.randomUUIDv7() as MessageId,
+              id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "user",
@@ -2168,7 +2169,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   return
                 case "Interject": {
                   const interjectMessage = new Message({
-                    id: Bun.randomUUIDv7() as MessageId,
+                    id: MessageId.of(Bun.randomUUIDv7()),
                     sessionId: command.sessionId,
                     branchId: command.branchId,
                     kind: "interjection",
@@ -2322,7 +2323,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         yield* extensionTurnControl.bind({
           queueFollowUp: Effect.fn("AgentLoop.boundQueueFollowUp")(function* (input) {
             const message = new Message({
-              id: Bun.randomUUIDv7() as MessageId,
+              id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: input.sessionId,
               branchId: input.branchId,
               kind: "regular",

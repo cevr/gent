@@ -6,7 +6,7 @@ import {
   type ToolCallPart,
   type ToolResultPart,
 } from "../../domain/message.js"
-import type { MessageId } from "../../domain/ids.js"
+import { MessageId } from "../../domain/ids.js"
 import type { ProviderRequest } from "../../providers/provider.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import { compileSystemPrompt, type PromptSection } from "../../server/system-prompt.js"
@@ -119,10 +119,10 @@ export const messageText = (message: Message): string =>
     .join("\n")
 
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  `${messageId}:assistant:${step}` as MessageId
+  MessageId.of(`${messageId}:assistant:${step}`)
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  `${messageId}:tool-result:${step}` as MessageId
+  MessageId.of(`${messageId}:tool-result:${step}`)
 
 export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
   text: message.parts

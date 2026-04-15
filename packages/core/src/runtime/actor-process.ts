@@ -8,7 +8,7 @@ import {
   ToolCallSucceeded,
 } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { ActorCommandId, BranchId, SessionId, ToolCallId, type MessageId } from "../domain/ids.js"
+import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -158,15 +158,15 @@ export class ActorProcess extends Context.Service<ActorProcess, ActorProcessServ
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new ActorProcessError({ message, cause })
 
-const makeCommandId = () => Bun.randomUUIDv7() as ActorCommandId
-const userMessageIdForCommand = (commandId: ActorCommandId) => commandId as string as MessageId
-const toolCallIdForCommand = (commandId: ActorCommandId) => commandId as string as ToolCallId
+const makeCommandId = () => ActorCommandId.of(Bun.randomUUIDv7())
+const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.of(commandId)
+const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.of(commandId)
 const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
-  `${commandId}:assistant` as MessageId
+  MessageId.of(`${commandId}:assistant`)
 const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
-  `${commandId}:tool-result` as MessageId
+  MessageId.of(`${commandId}:tool-result`)
 const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
-  `${commandId}:follow-up` as MessageId
+  MessageId.of(`${commandId}:follow-up`)
 
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,

@@ -1,6 +1,7 @@
 import { Console, Effect, Option } from "effect"
 import type { AgentName } from "@gent/core/domain/agent.js"
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import { SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
 import type { GentNamespacedClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
 import type { Session } from "./client/index"
@@ -200,7 +201,7 @@ export const resolveInitialState = (input: {
         return yield* Effect.die("fatal")
       }
       if (Option.isSome(session)) {
-        const sess = yield* client.session.get({ sessionId: session.value as SessionId })
+        const sess = yield* client.session.get({ sessionId: SessionId.of(session.value) })
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return yield* Effect.die("fatal")
@@ -213,7 +214,7 @@ export const resolveInitialState = (input: {
     }
 
     if (Option.isSome(session)) {
-      const sess = yield* client.session.get({ sessionId: session.value as SessionId })
+      const sess = yield* client.session.get({ sessionId: SessionId.of(session.value) })
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return yield* Effect.die("fatal")

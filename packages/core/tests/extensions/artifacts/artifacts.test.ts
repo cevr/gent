@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import type { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
+import { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/core/extensions/artifacts-protocol"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
@@ -8,8 +8,8 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { SessionStarted } from "@gent/core/domain/event"
 import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "@gent/core/extensions/artifacts-protocol"
 
-const sessionId = "art-test-session" as SessionId
-const branchId = "art-test-branch" as BranchId
+const sessionId = SessionId.of("art-test-session")
+const branchId = BranchId.of("art-test-branch")
 
 const withRuntime = (
   fn: (
@@ -189,7 +189,7 @@ describe("Artifacts extension", () => {
         const read = yield* runtime.ask(
           sessionId,
           ArtifactProtocol.Read({
-            query: { _tag: "ById" as const, id: "nonexistent" as ArtifactId },
+            query: { _tag: "ById" as const, id: ArtifactId.of("nonexistent") },
           }),
           branchId,
         )
@@ -275,7 +275,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const result = yield* runtime.ask(
           sessionId,
-          ArtifactProtocol.Update({ id: "nonexistent" as ArtifactId }),
+          ArtifactProtocol.Update({ id: ArtifactId.of("nonexistent") }),
           branchId,
         )
         expect(result).toBeNull()
@@ -301,7 +301,7 @@ describe("Artifacts extension", () => {
   it.live("List filters by branchId", () =>
     withRuntime((runtime) =>
       Effect.gen(function* () {
-        const otherBranch = "other-branch" as BranchId
+        const otherBranch = BranchId.of("other-branch")
         yield* runtime.ask(
           sessionId,
           ArtifactProtocol.Save({ label: "A", sourceTool: "plan", content: "a", branchId }),

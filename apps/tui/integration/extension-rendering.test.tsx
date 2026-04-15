@@ -2,15 +2,15 @@
 
 import { describe, expect, test } from "bun:test"
 import { onMount } from "solid-js"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "../src/routes/session"
 import { Route } from "../src/router"
 import { useExtensionUI, type ExtensionSnapshot } from "../src/extensions/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness"
 import { waitForRenderedFrame } from "../tests/helpers"
 
-const SESSION_ID = "test-session" as SessionId
-const BRANCH_ID = "test-branch" as BranchId
+const SESSION_ID = SessionId.of("test-session")
+const BRANCH_ID = BranchId.of("test-branch")
 
 function SnapshotProbe(props: {
   readonly onReady: (update: (snapshot: ExtensionSnapshot) => void) => void

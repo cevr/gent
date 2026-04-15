@@ -9,7 +9,7 @@ import {
   type GenerateRequest,
   type ProviderRequest,
 } from "../providers/provider.js"
-import type { ToolCallId } from "../domain/ids.js"
+import { ToolCallId } from "../domain/ids.js"
 import type { Message, TextPart } from "../domain/message.js"
 
 const extractLatestUserText = (messages: ReadonlyArray<Message>): string => {
@@ -331,7 +331,7 @@ export const createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
 
 let stepCallIdCounter = 0
 
-const makeStepToolCallId = () => `step-tc-${++stepCallIdCounter}` as ToolCallId
+const makeStepToolCallId = () => ToolCallId.of(`step-tc-${++stepCallIdCounter}`)
 
 /** A turn that emits a single text response and finishes with "stop". */
 export const textStep = (text: string): SequenceStep => ({

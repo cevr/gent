@@ -1,13 +1,14 @@
 import { Schema } from "effect"
+import { branded } from "./ids.js"
 
 // Model ID - provider/model format
 
-export const ModelId = Schema.String.pipe(Schema.brand("ModelId"))
+export const ModelId = Schema.String.pipe(branded("ModelId"))
 export type ModelId = typeof ModelId.Type
 
 // Provider - AI provider identifier (open, branded string — extensible via extensions)
 
-export const ProviderId = Schema.String.pipe(Schema.brand("ProviderId"))
+export const ProviderId = Schema.String.pipe(branded("ProviderId"))
 export type ProviderId = typeof ProviderId.Type
 
 // Model pricing per million tokens (USD)
@@ -51,5 +52,5 @@ export const BUILTIN_PROVIDER_IDS = new Set<string>([
 export const parseModelProvider = (modelId: string): ProviderId | undefined => {
   const slash = modelId.indexOf("/")
   if (slash <= 0 || slash === modelId.length - 1) return undefined
-  return modelId.slice(0, slash) as ProviderId
+  return ProviderId.of(modelId.slice(0, slash))
 }

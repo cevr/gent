@@ -4,7 +4,7 @@ import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "@gent/core/runtime/make-extension-host-context"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { Message, Session, Branch, TextPart } from "@gent/core/domain/message"
 
 // Minimal in-memory storage for session mutation tests
@@ -129,8 +129,8 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
   return { deps, published }
 }
 
-const SESSION_ID = "test-session" as SessionId
-const BRANCH_ID = "test-branch" as BranchId
+const SESSION_ID = SessionId.of("test-session")
+const BRANCH_ID = BranchId.of("test-branch")
 
 const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
   const session = new Session({
@@ -157,7 +157,7 @@ const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: 
   const msgs: Message[] = []
   for (let i = 0; i < count; i++) {
     const msg = new Message({
-      id: `msg-${i}` as MessageId,
+      id: MessageId.of(`msg-${i}`),
       sessionId: SESSION_ID,
       branchId: BRANCH_ID,
       role: i % 2 === 0 ? "user" : "assistant",
@@ -219,7 +219,7 @@ describe("session mutation primitives", () => {
 
     // Create a second branch to switch to
     const newBranch = new Branch({
-      id: "branch-2" as BranchId,
+      id: BranchId.of("branch-2"),
       sessionId: SESSION_ID,
       createdAt: new Date(),
     })
@@ -324,7 +324,7 @@ describe("session mutation primitives", () => {
     const { deps } = makeTestDeps(testStorage)
     const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
 
-    await Effect.runPromise(ctx.session.deleteMessages({ afterMessageId: "msg-1" as MessageId }))
+    await Effect.runPromise(ctx.session.deleteMessages({ afterMessageId: MessageId.of("msg-1") }))
 
     const remaining = testStorage.messages.get(BRANCH_ID) ?? []
     expect(remaining).toHaveLength(2) // msg-0 and msg-1

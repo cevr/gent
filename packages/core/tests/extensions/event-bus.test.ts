@@ -4,7 +4,7 @@ import { ExtensionEventBus, type BusEnvelope } from "@gent/core/runtime/extensio
 import { interpretEffects } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import type { ExtensionEffect } from "@gent/core/domain/extension"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("ExtensionEventBus", () => {
   const run = <A>(effect: Effect.Effect<A, never, ExtensionEventBus>) =>
@@ -134,14 +134,14 @@ describe("ExtensionEventBus", () => {
           { _tag: "BusEmit", channel: "ext:test-emit", payload: { from: "hook" } },
         ]
 
-        yield* interpretEffects(effects, "s1" as SessionId, "b1" as BranchId, {
+        yield* interpretEffects(effects, SessionId.of("s1"), BranchId.of("b1"), {
           turnControl,
           busEmit: (channel, payload) =>
             bus.emit({
               channel,
               payload,
-              sessionId: "s1" as SessionId,
-              branchId: "b1" as BranchId,
+              sessionId: SessionId.of("s1"),
+              branchId: BranchId.of("b1"),
             }),
         })
       }).pipe(Effect.provide(ExtensionEventBus.Live), Effect.provide(ExtensionTurnControl.Test())),

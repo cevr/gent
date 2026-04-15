@@ -6,13 +6,13 @@ import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const makeEvent = (tag: string, sessionId: string, branchId?: string) =>
   ({
     _tag: tag,
-    sessionId: sessionId as SessionId,
-    ...(branchId !== undefined ? { branchId: branchId as BranchId } : {}),
+    sessionId: SessionId.of(sessionId),
+    ...(branchId !== undefined ? { branchId: BranchId.of(branchId) } : {}),
   }) as unknown as AgentEvent
 
 describe("EventPublisher", () => {
@@ -72,7 +72,7 @@ describe("EventPublisher", () => {
           if (event._tag === "OuterEvent" && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
-                sessionId: "session-1" as SessionId,
+                sessionId: SessionId.of("session-1"),
               }),
             )
           }
@@ -121,7 +121,7 @@ describe("EventPublisher", () => {
           if (event._tag === "OuterEvent" && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
-                sessionId: "session-1" as SessionId,
+                sessionId: SessionId.of("session-1"),
               }),
             )
           }

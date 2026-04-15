@@ -12,7 +12,7 @@ import {
   type ExtensionAsyncContext,
   toExtensionAsyncContext,
 } from "@gent/core/domain/extension-context"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 
 // ── Type-level assertions ──
 // These types will cause a compile error if the two interfaces diverge.
@@ -62,8 +62,8 @@ void _typeCheck
 describe("ExtensionContext parity", () => {
   test("toExtensionContext produces Promise-returning methods for all facets", () => {
     const stubHost = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
       extension: {

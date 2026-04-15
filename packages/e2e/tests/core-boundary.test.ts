@@ -3,7 +3,7 @@ import { Effect, Layer, Ref } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
@@ -247,8 +247,8 @@ describe("SessionCommands → ActorProcess integration", () => {
       Effect.gen(function* () {
         const actorProcess = yield* ActorProcess
         return yield* actorProcess.getState({
-          sessionId: "state-session" as SessionId,
-          branchId: "state-branch" as BranchId,
+          sessionId: SessionId.of("state-session"),
+          branchId: BranchId.of("state-branch"),
         })
       }).pipe(Effect.provide(layer)),
     )

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { onMount } from "solid-js"
 import { Effect, Stream } from "effect"
 import { createMockClient, renderWithProviders } from "./render-harness"
@@ -52,8 +52,8 @@ describe("ClientProvider session lifecycle", () => {
       session: {
         create: () =>
           Effect.succeed({
-            sessionId: "session-created" as SessionId,
-            branchId: "branch-created" as BranchId,
+            sessionId: SessionId.of("session-created"),
+            branchId: BranchId.of("branch-created"),
             name: "Created",
           }),
       },
@@ -91,8 +91,8 @@ describe("ClientProvider session lifecycle", () => {
       () => <ClientProbe onReady={(value) => (ctx = value)} />,
       {
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -101,7 +101,7 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
     await setup.renderOnce()
 
     expect(ctx.sessionState()).toEqual({
@@ -122,8 +122,8 @@ describe("ClientProvider session lifecycle", () => {
       () => <ClientProbe onReady={(value) => (ctx = value)} />,
       {
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -132,7 +132,7 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B", "deepwork")
+    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B", "deepwork")
     await setup.renderOnce()
 
     expect(ctx.agent()).toBe("deepwork")
@@ -153,8 +153,8 @@ describe("ClientProvider session lifecycle", () => {
       () => <ClientProbe onReady={(value) => (ctx = value)} />,
       {
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -221,12 +221,12 @@ describe("ClientProvider session lifecycle", () => {
     const client = createMockClient({
       session: {
         getSnapshot: ({ sessionId }: { sessionId: SessionId; branchId: BranchId }) => {
-          if (sessionId === ("session-a" as SessionId)) {
+          if (sessionId === SessionId.of("session-a")) {
             return Effect.promise(() => oldSnapshot)
           }
           return Effect.succeed({
-            sessionId: "session-b" as SessionId,
-            branchId: "branch-b" as BranchId,
+            sessionId: SessionId.of("session-b"),
+            branchId: BranchId.of("branch-b"),
             messages: [],
             lastEventId: null,
             reasoningLevel: "low" as const,
@@ -253,8 +253,8 @@ describe("ClientProvider session lifecycle", () => {
       {
         client,
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -265,7 +265,7 @@ describe("ClientProvider session lifecycle", () => {
       throw new Error("client or extension context not ready")
     }
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
     await setup.renderOnce()
     await setup.renderOnce()
 
@@ -282,8 +282,8 @@ describe("ClientProvider session lifecycle", () => {
     expect(ext.snapshots().get("@test/shared")?.model).toEqual({ status: "new-branch" })
 
     resolveOldSnapshot?.({
-      sessionId: "session-a" as SessionId,
-      branchId: "branch-a" as BranchId,
+      sessionId: SessionId.of("session-a"),
+      branchId: BranchId.of("branch-a"),
       messages: [],
       lastEventId: null,
       reasoningLevel: "high",
@@ -325,15 +325,15 @@ describe("ClientProvider session lifecycle", () => {
     const client = createMockClient({
       session: {
         getSnapshot: ({ sessionId }: { sessionId: SessionId; branchId: BranchId }) => {
-          if (sessionId === ("session-a" as SessionId)) {
+          if (sessionId === SessionId.of("session-a")) {
             return Effect.async<never, Error>((resume) => {
               failOldSnapshot = (error) => resume(Effect.fail(error))
               return Effect.void
             })
           }
           return Effect.succeed({
-            sessionId: "session-b" as SessionId,
-            branchId: "branch-b" as BranchId,
+            sessionId: SessionId.of("session-b"),
+            branchId: BranchId.of("branch-b"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -353,8 +353,8 @@ describe("ClientProvider session lifecycle", () => {
       {
         client,
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -363,7 +363,7 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
     failOldSnapshot?.(new Error("stale session failed"))
     await Promise.resolve()
     await setup.renderOnce()
@@ -408,7 +408,7 @@ describe("ClientProvider session lifecycle", () => {
     const client = createMockClient({
       session: {
         getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) => {
-          if (sessionId === ("session-a" as SessionId)) {
+          if (sessionId === SessionId.of("session-a")) {
             return Effect.async((resume) => {
               resumeOldSnapshot = resume
               return Effect.void
@@ -441,8 +441,8 @@ describe("ClientProvider session lifecycle", () => {
       {
         client,
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -451,11 +451,11 @@ describe("ClientProvider session lifecycle", () => {
     )
     if (ctx === undefined) throw new Error("client context not ready")
 
-    ctx.switchSession("session-b" as SessionId, "branch-b" as BranchId, "B")
+    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
     resumeOldSnapshot?.(
       Effect.succeed({
-        sessionId: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        sessionId: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         messages: [],
         lastEventId: null,
         reasoningLevel: undefined,

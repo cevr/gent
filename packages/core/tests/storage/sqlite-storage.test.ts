@@ -6,7 +6,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { messageToInfo } from "@gent/core/server/session-utils"
 
 describe("Storage", () => {
@@ -629,8 +629,8 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-session" as SessionId
-        const branchId = "compat-branch" as BranchId
+        const sessionId = SessionId.of("compat-session")
+        const branchId = BranchId.of("compat-branch")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -658,8 +658,8 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-latest" as SessionId
-        const branchId = "compat-latest-b" as BranchId
+        const sessionId = SessionId.of("compat-latest")
+        const branchId = BranchId.of("compat-latest-b")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -685,9 +685,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-agent-run" as SessionId
-        const branchId = "compat-agent-run-b" as BranchId
-        const childSessionId = "compat-agent-run-child" as SessionId
+        const sessionId = SessionId.of("compat-agent-run")
+        const branchId = BranchId.of("compat-agent-run-b")
+        const childSessionId = SessionId.of("compat-agent-run-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -710,9 +710,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-agent-run-latest" as SessionId
-        const branchId = "compat-agent-run-latest-b" as BranchId
-        const childSessionId = "compat-agent-run-latest-child" as SessionId
+        const sessionId = SessionId.of("compat-agent-run-latest")
+        const branchId = BranchId.of("compat-agent-run-latest-b")
+        const childSessionId = SessionId.of("compat-agent-run-latest-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -738,9 +738,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-agent-run-tagless" as SessionId
-        const branchId = "compat-agent-run-tagless-b" as BranchId
-        const childSessionId = "compat-agent-run-tagless-child" as SessionId
+        const sessionId = SessionId.of("compat-agent-run-tagless")
+        const branchId = BranchId.of("compat-agent-run-tagless-b")
+        const childSessionId = SessionId.of("compat-agent-run-tagless-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -766,9 +766,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = "compat-agent-run-branchless" as SessionId
-        const branchId = "compat-agent-run-branchless-b" as BranchId
-        const childSessionId = "compat-agent-run-branchless-child" as SessionId
+        const sessionId = SessionId.of("compat-agent-run-branchless")
+        const branchId = BranchId.of("compat-agent-run-branchless-b")
+        const childSessionId = SessionId.of("compat-agent-run-branchless-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,

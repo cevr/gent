@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import { EventEnvelope, TurnCompleted } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { runHeadless } from "../src/headless-runner"
 import { createMockClient } from "./render-harness"
 
 describe("runHeadless", () => {
   test("stops after TurnCompleted even if the event stream stays open", async () => {
-    const sessionId = "session-test" as SessionId
-    const branchId = "branch-test" as BranchId
+    const sessionId = SessionId.of("session-test")
+    const branchId = BranchId.of("branch-test")
     let sent = false
 
     const completed = new EventEnvelope({

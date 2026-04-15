@@ -10,7 +10,7 @@ import {
   TurnCompleted,
 } from "@gent/core/domain/event"
 import type { AgentEvent, EventStoreService } from "@gent/core/domain/event"
-import type { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
@@ -24,8 +24,8 @@ import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 // Shared fixtures
 // ============================================================================
 
-const sessionId = "test-session" as SessionId
-const branchId = "test-branch" as BranchId
+const sessionId = SessionId.of("test-session")
+const branchId = BranchId.of("test-branch")
 const testLayer = ExtensionTurnControl.Test()
 
 const makeCounterActor = (id: string) =>
@@ -624,7 +624,7 @@ describe("event routing", () => {
 
       yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
       yield* eventPublisher.publish(
-        new TaskCompleted({ sessionId, branchId, taskId: "t-1" as TaskId }),
+        new TaskCompleted({ sessionId, branchId, taskId: TaskId.of("t-1") }),
       )
       yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 100 }))
 

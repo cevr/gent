@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
 const test = it.live.layer(Storage.TestWithSql())
 
@@ -16,8 +16,8 @@ const nextId = () => `test-${++counter}` as string
 const createFixture = (opts?: { sessionName?: string }) =>
   Effect.gen(function* () {
     const storage = yield* Storage
-    const sessionId = nextId() as SessionId
-    const branchId = nextId() as BranchId
+    const sessionId = SessionId.of(nextId())
+    const branchId = BranchId.of(nextId())
     const now = new Date()
 
     const session = yield* storage.createSession(
@@ -52,7 +52,7 @@ const addMessage = (
     const storage = yield* Storage
     return yield* storage.createMessage(
       new Message({
-        id: nextId() as MessageId,
+        id: MessageId.of(nextId()),
         sessionId,
         branchId,
         role,
@@ -228,7 +228,7 @@ describe("getSessionDetail", () => {
       yield* addMessage(sessionId, branchId, "assistant", "world")
 
       // Add second branch
-      const branchId2 = nextId() as BranchId
+      const branchId2 = BranchId.of(nextId())
       yield* storage.createBranch(
         new Branch({
           id: branchId2,
@@ -263,7 +263,7 @@ describe("getSessionDetail", () => {
   test("errors on missing session", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
-      const result = yield* Effect.result(storage.getSessionDetail("nonexistent" as SessionId))
+      const result = yield* Effect.result(storage.getSessionDetail(SessionId.of("nonexistent")))
       expect(result._tag).toBe("Failure")
     }))
 })
@@ -275,8 +275,8 @@ describe("getChildSessions", () => {
       const parent = yield* createFixture({ sessionName: "parent" })
 
       // Create two child sessions
-      const child1Id = nextId() as SessionId
-      const child2Id = nextId() as SessionId
+      const child1Id = SessionId.of(nextId())
+      const child2Id = SessionId.of(nextId())
       const now = new Date()
 
       yield* storage.createSession(
@@ -322,7 +322,7 @@ describe("getChildSessions", () => {
       const now = new Date()
 
       // Child
-      const childId = nextId() as SessionId
+      const childId = SessionId.of(nextId())
       yield* storage.createSession(
         new Session({
           id: childId,
@@ -334,7 +334,7 @@ describe("getChildSessions", () => {
       )
 
       // Grandchild
-      const grandchildId = nextId() as SessionId
+      const grandchildId = SessionId.of(nextId())
       yield* storage.createSession(
         new Session({
           id: grandchildId,
@@ -358,9 +358,9 @@ describe("getSessionAncestors", () => {
       const now = new Date()
 
       // Root -> Parent -> Child
-      const rootId = nextId() as SessionId
-      const parentId = nextId() as SessionId
-      const childId = nextId() as SessionId
+      const rootId = SessionId.of(nextId())
+      const parentId = SessionId.of(nextId())
+      const childId = SessionId.of(nextId())
 
       yield* storage.createSession(
         new Session({ id: rootId, name: "root", createdAt: now, updatedAt: now }),

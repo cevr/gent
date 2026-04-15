@@ -4,7 +4,7 @@ import { CounselTool } from "@gent/core/extensions/counsel/counsel-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentRunResult } from "@gent/core/domain/agent"
-import type { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core/domain/ids"
 
 const makeCtx = (overrides: {
   agentRun: (
@@ -32,7 +32,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Looks good, minor concern about error handling.",
-          sessionId: "counsel-session" as SessionId,
+          sessionId: SessionId.of("counsel-session"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -65,7 +65,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "After thorough analysis...",
-          sessionId: "counsel-deep" as SessionId,
+          sessionId: SessionId.of("counsel-deep"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -99,7 +99,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Noted.",
-          sessionId: "counsel-ctx" as SessionId,
+          sessionId: SessionId.of("counsel-ctx"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -142,7 +142,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Opinion here.",
-          sessionId: "ephemeral-session" as SessionId,
+          sessionId: SessionId.of("ephemeral-session"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })

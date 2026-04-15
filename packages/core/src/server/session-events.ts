@@ -1,10 +1,5 @@
 import { Effect, Layer, Context, Stream } from "effect"
-import {
-  EventStore,
-  type EventEnvelope,
-  type EventId,
-  type EventStoreError,
-} from "../domain/event.js"
+import { EventStore, type EventEnvelope, EventId, type EventStoreError } from "../domain/event.js"
 import type { SubscribeEventsInput } from "./transport-contract.js"
 
 const isPublicTransportEvent = (envelope: EventEnvelope) =>
@@ -31,7 +26,7 @@ export class SessionEvents extends Context.Service<SessionEvents, SessionEventsS
             .subscribe({
               sessionId: input.sessionId,
               ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
-              ...(input.after !== undefined ? { after: input.after as EventId } : {}),
+              ...(input.after !== undefined ? { after: EventId.of(input.after) } : {}),
             })
             .pipe(Stream.filter(isPublicTransportEvent)),
       } satisfies SessionEventsService

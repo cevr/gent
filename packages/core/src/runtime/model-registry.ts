@@ -2,8 +2,8 @@ import { Config, Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path }
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
-import { Model } from "../domain/model.js"
-import type { ModelId, ModelPricing } from "../domain/model.js"
+import { Model, ModelId } from "../domain/model.js"
+import type { ModelPricing } from "../domain/model.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -45,7 +45,7 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
       const name = typeof modelValue["name"] === "string" ? modelValue["name"] : modelKey
       const pricing = parsePricing(modelValue["cost"])
       const contextLength = parseContextLength(modelValue["limit"])
-      const id = `${providerId}/${modelKey}` as ModelId
+      const id = ModelId.of(`${providerId}/${modelKey}`)
 
       models.push(
         new Model({

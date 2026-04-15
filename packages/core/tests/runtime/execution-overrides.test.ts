@@ -12,7 +12,7 @@ import { describe, test, expect } from "bun:test"
 import { it } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import type { LoadedExtension, ExtensionTurnContext } from "@gent/core/domain/extension"
-import type { ToolCallId } from "@gent/core/domain/ids"
+import { ToolCallId } from "@gent/core/domain/ids"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
 import { AgentExecutionOverridesSchema } from "@gent/core/domain/agent"
 import { reducerActor } from "../extensions/helpers/reducer-actor"
@@ -64,7 +64,7 @@ describe("executionOverrides through RPC", () => {
             branchId,
             content: "test message",
             executionOverrides: {
-              parentToolCallId: "tc-from-parent" as ToolCallId,
+              parentToolCallId: ToolCallId.of("tc-from-parent"),
               tags: ["subprocess-test"],
             },
           })
@@ -92,7 +92,7 @@ describe("AgentExecutionOverrides CLI serialization", () => {
       reasoningEffort: "high" as const,
       systemPromptAddendum: "Be concise.",
       tags: ["subprocess-test"],
-      parentToolCallId: "tc-abc-123" as ToolCallId,
+      parentToolCallId: ToolCallId.of("tc-abc-123"),
     }
 
     const json = Schema.encodeSync(codec)(overrides)
@@ -103,7 +103,7 @@ describe("AgentExecutionOverrides CLI serialization", () => {
   })
 
   test("round-trips with minimal overrides", () => {
-    const overrides = { parentToolCallId: "tc-only" as ToolCallId }
+    const overrides = { parentToolCallId: ToolCallId.of("tc-only") }
     const json = Schema.encodeSync(codec)(overrides)
     const decoded = Schema.decodeUnknownSync(codec)(json)
     expect(decoded.parentToolCallId).toBe("tc-only")

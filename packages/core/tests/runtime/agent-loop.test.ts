@@ -34,7 +34,7 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
@@ -868,12 +868,12 @@ describe("concurrency", () => {
 // ============================================================================
 
 describe("continuation", () => {
-  const contSessionId = "cont-test-session" as SessionId
-  const contBranchId = "cont-test-branch" as BranchId
+  const contSessionId = SessionId.of("cont-test-session")
+  const contBranchId = BranchId.of("cont-test-branch")
 
   const makeContMessage = (text: string) =>
     new Message({
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2)}` as MessageId,
+      id: MessageId.of(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
       sessionId: contSessionId,
       branchId: contBranchId,
       role: "user",
@@ -1124,8 +1124,8 @@ describe("continuation", () => {
 // ============================================================================
 
 describe("interaction", () => {
-  const intSessionId = "s-interaction" as SessionId
-  const intBranchId = "b-interaction" as BranchId
+  const intSessionId = SessionId.of("s-interaction")
+  const intBranchId = BranchId.of("b-interaction")
 
   const makeIntMessage = (text: string) =>
     new Message({
@@ -1168,7 +1168,7 @@ describe("interaction", () => {
           return Effect.succeed(
             Stream.fromIterable([
               new ToolCallChunk({
-                toolCallId: "tc-1" as ToolCallId,
+                toolCallId: ToolCallId.of("tc-1"),
                 toolName: "interaction-tool",
                 input: { value: "test" },
               }),
@@ -1364,7 +1364,7 @@ describe("interaction", () => {
           if (idx === 0) {
             return Stream.fromIterable([
               new ToolCallChunk({
-                toolCallId: "tc-guard" as ToolCallId,
+                toolCallId: ToolCallId.of("tc-guard"),
                 toolName: tool.name,
                 input: { value: "guard-test" },
               }),
@@ -1427,10 +1427,10 @@ describe("recovery", () => {
   })
 
   const createSessionState = () => {
-    const sessionId = "session-loop-recovery" as SessionId
-    const branchId = "branch-loop-recovery" as BranchId
+    const sessionId = SessionId.of("session-loop-recovery")
+    const branchId = BranchId.of("branch-loop-recovery")
     const message = new Message({
-      id: "message-loop-recovery" as MessageId,
+      id: MessageId.of("message-loop-recovery"),
       sessionId,
       branchId,
       role: "user",
@@ -1613,7 +1613,7 @@ describe("recovery", () => {
     try {
       const { message } = createSessionState()
       const queuedMessage = new Message({
-        id: "queued-msg" as MessageId,
+        id: MessageId.of("queued-msg"),
         sessionId: message.sessionId,
         branchId: message.branchId,
         role: "user",

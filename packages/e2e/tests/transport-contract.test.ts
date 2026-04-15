@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import type { ToolCallId } from "@gent/core/domain/ids.js"
+import { ToolCallId } from "@gent/core/domain/ids.js"
 import { extractText } from "@gent/sdk"
 import { transportCases, waitFor } from "./transport-harness"
 
@@ -124,7 +124,7 @@ describe("GentClient transport contract", () => {
               branchId,
               content: "overrides test",
               executionOverrides: {
-                parentToolCallId: "tc-e2e-test" as ToolCallId,
+                parentToolCallId: ToolCallId.of("tc-e2e-test"),
                 tags: ["e2e-transport-test"],
               },
             })

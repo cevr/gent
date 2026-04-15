@@ -6,7 +6,7 @@ import {
   stripBackground,
   BashTool,
 } from "@gent/core/extensions/exec-tools/bash"
-import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 
 describe("splitCdCommand", () => {
@@ -67,9 +67,9 @@ describe("stripBackground", () => {
 // ============================================================================
 
 const stubCtx = {
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
-  toolCallId: "tc-1" as ToolCallId,
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  toolCallId: ToolCallId.of("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
   interaction: {

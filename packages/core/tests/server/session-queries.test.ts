@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { EventStore, AgentSwitched } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import type { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
@@ -154,7 +154,7 @@ describe("Session Tree", () => {
       const result = yield* Effect.result(
         commands.createSession({
           name: "Orphan",
-          parentSessionId: "nonexistent" as SessionId,
+          parentSessionId: SessionId.of("nonexistent"),
         }),
       )
       expect(result._tag).toBe("Failure")

@@ -7,14 +7,14 @@ import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { reducerActor } from "./helpers/reducer-actor"
 
-const sessionId = "test-session" as SessionId
-const branchId = "test-branch" as BranchId
+const sessionId = SessionId.of("test-session")
+const branchId = BranchId.of("test-branch")
 
 describe("extension concurrency", () => {
   describe("actor spawn serialization", () => {

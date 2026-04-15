@@ -6,10 +6,10 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
-const sessionId = "task-test-session" as SessionId
-const branchId = "task-test-branch" as BranchId
+const sessionId = SessionId.of("task-test-session")
+const branchId = BranchId.of("task-test-branch")
 
 const makeLayer = () => {
   const storageLayer = Storage.MemoryWithSql()

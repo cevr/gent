@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { SessionState, transitionSessionState, type Session } from "../src/client/session-state"
 
 const session: Session = {
-  sessionId: "session-1" as SessionId,
-  branchId: "branch-1" as BranchId,
+  sessionId: SessionId.of("session-1"),
+  branchId: BranchId.of("branch-1"),
   name: "Session 1",
   reasoningLevel: undefined,
 }
@@ -21,14 +21,14 @@ describe("session-state", () => {
   test("activate replaces current session without ceremonial switching state", () => {
     const next = transitionSessionState(SessionState.active(session), {
       _tag: "Activated",
-      session: { ...session, sessionId: "session-2" as SessionId, name: "Session 2" },
+      session: { ...session, sessionId: SessionId.of("session-2"), name: "Session 2" },
     })
 
     expect(next).toEqual({
       status: "active",
       session: {
         ...session,
-        sessionId: "session-2" as SessionId,
+        sessionId: SessionId.of("session-2"),
         name: "Session 2",
       },
     })

@@ -5,7 +5,7 @@ import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { Message } from "./message-list"
-import type { MessageId } from "@gent/core/domain/ids.js"
+import { MessageId } from "@gent/core/domain/ids.js"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
 
@@ -63,7 +63,7 @@ export function MessagePicker(props: MessagePickerProps) {
       if (e.name === "return") {
         const item = list[selectedIndex()]
         // SAFETY: PickerItem.id originates from MessageInfoReadonly.id which is a MessageId
-        if (item !== undefined) props.onSelect(item.id as MessageId)
+        if (item !== undefined) props.onSelect(MessageId.of(item.id))
         return true
       }
 

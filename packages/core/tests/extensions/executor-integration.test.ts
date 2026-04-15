@@ -9,7 +9,7 @@ import { Effect, Layer } from "effect"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ExecutorUiModel } from "@gent/core/extensions/executor/actor"
 import { executorActor } from "@gent/core/extensions/executor/actor"
 import {
@@ -70,8 +70,8 @@ const waitingResult: ExecutorMcpToolResult = {
 
 // ── Actor lifecycle helpers ──
 
-const sessionId = "test-session" as SessionId
-const branchId = "test-branch" as BranchId
+const sessionId = SessionId.of("test-session")
+const branchId = BranchId.of("test-branch")
 
 const mockEndpoint = {
   mode: "local" as const,

@@ -127,7 +127,7 @@ export const Agents = {
   cowork: defineAgent({
     name: "cowork",
     description: "General purpose - full tool access, can execute code changes",
-    model: "anthropic/claude-opus-4-6" as ModelId,
+    model: ModelId.of("anthropic/claude-opus-4-6"),
     systemPromptAddendum: COWORK_PROMPT,
     role: "primary",
   }),
@@ -135,7 +135,7 @@ export const Agents = {
   deepwork: defineAgent({
     name: "deepwork",
     description: "Deep analysis with thorough reasoning — alternative model perspective",
-    model: "openai/gpt-5.4" as ModelId,
+    model: ModelId.of("openai/gpt-5.4"),
     systemPromptAddendum: DEEPWORK_PROMPT,
     reasoningEffort: "high",
     role: "reviewer",
@@ -144,7 +144,7 @@ export const Agents = {
   explore: defineAgent({
     name: "explore",
     description: "Fast codebase exploration - finds files, searches patterns",
-    model: "openai/gpt-5.4-mini" as ModelId,
+    model: ModelId.of("openai/gpt-5.4-mini"),
     allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: EXPLORE_PROMPT,
     persistence: "ephemeral",
@@ -153,7 +153,7 @@ export const Agents = {
   architect: defineAgent({
     name: "architect",
     description: "Designs implementation approaches",
-    model: "anthropic/claude-opus-4-6" as ModelId,
+    model: ModelId.of("anthropic/claude-opus-4-6"),
     allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
     systemPromptAddendum: ARCHITECT_PROMPT,
   }),
@@ -161,7 +161,7 @@ export const Agents = {
   librarian: defineAgent({
     name: "librarian",
     description: "Answers questions about external repos using local cached clones",
-    model: "openai/gpt-5.4-mini" as ModelId,
+    model: ModelId.of("openai/gpt-5.4-mini"),
     allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
     systemPromptAddendum: LIBRARIAN_PROMPT,
     persistence: "ephemeral",
@@ -169,7 +169,7 @@ export const Agents = {
 
   summarizer: defineAgent({
     name: "summarizer",
-    model: "openai/gpt-5.4-mini" as ModelId,
+    model: ModelId.of("openai/gpt-5.4-mini"),
     allowedTools: [],
     systemPromptAddendum: SUMMARIZER_PROMPT,
     persistence: "ephemeral",
@@ -177,7 +177,7 @@ export const Agents = {
 
   title: defineAgent({
     name: "title",
-    model: "openai/gpt-5.4-mini" as ModelId,
+    model: ModelId.of("openai/gpt-5.4-mini"),
     allowedTools: [],
     temperature: 0.5,
     persistence: "ephemeral",
@@ -186,7 +186,7 @@ export const Agents = {
   auditor: defineAgent({
     name: "auditor",
     description: "Audits code for a specific concern category",
-    model: "openai/gpt-5.4-mini" as ModelId,
+    model: ModelId.of("openai/gpt-5.4-mini"),
     allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
     systemPromptAddendum: AUDITOR_PROMPT,
     persistence: "ephemeral",
@@ -194,7 +194,7 @@ export const Agents = {
 } as const
 
 // Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = "openai/gpt-5.4-mini" as ModelId
+export const DEFAULT_MODEL_ID = ModelId.of("openai/gpt-5.4-mini")
 
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>

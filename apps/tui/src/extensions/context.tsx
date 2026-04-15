@@ -40,6 +40,7 @@ type SolidComponent = (props?: any) => _JSX.Element
 
 const platformRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
 const { _fsInstance, _pathInstance } = Effect.runSync(
+  // @effect-diagnostics-next-line strictEffectProvide:off — module-level platform capture
   Effect.provide(
     Effect.gen(function* () {
       const _fsInstance = yield* FileSystem.FileSystem

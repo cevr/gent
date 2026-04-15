@@ -6,7 +6,7 @@ import {
   TurnCompleted,
   ToolCallSucceeded,
 } from "@gent/core/domain/event"
-import type { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import {
   AUTO_EXTENSION_ID,
@@ -529,8 +529,8 @@ describe("Auto pure reducer", () => {
 
 // ── Runtime integration tests ──
 
-const sessionId = "auto-session" as SessionId
-const branchId = "auto-branch" as BranchId
+const sessionId = SessionId.of("auto-session")
+const branchId = BranchId.of("auto-branch")
 
 const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
@@ -583,7 +583,7 @@ const checkpointSignal = (output: Record<string, unknown>) =>
   new ToolCallSucceeded({
     sessionId,
     branchId,
-    toolCallId: "tc-checkpoint" as ToolCallId,
+    toolCallId: ToolCallId.of("tc-checkpoint"),
     toolName: "auto_checkpoint",
     output: JSON.stringify(output),
   })
@@ -592,7 +592,7 @@ const reviewSignal = () =>
   new ToolCallSucceeded({
     sessionId,
     branchId,
-    toolCallId: "tc-review" as ToolCallId,
+    toolCallId: ToolCallId.of("tc-review"),
     toolName: "review",
   })
 
@@ -829,9 +829,9 @@ describe("Auto runtime integration", () => {
 // ── JSONL replay tests ──
 
 describe("Auto JSONL replay via onInit", () => {
-  const parentId = "parent-session" as SessionId
-  const childId = "child-session" as SessionId
-  const childBranchId = "child-branch" as BranchId
+  const parentId = SessionId.of("parent-session")
+  const childId = SessionId.of("child-session")
+  const childBranchId = BranchId.of("child-branch")
 
   /** Build a mock AutoJournal that returns pre-built rows */
   const mockJournal = (rows: JournalRow[], originSessionId?: string) =>
@@ -944,7 +944,7 @@ describe("Auto JSONL replay via onInit", () => {
       const storage = yield* Storage
       const now = new Date()
       // Create two separate lineages
-      const otherParentId = "other-parent" as SessionId
+      const otherParentId = SessionId.of("other-parent")
       yield* storage.createSession(
         new Session({ id: otherParentId, createdAt: now, updatedAt: now }),
       )

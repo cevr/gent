@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
-import { BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
+import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 
 // Event Types
@@ -397,7 +397,7 @@ export const AgentEvent = Schema.Union([
 ])
 export type AgentEvent = typeof AgentEvent.Type
 
-export const EventId = Schema.Number.pipe(Schema.brand("EventId"))
+export const EventId = Schema.Number.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
 
 export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
@@ -424,8 +424,8 @@ export interface EventStoreService {
 }
 
 export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
-  if ("sessionId" in event) return event.sessionId as SessionId
-  if ("parentSessionId" in event) return event.parentSessionId as SessionId
+  if ("sessionId" in event) return SessionId.of(event.sessionId)
+  if ("parentSessionId" in event) return SessionId.of(event.parentSessionId)
   return undefined
 }
 
@@ -486,7 +486,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
         Effect.orElseSucceed(() => undefined),
       )
       const envelope = new EventEnvelope({
-        id: id as EventId,
+        id: EventId.of(id),
         event,
         createdAt: yield* Clock.currentTimeMillis,
         ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
@@ -502,7 +502,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
-            const afterId = after ?? (0 as EventId)
+            const afterId = after ?? EventId.of(0)
             const ps = getOrCreateSessionPubSub(sessions, sessionId)
             const subscription = yield* PubSub.subscribe(ps)
             const latestId = yield* Ref.get(idRef)

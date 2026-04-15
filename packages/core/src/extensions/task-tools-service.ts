@@ -15,7 +15,8 @@ import {
   TaskDeleted,
 } from "../domain/event.js"
 import type { AgentName } from "../domain/agent.js"
-import type { TaskId, SessionId, BranchId } from "../domain/ids.js"
+import { TaskId } from "../domain/ids.js"
+import type { SessionId, BranchId } from "../domain/ids.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
@@ -106,7 +107,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
                 const eventPublisher = yield* EventPublisher
-                const id = Bun.randomUUIDv7() as TaskId
+                const id = TaskId.of(Bun.randomUUIDv7())
                 const now = yield* DateTime.nowAsDate
                 const task = new Task({
                   id,

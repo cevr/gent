@@ -6,7 +6,8 @@ import {
   type AgentRunError,
   type AgentRunResult,
 } from "../../domain/agent.js"
-import type { SessionId, TaskId } from "../../domain/ids.js"
+import { TaskId } from "../../domain/ids.js"
+import type { SessionId } from "../../domain/ids.js"
 import type { Task } from "../../domain/task.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
@@ -79,7 +80,7 @@ export const DelegateTool = defineTool({
 
     /** Check if task is still in a non-terminal state before writing completion */
     const isTaskStillActive = (taskId: string) =>
-      ctx.extension.ask(TaskProtocol.GetTask({ taskId: taskId as TaskId }), ctx.branchId).pipe(
+      ctx.extension.ask(TaskProtocol.GetTask({ taskId: TaskId.of(taskId) }), ctx.branchId).pipe(
         Effect.map(
           (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
         ),

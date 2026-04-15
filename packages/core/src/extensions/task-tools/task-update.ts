@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import type { TaskStatus } from "../../domain/task.js"
-import type { TaskId } from "../../domain/ids.js"
+import { TaskId } from "../../domain/ids.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskUpdateParams = Schema.Struct({
@@ -23,7 +23,7 @@ export const TaskUpdateTool = defineTool({
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
     const updated = yield* ctx.extension.ask(
       TaskProtocol.UpdateTask({
-        taskId: params.taskId as TaskId,
+        taskId: TaskId.of(params.taskId),
         status: params.status as TaskStatus | undefined,
         description: params.description,
       }),

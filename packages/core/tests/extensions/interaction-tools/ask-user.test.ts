@@ -5,12 +5,12 @@ import { AskUserTool } from "@gent/core/extensions/interaction-tools/ask-user"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 
 const makeCtx = (approvalService: { present: ToolContext["approve"] }): ToolContext => ({
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
-  toolCallId: "test-call" as ToolCallId,
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  toolCallId: ToolCallId.of("test-call"),
   approve: approvalService.present,
   cwd: "/tmp",
   home: "/tmp",
@@ -71,8 +71,8 @@ describe("AskUser Tool", () => {
       const ctx = makeCtx({
         present: (params) =>
           approval.present(params, {
-            sessionId: "test-session" as SessionId,
-            branchId: "test-branch" as BranchId,
+            sessionId: SessionId.of("test-session"),
+            branchId: BranchId.of("test-branch"),
           }),
       })
 
@@ -106,8 +106,8 @@ describe("AskUser Tool", () => {
       const ctx = makeCtx({
         present: (params) =>
           approval.present(params, {
-            sessionId: "test-session" as SessionId,
-            branchId: "test-branch" as BranchId,
+            sessionId: SessionId.of("test-session"),
+            branchId: BranchId.of("test-branch"),
           }),
       })
 

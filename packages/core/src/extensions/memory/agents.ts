@@ -6,7 +6,7 @@
  */
 
 import { defineAgent, type AgentName } from "../../domain/agent.js"
-import type { ModelId } from "../../domain/model.js"
+import { ModelId } from "../../domain/model.js"
 
 // ── Reflect Agent ──
 
@@ -46,7 +46,7 @@ After processing, summarize what you extracted and stored.
 
 export const MemoryReflectAgent = defineAgent({
   name: "memory:reflect" as AgentName,
-  model: "anthropic/claude-sonnet-4-6" as ModelId,
+  model: ModelId.of("anthropic/claude-sonnet-4-6"),
   description: "Review recent sessions and extract project-level memories",
   systemPromptAddendum: REFLECT_PROMPT,
   allowedTools: ["memory_remember", "memory_recall", "memory_forget", "search_sessions"],
@@ -82,7 +82,7 @@ Summarize: how many entries reviewed, merged, promoted, pruned.
 
 export const MemoryMeditateAgent = defineAgent({
   name: "memory:meditate" as AgentName,
-  model: "anthropic/claude-sonnet-4-6" as ModelId,
+  model: ModelId.of("anthropic/claude-sonnet-4-6"),
   description: "Consolidate project memories, prune duplicates, promote to global principles",
   systemPromptAddendum: MEDITATE_PROMPT,
   allowedTools: ["memory_remember", "memory_recall", "memory_forget"],

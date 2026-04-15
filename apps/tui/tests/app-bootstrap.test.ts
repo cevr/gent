@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import type { AgentName } from "@gent/core/domain/agent"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
 import { createMockClient } from "./render-harness"
 
@@ -12,8 +12,8 @@ describe("resolveStartupAuthState", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: "session-a" as SessionId,
-            branchId: "branch-a" as BranchId,
+            sessionId: SessionId.of("session-a"),
+            branchId: BranchId.of("branch-a"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -44,8 +44,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "session",
       session: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -75,8 +75,8 @@ describe("resolveStartupAuthState", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: "session-a" as SessionId,
-            branchId: "branch-a" as BranchId,
+            sessionId: SessionId.of("session-a"),
+            branchId: BranchId.of("branch-a"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -99,8 +99,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "headless",
       session: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -139,8 +139,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "branchPicker",
       session: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -151,13 +151,13 @@ describe("resolveStartupAuthState", () => {
       },
       branches: [
         {
-          id: "branch-a" as BranchId,
-          sessionId: "session-a" as SessionId,
+          id: BranchId.of("branch-a"),
+          sessionId: SessionId.of("session-a"),
           createdAt: 0,
         },
         {
-          id: "branch-b" as BranchId,
-          sessionId: "session-a" as SessionId,
+          id: BranchId.of("branch-b"),
+          sessionId: SessionId.of("session-a"),
           createdAt: 1,
         },
       ],

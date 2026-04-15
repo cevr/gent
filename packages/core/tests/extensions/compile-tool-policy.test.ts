@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { compileToolPolicy } from "@gent/core/runtime/extensions/registry"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { defineTool } from "@gent/core/domain/tool"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("compileToolPolicy", () => {
   const makeTool = (name: string) =>
@@ -29,7 +29,7 @@ describe("compileToolPolicy", () => {
     makeTool("search_skills"),
   ]
 
-  const emptyCtx = { sessionId: "s" as SessionId, branchId: "b" as BranchId }
+  const emptyCtx = { sessionId: SessionId.of("s"), branchId: BranchId.of("b") }
 
   const names = (tools: ReadonlyArray<{ name: string }>) => tools.map((t) => t.name).sort()
 

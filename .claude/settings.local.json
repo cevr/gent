@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/cvr/Developer/personal/dotfiles/skills/**)",
+      "Read(//Users/cvr/.claude/**)"
+    ]
+  }
+}

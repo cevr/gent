@@ -13,8 +13,8 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
-import type { ModelId } from "@gent/core/domain/model"
+import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -137,12 +137,12 @@ describe("AgentExecutionOverrides", () => {
         yield* runner.run({
           agent: Agents.explore,
           prompt: "test",
-          parentSessionId: "s1" as SessionId,
-          parentBranchId: "b1" as BranchId,
+          parentSessionId: SessionId.of("s1"),
+          parentBranchId: BranchId.of("b1"),
           cwd: "/tmp",
           persistence: "durable",
           overrides: {
-            modelId: "custom/model" as ModelId,
+            modelId: ModelId.of("custom/model"),
             allowedTools: ["bash", "grep"],
             deniedTools: ["write"],
             reasoningEffort: "high",
@@ -698,7 +698,7 @@ describe("AgentRunner", () => {
           const now = new Date()
           yield* storage.createMessage(
             new Message({
-              id: `${input.sessionId}:assistant:1` as MessageId,
+              id: MessageId.of(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "assistant",
@@ -752,8 +752,8 @@ describe("AgentRunner", () => {
         return yield* runner.run({
           agent: Agents.explore,
           prompt: "analyze",
-          parentSessionId: "parent-reasoning" as SessionId,
-          parentBranchId: "branch-reasoning" as BranchId,
+          parentSessionId: SessionId.of("parent-reasoning"),
+          parentBranchId: BranchId.of("branch-reasoning"),
           cwd: "/tmp",
           persistence: "durable",
         })
@@ -777,7 +777,7 @@ describe("AgentRunner", () => {
           const now = new Date()
           yield* storage.createMessage(
             new Message({
-              id: `${input.sessionId}:assistant:1` as MessageId,
+              id: MessageId.of(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "assistant",
@@ -829,8 +829,8 @@ describe("AgentRunner", () => {
         return yield* runner.run({
           agent: Agents.explore,
           prompt: "analyze",
-          parentSessionId: "parent-mixed" as SessionId,
-          parentBranchId: "branch-mixed" as BranchId,
+          parentSessionId: SessionId.of("parent-mixed"),
+          parentBranchId: BranchId.of("branch-mixed"),
           cwd: "/tmp",
           persistence: "durable",
         })
@@ -854,7 +854,7 @@ describe("AgentRunner", () => {
           const now = new Date()
           yield* storage.createMessage(
             new Message({
-              id: `${input.sessionId}:assistant:1` as MessageId,
+              id: MessageId.of(`${input.sessionId}:assistant:1`),
               sessionId: input.sessionId,
               branchId: input.branchId,
               role: "assistant",
@@ -906,8 +906,8 @@ describe("AgentRunner", () => {
         return yield* runner.run({
           agent: Agents.explore,
           prompt: "save test",
-          parentSessionId: "parent-save" as SessionId,
-          parentBranchId: "branch-save" as BranchId,
+          parentSessionId: SessionId.of("parent-save"),
+          parentBranchId: BranchId.of("branch-save"),
           cwd: "/tmp",
           persistence: "durable",
         })
@@ -944,18 +944,19 @@ describe("session depth guard", () => {
 
   const makeSession = (id: string, parentSessionId?: string) =>
     new Session({
-      id: id as SessionId,
+      id: SessionId.of(id),
       name: `session-${id}`,
-      parentSessionId: parentSessionId as SessionId | undefined,
-      parentBranchId: parentSessionId ? (`branch-${parentSessionId}` as BranchId) : undefined,
+      parentSessionId: parentSessionId !== undefined ? SessionId.of(parentSessionId) : undefined,
+      parentBranchId:
+        parentSessionId !== undefined ? BranchId.of(`branch-${parentSessionId}`) : undefined,
       createdAt: new Date(),
       updatedAt: new Date(),
     })
 
   const makeBranch = (sessionId: string) =>
     new Branch({
-      id: `branch-${sessionId}` as BranchId,
-      sessionId: sessionId as SessionId,
+      id: BranchId.of(`branch-${sessionId}`),
+      sessionId: SessionId.of(sessionId),
       createdAt: new Date(),
     })
 
@@ -975,7 +976,7 @@ describe("session depth guard", () => {
         const storage = yield* Storage
         yield* storage.createSession(makeSession("root"))
         yield* storage.createBranch(makeBranch("root"))
-        expect(yield* getSessionDepth("root" as SessionId, storage)).toBe(0)
+        expect(yield* getSessionDepth(SessionId.of("root"), storage)).toBe(0)
       }),
     )
   })
@@ -988,7 +989,7 @@ describe("session depth guard", () => {
         yield* storage.createBranch(makeBranch("root"))
         yield* storage.createSession(makeSession("child", "root"))
         yield* storage.createBranch(makeBranch("child"))
-        expect(yield* getSessionDepth("child" as SessionId, storage)).toBe(1)
+        expect(yield* getSessionDepth(SessionId.of("child"), storage)).toBe(1)
       }),
     )
   })
@@ -1003,7 +1004,7 @@ describe("session depth guard", () => {
         yield* storage.createBranch(makeBranch("child"))
         yield* storage.createSession(makeSession("grandchild", "child"))
         yield* storage.createBranch(makeBranch("grandchild"))
-        expect(yield* getSessionDepth("grandchild" as SessionId, storage)).toBe(2)
+        expect(yield* getSessionDepth(SessionId.of("grandchild"), storage)).toBe(2)
       }),
     )
   })
@@ -1013,7 +1014,7 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
-        const deepest = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
+        const deepest = SessionId.of(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
         expect(yield* getSessionDepth(deepest, storage)).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH)
       }),
     )
@@ -1024,7 +1025,7 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH)
-        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH}` as SessionId
+        const parentId = SessionId.of(`s${DEFAULT_MAX_AGENT_RUN_DEPTH}`)
         const parentDepth = yield* getSessionDepth(parentId, storage)
         expect(parentDepth >= DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
@@ -1036,7 +1037,7 @@ describe("session depth guard", () => {
       Effect.gen(function* () {
         const storage = yield* Storage
         yield* buildSessionChain(storage, DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
-        const parentId = `s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}` as SessionId
+        const parentId = SessionId.of(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`)
         const parentDepth = yield* getSessionDepth(parentId, storage)
         expect(parentDepth < DEFAULT_MAX_AGENT_RUN_DEPTH).toBe(true)
       }),
@@ -1047,7 +1048,7 @@ describe("session depth guard", () => {
     await run(
       Effect.gen(function* () {
         const storage = yield* Storage
-        expect(yield* getSessionDepth("nonexistent" as SessionId, storage)).toBe(0)
+        expect(yield* getSessionDepth(SessionId.of("nonexistent"), storage)).toBe(0)
       }),
     )
   })
@@ -1105,8 +1106,8 @@ describe("ephemeral service propagation", () => {
         const result = yield* runner.run({
           agent: Agents.explore,
           prompt: "test service propagation",
-          parentSessionId: "parent-svc-prop" as SessionId,
-          parentBranchId: "parent-svc-prop-branch" as BranchId,
+          parentSessionId: SessionId.of("parent-svc-prop"),
+          parentBranchId: BranchId.of("parent-svc-prop-branch"),
           cwd: process.cwd(),
         })
 
@@ -1185,8 +1186,8 @@ describe("ephemeral service propagation", () => {
         const result = yield* runner.run({
           agent: Agents.explore,
           prompt: "test auto-approve",
-          parentSessionId: "parent-approve" as SessionId,
-          parentBranchId: "parent-approve-branch" as BranchId,
+          parentSessionId: SessionId.of("parent-approve"),
+          parentBranchId: BranchId.of("parent-approve-branch"),
           cwd: process.cwd(),
         })
 

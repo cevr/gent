@@ -4,7 +4,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskStorage } from "@gent/core/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
-import type { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
 
 // Single in-memory db: TestWithSql exposes both Storage and SqlClient.
 // TaskStorage.Live consumes SqlClient, so we provide TestWithSql to it.
@@ -19,13 +19,13 @@ const setup = Effect.gen(function* () {
   const taskStorage = yield* TaskStorage
   const now = new Date()
   const session = new Session({
-    id: "s1" as SessionId,
+    id: SessionId.of("s1"),
     name: "Test",
     createdAt: now,
     updatedAt: now,
   })
   const branch = new Branch({
-    id: "b1" as BranchId,
+    id: BranchId.of("b1"),
     sessionId: session.id,
     createdAt: now,
   })
@@ -37,9 +37,9 @@ const setup = Effect.gen(function* () {
 const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof Task>[0]>) => {
   const now = new Date()
   return new Task({
-    id: id as TaskId,
-    sessionId: "s1" as SessionId,
-    branchId: "b1" as BranchId,
+    id: TaskId.of(id),
+    sessionId: SessionId.of("s1"),
+    branchId: BranchId.of("b1"),
     subject: `Task ${id}`,
     status: "pending",
     createdAt: now,
@@ -54,7 +54,7 @@ describe("Task Storage", () => {
       const { storage } = yield* setup
       const task = makeTask("t1", { description: "Do something", cwd: "/tmp" })
       yield* storage.createTask(task)
-      const got = yield* storage.getTask("t1" as TaskId)
+      const got = yield* storage.getTask(TaskId.of("t1"))
       expect(got).toBeDefined()
       expect(got!.id).toBe("t1")
       expect(got!.subject).toBe("Task t1")
@@ -66,7 +66,7 @@ describe("Task Storage", () => {
   test("getTask returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
-      const got = yield* storage.getTask("nonexistent" as TaskId)
+      const got = yield* storage.getTask(TaskId.of("nonexistent"))
       expect(got).toBeUndefined()
     }))
 
@@ -75,7 +75,7 @@ describe("Task Storage", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      const tasks = yield* storage.listTasks("s1" as SessionId)
+      const tasks = yield* storage.listTasks(SessionId.of("s1"))
       expect(tasks.length).toBe(2)
     }))
 
@@ -83,9 +83,9 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      const tasks = yield* storage.listTasks("s1" as SessionId, "b1" as BranchId)
+      const tasks = yield* storage.listTasks(SessionId.of("s1"), BranchId.of("b1"))
       expect(tasks.length).toBe(1)
-      const empty = yield* storage.listTasks("s1" as SessionId, "other" as BranchId)
+      const empty = yield* storage.listTasks(SessionId.of("s1"), BranchId.of("other"))
       expect(empty.length).toBe(0)
     }))
 
@@ -93,7 +93,7 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      const updated = yield* storage.updateTask("t1" as TaskId, { status: "in_progress" })
+      const updated = yield* storage.updateTask(TaskId.of("t1"), { status: "in_progress" })
       expect(updated).toBeDefined()
       expect(updated!.status).toBe("in_progress")
     }))
@@ -101,7 +101,7 @@ describe("Task Storage", () => {
   test("updateTask returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
-      const updated = yield* storage.updateTask("nonexistent" as TaskId, { status: "completed" })
+      const updated = yield* storage.updateTask(TaskId.of("nonexistent"), { status: "completed" })
       expect(updated).toBeUndefined()
     }))
 
@@ -109,8 +109,8 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      yield* storage.deleteTask("t1" as TaskId)
-      const got = yield* storage.getTask("t1" as TaskId)
+      yield* storage.deleteTask(TaskId.of("t1"))
+      const got = yield* storage.getTask(TaskId.of("t1"))
       expect(got).toBeUndefined()
     }))
 
@@ -118,7 +118,7 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1", { metadata: { key: "value", count: 42 } }))
-      const got = yield* storage.getTask("t1" as TaskId)
+      const got = yield* storage.getTask(TaskId.of("t1"))
       expect(got).toBeDefined()
       const meta = got!.metadata as Record<string, unknown>
       expect(meta.key).toBe("value")
@@ -132,8 +132,8 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      const deps = yield* storage.getTaskDeps("t2" as TaskId)
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps).toEqual(["t1"])
     }))
 
@@ -142,9 +142,9 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      yield* storage.removeTaskDep("t2" as TaskId, "t1" as TaskId)
-      const deps = yield* storage.getTaskDeps("t2" as TaskId)
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      yield* storage.removeTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps.length).toBe(0)
     }))
 
@@ -153,10 +153,10 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      yield* storage.deleteTask("t2" as TaskId)
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      yield* storage.deleteTask(TaskId.of("t2"))
       // After deleting t2, its dep entries should also be gone
-      const deps = yield* storage.getTaskDeps("t2" as TaskId)
+      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps.length).toBe(0)
     }))
 
@@ -165,9 +165,9 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      yield* storage.addTaskDep("t2" as TaskId, "t1" as TaskId)
-      const deps = yield* storage.getTaskDeps("t2" as TaskId)
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps.length).toBe(1)
     }))
 })

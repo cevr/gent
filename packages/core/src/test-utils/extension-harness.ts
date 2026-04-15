@@ -30,7 +30,7 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
-import type { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
+import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { AnyToolDefinition, ToolContext } from "../domain/tool.js"
@@ -78,7 +78,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     new ToolCallSucceeded({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
-      toolCallId: "tc-test" as ToolCallId,
+      toolCallId: ToolCallId.of("tc-test"),
       toolName: "test",
       ...overrides,
     }),
@@ -87,7 +87,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     new ToolCallFailed({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
-      toolCallId: "tc-test" as ToolCallId,
+      toolCallId: ToolCallId.of("tc-test"),
       toolName: "test",
       ...overrides,
     }),
@@ -148,19 +148,19 @@ export function createActorHarness<State, Message = void>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ActorHarnessResult<State, any> {
   const ctx: ExtensionReduceContext = {
-    sessionId: (options?.sessionId ?? "test-session") as SessionId,
-    branchId: (options?.branchId ?? "test-branch") as BranchId,
+    sessionId: SessionId.of(options?.sessionId ?? "test-session"),
+    branchId: BranchId.of(options?.branchId ?? "test-branch"),
   }
 
   const deriveCtx: ExtensionTurnContext = {
     sessionId: ctx.sessionId,
-    branchId: (ctx.branchId ?? "test-branch") as BranchId,
+    branchId: BranchId.of(ctx.branchId ?? "test-branch"),
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
     interactive: true,
   }
 
-  const branchId = (options?.branchId ?? "test-branch") as BranchId
+  const branchId = BranchId.of(options?.branchId ?? "test-branch")
   const events = createEventFactories({ sessionId: ctx.sessionId, branchId })
 
   const reduce = (
@@ -219,7 +219,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
       Effect.succeed({
         _tag: "success" as const,
         text: "",
-        sessionId: "test-subagent-session" as SessionId,
+        sessionId: SessionId.of("test-subagent-session"),
         agentName: "cowork" as AgentName,
       }),
   }
@@ -296,9 +296,9 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 /** Default ToolContext for tests — overridable via spread */
 export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext => ({
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
-  toolCallId: "test-call" as ToolCallId,
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  toolCallId: ToolCallId.of("test-call"),
   cwd: "/tmp",
   home: "/tmp",
   extension: {

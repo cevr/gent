@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { runSessionSubscriptionAttempt } from "../src/client/session-subscription"
 
 const noop = () => {}
@@ -14,14 +14,14 @@ describe("runSessionSubscriptionAttempt", () => {
 
     const result = await Effect.runPromise(
       runSessionSubscriptionAttempt({
-        sessionId: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        sessionId: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         lastSeenEventId: null,
         log,
         isActiveSession: () => active,
         getSnapshot: Effect.succeed({
-          sessionId: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          sessionId: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           messages: [],
           lastEventId: null,
           reasoningLevel: undefined,

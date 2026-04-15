@@ -16,16 +16,16 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
-import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AUTO_EXTENSION_ID } from "@gent/core/extensions/auto"
 import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
 
-const sessionId = "auto-e2e-session" as SessionId
-const branchId = "auto-e2e-branch" as BranchId
+const sessionId = SessionId.of("auto-e2e-session")
+const branchId = BranchId.of("auto-e2e-branch")
 
 const makeMessage = (text: string) =>
   new Message({
-    id: `msg-${Date.now()}` as MessageId,
+    id: MessageId.of(`msg-${Date.now()}`),
     sessionId,
     branchId,
     kind: "regular",
@@ -44,7 +44,7 @@ const reviewCompatibleRunner = {
             { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
           ])
         : "No issues found.",
-      sessionId: "test-subagent-session" as SessionId,
+      sessionId: SessionId.of("test-subagent-session"),
       agentName: "cowork" as AgentName,
     }),
 }

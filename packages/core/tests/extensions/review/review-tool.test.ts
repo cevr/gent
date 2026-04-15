@@ -4,7 +4,7 @@ import { ReviewTool } from "@gent/core/extensions/review/review-tool"
 import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import type { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core/domain/ids"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -51,7 +51,7 @@ describe("ReviewTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "[]",
-          sessionId: "child" as SessionId,
+          sessionId: SessionId.of("child"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -89,7 +89,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
-          sessionId: "child" as SessionId,
+          sessionId: SessionId.of("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
@@ -111,7 +111,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: "not valid json",
-          sessionId: "child" as SessionId,
+          sessionId: SessionId.of("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
@@ -144,7 +144,7 @@ describe("ReviewTool", () => {
                   text: "Missing null check",
                 },
               ]),
-              sessionId: "synth" as SessionId,
+              sessionId: SessionId.of("synth"),
               agentName: params.agent.name,
               persistence: "ephemeral" as const,
             }
@@ -153,7 +153,7 @@ describe("ReviewTool", () => {
             return {
               _tag: "success" as const,
               text: "Applied fixes.",
-              sessionId: "exec" as SessionId,
+              sessionId: SessionId.of("exec"),
               agentName: params.agent.name,
               persistence: "durable" as const,
             }
@@ -161,7 +161,7 @@ describe("ReviewTool", () => {
           return {
             _tag: "success" as const,
             text: "[]",
-            sessionId: "child" as SessionId,
+            sessionId: SessionId.of("child"),
             agentName: params.agent.name,
             persistence: "ephemeral" as const,
           }
@@ -194,7 +194,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
-          sessionId: "child" as SessionId,
+          sessionId: SessionId.of("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),

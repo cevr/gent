@@ -6,7 +6,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents, type AgentRunResult } from "@gent/core/domain/agent"
-import type { ArtifactId } from "@gent/core/domain/ids"
+import { ArtifactId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/core/extensions/artifacts-protocol"
 import { ARTIFACTS_EXTENSION_ID } from "@gent/core/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/core/extensions/plan-tool"
@@ -26,7 +26,7 @@ interface AskCall {
 }
 
 const fakeArtifact = (sourceTool: string): Artifact => ({
-  id: "fake-id" as ArtifactId,
+  id: ArtifactId.of("fake-id"),
   label: "test",
   sourceTool,
   content: "test content",

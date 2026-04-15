@@ -10,7 +10,7 @@ import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-ma
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import type { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
+import { ToolCallId, SessionId, BranchId } from "@gent/core/domain/ids"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { reducerActor } from "./helpers/reducer-actor"
@@ -190,8 +190,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -200,8 +200,8 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.after",
         {
-          sessionId: "s" as SessionId,
-          branchId: "b" as BranchId,
+          sessionId: SessionId.of("s"),
+          branchId: BranchId.of("b"),
           durationMs: 0,
           agentName: "cowork" as never,
           interrupted: false,
@@ -265,8 +265,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "async-s" as SessionId,
-      branchId: "async-b" as BranchId,
+      sessionId: SessionId.of("async-s"),
+      branchId: BranchId.of("async-b"),
       cwd: "/tmp",
       home: "/tmp",
       session: {
@@ -278,8 +278,8 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.after",
         {
-          sessionId: "async-s" as SessionId,
-          branchId: "async-b" as BranchId,
+          sessionId: SessionId.of("async-s"),
+          branchId: BranchId.of("async-b"),
           durationMs: 42,
           agentName: "cowork" as never,
           interrupted: false,
@@ -313,8 +313,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -323,8 +323,8 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.after",
         {
-          sessionId: "s" as SessionId,
-          branchId: "b" as BranchId,
+          sessionId: SessionId.of("s"),
+          branchId: BranchId.of("b"),
           durationMs: 0,
           agentName: "cowork" as never,
           interrupted: false,
@@ -356,8 +356,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -366,8 +366,8 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.before",
         {
-          sessionId: "s" as SessionId,
-          branchId: "b" as BranchId,
+          sessionId: SessionId.of("s"),
+          branchId: BranchId.of("b"),
           agentName: "cowork" as never,
           toolCount: 3,
           systemPromptLength: 500,
@@ -398,8 +398,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -408,8 +408,8 @@ describe("extension api", () => {
       compiled.runInterceptor(
         "turn.before",
         {
-          sessionId: "s" as SessionId,
-          branchId: "b" as BranchId,
+          sessionId: SessionId.of("s"),
+          branchId: BranchId.of("b"),
           agentName: "cowork" as never,
           toolCount: 7,
           systemPromptLength: 1000,
@@ -437,8 +437,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -446,7 +446,7 @@ describe("extension api", () => {
     const result = await Effect.runPromise(
       compiled.runInterceptor(
         "message.input",
-        { content: "hello world", sessionId: "s" as SessionId, branchId: "b" as BranchId },
+        { content: "hello world", sessionId: SessionId.of("s"), branchId: BranchId.of("b") },
         (i) => Effect.succeed(i.content),
         stubCtx,
       ),
@@ -476,8 +476,8 @@ describe("extension api", () => {
     const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
     const compiled = compileHooks(resolved.extensions)
     const stubCtx = {
-      sessionId: "s" as SessionId,
-      branchId: "b" as BranchId,
+      sessionId: SessionId.of("s"),
+      branchId: BranchId.of("b"),
       cwd: "/tmp",
       home: "/tmp",
     } as ExtensionHostContext
@@ -485,7 +485,7 @@ describe("extension api", () => {
     const result = await Effect.runPromise(
       compiled.runInterceptor(
         "message.input",
-        { content: "base", sessionId: "s" as SessionId, branchId: "b" as BranchId },
+        { content: "base", sessionId: SessionId.of("s"), branchId: BranchId.of("b") },
         (i) => Effect.succeed(i.content),
         stubCtx,
       ),
@@ -532,9 +532,9 @@ describe("extension tools through ToolRunner.run", () => {
   })
 
   const ctx = {
-    sessionId: "s1" as SessionId,
-    branchId: "b1" as BranchId,
-    toolCallId: "tc1" as ToolCallId,
+    sessionId: SessionId.of("s1"),
+    branchId: BranchId.of("b1"),
+    toolCallId: ToolCallId.of("tc1"),
   }
 
   test("runs tool with required and optional params", async () => {
@@ -613,8 +613,8 @@ describe("state-backed extension api", () => {
     const actorLayer = ExtensionTurnControl.Test()
     const actor = await Effect.runPromise(
       spawnMachineExtensionRef("state-agent-run-alias", setup.actor!, {
-        sessionId: "s1" as SessionId,
-        branchId: "b1" as BranchId,
+        sessionId: SessionId.of("s1"),
+        branchId: BranchId.of("b1"),
       }).pipe(Effect.provide(actorLayer)),
     )
 
@@ -623,13 +623,13 @@ describe("state-backed extension api", () => {
       actor
         .publish(
           new AgentRunSpawned({
-            parentSessionId: "s1" as SessionId,
-            childSessionId: "s2" as SessionId,
+            parentSessionId: SessionId.of("s1"),
+            childSessionId: SessionId.of("s2"),
             agentName: "reviewer",
             prompt: "inspect",
-            branchId: "b1" as BranchId,
+            branchId: BranchId.of("b1"),
           }),
-          { sessionId: "s1" as SessionId, branchId: "b1" as BranchId },
+          { sessionId: SessionId.of("s1"), branchId: BranchId.of("b1") },
         )
         .pipe(Effect.provide(actorLayer)),
     )

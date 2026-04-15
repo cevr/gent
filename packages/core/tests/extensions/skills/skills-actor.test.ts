@@ -6,7 +6,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
@@ -15,8 +15,8 @@ import { SkillsProtocol } from "@gent/core/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/core/extensions/skills/skills"
 import { makeActorRuntimeLayer } from "../helpers/actor-runtime-layer"
 
-const sessionId = "skills-test-session" as SessionId
-const branchId = "skills-test-branch" as BranchId
+const sessionId = SessionId.of("skills-test-session")
+const branchId = BranchId.of("skills-test-branch")
 
 const testSkills = [
   new Skill({

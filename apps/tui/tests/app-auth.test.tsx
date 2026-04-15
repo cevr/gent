@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { Effect } from "effect"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { App } from "../src/app"
 import { Route, useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
@@ -67,8 +67,8 @@ describe("App auth gate", () => {
         client,
         runtime,
         initialSession: {
-          id: "session-a" as SessionId,
-          branchId: "branch-a" as BranchId,
+          id: SessionId.of("session-a"),
+          branchId: BranchId.of("branch-a"),
           name: "A",
           createdAt: 0,
           updatedAt: 0,
@@ -122,8 +122,8 @@ describe("App auth gate", () => {
       runtime,
       initialAgent: "deepwork",
       initialSession: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "A",
         createdAt: 0,
         updatedAt: 0,
@@ -153,8 +153,8 @@ describe("App auth gate", () => {
       branch: {
         getTree: () =>
           Effect.succeed([
-            { id: "branch-a" as BranchId, name: "Main", messageCount: 3, children: [] },
-            { id: "branch-b" as BranchId, name: "Side", messageCount: 1, children: [] },
+            { id: BranchId.of("branch-a"), name: "Main", messageCount: 3, children: [] },
+            { id: BranchId.of("branch-b"), name: "Side", messageCount: 1, children: [] },
           ]),
       },
     })
@@ -164,15 +164,15 @@ describe("App auth gate", () => {
       client,
       runtime,
       initialSession: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
       },
-      initialRoute: Route.branchPicker("session-a" as SessionId, "Session A", [
-        { id: "branch-a" as BranchId, sessionId: "session-a" as SessionId, createdAt: 0 },
-        { id: "branch-b" as BranchId, sessionId: "session-a" as SessionId, createdAt: 1 },
+      initialRoute: Route.branchPicker(SessionId.of("session-a"), "Session A", [
+        { id: BranchId.of("branch-a"), sessionId: SessionId.of("session-a"), createdAt: 0 },
+        { id: BranchId.of("branch-b"), sessionId: SessionId.of("session-a"), createdAt: 1 },
       ]),
     })
 
@@ -212,8 +212,8 @@ describe("App auth gate", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: "session-a" as SessionId,
-            branchId: "branch-b" as BranchId,
+            sessionId: SessionId.of("session-a"),
+            branchId: BranchId.of("branch-b"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -238,8 +238,8 @@ describe("App auth gate", () => {
       branch: {
         getTree: () =>
           Effect.succeed([
-            { id: "branch-a" as BranchId, name: "Main", messageCount: 3, children: [] },
-            { id: "branch-b" as BranchId, name: "Side", messageCount: 1, children: [] },
+            { id: BranchId.of("branch-a"), name: "Main", messageCount: 3, children: [] },
+            { id: BranchId.of("branch-b"), name: "Side", messageCount: 1, children: [] },
           ]),
       },
       message: {
@@ -262,9 +262,9 @@ describe("App auth gate", () => {
       {
         client,
         runtime,
-        initialRoute: Route.branchPicker("session-a" as SessionId, "Session A", [
-          { id: "branch-a" as BranchId, sessionId: "session-a" as SessionId, createdAt: 0 },
-          { id: "branch-b" as BranchId, sessionId: "session-a" as SessionId, createdAt: 1 },
+        initialRoute: Route.branchPicker(SessionId.of("session-a"), "Session A", [
+          { id: BranchId.of("branch-a"), sessionId: SessionId.of("session-a"), createdAt: 0 },
+          { id: BranchId.of("branch-b"), sessionId: SessionId.of("session-a"), createdAt: 1 },
         ]),
       },
     )
@@ -272,8 +272,8 @@ describe("App auth gate", () => {
       throw new Error("client or router context not ready")
     }
 
-    ctx.switchSession("session-a" as SessionId, "branch-b" as BranchId, "Session A")
-    router.navigateToSession("session-a" as SessionId, "branch-b" as BranchId, "ship it")
+    ctx.switchSession(SessionId.of("session-a"), BranchId.of("branch-b"), "Session A")
+    router.navigateToSession(SessionId.of("session-a"), BranchId.of("branch-b"), "ship it")
 
     // Auth gate should be checking — prompt must not be sent yet
     expect(sentMessages).toEqual([])
@@ -344,15 +344,15 @@ describe("App auth gate", () => {
       runtime,
       initialAgent: "cowork",
       initialSession: {
-        id: "session-a" as SessionId,
-        branchId: "branch-a" as BranchId,
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
         name: "A",
         createdAt: 0,
         updatedAt: 0,
       },
       initialRoute: Route.session(
-        "session-a" as SessionId,
-        "branch-a" as BranchId,
+        SessionId.of("session-a"),
+        BranchId.of("branch-a"),
         "build a feature",
       ),
     })

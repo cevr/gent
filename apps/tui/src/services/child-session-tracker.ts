@@ -9,7 +9,8 @@
 import { Effect, Fiber, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
 import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event.js"
-import type { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids.js"
+import { SessionId } from "@gent/core/domain/ids.js"
+import type { BranchId, ToolCallId } from "@gent/core/domain/ids.js"
 
 // =============================================================================
 // Constants
@@ -145,7 +146,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       Effect.gen(function* () {
         const fiber = yield* FiberSet.run(fiberSet)(
           Stream.runForEach(
-            eventStore.subscribe({ sessionId: childSessionId as SessionId }),
+            eventStore.subscribe({ sessionId: SessionId.of(childSessionId) }),
             (envelope: EventEnvelope) => handleChildEvent(childSessionId, envelope.event),
           ).pipe(Effect.catchEager(() => Effect.void)),
         )

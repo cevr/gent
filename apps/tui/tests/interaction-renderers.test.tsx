@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event"
 import { AskUserRenderer } from "../src/components/interaction-renderers/ask-user"
 import { PromptRenderer } from "../src/components/interaction-renderers/prompt"
@@ -12,8 +12,8 @@ import { waitForRenderedFrame } from "./helpers"
 const interaction = (text: string, metadata?: unknown): ActiveInteraction =>
   ({
     _tag: "InteractionPresented",
-    sessionId: "s" as SessionId,
-    branchId: "b" as BranchId,
+    sessionId: SessionId.of("s"),
+    branchId: BranchId.of("b"),
     requestId: "req-1",
     text,
     metadata,

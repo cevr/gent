@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
-import type { TaskId } from "../../domain/ids.js"
+import { TaskId } from "../../domain/ids.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskGetParams = Schema.Struct({
@@ -15,7 +15,7 @@ export const TaskGetTool = defineTool({
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
     const task = yield* ctx.extension.ask(
-      TaskProtocol.GetTask({ taskId: params.taskId as TaskId }),
+      TaskProtocol.GetTask({ taskId: TaskId.of(params.taskId) }),
       ctx.branchId,
     )
     if (task == null) {
@@ -23,7 +23,7 @@ export const TaskGetTool = defineTool({
     }
 
     const deps = yield* ctx.extension.ask(
-      TaskProtocol.GetDependencies({ taskId: params.taskId as TaskId }),
+      TaskProtocol.GetDependencies({ taskId: TaskId.of(params.taskId) }),
       ctx.branchId,
     )
 

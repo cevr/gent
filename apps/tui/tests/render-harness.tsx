@@ -16,7 +16,7 @@ import type { GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
 import type { SessionInfo, SessionRuntime } from "@gent/sdk"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { AgentName } from "@gent/core/domain/agent"
 import type { ClientLog } from "../src/utils/client-logger"
 
@@ -39,8 +39,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     session: {
       create: () =>
         noRpcError({
-          sessionId: "session-test" as SessionId,
-          branchId: "branch-test" as BranchId,
+          sessionId: SessionId.of("session-test"),
+          branchId: BranchId.of("branch-test"),
           name: "Test Session",
         }),
       list: () => noRpcError([]),
@@ -50,8 +50,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       getTree: () => noRpcError({ id: "session-test", name: "Test Session", children: [] }),
       getSnapshot: () =>
         noRpcError({
-          sessionId: "session-test" as SessionId,
-          branchId: "branch-test" as BranchId,
+          sessionId: SessionId.of("session-test"),
+          branchId: BranchId.of("branch-test"),
           messages: [],
           lastEventId: null,
           reasoningLevel: undefined,
@@ -62,10 +62,10 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     },
     branch: {
       list: () => noRpcError([]),
-      create: () => noRpcError({ branchId: "branch-test" as BranchId }),
+      create: () => noRpcError({ branchId: BranchId.of("branch-test") }),
       getTree: () => noRpcError([]),
       switch: () => noRpcError(undefined),
-      fork: () => noRpcError({ branchId: "branch-test" as BranchId }),
+      fork: () => noRpcError({ branchId: BranchId.of("branch-test") }),
     },
     message: {
       send: () => noRpcError(undefined),
@@ -211,7 +211,7 @@ export const renderWithProviders = async (
                 <RouterProvider
                   initialRoute={
                     options?.initialRoute ??
-                    Route.session("test-session" as SessionId, "test-branch" as BranchId)
+                    Route.session(SessionId.of("test-session"), BranchId.of("test-branch"))
                   }
                 >
                   <ClientProvider

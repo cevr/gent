@@ -12,7 +12,7 @@ import {
   Message,
   type MessagePart,
 } from "@gent/core/domain/message"
-import type { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 
 describe("truncate", () => {
   test("under max → unchanged", () => {
@@ -76,9 +76,9 @@ describe("renderMessageParts", () => {
 
 describe("renderSessionTree", () => {
   const now = new Date()
-  const sid = "s1" as SessionId
-  const bid1 = "b1" as BranchId
-  const bid2 = "b2" as BranchId
+  const sid = SessionId.of("s1")
+  const bid1 = BranchId.of("b1")
+  const bid2 = BranchId.of("b2")
 
   const makeBranch = (id: BranchId, opts?: { parentBranchId?: BranchId; name?: string }) =>
     new Branch({
@@ -91,7 +91,7 @@ describe("renderSessionTree", () => {
 
   const makeMessage = (branchId: BranchId, role: "user" | "assistant", text: string) =>
     new Message({
-      id: `msg-${Math.random().toString(36).slice(2, 8)}` as MessageId,
+      id: MessageId.of(`msg-${Math.random().toString(36).slice(2, 8)}`),
       sessionId: sid,
       branchId,
       role,

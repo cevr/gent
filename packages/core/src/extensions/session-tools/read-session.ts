@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { headTailChars } from "../../domain/output-buffer.js"
 import type { Message, MessagePart, Branch } from "../../domain/message.js"
-import type { SessionId } from "../../domain/ids.js"
+import { SessionId } from "../../domain/ids.js"
 
 // Read Session Error
 
@@ -107,7 +107,7 @@ export const ReadSessionTool = defineTool({
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
   execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
-    const tree = yield* ctx.session.getDetail(params.sessionId as SessionId).pipe(
+    const tree = yield* ctx.session.getDetail(SessionId.of(params.sessionId)).pipe(
       Effect.mapError(
         (e) =>
           new ReadSessionError({

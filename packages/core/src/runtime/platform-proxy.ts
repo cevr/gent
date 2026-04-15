@@ -22,6 +22,7 @@ export const makeAsyncFs = (
         const result = value.apply(target, args)
         // If the result is an Effect (has [Symbol] from Effect), run it
         if (result !== null && typeof result === "object" && Effect.isEffect(result)) {
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — dynamic proxy, types erased at runtime
           return run(result as Effect.Effect<unknown, unknown>)
         }
         return result

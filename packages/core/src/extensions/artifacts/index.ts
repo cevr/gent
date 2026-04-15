@@ -17,7 +17,8 @@ import type {
   TurnProjection,
 } from "../../domain/extension.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { ArtifactId, BranchId } from "../../domain/ids.js"
+import { ArtifactId } from "../../domain/ids.js"
+import type { BranchId } from "../../domain/ids.js"
 import { defineTool, type ToolContext } from "../../domain/tool.js"
 import { extension } from "../api.js"
 import {
@@ -34,7 +35,7 @@ export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
 
 // ── Helpers ──
 
-const generateId = () => crypto.randomUUID() as ArtifactId
+const generateId = () => ArtifactId.of(crypto.randomUUID())
 
 const applyPatch = (content: string, patch: ContentPatch): string =>
   patch.replaceAll === true
@@ -305,7 +306,7 @@ const ArtifactReadTool = defineTool({
   execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolContext) {
     const query =
       params.id !== undefined
-        ? { _tag: "ById" as const, id: params.id as ArtifactId }
+        ? { _tag: "ById" as const, id: ArtifactId.of(params.id) }
         : { _tag: "BySource" as const, sourceTool: params.sourceTool ?? "", branchId: ctx.branchId }
     const artifact = yield* ctx.extension.ask(ArtifactProtocol.Read({ query }), ctx.branchId)
     if (artifact === null) return { found: false }
@@ -342,7 +343,7 @@ const ArtifactUpdateTool = defineTool({
         : undefined
     const artifact = yield* ctx.extension.ask(
       ArtifactProtocol.Update({
-        id: params.id as ArtifactId,
+        id: ArtifactId.of(params.id),
         patch,
         status: params.status,
         label: params.label,
@@ -363,7 +364,7 @@ const ArtifactClearTool = defineTool({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),
   }),
   execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolContext) {
-    yield* ctx.extension.ask(ArtifactProtocol.Clear({ id: params.id as ArtifactId }), ctx.branchId)
+    yield* ctx.extension.ask(ArtifactProtocol.Clear({ id: ArtifactId.of(params.id) }), ctx.branchId)
     return { cleared: true }
   }),
 })

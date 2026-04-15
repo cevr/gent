@@ -1,15 +1,15 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
-const sessionId = "persist-session" as SessionId
-const branchId = "persist-branch" as BranchId
+const sessionId = SessionId.of("persist-session")
+const branchId = BranchId.of("persist-branch")
 
 interface CounterState {
   readonly count: number

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Ref, Layer } from "effect"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const test = it.live.layer(ExtensionTurnControl.Test())
 
@@ -10,8 +10,8 @@ describe("ExtensionTurnControl", () => {
     Effect.gen(function* () {
       const tc = yield* ExtensionTurnControl
       yield* tc.queueFollowUp({
-        sessionId: "s1" as SessionId,
-        branchId: "b1" as BranchId,
+        sessionId: SessionId.of("s1"),
+        branchId: BranchId.of("b1"),
         content: "follow up",
       })
     }))
@@ -20,8 +20,8 @@ describe("ExtensionTurnControl", () => {
     Effect.gen(function* () {
       const tc = yield* ExtensionTurnControl
       yield* tc.interject({
-        sessionId: "s1" as SessionId,
-        branchId: "b1" as BranchId,
+        sessionId: SessionId.of("s1"),
+        branchId: BranchId.of("b1"),
         content: "urgent",
       })
     }))
@@ -38,13 +38,13 @@ describe("ExtensionTurnControl", () => {
       const result = yield* Effect.gen(function* () {
         const tc = yield* ExtensionTurnControl
         yield* tc.queueFollowUp({
-          sessionId: "s1" as SessionId,
-          branchId: "b1" as BranchId,
+          sessionId: SessionId.of("s1"),
+          branchId: BranchId.of("b1"),
           content: "hello",
         })
         yield* tc.interject({
-          sessionId: "s1" as SessionId,
-          branchId: "b1" as BranchId,
+          sessionId: SessionId.of("s1"),
+          branchId: BranchId.of("b1"),
           content: "urgent",
         })
         return yield* Ref.get(calls)
@@ -61,15 +61,15 @@ describe("ExtensionTurnControl", () => {
 
         const queueExit = yield* Effect.exit(
           tc.queueFollowUp({
-            sessionId: "s1" as SessionId,
-            branchId: "b1" as BranchId,
+            sessionId: SessionId.of("s1"),
+            branchId: BranchId.of("b1"),
             content: "queued-before-bind",
           }),
         )
         const interjectExit = yield* Effect.exit(
           tc.interject({
-            sessionId: "s1" as SessionId,
-            branchId: "b1" as BranchId,
+            sessionId: SessionId.of("s1"),
+            branchId: BranchId.of("b1"),
             content: "interrupt-before-bind",
           }),
         )
@@ -104,13 +104,13 @@ describe("ExtensionTurnControl", () => {
         })
 
         yield* tc.queueFollowUp({
-          sessionId: "s1" as SessionId,
-          branchId: "b1" as BranchId,
+          sessionId: SessionId.of("s1"),
+          branchId: BranchId.of("b1"),
           content: "queued-after-bind",
         })
         yield* tc.interject({
-          sessionId: "s1" as SessionId,
-          branchId: "b1" as BranchId,
+          sessionId: SessionId.of("s1"),
+          branchId: BranchId.of("b1"),
           content: "interrupt-after-bind",
         })
 

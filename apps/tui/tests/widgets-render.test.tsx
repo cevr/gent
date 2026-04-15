@@ -10,16 +10,16 @@ import { QueueWidget } from "../src/components/queue-widget"
 import { TaskWidget } from "../src/components/task-widget"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
 import { useClient, type GentRuntime } from "../src/client"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const syntaxStyle = () => SyntaxStyle.create()
 
 const testSession: SessionInfo = {
-  id: "session-test" as SessionId,
+  id: SessionId.of("session-test"),
   name: "Test Session",
   cwd: "/tmp/gent-test",
   reasoningLevel: undefined,
-  branchId: "branch-test" as BranchId,
+  branchId: BranchId.of("branch-test"),
   parentSessionId: undefined,
   parentBranchId: undefined,
   createdAt: Date.now(),
@@ -27,11 +27,11 @@ const testSession: SessionInfo = {
 }
 
 const nextSession: SessionInfo = {
-  id: "session-next" as SessionId,
+  id: SessionId.of("session-next"),
   name: "Next Session",
   cwd: "/tmp/gent-next",
   reasoningLevel: undefined,
-  branchId: "branch-next" as BranchId,
+  branchId: BranchId.of("branch-next"),
   parentSessionId: undefined,
   parentBranchId: undefined,
   createdAt: Date.now(),
@@ -50,13 +50,13 @@ const HealthControlsProbe = (props: {
     switchSession: () =>
       client.switchSession(
         nextSession.id,
-        nextSession.branchId as BranchId,
+        BranchId.of(nextSession.branchId),
         nextSession.name ?? "Next Session",
       ),
     switchBranchSameSession: () =>
       client.switchSession(
         testSession.id,
-        "branch-alt" as BranchId,
+        BranchId.of("branch-alt"),
         testSession.name ?? "Test Session",
       ),
     clearSession: () => client.clearSession(),

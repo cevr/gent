@@ -9,7 +9,7 @@ import { Agents } from "@gent/core/domain/agent"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
-import type { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
 import { TaskService } from "@gent/core/extensions/task-tools-service"
@@ -23,7 +23,7 @@ const mockRunnerSuccess = {
     Effect.succeed({
       _tag: "success" as const,
       text: `done: ${params.prompt}`,
-      sessionId: "child-session" as SessionId,
+      sessionId: SessionId.of("child-session"),
       agentName: params.agent.name,
     }),
 }
@@ -31,7 +31,7 @@ const mockRunnerSuccess = {
 const makeCtx = Effect.gen(function* () {
   const runtime = yield* ExtensionStateRuntime
   return testToolContext({
-    sessionId: "s1" as SessionId,
+    sessionId: SessionId.of("s1"),
     branchId: "b1",
     toolCallId: "tc1",
     agent: {
@@ -44,20 +44,20 @@ const makeCtx = Effect.gen(function* () {
         Effect.succeed({
           _tag: "success" as const,
           text: `done: ${params.prompt}`,
-          sessionId: "child-session" as SessionId,
+          sessionId: SessionId.of("child-session"),
           agentName: params.agent.name,
         }),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
     extension: {
-      send: (message, branchId) => runtime.send("s1" as SessionId, message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.ask("s1" as SessionId, message, branchId ?? "b1"),
+      send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.ask(SessionId.of("s1"), message, branchId ?? "b1"),
       getUiSnapshots: dieStub("extension.getUiSnapshots"),
       getUiSnapshot: dieStub("extension.getUiSnapshot"),
     },
     extensions: {
-      send: (message, branchId) => runtime.send("s1" as SessionId, message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.ask("s1" as SessionId, message, branchId ?? "b1"),
+      send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.ask(SessionId.of("s1"), message, branchId ?? "b1"),
     },
   }) as ToolContext
 })
@@ -72,7 +72,7 @@ const setup = Effect.gen(function* () {
   const now = new Date()
   yield* storage.createSession(
     new Session({
-      id: "s1" as SessionId,
+      id: SessionId.of("s1"),
       name: "Test",
       createdAt: now,
       updatedAt: now,
@@ -81,7 +81,7 @@ const setup = Effect.gen(function* () {
   yield* storage.createBranch(
     new Branch({
       id: "b1",
-      sessionId: "s1" as SessionId,
+      sessionId: SessionId.of("s1"),
       createdAt: now,
     }),
   )
@@ -192,7 +192,7 @@ describe("TaskUpdateTool", () => {
       const ctx = yield* makeCtx
       const eventStore = yield* EventStore
       const eventsFiber = yield* Effect.forkChild(
-        eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
+        eventStore.subscribe({ sessionId: SessionId.of("s1") }).pipe(
           Stream.filter((envelope) => envelope.event._tag === "TaskCompleted"),
           Stream.take(1),
           Stream.runCollect,
@@ -217,7 +217,7 @@ describe("TaskService.remove", () => {
       const eventStore = yield* EventStore
       const taskService = yield* TaskService
       const eventsFiber = yield* Effect.forkChild(
-        eventStore.subscribe({ sessionId: "s1" as SessionId }).pipe(
+        eventStore.subscribe({ sessionId: SessionId.of("s1") }).pipe(
           Stream.filter((envelope) => envelope.event._tag === "TaskDeleted"),
           Stream.take(1),
           Stream.runCollect,
@@ -225,7 +225,7 @@ describe("TaskService.remove", () => {
       )
       yield* Effect.yieldNow
       const created = yield* taskService.create({
-        sessionId: "s1" as SessionId,
+        sessionId: SessionId.of("s1"),
         branchId: "b1",
         subject: "Ephemeral debug task",
       })

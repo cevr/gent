@@ -40,7 +40,8 @@ import {
   AgentExecutionOverridesSchema,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
-import type { SessionId, BranchId, ToolCallId } from "../../domain/ids.js"
+import { SessionId, BranchId } from "../../domain/ids.js"
+import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
@@ -328,8 +329,8 @@ const makeSharedRunnerHelpers = (
         })
       }
 
-      const sessionId = Bun.randomUUIDv7() as SessionId
-      const branchId = Bun.randomUUIDv7() as BranchId
+      const sessionId = SessionId.of(Bun.randomUUIDv7())
+      const branchId = BranchId.of(Bun.randomUUIDv7())
       const now = yield* DateTime.nowAsDate
 
       yield* storage.createSession(
@@ -548,8 +549,8 @@ const runEphemeralAgent = (params: {
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
 }) => {
-  const sessionId = Bun.randomUUIDv7() as SessionId
-  const branchId = Bun.randomUUIDv7() as BranchId
+  const sessionId = SessionId.of(Bun.randomUUIDv7())
+  const branchId = BranchId.of(Bun.randomUUIDv7())
   const normalizedOverrides = normalizeOverrides(params.overrides)
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,

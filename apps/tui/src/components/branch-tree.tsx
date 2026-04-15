@@ -5,7 +5,7 @@ import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import type { BranchTreeNode } from "../client"
-import type { BranchId } from "@gent/core/domain/ids.js"
+import { BranchId } from "@gent/core/domain/ids.js"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
 
@@ -83,7 +83,7 @@ export function BranchTree(props: BranchTreeProps) {
         const item = list[selectedIndex()]
         if (item !== undefined) {
           // SAFETY: FlatNode.id originates from BranchTreeNode.id which is a BranchId
-          props.onSelect(item.id as BranchId)
+          props.onSelect(BranchId.of(item.id))
         }
         return true
       }

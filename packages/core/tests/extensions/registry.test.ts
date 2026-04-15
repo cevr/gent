@@ -9,7 +9,7 @@ import type {
 } from "@gent/core/domain/extension"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { PromptSectionInput } from "@gent/core/domain/prompt"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 
 const makeTool = (name: string): AnyToolDefinition => ({
@@ -52,8 +52,8 @@ const makeExt = (
 })
 
 const runCtx: RunContext = {
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
 }
 
 describe("resolveExtensions", () => {

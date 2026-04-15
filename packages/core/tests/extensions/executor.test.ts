@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { ExtensionTurnContext } from "@gent/core/domain/extension"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import {
   ExecutorActorConfig,
   projectSnapshot,
@@ -19,8 +19,8 @@ import { readExecutionId, normalizeToolResult } from "@gent/core/extensions/exec
 const { reduce, initial } = ExecutorActorConfig
 
 const stubCtx: ExtensionTurnContext = {
-  sessionId: "test-session" as SessionId,
-  branchId: "test-branch" as BranchId,
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
   agent: new AgentDefinition({ name: "test" as never }),
   allTools: [],
   interactive: true,

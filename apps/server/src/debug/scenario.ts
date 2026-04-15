@@ -22,7 +22,7 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message.js"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
 import { TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
@@ -35,7 +35,7 @@ export interface DebugScenarioParams {
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const asToolCallId = (value: string) => value as ToolCallId
+const asToolCallId = (value: string) => ToolCallId.of(value)
 const DebugJson = Schema.fromJsonString(Schema.Unknown)
 const encodeDebugJson = Schema.encodeSync(DebugJson)
 
@@ -58,7 +58,7 @@ const createParentTurnMessages = (
   const now = new Date()
 
   const assistant = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "assistant",
@@ -101,7 +101,7 @@ const createParentTurnMessages = (
   })
 
   const tool = new Message({
-    id: Bun.randomUUIDv7() as MessageId,
+    id: MessageId.of(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "tool",
@@ -177,7 +177,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
     const storage = yield* Storage
     const eventStore = yield* EventStore
     const user = new Message({
-      id: Bun.randomUUIDv7() as MessageId,
+      id: MessageId.of(Bun.randomUUIDv7()),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "user",
@@ -200,8 +200,8 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
 const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const storage = yield* Storage
-    const sessionId = Bun.randomUUIDv7() as SessionId
-    const branchId = Bun.randomUUIDv7() as BranchId
+    const sessionId = SessionId.of(Bun.randomUUIDv7())
+    const branchId = BranchId.of(Bun.randomUUIDv7())
     const now = yield* DateTime.nowAsDate
 
     yield* storage.createSession(

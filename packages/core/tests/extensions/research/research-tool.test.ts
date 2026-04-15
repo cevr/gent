@@ -5,7 +5,7 @@ import { ResearchTool } from "@gent/core/extensions/research/research-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentRunResult } from "@gent/core/domain/agent"
-import type { SessionId } from "@gent/core/domain/ids"
+import { SessionId } from "@gent/core/domain/ids"
 import { BunFileSystem } from "@effect/platform-bun"
 import { mkdirSync } from "node:fs"
 
@@ -43,7 +43,7 @@ describe("ResearchTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
-          sessionId: "research-1" as SessionId,
+          sessionId: SessionId.of("research-1"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         }),
@@ -74,7 +74,7 @@ describe("ResearchTool", () => {
           return Effect.succeed({
             _tag: "success" as const,
             text: "Comparative analysis: both use fiber-based concurrency.",
-            sessionId: "synthesis" as SessionId,
+            sessionId: SessionId.of("synthesis"),
             agentName: params.agent.name,
             persistence: "ephemeral" as const,
           })
@@ -82,7 +82,7 @@ describe("ResearchTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
-          sessionId: "worker" as SessionId,
+          sessionId: SessionId.of("worker"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -114,7 +114,7 @@ describe("ResearchTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Found scheduler patterns.",
-          sessionId: "focus" as SessionId,
+          sessionId: SessionId.of("focus"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })

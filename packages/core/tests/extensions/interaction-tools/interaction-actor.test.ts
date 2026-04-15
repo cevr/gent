@@ -10,7 +10,7 @@ import {
 } from "@gent/core/domain/event"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import type { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import {
   INTERACTION_TOOLS_EXTENSION_ID,
   interactionActor,
@@ -20,8 +20,8 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
-const sessionId = "s-interaction" as SessionId
-const branchId = "b-interaction" as BranchId
+const sessionId = SessionId.of("s-interaction")
+const branchId = BranchId.of("b-interaction")
 
 const interactionExtension: LoadedExtension = {
   manifest: { id: INTERACTION_TOOLS_EXTENSION_ID },

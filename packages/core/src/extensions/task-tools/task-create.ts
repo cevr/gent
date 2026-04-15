@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "../../domain/tool.js"
 import { AgentName } from "../../domain/agent.js"
-import type { TaskId } from "../../domain/ids.js"
+import { TaskId } from "../../domain/ids.js"
 import { TaskProtocol } from "../task-tools-protocol.js"
 
 export const TaskCreateParams = Schema.Struct({
@@ -44,7 +44,7 @@ export const TaskCreateTool = defineTool({
     if (params.blockedBy !== undefined) {
       for (const depId of params.blockedBy) {
         yield* ctx.extension.ask(
-          TaskProtocol.AddDependency({ taskId: task.id, blockedById: depId as TaskId }),
+          TaskProtocol.AddDependency({ taskId: task.id, blockedById: TaskId.of(depId) }),
           ctx.branchId,
         )
       }

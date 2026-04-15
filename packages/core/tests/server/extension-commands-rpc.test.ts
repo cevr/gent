@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { type ExtensionContext, toExtensionContext } from "@gent/core/domain/extension-context"
 import type { GentExtension } from "@gent/core/domain/extension"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import type { SessionId, BranchId } from "@gent/core/domain/ids"
+import { SessionId, BranchId } from "@gent/core/domain/ids"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
@@ -70,7 +70,7 @@ describe("extension command RPCs", () => {
         const cmd = cmds.find((c) => c.name === "greet")!
 
         const hostCtx = makeExtensionHostContext(
-          { sessionId: "test-session" as SessionId, branchId: "test-branch" as BranchId },
+          { sessionId: SessionId.of("test-session"), branchId: BranchId.of("test-branch") },
           {
             platform,
             extensionStateRuntime: stateRuntime,

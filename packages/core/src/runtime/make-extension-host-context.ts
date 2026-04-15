@@ -8,7 +8,7 @@
 import { DateTime, Effect } from "effect"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
-import type { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import type { ExtensionStateRuntimeService } from "./extensions/state-runtime.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
@@ -137,7 +137,7 @@ export const makeExtensionHostContext = (
     createBranch: (params) =>
       Effect.gen(function* () {
         const branch = new Branch({
-          id: Bun.randomUUIDv7() as BranchId,
+          id: BranchId.of(Bun.randomUUIDv7()),
           sessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           name: params.name,
@@ -161,7 +161,7 @@ export const makeExtensionHostContext = (
         if (targetIndex === -1) return yield* Effect.die("Message not found in current branch")
 
         const branch = new Branch({
-          id: Bun.randomUUIDv7() as BranchId,
+          id: BranchId.of(Bun.randomUUIDv7()),
           sessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           parentMessageId: params.atMessageId,
@@ -173,7 +173,7 @@ export const makeExtensionHostContext = (
         for (const msg of messages.slice(0, targetIndex + 1)) {
           yield* deps.storage.createMessage(
             new Message({
-              id: Bun.randomUUIDv7() as MessageId,
+              id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: msg.sessionId,
               branchId: branch.id,
               role: msg.role,
@@ -223,8 +223,8 @@ export const makeExtensionHostContext = (
     createChildSession: (params) =>
       Effect.gen(function* () {
         const now = yield* DateTime.nowAsDate
-        const sessionId = Bun.randomUUIDv7() as SessionId
-        const branchId = Bun.randomUUIDv7() as BranchId
+        const sessionId = SessionId.of(Bun.randomUUIDv7())
+        const branchId = BranchId.of(Bun.randomUUIDv7())
         const session = new Session({
           id: sessionId,
           name: params.name ?? "child session",
