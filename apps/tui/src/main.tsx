@@ -182,7 +182,7 @@ const main = Command.make(
   }) =>
     Effect.gen(function* () {
       const cwd = process.cwd()
-      const home = yield* Config.string("HOME")
+      const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const scope = yield* Effect.scope
       const uiServices = (yield* Layer.buildWithScope(
         makeUiLayer(),
@@ -368,7 +368,7 @@ const sessions = Command.make(
 // Server status subcommand
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
-    const home = yield* Config.string("HOME")
+    const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
     const entries = listRegistryEntries(home)
 
     if (entries.length === 0) {
@@ -403,7 +403,7 @@ const serverStop = Command.make(
   },
   ({ all }) =>
     Effect.gen(function* () {
-      const home = yield* Config.string("HOME")
+      const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const thisHost = getLocalHostname()
       const entries = listRegistryEntries(home)
 
