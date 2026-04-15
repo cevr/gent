@@ -4,7 +4,8 @@
  * Rules:
  * - no-direct-env: flags Bun.env["X"] / process.env.X (use Config from effect)
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - no-extension-internal-imports: flags imports from runtime/, storage/, server/ inside extensions/
+ * - no-extension-internal-imports: enforces extension boundary — extensions must import
+ *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -24,34 +25,60 @@ const plugin: Plugin = {
   },
   rules: {
     /**
-     * Flags imports from runtime/, storage/, server/ inside extension files.
+     * Enforces the extension boundary contract.
      *
-     * Extensions must use the typed extension API (domain types, extensions/api,
-     * protocol files) — not reach into internal host modules.
+     * Extensions may import from:
+     *   - `./api.js` or `../api.js` (relative to extension file in core)
+     *   - `@gent/core/extensions/api` (package path, for extracted extensions)
+     *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
+     *   - Sibling extension files (relative `./` or `../` within extensions/)
      *
-     * Allowlist: extensions/api.ts (the builder implementation layer).
+     * Extensions may NOT import from:
+     *   - `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`,
+     *     `@gent/core/server/*`, `@gent/core/providers/*`
+     *   - Relative paths that escape into domain/, runtime/, storage/, etc.
      *
-     * Catches both relative (../runtime/) and package-path (@gent/core/runtime/) imports.
+     * Applies to: packages/core/src/extensions/** and packages/extensions/**
+     * Exempt: extensions/api.ts (the builder implementation)
      */
     "no-extension-internal-imports": {
       create(context) {
         const filename = context.filename
-        // Only applies to builtin extension source files in packages/core
-        if (!filename.includes("packages/core/src/extensions/")) return {}
-        // Allowlist: api.ts is the builder implementation
+
+        // Scope: only extension implementation files
+        const inCoreExtensions = filename.includes("packages/core/src/extensions/")
+        const inExtensionsPackage = filename.includes("packages/extensions/")
+        if (!inCoreExtensions && !inExtensionsPackage) return {}
+
+        // Exempt: api.ts is the bridge between internals and the public surface
         if (filename.endsWith("/extensions/api.ts")) return {}
 
-        const FORBIDDEN_RELATIVE = /^\.\.?\/(\.\.\/)*(?:runtime|storage|server)\//
-        const FORBIDDEN_PACKAGE = /^@gent\/core\/(runtime|storage|server)\//
+        // Relative imports that escape into core internals
+        const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers)\//
+
+        // Allowed @gent/core subpaths (everything else is forbidden)
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api/
 
         return {
           ImportDeclaration(node: { source: { value: string }; type: string }) {
             const source = node.source.value
-            if (FORBIDDEN_RELATIVE.test(source) || FORBIDDEN_PACKAGE.test(source)) {
+
+            // Relative imports escaping into core internals
+            if (INTERNAL_RELATIVE.test(source)) {
               context.report({
-                message: `Extension files must not import from internal modules. Use the typed extension API instead. Forbidden import: "${source}"`,
+                message: `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`,
                 node,
               })
+              return
+            }
+
+            // Package imports into core internals (skip allowed paths)
+            if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
+              context.report({
+                message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
+                node,
+              })
+              return
             }
           },
         }

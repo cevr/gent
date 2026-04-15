@@ -258,13 +258,14 @@ export class ExtensionStateRuntime extends Context.Service<
 
               const spawnExit = yield* Effect.exit(
                 // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration
+                /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration */
                 (
                   spawnMachineExtensionRef(spec.extensionId, spec.actor, {
                     sessionId,
                     branchId,
                   }) as Effect.Effect<ExtensionRef, never, never>
                 ).pipe(Effect.provideService(ExtensionTurnControl, turnControl)),
+                /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
               )
 
               if (spawnExit._tag === "Failure") {
