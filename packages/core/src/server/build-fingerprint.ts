@@ -33,7 +33,10 @@ export const computeLocalFingerprint: Effect.Effect<
   }
 
   // 2. Git hash from gent source root (dev mode)
-  const gentRoot = path.resolve(new URL(import.meta.url).pathname, "../../../..")
+  const gentRoot = path.resolve(
+    decodeURIComponent(new URL(import.meta.url).pathname),
+    "../../../..",
+  )
   // @effect-diagnostics globalErrorInEffectCatch:off globalErrorInEffectFailure:off — error immediately caught by Effect.option
   const result = yield* Effect.try({
     try: () => {
