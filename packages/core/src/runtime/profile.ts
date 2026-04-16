@@ -1,17 +1,22 @@
 /**
- * RuntimeProfileResolver — single activation pipeline used by every composition root.
+ * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
+ * every composition root that needs to *discover* extensions.
  *
- * Three callers historically built the same `{ resolved extensions, prompt sections,
- * scheduled jobs }` shape independently:
+ * Two callers historically built the same `{ resolved extensions, prompt sections,
+ * scheduled jobs }` shape independently and are now unified here:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
  *   2. Per-cwd profile cache (`packages/core/src/runtime/session-profile.ts`)
- *   3. Ephemeral child runs (`packages/core/src/runtime/agent/agent-runner.ts`)
  *
- * Every drift between these paths surfaced as a runtime gotcha (e.g. ephemeral runs
- * silently using parent storage because layer precedence flipped). This module is the
- * one resolver — every caller uses it and the only differences left are scope
- * (server-lifetime vs per-cwd vs per-run) and downstream layer composition.
+ * Both pair `resolveRuntimeProfile` with `buildExtensionLayers` so they end up
+ * with the same registry/state-runtime/event-bus shape — no more drift like
+ * the per-cwd path silently dropping bus subscriptions.
+ *
+ * Ephemeral child runs (`packages/core/src/runtime/agent/agent-runner.ts`)
+ * intentionally do NOT call this resolver: they forward an already-resolved
+ * `ExtensionRegistry` from the parent and only re-build event bus / state
+ * runtime locally to isolate per-run mutable state. That divergence is
+ * structural, not duplication, and is documented at the call site.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
  * construction paths into a single substrate; downstream code becomes obvious.
@@ -88,8 +93,9 @@ export interface RuntimeProfile {
  * The returned `RuntimeProfile` is a pure data record. Caller chooses scope:
  *   - server startup: invoke once at boot, hold for server lifetime.
  *   - per-cwd cache: invoke per unique cwd, cache by canonical path.
- *   - ephemeral run: not used here; ephemeral runs forward an already-resolved
- *     `ExtensionRegistry` from the parent and do not re-discover.
+ *
+ * Ephemeral runs do not call this — they forward `ExtensionRegistry` from
+ * the parent. See module doc.
  *
  * Requires `Scope.Scope` because `reconcileLoadedExtensions` registers
  * scope-tied finalizers (extension `onShutdown` and scheduled jobs).

@@ -110,11 +110,12 @@ It is the composition boundary. Not the domain boundary.
 
 ### RuntimeProfileResolver
 
-`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Three callers historically did this independently and drifted; now every composition root uses the same resolver and only differs in scope:
+`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently (and drift, e.g. dropping bus subscriptions on the per-cwd path); now both go through the resolver paired with `buildExtensionLayers`:
 
-- **Server startup** (`server/dependencies.ts`) — resolves once at boot, holds for server lifetime. Publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
-- **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, caches by canonical path inside the server scope.
-- **Ephemeral child runs** (`runtime/agent/agent-runner.ts`) — does NOT re-resolve; forwards an already-resolved `ExtensionRegistry` from the parent.
+- **Server startup** (`server/dependencies.ts`) — resolves once at boot, builds the registry/state/event-bus layer via `buildExtensionLayers`, publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
+- **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, builds the same layer shape via `buildExtensionLayers` inside the captured server scope.
+
+Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call the resolver — they forward an already-resolved `ExtensionRegistry` from the parent and only rebuild the per-run mutable bits (storage, event bus, state runtime) for isolation. That divergence is structural, not duplication.
 
 `compileBaseSections(profile)` resolves dynamic prompt sections inside the extension-services runtime so contributions like `Skills`'s prompt section can read services from their own `setup.layer`.
 

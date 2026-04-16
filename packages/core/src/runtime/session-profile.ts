@@ -35,7 +35,7 @@ import {
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/scheduler.js"
-import { compileBaseSections, resolveRuntimeProfile } from "./profile.js"
+import { buildExtensionLayers, compileBaseSections, resolveRuntimeProfile } from "./profile.js"
 
 // ── SessionProfile ──
 
@@ -137,23 +137,14 @@ export class SessionProfileCache extends Context.Service<
               )
             }
 
-            // 2. Build extension-provided service layers (Skills.Live, AutoJournal.Live, etc.)
-            const extensionLayers = resolved.extensions
-              .filter((ext) => ext.setup.layer !== undefined)
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-              .map((ext) => ext.setup.layer as Layer.Layer<any>)
-
-            // 3. Build registry + extension state runtime + extension layers from resolved
-            const registryLayer = ExtensionRegistry.fromResolved(resolved)
-            const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(
-              resolved.extensions,
-            ).pipe(Layer.provide(ExtensionTurnControl.Live))
-
-            // Merge all per-profile layers
-            const combinedLayer =
-              extensionLayers.length > 0
-                ? Layer.mergeAll(registryLayer, stateRuntimeLayer, ...extensionLayers)
-                : Layer.mergeAll(registryLayer, stateRuntimeLayer)
+            // 2. Build extension layers via the shared helper — same shape as
+            //    server startup. Includes registry, state runtime, event bus
+            //    (with extension subscriptions), and extension `setup.layer`s.
+            //    `buildExtensionLayers` requires `ExtensionTurnControl`; provide
+            //    it locally then build inside the captured server scope.
+            const combinedLayer = buildExtensionLayers(resolved).pipe(
+              Layer.provide(ExtensionTurnControl.Live),
+            )
 
             const combinedCtx = yield* Layer.build(combinedLayer).pipe(
               Effect.provideService(Scope.Scope, serverScope),
@@ -164,6 +155,10 @@ export class SessionProfileCache extends Context.Service<
             // Compile base sections inside the built layer's runtime so any
             // dynamic prompt section (e.g. `Skills`) can read its required
             // services from extension `setup.layer`s now in scope.
+            // strictEffectProvide:off is intentional — `combinedCtx` is the
+            // resolved ServiceMap from `Layer.build` above, not a freshly
+            // constructed sub-layer. This is the documented pattern for
+            // running an Effect inside an already-built scope.
             const baseSections = yield* compileBaseSections(profileData).pipe(
               // @effect-diagnostics-next-line strictEffectProvide:off
               Effect.provide(Layer.succeedContext(combinedCtx)),
