@@ -80,11 +80,6 @@
     },
     {
       "files": [
-        "**/extensions/anthropic/**",
-        "**/extensions/openai/**",
-        "**/extensions/bedrock/**",
-        "**/extensions/google/**",
-        "**/extensions/mistral/**",
         "**/extensions/src/anthropic/**",
         "**/extensions/src/openai/**",
         "**/extensions/src/bedrock/**",

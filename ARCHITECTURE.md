@@ -25,9 +25,10 @@ packages/
 │   ├── storage/   # SQLite persistence (focused services: Storage, CheckpointStorage, InteractionStorage, SearchStorage)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # actor-process, agent-loop, task/runtime services
-│   ├── extensions/# builtin extensions (tool definitions live here)
+│   ├── extensions/# api.ts only — public authoring surface for extensions
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
+├── extensions/    # all 27 builtin extensions (imports only @gent/core/extensions/api)
 └── sdk/           # direct + HTTP transports over one client contract
 ```
 
@@ -237,11 +238,34 @@ Rules:
 
 Extension shape lives in:
 
+- `packages/core/src/extensions/api.ts` — public authoring surface (re-exports from domain/, providers/, runtime/)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
 - `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
 - `packages/core/src/runtime/extensions/hooks.ts` — interceptor compilation
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
+- `packages/extensions/src/` — all 27 builtin extension implementations
 - `apps/tui/src/extensions/` — TUI discovery, loading, resolution
+
+### Dependency direction
+
+```text
+apps/tui, apps/server, packages/sdk
+    ↓               ↓            ↓
+@gent/extensions → @gent/core
+                    (no reverse dep)
+```
+
+Core never imports from extensions. Composition roots (apps, SDK) pass `BuiltinExtensions` into `DependenciesConfig.extensions`.
+
+### Extension boundary contract
+
+Extensions (builtin and third-party) may import from:
+
+- `@gent/core/extensions/api` — the authoring surface
+- `effect-machine` — directly, for actor extensions
+- `effect`, `@effect/*` — as peer deps
+
+Extensions may NOT import from `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`, `@gent/core/server/*`, `@gent/core/providers/*`. The `no-extension-internal-imports` oxlint rule enforces this.
 
 Rules:
 
@@ -472,13 +496,13 @@ Key files:
 
 | File                                                | Purpose                       |
 | --------------------------------------------------- | ----------------------------- |
-| `packages/core/src/extensions/memory/vault.ts`      | Vault I/O service             |
-| `packages/core/src/extensions/memory/state.ts`      | Extension state + helpers     |
-| `packages/core/src/extensions/memory/tools.ts`      | Agent tools                   |
-| `packages/core/src/extensions/memory/agents.ts`     | reflect + meditate agent defs |
+| `packages/extensions/src/memory/vault.ts`           | Vault I/O service             |
+| `packages/extensions/src/memory/state.ts`           | Extension state + helpers     |
+| `packages/extensions/src/memory/tools.ts`           | Agent tools                   |
+| `packages/extensions/src/memory/agents.ts`          | reflect + meditate agent defs |
 | `packages/core/src/runtime/extensions/scheduler.ts` | Host scheduler reconciliation |
-| `packages/core/src/extensions/memory/projection.ts` | Prompt section + UI model     |
-| `packages/core/src/extensions/memory/index.ts`      | Extension registration        |
+| `packages/extensions/src/memory/projection.ts`      | Prompt section + UI model     |
+| `packages/extensions/src/memory/index.ts`           | Extension registration        |
 
 ## Observability
 
