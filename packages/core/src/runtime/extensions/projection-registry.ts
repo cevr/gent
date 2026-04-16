@@ -41,15 +41,22 @@ export interface ProjectionEvaluation {
 
 export interface CompiledProjections {
   readonly entries: ReadonlyArray<RegisteredProjection>
+  /** Demoted ui surfaces — extensions that contributed more than one ui-bearing projection. */
+  readonly uiCollisions: ReadonlyArray<{
+    readonly extensionId: string
+    readonly projectionId: string
+  }>
   /** Run every projection and collect projected outputs. */
-  readonly evaluateAll: (ctx: {
-    readonly turn: ExtensionTurnContext
-  }) => Effect.Effect<ProjectionEvaluation>
-  /** Run a single projection by `extensionId/projectionId` — returns the raw value. */
+  readonly evaluateAll: (ctx: ProjectionContext) => Effect.Effect<ProjectionEvaluation>
+  /**
+   * Run a single projection by `extensionId/projectionId` — returns the raw value.
+   * If multiple registrations share the same id (across scopes), the highest-precedence
+   * one (project > user > builtin) wins.
+   */
   readonly query: (
     extensionId: string,
     projectionId: string,
-    ctx: { readonly turn: ExtensionTurnContext },
+    ctx: ProjectionContext,
   ) => Effect.Effect<unknown | undefined>
 }
 
@@ -62,21 +69,95 @@ const sortedExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): RegisteredProjection[] => {
+interface CollectionResult {
+  readonly entries: ReadonlyArray<RegisteredProjection>
+  readonly uiCollisions: ReadonlyArray<{
+    readonly extensionId: string
+    readonly projectionId: string
+  }>
+}
+
+const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): CollectionResult => {
+  const sorted = sortedExtensions(extensions)
   const entries: RegisteredProjection[] = []
-  for (const ext of sortedExtensions(extensions)) {
-    for (const projection of ext.setup.projections ?? []) {
+  const uiCollisions: Array<{ extensionId: string; projectionId: string }> = []
+
+  // Snapshot collisions: ExtensionUiSnapshot is keyed only by extensionId today,
+  // so if one extension contributes multiple `ui`-bearing projections (whether
+  // within the same scope or stacked across scopes), later snapshots would
+  // silently overwrite earlier ones in the TUI store. Enforce
+  // one-UI-per-extension-id structurally — keep the highest-scope, first-declared
+  // ui-bearing projection; demote later ones (record them without `ui`).
+  //
+  // Pre-pass: walk in highest-precedence-first order to identify the single
+  // (extensionId, projectionId, registrationIndex) that owns the UI surface.
+  // Using a (extensionId → {projectionId, registrationIndex}) tuple distinguishes
+  // two extensions sharing the same id (e.g. project shadowing builtin).
+  interface UiOwner {
+    readonly projectionId: string
+    /** Index into the to-be-built `entries` array — disambiguates same-id same-projectionId cases. */
+    readonly extensionIndex: number
+    readonly projectionIndex: number
+  }
+  const uiOwner = new Map<string, UiOwner>()
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const ext = sorted[i]
+    if (ext === undefined) continue
+    if (uiOwner.has(ext.manifest.id)) continue
+    const projections = ext.setup.projections ?? []
+    for (let pi = 0; pi < projections.length; pi++) {
+      const projection = projections[pi]
+      if (projection?.ui !== undefined) {
+        uiOwner.set(ext.manifest.id, {
+          projectionId: projection.id,
+          extensionIndex: i,
+          projectionIndex: pi,
+        })
+        break
+      }
+    }
+  }
+
+  for (let ei = 0; ei < sorted.length; ei++) {
+    const ext = sorted[ei]
+    if (ext === undefined) continue
+    const projections = ext.setup.projections ?? []
+    for (let pi = 0; pi < projections.length; pi++) {
+      const projection = projections[pi]
+      if (projection === undefined) continue
+      if (projection.ui !== undefined) {
+        const owner = uiOwner.get(ext.manifest.id)
+        const isOwner =
+          owner !== undefined && owner.extensionIndex === ei && owner.projectionIndex === pi
+        if (!isOwner) {
+          uiCollisions.push({ extensionId: ext.manifest.id, projectionId: projection.id })
+          entries.push({
+            extensionId: ext.manifest.id,
+            projection: { ...projection, ui: undefined },
+          })
+          continue
+        }
+      }
       entries.push({ extensionId: ext.manifest.id, projection })
     }
   }
-  return entries
+
+  return { entries, uiCollisions }
 }
 
 /** Compile registered projections into an evaluator. */
 export const compileProjections = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CompiledProjections => {
-  const entries = collectProjections(extensions)
+  const { entries, uiCollisions } = collectProjections(extensions)
+  // Surface collisions via console at compile time — one structured line per
+  // demoted projection. Avoids requiring an Effect at registration boundary.
+  for (const collision of uiCollisions) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[gent] projection ui collision: extension "${collision.extensionId}" already has a UI-bearing projection; demoting projection "${collision.projectionId}" (its ui surface is dropped). Each extension must have at most one ui-bearing projection.`,
+    )
+  }
 
   const runOne = (
     entry: RegisteredProjection,
@@ -196,12 +277,23 @@ export const compileProjections = (
 
   const query: CompiledProjections["query"] = (extensionId, projectionId, ctx) =>
     Effect.gen(function* () {
-      const entry = entries.find(
-        (e) => e.extensionId === extensionId && e.projection.id === projectionId,
-      )
+      // Entries are scope-sorted (builtin → user → project) — iterate in reverse
+      // so the highest-precedence registration wins.
+      let entry: RegisteredProjection | undefined
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const candidate = entries[i]
+        if (
+          candidate !== undefined &&
+          candidate.extensionId === extensionId &&
+          candidate.projection.id === projectionId
+        ) {
+          entry = candidate
+          break
+        }
+      }
       if (entry === undefined) return undefined
       return yield* runOne(entry, ctx)
     })
 
-  return { entries, evaluateAll, query }
+  return { entries, uiCollisions, evaluateAll, query }
 }

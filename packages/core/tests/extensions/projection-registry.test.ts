@@ -47,6 +47,12 @@ const turnCtx: ExtensionTurnContext = {
   home: "/tmp",
 } as unknown as ExtensionTurnContext
 
+const projCtx = {
+  turn: turnCtx,
+  cwd: "/tmp",
+  home: "/tmp",
+}
+
 describe("projection registry", () => {
   it.live("evaluateAll runs each query and projects prompt + policy + ui", () =>
     Effect.gen(function* () {
@@ -58,7 +64,7 @@ describe("projection registry", () => {
         ui: { project: (v) => ({ rendered: v.greeting }) },
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
-      const result = yield* compiled.evaluateAll({ turn: turnCtx })
+      const result = yield* compiled.evaluateAll(projCtx)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("hi")
       expect(result.policyFragments).toEqual([{ include: ["hi"] }])
@@ -79,7 +85,7 @@ describe("projection registry", () => {
         ui: { project: (n) => ({ value: n }) },
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
-      yield* compiled.evaluateAll({ turn: turnCtx })
+      yield* compiled.evaluateAll(projCtx)
       expect(yield* Ref.get(counter)).toBe(1)
     }),
   )
@@ -101,7 +107,7 @@ describe("projection registry", () => {
           },
         ]),
       ])
-      const result = yield* compiled.evaluateAll({ turn: turnCtx })
+      const result = yield* compiled.evaluateAll(projCtx)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("good")
     }),
@@ -116,7 +122,7 @@ describe("projection registry", () => {
         ui: { schema: Schema_, project: (v) => v },
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
-      const result = yield* compiled.evaluateAll({ turn: turnCtx })
+      const result = yield* compiled.evaluateAll(projCtx)
       expect(result.uiSnapshots).toHaveLength(0)
     }),
   )
@@ -133,7 +139,7 @@ describe("projection registry", () => {
         ext("a-built", "builtin", [make("builtin-section")]),
         ext("b-user", "user", [make("user-section")]),
       ])
-      const result = yield* compiled.evaluateAll({ turn: turnCtx })
+      const result = yield* compiled.evaluateAll(projCtx)
       expect(result.promptSections.map((s) => s.content)).toEqual([
         "builtin-section",
         "user-section",
@@ -149,7 +155,7 @@ describe("projection registry", () => {
         query: () => Effect.succeed("hello"),
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
-      const value = yield* compiled.query("a", "raw", { turn: turnCtx })
+      const value = yield* compiled.query("a", "raw", projCtx)
       expect(value).toBe("hello")
     }),
   )
@@ -157,7 +163,7 @@ describe("projection registry", () => {
   it.live("query() returns undefined for unknown projection id", () =>
     Effect.gen(function* () {
       const compiled = compileProjections([])
-      const value = yield* compiled.query("a", "missing", { turn: turnCtx })
+      const value = yield* compiled.query("a", "missing", projCtx)
       expect(value).toBeUndefined()
     }),
   )
@@ -171,13 +177,108 @@ describe("projection registry", () => {
       const resolved = resolveExtensions([ext("a", "builtin", [projection])])
       expect(resolved.projections.entries).toHaveLength(1)
       expect(resolved.projections.entries[0]?.projection.id).toBe("p")
-      const value = yield* resolved.projections.query("a", "p", { turn: turnCtx })
+      const value = yield* resolved.projections.query("a", "p", projCtx)
       expect(value).toBe(42)
     }),
   )
 
   // Layer satisfaction — projection R requirements come from extension layer at runtime.
   // This test demonstrates the contract holds when the layer is provided.
+  it.live(
+    "ui collisions: only one ui-bearing projection per extension; later ones lose ui surface",
+    () =>
+      Effect.gen(function* () {
+        const winner: ProjectionContribution<string> = {
+          id: "winner",
+          query: () => Effect.succeed("first"),
+          ui: { project: (v) => ({ kind: "winner", v }) },
+        }
+        const demoted: ProjectionContribution<string> = {
+          id: "demoted",
+          query: () => Effect.succeed("second"),
+          prompt: (v) => [{ id: "p", content: v, priority: 50 }],
+          ui: { project: (v) => ({ kind: "demoted", v }) },
+        }
+        const compiled = compileProjections([ext("a", "builtin", [winner, demoted])])
+        // Demoted projection logged + reported
+        expect(compiled.uiCollisions).toEqual([{ extensionId: "a", projectionId: "demoted" }])
+        const result = yield* compiled.evaluateAll(projCtx)
+        // Only winner's UI snapshot — demoted's prompt still fires
+        expect(result.uiSnapshots).toHaveLength(1)
+        expect(result.uiSnapshots[0]?.model).toEqual({ kind: "winner", v: "first" })
+        expect(result.promptSections).toHaveLength(1)
+        expect(result.promptSections[0]?.content).toBe("second")
+      }),
+  )
+
+  it.live("ui collisions: project scope wins UI when same extension id appears twice", () =>
+    Effect.gen(function* () {
+      const builtinUi: ProjectionContribution<string> = {
+        id: "ui",
+        query: () => Effect.succeed("from-builtin"),
+        ui: { project: (v) => ({ from: v }) },
+      }
+      const projectUi: ProjectionContribution<string> = {
+        id: "ui",
+        query: () => Effect.succeed("from-project"),
+        ui: { project: (v) => ({ from: v }) },
+      }
+      const compiled = compileProjections([
+        ext("shared", "builtin", [builtinUi]),
+        ext("shared", "project", [projectUi]),
+      ])
+      const result = yield* compiled.evaluateAll(projCtx)
+      // Both run, but only the project-scope ui surface wins
+      expect(result.uiSnapshots).toHaveLength(1)
+      expect(result.uiSnapshots[0]?.model).toEqual({ from: "from-project" })
+    }),
+  )
+
+  it.live("query() returns highest-precedence registration when ids collide across scopes", () =>
+    Effect.gen(function* () {
+      const builtinP: ProjectionContribution<string> = {
+        id: "p",
+        query: () => Effect.succeed("builtin-value"),
+      }
+      const projectP: ProjectionContribution<string> = {
+        id: "p",
+        query: () => Effect.succeed("project-value"),
+      }
+      const compiled = compileProjections([
+        ext("shared", "builtin", [builtinP]),
+        ext("shared", "project", [projectP]),
+      ])
+      const value = yield* compiled.query("shared", "p", projCtx)
+      expect(value).toBe("project-value")
+    }),
+  )
+
+  it.live("ProjectionContext exposes cwd, home, sessionCwd to query Effect", () =>
+    Effect.gen(function* () {
+      const captured: { cwd?: string; home?: string; sessionCwd?: string } = {}
+      const projection: ProjectionContribution<string> = {
+        id: "ctx-reader",
+        query: (ctx) =>
+          Effect.sync(() => {
+            captured.cwd = ctx.cwd
+            captured.home = ctx.home
+            captured.sessionCwd = ctx.sessionCwd
+            return "read"
+          }),
+      }
+      const compiled = compileProjections([ext("a", "builtin", [projection])])
+      yield* compiled.evaluateAll({
+        turn: turnCtx,
+        cwd: "/proj",
+        home: "/users/me",
+        sessionCwd: "/proj/feature",
+      })
+      expect(captured.cwd).toBe("/proj")
+      expect(captured.home).toBe("/users/me")
+      expect(captured.sessionCwd).toBe("/proj/feature")
+    }),
+  )
+
   it.live("projection with service requirement runs when layer is composed", () =>
     Effect.gen(function* () {
       class Greeter extends Context.Service<
@@ -196,7 +297,7 @@ describe("projection registry", () => {
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
       const result = yield* compiled
-        .evaluateAll({ turn: turnCtx })
+        .evaluateAll(projCtx)
         .pipe(
           Effect.provide(Layer.succeed(Greeter, { say: () => Effect.succeed("hi from service") })),
         )

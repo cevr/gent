@@ -88,13 +88,10 @@ const projectionFactoryName = (node: AstNode): string | undefined => {
   return name
 }
 
-/** Locate the `query: <arrow>` value in the first object-literal argument. */
-const findQueryArrow = (node: AstNode): AstNode | undefined => {
-  const args = node.arguments
-  if (!Array.isArray(args) || args.length === 0) return undefined
-  const arg = args[0]
-  if (!isAstNode(arg) || arg.type !== "ObjectExpression") return undefined
-  const properties = arg.properties
+/** Locate the `query: <arrow>` value inside an object literal expression. */
+const findQueryArrowInObject = (objExpr: AstNode): AstNode | undefined => {
+  if (objExpr.type !== "ObjectExpression") return undefined
+  const properties = objExpr.properties
   if (!Array.isArray(properties)) return undefined
   for (const propRaw of properties) {
     if (!isAstNode(propRaw) || propRaw.type !== "Property") continue
@@ -111,6 +108,36 @@ const findQueryArrow = (node: AstNode): AstNode | undefined => {
     }
   }
   return undefined
+}
+
+/** Locate the `query: <arrow>` value in the first object-literal argument of a CallExpression. */
+const findQueryArrow = (node: AstNode): AstNode | undefined => {
+  const args = node.arguments
+  if (!Array.isArray(args) || args.length === 0) return undefined
+  const arg = args[0]
+  if (!isAstNode(arg)) return undefined
+  return findQueryArrowInObject(arg)
+}
+
+const PROJECTION_TYPE_NAMES = new Set(["ProjectionContribution", "AnyProjectionContribution"])
+
+/** Detect whether a TypeScript type reference (or type-reference-like) names ProjectionContribution. */
+const isProjectionTypeRef = (typeNode: AstNode | undefined): boolean => {
+  if (typeNode === undefined) return false
+  // TSTypeAnnotation wraps a typeAnnotation child
+  if (typeNode.type === "TSTypeAnnotation") {
+    return isProjectionTypeRef(getNodeField(typeNode, "typeAnnotation"))
+  }
+  if (typeNode.type === "TSTypeReference") {
+    const name = getNodeField(typeNode, "typeName")
+    if (name === undefined) return false
+    if (name.type === "Identifier") {
+      const n = getStringField(name, "name")
+      return n !== undefined && PROJECTION_TYPE_NAMES.has(n)
+    }
+    return false
+  }
+  return false
 }
 
 /** If `node` is `expr.<method>(...)` and method is a known write, return the method name. */
@@ -259,34 +286,67 @@ const plugin: Plugin = {
      * Valid:   query: () => MyService.list().pipe(Effect.map(...))
      * Invalid: query: () => MyService.create({ ... })
      *
-     * Detection:
-     * - Find `projection({ ... })` / `projectionContribution({ ... })` calls
-     * - Locate the `query` property's arrow/function body
-     * - Walk the body for member-call expressions whose method name matches a
-     *   known write capability (set, create, update, delete, write, etc.)
+     * Detection — three authoring shapes are scanned:
+     *
+     *   1. Factory call: `projection({ query: ... })` or `projectionContribution({ query: ... })`
+     *   2. Typed binding: `const p: ProjectionContribution<...> = { query: ... }`
+     *      (or `AnyProjectionContribution`)
+     *   3. `satisfies` expression: `({ query: ... } satisfies ProjectionContribution<...>)`
+     *
+     * For each match: locate the `query` property's arrow/function body and walk
+     * for member-call expressions whose method name matches a known write
+     * capability (set, create, update, delete, write, etc.).
      *
      * Limitations: AST-only, no symbol resolution. False positives possible
      * (e.g. `Set#add`, `Map#set` on local collections). Suppress with
      * `// eslint-disable-next-line gent/no-projection-writes` when the call is
-     * provably local.
+     * provably local. Doesn't follow `query` defined as an external function ref.
      */
     "no-projection-writes": {
       create(context) {
+        const reportWritesIn = (queryFn: AstNode): void => {
+          walkAst(queryFn.body, (inner) => {
+            const methodName = writeCallMethod(inner)
+            if (methodName === undefined) return
+            context.report({
+              message: `Projection \`query\` must be read-only — call to \`.${methodName}(\` looks like a write. Use a Mutation or Workflow contribution for state changes.`,
+              node: inner,
+            })
+          })
+        }
         return {
+          // 1. Factory call form: projection({ ... }) / projectionContribution({ ... })
           CallExpression(node) {
             if (!isAstNode(node)) return
             const calleeName = projectionFactoryName(node)
             if (calleeName === undefined) return
             const queryFn = findQueryArrow(node)
             if (queryFn === undefined) return
-            walkAst(queryFn.body, (inner) => {
-              const methodName = writeCallMethod(inner)
-              if (methodName === undefined) return
-              context.report({
-                message: `Projection \`query\` must be read-only — call to \`.${methodName}(\` looks like a write. Use a Mutation or Workflow contribution for state changes.`,
-                node: inner,
-              })
-            })
+            reportWritesIn(queryFn)
+          },
+          // 2. Typed binding form: const p: ProjectionContribution<...> = { ... }
+          VariableDeclarator(node) {
+            if (!isAstNode(node)) return
+            const id = getNodeField(node, "id")
+            if (id === undefined) return
+            const typeAnn = getNodeField(id, "typeAnnotation")
+            if (!isProjectionTypeRef(typeAnn)) return
+            const init = getNodeField(node, "init")
+            if (init === undefined) return
+            const queryFn = findQueryArrowInObject(init)
+            if (queryFn === undefined) return
+            reportWritesIn(queryFn)
+          },
+          // 3. satisfies form: ({ ... } satisfies ProjectionContribution<...>)
+          TSSatisfiesExpression(node) {
+            if (!isAstNode(node)) return
+            const typeAnn = getNodeField(node, "typeAnnotation")
+            if (!isProjectionTypeRef(typeAnn)) return
+            const expr = getNodeField(node, "expression")
+            if (expr === undefined) return
+            const queryFn = findQueryArrowInObject(expr)
+            if (queryFn === undefined) return
+            reportWritesIn(queryFn)
           },
         }
       },

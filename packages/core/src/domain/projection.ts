@@ -36,9 +36,20 @@ export class ProjectionError extends Data.TaggedError(
   readonly reason: string
 }> {}
 
-/** Context handed to a projection's `query` Effect. */
+/** Context handed to a projection's `query` Effect.
+ *
+ *  Read-only by design — no mutation/control surfaces here. If a projection
+ *  needs `ctx.extension.send`/`ctx.interaction.approve`/etc., it isn't a
+ *  projection — it's a workflow or mutation.
+ */
 export interface ProjectionContext {
   readonly turn: ExtensionTurnContext
+  /** Process working directory (host cwd). */
+  readonly cwd: string
+  /** User home directory. */
+  readonly home: string
+  /** Session-scoped working directory, if the session was opened in a specific cwd. */
+  readonly sessionCwd?: string
 }
 
 /** UI surface — projected value rendered into an extension UI snapshot. */
