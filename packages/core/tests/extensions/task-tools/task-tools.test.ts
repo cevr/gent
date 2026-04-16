@@ -16,6 +16,9 @@ import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import type { QueryRef, QueryError, QueryNotFoundError } from "@gent/core/domain/query"
+import type { MutationRef, MutationError, MutationNotFoundError } from "@gent/core/domain/mutation"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -31,6 +34,24 @@ const mockRunnerSuccess = {
 
 const makeCtx = Effect.gen(function* () {
   const runtime = yield* ExtensionStateRuntime
+  const registry = yield* ExtensionRegistry
+  const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
+  const query = <I, O>(ref: QueryRef<I, O>, input: I) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    registry
+      .getResolved()
+      .queries.run(ref.extensionId, ref.queryId, input, ctxBase) as Effect.Effect<
+      O,
+      QueryError | QueryNotFoundError
+    >
+  const mutate = <I, O>(ref: MutationRef<I, O>, input: I) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    registry
+      .getResolved()
+      .mutations.run(ref.extensionId, ref.mutationId, input, ctxBase) as Effect.Effect<
+      O,
+      MutationError | MutationNotFoundError
+    >
   return testToolContext({
     sessionId: SessionId.of("s1"),
     branchId: "b1",
@@ -53,6 +74,8 @@ const makeCtx = Effect.gen(function* () {
     extension: {
       send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
       ask: (message, branchId) => runtime.ask(SessionId.of("s1"), message, branchId ?? "b1"),
+      query,
+      mutate,
       getUiSnapshots: dieStub("extension.getUiSnapshots"),
       getUiSnapshot: dieStub("extension.getUiSnapshot"),
     },

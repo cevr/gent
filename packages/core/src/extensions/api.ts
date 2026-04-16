@@ -62,7 +62,9 @@ import {
   type ExtensionStorage,
 } from "../runtime/extensions/extension-storage.js"
 import { type Contribution, filterByKind } from "../domain/contribution.js"
+import type { AnyMutationContribution } from "../domain/mutation.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
+import type { AnyQueryContribution } from "../domain/query.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -227,10 +229,26 @@ export {
 export type {
   ProjectionContribution,
   ProjectionContext,
+  ProjectionUiContext,
+  ProjectionTurnContext,
   ProjectionUiSurface,
   AnyProjectionContribution,
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
+export type {
+  QueryContribution,
+  QueryContext,
+  QueryRef,
+  AnyQueryContribution,
+} from "../domain/query.js"
+export { QueryError, QueryNotFoundError } from "../domain/query.js"
+export type {
+  MutationContribution,
+  MutationContext,
+  MutationRef,
+  AnyMutationContribution,
+} from "../domain/mutation.js"
+export { MutationError, MutationNotFoundError } from "../domain/mutation.js"
 export type {
   InterceptorContribution as InterceptorContributionDescriptor,
   InterceptorKey,
@@ -487,6 +505,12 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   /** Register a read-only projection (derives from services; surfaces prompt/ui/policy).
    *  Multiple calls ok. The projection's R requirement must be satisfied by `.layer()`. */
   projection(p: AnyProjectionContribution): ExtensionBuilder<Provides>
+  /** Register a typed read-only RPC handler — invoked via `ctx.extension.query(ref, input)`.
+   *  Multiple calls ok. The query's R requirement must be satisfied by `.layer()`. */
+  query(q: AnyQueryContribution): ExtensionBuilder<Provides>
+  /** Register a typed write RPC handler — invoked via `ctx.extension.mutate(ref, input)`.
+   *  Multiple calls ok. The mutation's R requirement must be satisfied by `.layer()`. */
+  mutation(m: AnyMutationContribution): ExtensionBuilder<Provides>
 }
 
 // ── Public API ──
@@ -526,6 +550,8 @@ interface LoweredBuckets {
   jobs: ScheduledJobContribution[]
   busSubscriptions: BusSubscriptionEntry[]
   projections: AnyProjectionContribution[]
+  queries: AnyQueryContribution[]
+  mutations: AnyMutationContribution[]
   startupEffects: Array<Effect.Effect<void>>
   shutdownEffects: Array<Effect.Effect<void>>
   actor: AnyExtensionActorDefinition | undefined
@@ -544,6 +570,8 @@ const emptyBuckets = (): LoweredBuckets => ({
   jobs: [],
   busSubscriptions: [],
   projections: [],
+  queries: [],
+  mutations: [],
   startupEffects: [],
   shutdownEffects: [],
   actor: undefined,
@@ -585,6 +613,12 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
     case "projection":
       b.projections.push(c.projection)
       return
+    case "query":
+      b.queries.push(c.query)
+      return
+    case "mutation":
+      b.mutations.push(c.mutation)
+      return
     case "lifecycle":
       if (c.phase === "startup") b.startupEffects.push(c.effect)
       else b.shutdownEffects.push(c.effect)
@@ -619,6 +653,8 @@ const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
     ...(b.jobs.length > 0 ? { jobs: b.jobs } : {}),
     ...(b.busSubscriptions.length > 0 ? { busSubscriptions: b.busSubscriptions } : {}),
     ...(b.projections.length > 0 ? { projections: b.projections } : {}),
+    ...(b.queries.length > 0 ? { queries: b.queries } : {}),
+    ...(b.mutations.length > 0 ? { mutations: b.mutations } : {}),
     ...(b.actor !== undefined ? { actor: b.actor } : {}),
     ...(b.permissionRules.length > 0 ? { permissionRules: b.permissionRules } : {}),
     onStartup,
@@ -872,6 +908,14 @@ export const extension = <P = never>(
         },
         projection: (p) => {
           _contributions.push({ _kind: "projection", projection: p })
+          return builder
+        },
+        query: (q) => {
+          _contributions.push({ _kind: "query", query: q })
+          return builder
+        },
+        mutation: (m) => {
+          _contributions.push({ _kind: "mutation", mutation: m })
           return builder
         },
       }

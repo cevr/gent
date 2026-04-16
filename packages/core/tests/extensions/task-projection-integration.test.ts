@@ -35,7 +35,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { TaskProjection } from "@gent/extensions/task-tools/projection"
-import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools-protocol"
+import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity"
 
 const sessionId = SessionId.of("s1")
 const branchId = BranchId.of("b1")

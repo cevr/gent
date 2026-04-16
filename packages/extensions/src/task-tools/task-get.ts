@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool, TaskId } from "@gent/core/extensions/api"
-import { TaskProtocol } from "../task-tools-protocol.js"
+import { TaskGetRef, TaskGetDepsRef } from "./queries.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),
@@ -13,18 +13,13 @@ export const TaskGetTool = defineTool({
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
-    const task = yield* ctx.extension.ask(
-      TaskProtocol.GetTask({ taskId: TaskId.of(params.taskId) }),
-      ctx.branchId,
-    )
+    const taskId = TaskId.of(params.taskId)
+    const task = yield* ctx.extension.query(TaskGetRef, { taskId })
     if (task == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* ctx.extension.ask(
-      TaskProtocol.GetDependencies({ taskId: TaskId.of(params.taskId) }),
-      ctx.branchId,
-    )
+    const deps = yield* ctx.extension.query(TaskGetDepsRef, { taskId })
 
     return {
       id: task.id,

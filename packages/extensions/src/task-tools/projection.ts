@@ -15,11 +15,7 @@
 import { Effect } from "effect"
 import { type ProjectionContribution, ProjectionError, type Task } from "@gent/core/extensions/api"
 import { TaskStorage } from "../task-tools-storage.js"
-import {
-  TaskUiModel,
-  type TaskEntry,
-  type TaskUiModel as TaskUiModelType,
-} from "../task-tools-protocol.js"
+import { TaskUiModel, type TaskEntry, type TaskUiModel as TaskUiModelType } from "./identity.js"
 
 const taskToEntry = (task: Task): TaskEntry => ({
   id: task.id,

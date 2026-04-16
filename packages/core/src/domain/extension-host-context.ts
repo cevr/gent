@@ -22,6 +22,8 @@ import type {
 } from "./interaction-request"
 import type { Branch, Message, MessageMetadata, Session } from "./message"
 import type { ModelId } from "./model"
+import type { MutationError, MutationNotFoundError, MutationRef } from "./mutation"
+import type { QueryError, QueryNotFoundError, QueryRef } from "./query"
 import type { SearchResult } from "../storage/search-storage"
 import type { StorageError } from "../storage/sqlite-storage"
 
@@ -63,6 +65,28 @@ export declare namespace ExtensionHostContext {
       message: M,
       branchId?: BranchId,
     ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
+
+    /**
+     * Typed read-only RPC into another extension. Routes by `(extensionId, queryId)`,
+     * decodes input via `ref.input` and output via `ref.output`. The contributing
+     * extension's `layer()` provides the handler's service requirements.
+     *
+     * Replaces the untyped `ask()` channel for read operations.
+     */
+    readonly query: <I, O>(
+      ref: QueryRef<I, O>,
+      input: I,
+    ) => Effect.Effect<O, QueryError | QueryNotFoundError>
+
+    /**
+     * Typed write RPC into another extension. Same routing/decode rules as
+     * `query()` — the distinction is intent: `mutate` is the explicit write
+     * surface; `query` is for reads (lint-enforced read-only handler).
+     */
+    readonly mutate: <I, O>(
+      ref: MutationRef<I, O>,
+      input: I,
+    ) => Effect.Effect<O, MutationError | MutationNotFoundError>
 
     readonly getUiSnapshots: (
       branchId?: BranchId,

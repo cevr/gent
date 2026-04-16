@@ -9,6 +9,8 @@ import type { PermissionResult, PermissionRule } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
 import type { AnyProjectionContribution } from "./projection.js"
+import type { AnyQueryContribution } from "./query.js"
+import type { AnyMutationContribution } from "./mutation.js"
 import type { PromptSection, PromptSectionInput } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -431,6 +433,10 @@ export interface ExtensionSetup {
   }>
   /** Read-only projections — derived views of services for prompt/UI/policy. */
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
+  /** Typed read-only RPC handlers — invoked via `ctx.extension.query(ref, input)`. */
+  readonly queries?: ReadonlyArray<AnyQueryContribution>
+  /** Typed write RPC handlers — invoked via `ctx.extension.mutate(ref, input)`. */
+  readonly mutations?: ReadonlyArray<AnyMutationContribution>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */

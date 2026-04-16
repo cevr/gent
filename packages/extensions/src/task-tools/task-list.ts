@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool } from "@gent/core/extensions/api"
-import { TaskProtocol } from "../task-tools-protocol.js"
+import { TaskListRef } from "./queries.js"
 
 export const TaskListParams = Schema.Struct({})
 
@@ -11,10 +11,7 @@ export const TaskListTool = defineTool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
-    const tasks = yield* ctx.extension.ask(
-      TaskProtocol.ListTasks({ sessionId: ctx.sessionId, branchId: ctx.branchId }),
-      ctx.branchId,
-    )
+    const tasks = yield* ctx.extension.query(TaskListRef, {})
 
     if (tasks.length === 0) {
       return { tasks: [], summary: "No tasks" }

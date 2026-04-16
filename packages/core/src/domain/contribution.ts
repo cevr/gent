@@ -20,8 +20,10 @@ import type {
 } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSectionInput } from "./prompt.js"
+import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { ProviderContribution } from "./provider-contribution.js"
+import type { AnyQueryContribution } from "./query.js"
 import type { AnyToolDefinition } from "./tool.js"
 import type { TurnExecutorContribution } from "./turn-executor.js"
 
@@ -104,6 +106,16 @@ export interface ProjectionKindContribution {
   readonly projection: AnyProjectionContribution
 }
 
+export interface QueryKindContribution {
+  readonly _kind: "query"
+  readonly query: AnyQueryContribution
+}
+
+export interface MutationKindContribution {
+  readonly _kind: "mutation"
+  readonly mutation: AnyMutationContribution
+}
+
 // ── Union ──
 
 export type Contribution =
@@ -121,6 +133,8 @@ export type Contribution =
   | BusSubscriptionContribution
   | LifecycleContribution
   | ProjectionKindContribution
+  | QueryKindContribution
+  | MutationKindContribution
 
 export type ContributionKind = Contribution["_kind"]
 
@@ -192,6 +206,16 @@ export const onShutdown = (effect: Effect.Effect<void>): LifecycleContribution =
 export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
   _kind: "projection",
   projection: p,
+})
+
+export const query = (q: AnyQueryContribution): QueryKindContribution => ({
+  _kind: "query",
+  query: q,
+})
+
+export const mutation = (m: AnyMutationContribution): MutationKindContribution => ({
+  _kind: "mutation",
+  mutation: m,
 })
 
 // ── Filters ──

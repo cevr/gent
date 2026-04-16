@@ -9,7 +9,8 @@ import {
   type SessionId,
   type Task,
 } from "@gent/core/extensions/api"
-import { TaskProtocol } from "../task-tools-protocol.js"
+import { TaskCreateRef, TaskUpdateRef } from "../task-tools/mutations.js"
+import { TaskGetRef } from "../task-tools/queries.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -80,7 +81,7 @@ export const DelegateTool = defineTool({
 
     /** Check if task is still in a non-terminal state before writing completion */
     const isTaskStillActive = (taskId: string) =>
-      ctx.extension.ask(TaskProtocol.GetTask({ taskId: TaskId.of(taskId) }), ctx.branchId).pipe(
+      ctx.extension.query(TaskGetRef, { taskId: TaskId.of(taskId) }).pipe(
         Effect.map(
           (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
         ),
@@ -91,20 +92,17 @@ export const DelegateTool = defineTool({
       Effect.gen(function* () {
         // Set task to in_progress
         yield* ctx.extension
-          .ask(TaskProtocol.UpdateTask({ taskId: task.id, status: "in_progress" }), ctx.branchId)
+          .mutate(TaskUpdateRef, { taskId: task.id, status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
         const resolvedAgent = yield* ctx.agent.get(agent.name)
         if (resolvedAgent === undefined) {
           yield* ctx.extension
-            .ask(
-              TaskProtocol.UpdateTask({
-                taskId: task.id,
-                status: "failed",
-                metadata: { error: `Unknown agent: ${agent.name}` },
-              }),
-              ctx.branchId,
-            )
+            .mutate(TaskUpdateRef, {
+              taskId: task.id,
+              status: "failed",
+              metadata: { error: `Unknown agent: ${agent.name}` },
+            })
             .pipe(Effect.catchEager(() => Effect.void))
           return
         }
@@ -121,36 +119,30 @@ export const DelegateTool = defineTool({
 
         if (result._tag === "success") {
           yield* ctx.extension
-            .ask(
-              TaskProtocol.UpdateTask({
-                taskId: task.id,
-                status: "completed",
-                owner: result.sessionId,
-                metadata: {
-                  ...(typeof task.metadata === "object" && task.metadata !== null
-                    ? task.metadata
-                    : {}),
-                  childSessionId: result.sessionId,
-                },
-              }),
-              ctx.branchId,
-            )
+            .mutate(TaskUpdateRef, {
+              taskId: task.id,
+              status: "completed",
+              owner: result.sessionId,
+              metadata: {
+                ...(typeof task.metadata === "object" && task.metadata !== null
+                  ? task.metadata
+                  : {}),
+                childSessionId: result.sessionId,
+              },
+            })
             .pipe(Effect.catchEager(() => Effect.void))
         } else {
           yield* ctx.extension
-            .ask(
-              TaskProtocol.UpdateTask({
-                taskId: task.id,
-                status: "failed",
-                metadata: {
-                  ...(typeof task.metadata === "object" && task.metadata !== null
-                    ? task.metadata
-                    : {}),
-                  error: result.error,
-                },
-              }),
-              ctx.branchId,
-            )
+            .mutate(TaskUpdateRef, {
+              taskId: task.id,
+              status: "failed",
+              metadata: {
+                ...(typeof task.metadata === "object" && task.metadata !== null
+                  ? task.metadata
+                  : {}),
+                error: result.error,
+              },
+            })
             .pipe(Effect.catchEager(() => Effect.void))
         }
       }).pipe(Effect.catchEager(() => Effect.void))
@@ -160,18 +152,16 @@ export const DelegateTool = defineTool({
       if (!resolved.ok) return { error: resolved.error }
 
       const task = yield* ctx.extension
-        .ask(
-          TaskProtocol.CreateTask({
-            sessionId: ctx.sessionId,
-            branchId: ctx.branchId,
-            subject: params.description ?? params.task ?? "background task",
-            agentType: resolved.agent.name,
-            prompt: params.task,
-            cwd: ctx.cwd,
-          }),
-          ctx.branchId,
+        .mutate(TaskCreateRef, {
+          subject: params.description ?? params.task ?? "background task",
+          agentType: resolved.agent.name,
+          prompt: params.task,
+          cwd: ctx.cwd,
+        })
+        .pipe(
+          Effect.catchEager(() => Effect.succeed<Task | undefined>(undefined)),
+          Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)),
         )
-        .pipe(Effect.catchDefect(() => Effect.void.pipe(Effect.as<Task | undefined>(undefined))))
       if (task === undefined)
         return { error: "Background tasks unavailable — task-tools extension is disabled" }
 
@@ -190,18 +180,16 @@ export const DelegateTool = defineTool({
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
         const task = yield* ctx.extension
-          .ask(
-            TaskProtocol.CreateTask({
-              sessionId: ctx.sessionId,
-              branchId: ctx.branchId,
-              subject: summarizeTaskSubject(item.task),
-              agentType: resolved.agent.name,
-              prompt: item.task,
-              cwd: ctx.cwd,
-            }),
-            ctx.branchId,
+          .mutate(TaskCreateRef, {
+            subject: summarizeTaskSubject(item.task),
+            agentType: resolved.agent.name,
+            prompt: item.task,
+            cwd: ctx.cwd,
+          })
+          .pipe(
+            Effect.catchEager(() => Effect.succeed<Task | undefined>(undefined)),
+            Effect.catchDefect(() => Effect.succeed<Task | undefined>(undefined)),
           )
-          .pipe(Effect.catchDefect(() => Effect.void.pipe(Effect.as<Task | undefined>(undefined))))
         if (task === undefined) {
           return { error: "Background tasks unavailable — task-tools extension is disabled" }
         }

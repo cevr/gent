@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool, AgentName, TaskId } from "@gent/core/extensions/api"
-import { TaskProtocol } from "../task-tools-protocol.js"
+import { TaskCreateRef, TaskAddDepRef } from "./mutations.js"
 
 export const TaskCreateParams = Schema.Struct({
   subject: Schema.String.annotate({ description: "Brief task title in imperative form" }),
@@ -26,25 +26,20 @@ export const TaskCreateTool = defineTool({
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,
   execute: Effect.fn("TaskCreateTool.execute")(function* (params, ctx) {
-    const task = yield* ctx.extension.ask(
-      TaskProtocol.CreateTask({
-        sessionId: ctx.sessionId,
-        branchId: ctx.branchId,
-        subject: params.subject,
-        description: params.description,
-        agentType: params.agent,
-        prompt: params.prompt,
-        cwd: params.cwd,
-      }),
-      ctx.branchId,
-    )
+    const task = yield* ctx.extension.mutate(TaskCreateRef, {
+      subject: params.subject,
+      description: params.description,
+      agentType: params.agent,
+      prompt: params.prompt,
+      cwd: params.cwd,
+    })
 
     if (params.blockedBy !== undefined) {
       for (const depId of params.blockedBy) {
-        yield* ctx.extension.ask(
-          TaskProtocol.AddDependency({ taskId: task.id, blockedById: TaskId.of(depId) }),
-          ctx.branchId,
-        )
+        yield* ctx.extension.mutate(TaskAddDepRef, {
+          taskId: task.id,
+          blockedById: TaskId.of(depId),
+        })
       }
     }
 

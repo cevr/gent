@@ -9,6 +9,8 @@ import { DateTime, Effect } from "effect"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import type { MutationRef, MutationError, MutationNotFoundError } from "../domain/mutation.js"
+import type { QueryRef, QueryError, QueryNotFoundError } from "../domain/query.js"
 import type { ExtensionStateRuntimeService } from "./extensions/state-runtime.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
@@ -117,6 +119,34 @@ export const makeExtensionHostContext = (
       deps.extensionStateRuntime.send(runInfo.sessionId, message, branchId ?? runInfo.branchId),
     ask: (message, branchId) =>
       deps.extensionStateRuntime.ask(runInfo.sessionId, message, branchId ?? runInfo.branchId),
+    query: <I, O>(ref: QueryRef<I, O>, input: I) => {
+      const queries = deps.extensionRegistry.getResolved().queries
+      const ctx = {
+        sessionId: runInfo.sessionId,
+        branchId: runInfo.branchId,
+        cwd: deps.platform.cwd,
+        home: deps.platform.home,
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      return queries.run(ref.extensionId, ref.queryId, input, ctx) as Effect.Effect<
+        O,
+        QueryError | QueryNotFoundError
+      >
+    },
+    mutate: <I, O>(ref: MutationRef<I, O>, input: I) => {
+      const mutations = deps.extensionRegistry.getResolved().mutations
+      const ctx = {
+        sessionId: runInfo.sessionId,
+        branchId: runInfo.branchId,
+        cwd: deps.platform.cwd,
+        home: deps.platform.home,
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      return mutations.run(ref.extensionId, ref.mutationId, input, ctx) as Effect.Effect<
+        O,
+        MutationError | MutationNotFoundError
+      >
+    },
     getUiSnapshots: (branchId) =>
       deps.extensionStateRuntime.getUiSnapshots(runInfo.sessionId, branchId ?? runInfo.branchId),
     getUiSnapshot: <T>(extensionId: string, branchId?: BranchId) =>

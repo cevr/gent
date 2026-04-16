@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineTool, TaskId, type TaskStatus } from "@gent/core/extensions/api"
-import { TaskProtocol } from "../task-tools-protocol.js"
+import { TaskUpdateRef } from "./mutations.js"
 
 export const TaskUpdateParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to update" }),
@@ -19,14 +19,11 @@ export const TaskUpdateTool = defineTool({
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
-    const updated = yield* ctx.extension.ask(
-      TaskProtocol.UpdateTask({
-        taskId: TaskId.of(params.taskId),
-        status: params.status as TaskStatus | undefined,
-        description: params.description,
-      }),
-      ctx.branchId,
-    )
+    const updated = yield* ctx.extension.mutate(TaskUpdateRef, {
+      taskId: TaskId.of(params.taskId),
+      status: params.status as TaskStatus | undefined,
+      description: params.description,
+    })
 
     if (updated == null) {
       return { error: `Task not found: ${params.taskId}` }

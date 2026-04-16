@@ -1,6 +1,7 @@
 import { Clock, Effect } from "effect"
-import { SessionId } from "../domain/ids.js"
+import { BranchId, SessionId } from "../domain/ids.js"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
+import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
@@ -56,6 +57,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const providerAuth = yield* ProviderAuth
     const extensionStateRuntime = yield* ExtensionStateRuntime
     const extensionRegistry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
@@ -334,6 +336,54 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             }),
           )
           return reply
+        }),
+
+      "extension.query": ({ sessionId, extensionId, queryId, input, branchId }) =>
+        Effect.gen(function* () {
+          const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
+          const queries = activeRegistry.getResolved().queries
+          return yield* queries
+            .run(extensionId, queryId, input, {
+              sessionId: SessionId.of(sessionId),
+              branchId: branchId !== undefined ? BranchId.of(branchId) : undefined,
+              cwd: platform.cwd,
+              home: platform.home,
+            })
+            .pipe(
+              Effect.mapError(
+                (e) =>
+                  new ExtensionProtocolError({
+                    extensionId,
+                    tag: queryId,
+                    phase: "request",
+                    message: "reason" in e ? `${e._tag}: ${e.reason}` : e._tag,
+                  }),
+              ),
+            )
+        }),
+
+      "extension.mutate": ({ sessionId, extensionId, mutationId, input, branchId }) =>
+        Effect.gen(function* () {
+          const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
+          const mutations = activeRegistry.getResolved().mutations
+          return yield* mutations
+            .run(extensionId, mutationId, input, {
+              sessionId: SessionId.of(sessionId),
+              branchId: branchId !== undefined ? BranchId.of(branchId) : undefined,
+              cwd: platform.cwd,
+              home: platform.home,
+            })
+            .pipe(
+              Effect.mapError(
+                (e) =>
+                  new ExtensionProtocolError({
+                    extensionId,
+                    tag: mutationId,
+                    phase: "request",
+                    message: "reason" in e ? `${e._tag}: ${e.reason}` : e._tag,
+                  }),
+              ),
+            )
         }),
 
       "extension.listCommands": () =>

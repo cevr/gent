@@ -24,8 +24,16 @@ import {
 } from "@gent/core/domain/message.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
-import { TaskProtocol } from "@gent/extensions/task-tools-protocol.js"
+import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
+import type { QueryError, QueryNotFoundError } from "@gent/core/domain/query.js"
+import type { MutationError, MutationNotFoundError } from "@gent/core/domain/mutation.js"
+import {
+  TaskCreateRef,
+  TaskDeleteRef,
+  TaskUpdateRef,
+} from "@gent/extensions/task-tools/mutations.js"
+import { TaskListRef } from "@gent/extensions/task-tools/queries.js"
 
 export interface DebugScenarioParams {
   sessionId: SessionId
@@ -565,92 +573,74 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
 const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
-    const extensionRuntime = yield* ExtensionStateRuntime
+    const registry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
+    const queries = registry.getResolved().queries
+    const mutations = registry.getResolved().mutations
+    const ctx = {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      cwd: platform.cwd,
+      home: platform.home,
+    }
+
+    const runQuery = <T>(
+      ref: { readonly extensionId: string; readonly queryId: string },
+      input: unknown,
+    ): Effect.Effect<T, QueryError | QueryNotFoundError> =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      queries.run(ref.extensionId, ref.queryId, input, ctx) as Effect.Effect<
+        T,
+        QueryError | QueryNotFoundError
+      >
+    const runMutation = <T>(
+      ref: { readonly extensionId: string; readonly mutationId: string },
+      input: unknown,
+    ): Effect.Effect<T, MutationError | MutationNotFoundError> =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      mutations.run(ref.extensionId, ref.mutationId, input, ctx) as Effect.Effect<
+        T,
+        MutationError | MutationNotFoundError
+      >
 
     while (true) {
-      const existing = yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.ListTasks({ sessionId: params.sessionId, branchId: params.branchId }),
-        params.branchId,
-      )
+      const existing = yield* runQuery<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})
       for (const task of existing) {
-        yield* extensionRuntime
-          .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: task.id }), params.branchId)
-          .pipe(Effect.catchEager(() => Effect.void))
+        yield* runMutation<null>(TaskDeleteRef, { taskId: task.id }).pipe(
+          Effect.catchEager(() => Effect.void),
+        )
       }
 
-      const inspect = yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.CreateTask({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          subject: "Inspect codebase",
-        }),
-        params.branchId,
-      )
-      const verify = yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.CreateTask({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          subject: "Run verification",
-        }),
-        params.branchId,
-      )
-      const summarize = yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.CreateTask({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          subject: "Summarize outcome",
-        }),
-        params.branchId,
-      )
+      const inspect = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+        subject: "Inspect codebase",
+      })
+      const verify = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+        subject: "Run verification",
+      })
+      const summarize = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+        subject: "Summarize outcome",
+      })
 
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: inspect.id, status: "in_progress" }),
-        params.branchId,
-      )
+      const setStatus = (taskId: string, status: "in_progress" | "completed") =>
+        runMutation<unknown>(TaskUpdateRef, { taskId, status })
+
+      yield* setStatus(inspect.id, "in_progress")
       yield* Effect.sleep("2 seconds")
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: inspect.id, status: "completed" }),
-        params.branchId,
-      )
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: verify.id, status: "in_progress" }),
-        params.branchId,
-      )
+      yield* setStatus(inspect.id, "completed")
+      yield* setStatus(verify.id, "in_progress")
       yield* Effect.sleep("2 seconds")
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: verify.id, status: "completed" }),
-        params.branchId,
-      )
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: summarize.id, status: "in_progress" }),
-        params.branchId,
-      )
+      yield* setStatus(verify.id, "completed")
+      yield* setStatus(summarize.id, "in_progress")
       yield* Effect.sleep("2 seconds")
-      yield* extensionRuntime.ask(
-        params.sessionId,
-        TaskProtocol.UpdateTask({ taskId: summarize.id, status: "completed" }),
-        params.branchId,
-      )
+      yield* setStatus(summarize.id, "completed")
       yield* Effect.sleep("2 seconds")
 
-      yield* extensionRuntime
-        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: inspect.id }), params.branchId)
-        .pipe(Effect.catchEager(() => Effect.void))
-      yield* extensionRuntime
-        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: verify.id }), params.branchId)
-        .pipe(Effect.catchEager(() => Effect.void))
-      yield* extensionRuntime
-        .ask(params.sessionId, TaskProtocol.DeleteTask({ taskId: summarize.id }), params.branchId)
-        .pipe(Effect.catchEager(() => Effect.void))
+      const deleteTask = (taskId: string) =>
+        runMutation<null>(TaskDeleteRef, { taskId }).pipe(Effect.catchEager(() => Effect.void))
+
+      yield* deleteTask(inspect.id)
+      yield* deleteTask(verify.id)
+      yield* deleteTask(summarize.id)
       yield* Effect.sleep("2 seconds")
     }
   })
