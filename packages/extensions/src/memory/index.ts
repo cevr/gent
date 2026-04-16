@@ -19,11 +19,17 @@
 import { Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
-  extension,
+  agentContribution,
   AgentEvent,
-  type ReduceResult,
-  type ExtensionActorDefinition,
+  defineExtension,
+  jobContribution,
+  layerContribution,
+  projectionContribution,
+  toolContribution,
+  workflowContribution,
   type AnyToolDefinition,
+  type ReduceResult,
+  type WorkflowContribution,
 } from "@gent/core/extensions/api"
 import {
   type MemoryState,
@@ -125,7 +131,7 @@ const memoryMachine = Machine.make({
     return nextMemory === state.memory ? state : MemoryMachineState.Active({ memory: nextMemory })
   })
 
-const memoryActor: ExtensionActorDefinition<
+const memoryWorkflow: WorkflowContribution<
   typeof MemoryMachineState.Type,
   typeof MemoryMachineEvent.Type,
   never,
@@ -138,6 +144,8 @@ const memoryActor: ExtensionActorDefinition<
   // No `snapshot` — UI surface is owned by `MemoryVaultProjection` (compile-time
   // structural conflict rule in projection-registry forbids both at once for the
   // same extensionId; vault entries are the user-visible memory state).
+  // `turn` here is the C8 transitional lowering bridge — deleted in C12 when
+  // `state-runtime.ts` splits and projections take over per-turn surface.
   turn: {
     project: (state) => projectSessionMemoryTurn(state.memory),
   },
@@ -145,12 +153,14 @@ const memoryActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-export const MemoryExtension = extension("@gent/memory", ({ ext }) =>
-  ext
-    .tools(...(MemoryTools as ReadonlyArray<AnyToolDefinition>))
-    .agents(...MemoryAgents)
-    .actor(memoryActor)
-    .projection(MemoryVaultProjection)
-    .layer(MemoryVaultLive())
-    .jobs(...MemoryDreamJobs()),
-)
+export const MemoryExtension = defineExtension({
+  id: MEMORY_EXTENSION_ID,
+  contributions: () => [
+    ...(MemoryTools as ReadonlyArray<AnyToolDefinition>).map(toolContribution),
+    ...MemoryAgents.map(agentContribution),
+    workflowContribution(memoryWorkflow),
+    projectionContribution(MemoryVaultProjection),
+    layerContribution(MemoryVaultLive()),
+    ...MemoryDreamJobs().map(jobContribution),
+  ],
+})

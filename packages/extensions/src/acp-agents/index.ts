@@ -2,31 +2,50 @@
  * ACP Agents Extension — external agents (Claude Code, OpenCode, Gemini CLI)
  * as first-class gent agents via the TurnExecutor primitive.
  *
+ * The "session manager" here is a per-extension subprocess + ACP-session
+ * cache, not a state machine with declared effects. It survives this commit
+ * unchanged (no `WorkflowContribution` is appropriate); C9 collapses
+ * `TurnExecutor` into `ExternalDriverContribution`. What C8d does is the
+ * structural lift: `extension(...).agents().turnExecutor().onShutdown()` →
+ * `defineExtension({ id, contributions: [...] })`.
+ *
  * @module
  */
-import { extension, defineAgent, ExternalExecution } from "@gent/core/extensions/api"
+import {
+  agentContribution,
+  defineAgent,
+  defineExtension,
+  ExternalExecution,
+  onShutdownContribution,
+  turnExecutorContribution,
+} from "@gent/core/extensions/api"
 import { ACP_AGENTS } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
 import { createAcpSessionManager } from "./session-manager.js"
 
-export const AcpAgentsExtension = extension("@gent/acp-agents", ({ ext }) => {
-  const manager = createAcpSessionManager()
+export const AcpAgentsExtension = defineExtension({
+  id: "@gent/acp-agents",
+  contributions: () => {
+    const manager = createAcpSessionManager()
 
-  // Build all agent defs upfront — .agents() is single-call (guardSingle)
-  const agentDefs = Object.entries(ACP_AGENTS).map(([name, config]) =>
-    defineAgent({
-      name,
-      description: `${config.command} via ACP`,
-      persistence: "ephemeral",
-      execution: new ExternalExecution({ runnerId: `acp-${name}` }),
-    }),
-  )
-
-  // Register agents (single call) then turn executors (multi-call)
-  let builder = ext.agents(...agentDefs)
-  for (const [name, config] of Object.entries(ACP_AGENTS)) {
-    builder = builder.turnExecutor(`acp-${name}`, makeAcpTurnExecutor(config, manager))
-  }
-
-  return builder.onShutdown(manager.disposeAll())
+    return [
+      ...Object.entries(ACP_AGENTS).map(([name, config]) =>
+        agentContribution(
+          defineAgent({
+            name,
+            description: `${config.command} via ACP`,
+            persistence: "ephemeral",
+            execution: new ExternalExecution({ runnerId: `acp-${name}` }),
+          }),
+        ),
+      ),
+      ...Object.entries(ACP_AGENTS).map(([name, config]) =>
+        turnExecutorContribution({
+          id: `acp-${name}`,
+          executor: makeAcpTurnExecutor(config, manager),
+        }),
+      ),
+      onShutdownContribution(manager.disposeAll()),
+    ]
+  },
 })
