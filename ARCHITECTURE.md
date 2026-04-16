@@ -313,10 +313,11 @@ Internally both go through `lowerContributions()` → `ExtensionSetup`. The `Con
 `TaskService.Live` is owned by the `@gent/task-tools` extension, not core:
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
-- `task.list` RPC removed — TUI reads from extension actor snapshot
-- task mutation flows through the extension boundary, not direct core wiring
+- `task.list` RPC removed — TUI reads from `TaskProjection` (`packages/extensions/src/task-tools/projection.ts`), which queries `TaskStorage` on demand. The actor no longer mirrors task events; UI snapshot derivation lives in the projection.
+- task mutation flows through the extension boundary, not direct core wiring (the actor is currently a pure RPC dispatcher; Commit 4 will replace it with typed Mutation contributions)
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
 - Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
+- Event-publisher evaluates registered projections after every event and emits `ExtensionUiSnapshot` for each ui-bearing projection — the snapshot pipeline is unified across actor and projection sources
 
 ### TUI Extensions
 

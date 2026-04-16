@@ -19,11 +19,8 @@
  */
 import { Effect, Schema } from "effect"
 import { ExtensionUiSnapshot } from "../../domain/event.js"
-import type {
-  ExtensionTurnContext,
-  LoadedExtension,
-  ToolPolicyFragment,
-} from "../../domain/extension.js"
+import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
+import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { AnyProjectionContribution, ProjectionContext } from "../../domain/projection.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
@@ -191,8 +188,8 @@ export const compileProjections = (
   const evaluateUi = (
     entry: RegisteredProjection,
     value: unknown,
-    sessionId: ExtensionTurnContext["sessionId"],
-    branchId: ExtensionTurnContext["branchId"],
+    sessionId: SessionId,
+    branchId: BranchId,
   ): Effect.Effect<ExtensionUiSnapshot | undefined> =>
     Effect.gen(function* () {
       const ui = entry.projection.ui
@@ -269,8 +266,10 @@ export const compileProjections = (
             )
           }
         }
-        const ui = yield* evaluateUi(entry, value, ctx.turn.sessionId, ctx.turn.branchId)
-        if (ui !== undefined) uiSnapshots.push(ui)
+        if (ctx.branchId !== undefined) {
+          const ui = yield* evaluateUi(entry, value, ctx.sessionId, ctx.branchId)
+          if (ui !== undefined) uiSnapshots.push(ui)
+        }
       }
       return { promptSections, policyFragments, uiSnapshots }
     })

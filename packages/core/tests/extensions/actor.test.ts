@@ -12,6 +12,7 @@ import {
 import type { AgentEvent, EventStoreService } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -609,7 +610,8 @@ describe("event routing", () => {
       Layer.succeed(EventStore, baseService),
     )
     const servicesLayer = Storage.Test()
-    const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
+    const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions(extensions))
+    const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer, registryLayer)
     const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
     const fullLayer = Layer.mergeAll(combinedBase, eventPublisherLayer)
     return { published, fullLayer }

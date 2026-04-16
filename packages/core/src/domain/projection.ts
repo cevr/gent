@@ -26,6 +26,7 @@
  */
 import { Data, type Effect, type Schema } from "effect"
 import type { ExtensionTurnContext, ToolPolicyFragment } from "./extension.js"
+import type { BranchId, SessionId } from "./ids.js"
 import type { PromptSection } from "./prompt.js"
 
 /** Failure raised by a projection query. Carries projection id + cause for diagnostics. */
@@ -41,15 +42,24 @@ export class ProjectionError extends Data.TaggedError(
  *  Read-only by design — no mutation/control surfaces here. If a projection
  *  needs `ctx.extension.send`/`ctx.interaction.approve`/etc., it isn't a
  *  projection — it's a workflow or mutation.
+ *
+ *  `turn` is present during prompt assembly (when the projection feeds prompt
+ *  sections / tool policy) and absent during pure UI snapshot evaluation
+ *  (event-publisher → SSE → TUI). UI-only projections must not depend on
+ *  `turn`. Policy/prompt projections require `turn` and won't be evaluated in
+ *  UI-only contexts.
  */
 export interface ProjectionContext {
-  readonly turn: ExtensionTurnContext
+  readonly sessionId: SessionId
+  readonly branchId?: BranchId
   /** Process working directory (host cwd). */
   readonly cwd: string
   /** User home directory. */
   readonly home: string
   /** Session-scoped working directory, if the session was opened in a specific cwd. */
   readonly sessionCwd?: string
+  /** Present during prompt assembly; absent during UI-snapshot-only evaluation. */
+  readonly turn?: ExtensionTurnContext
 }
 
 /** UI surface — projected value rendered into an extension UI snapshot. */

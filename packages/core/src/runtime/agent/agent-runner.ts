@@ -464,10 +464,18 @@ const buildEphemeralLayer = (params: {
   // Non-interactive approval (auto-approve all, cancel ask-user)
   const approvalLayer = ApprovalService.LiveAutoResolve
 
+  // Registry (forwarded from parent — read-only resolved data)
+  const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
+
   // Event publisher on ephemeral storage — must include bus so extension subscriptions fire
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
-    Layer.mergeAll(eventStoreLayer, extensionStateRuntimeLayer, extensionEventBusLayer),
+    Layer.mergeAll(
+      eventStoreLayer,
+      extensionStateRuntimeLayer,
+      extensionEventBusLayer,
+      registryLayer,
+    ),
   )
 
   // PromptPresenter built on auto-resolve ApprovalService — parent first so local approval wins
@@ -481,9 +489,6 @@ const buildEphemeralLayer = (params: {
     .filter((ext) => ext.setup.layer !== undefined)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     .map((ext) => ext.setup.layer as Layer.Layer<any>)
-
-  // Registry (forwarded from parent — read-only resolved data)
-  const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
 
   // Core deps for AgentLoop + ToolRunner
   const coreDeps = Layer.mergeAll(

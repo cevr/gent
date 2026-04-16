@@ -484,6 +484,9 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
       branchId?: string
     }) => Effect.Effect<void>,
   ): ExtensionBuilder<Provides>
+  /** Register a read-only projection (derives from services; surfaces prompt/ui/policy).
+   *  Multiple calls ok. The projection's R requirement must be satisfied by `.layer()`. */
+  projection(p: AnyProjectionContribution): ExtensionBuilder<Provides>
 }
 
 // ── Public API ──
@@ -865,6 +868,10 @@ export const extension = <P = never>(
         },
         bus: (pattern, handler) => {
           _contributions.push({ _kind: "bus-subscription", pattern, handler })
+          return builder
+        },
+        projection: (p) => {
+          _contributions.push({ _kind: "projection", projection: p })
           return builder
         },
       }

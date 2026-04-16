@@ -14,6 +14,9 @@ import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+
+const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
 describe("Session Snapshot", () => {
   it.live("getSessionSnapshot only returns persisted state", () => {
@@ -45,6 +48,7 @@ describe("Session Snapshot", () => {
       ExtensionStateRuntime.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
+      emptyRegistryLayer,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(
@@ -90,6 +94,7 @@ describe("Session Tree", () => {
       ExtensionStateRuntime.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
+      emptyRegistryLayer,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(

@@ -10,6 +10,7 @@ import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { reducerActor } from "./helpers/reducer-actor"
 
@@ -96,11 +97,13 @@ describe("extension concurrency", () => {
           },
         ] as Parameters<typeof ExtensionStateRuntime.fromExtensions>[0]
 
+        const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
         const baseLayer = Layer.mergeAll(
           ExtensionStateRuntime.fromExtensions(extensions).pipe(
             Layer.provideMerge(ExtensionTurnControl.Test()),
           ),
           EventStore.Memory,
+          registryLayer,
         )
         const layer = Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer))
 

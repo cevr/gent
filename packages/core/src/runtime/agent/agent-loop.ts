@@ -266,7 +266,7 @@ const resolveTurnContext = (params: {
 
     // Derive extension projections from state machines
     const allTools = yield* params.extensionRegistry.listTools()
-    const extensionResults = yield* params.extensionStateRuntime.deriveAll(params.sessionId, {
+    const turnCtx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       agent: effectiveAgent,
@@ -275,8 +275,28 @@ const resolveTurnContext = (params: {
       tags: params.executionOverrides?.tags,
       agentName: currentAgent,
       parentToolCallId: params.executionOverrides?.parentToolCallId,
+    }
+    const extensionResults = yield* params.extensionStateRuntime.deriveAll(
+      params.sessionId,
+      turnCtx,
+    )
+    const actorProjections = extensionResults.map((r) => r.projection)
+
+    // Evaluate ProjectionContribution-based projections — merge into the same
+    // TurnProjection list consumed by compileToolPolicy. Actor projections
+    // (above) and projection contributions (here) feed the same pipeline.
+    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateAll({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      cwd: params.hostCtx.cwd,
+      home: params.hostCtx.home,
+      turn: turnCtx,
     })
-    const extensionProjections = extensionResults.map((r) => r.projection)
+    const extensionProjections = [
+      ...actorProjections,
+      ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
+      ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
+    ]
 
     // Resolve tools + extension prompt sections via ToolPolicy compiler
     const { tools, promptSections: extensionSections } =

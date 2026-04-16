@@ -15,6 +15,7 @@ import {
   INTERACTION_TOOLS_EXTENSION_ID,
   interactionActor,
 } from "@gent/extensions/interaction-tools"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -45,7 +46,8 @@ const makeLayer = () => {
     Layer.succeed(EventStore, baseService),
   )
   const servicesLayer = Storage.Test()
-  const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer)
+  const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([interactionExtension]))
+  const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer, registryLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
   return Layer.mergeAll(combinedBase, eventPublisherLayer)
 }

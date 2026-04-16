@@ -48,9 +48,11 @@ const turnCtx: ExtensionTurnContext = {
 } as unknown as ExtensionTurnContext
 
 const projCtx = {
-  turn: turnCtx,
+  sessionId: turnCtx.sessionId,
+  branchId: turnCtx.branchId,
   cwd: "/tmp",
   home: "/tmp",
+  turn: turnCtx,
 }
 
 describe("projection registry", () => {
@@ -268,10 +270,12 @@ describe("projection registry", () => {
       }
       const compiled = compileProjections([ext("a", "builtin", [projection])])
       yield* compiled.evaluateAll({
-        turn: turnCtx,
+        sessionId: turnCtx.sessionId,
+        branchId: turnCtx.branchId,
         cwd: "/proj",
         home: "/users/me",
         sessionCwd: "/proj/feature",
+        turn: turnCtx,
       })
       expect(captured.cwd).toBe("/proj")
       expect(captured.home).toBe("/users/me")

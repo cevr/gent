@@ -53,7 +53,11 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
 const withEventPublisher = (
   baseEventStoreLayer: Layer.Layer<EventStore>,
   stateRuntimeLayer: Layer.Layer<ExtensionStateRuntime> = ExtensionStateRuntime.Test(),
-) => Layer.provide(EventPublisherLive, Layer.merge(baseEventStoreLayer, stateRuntimeLayer))
+) =>
+  Layer.provide(
+    EventPublisherLive,
+    Layer.mergeAll(baseEventStoreLayer, stateRuntimeLayer, testRegistryLayer),
+  )
 
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(
@@ -548,7 +552,11 @@ describe("AgentRunner", () => {
     }
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
-      Layer.merge(baseEventStoreLayer, Layer.succeed(ExtensionStateRuntime, stateRuntime)),
+      Layer.mergeAll(
+        baseEventStoreLayer,
+        Layer.succeed(ExtensionStateRuntime, stateRuntime),
+        testRegistryLayer,
+      ),
     )
     const deps = Layer.mergeAll(
       storageLayer,

@@ -39,10 +39,11 @@ describe("ActorProcess", () => {
   const makeActorProcessLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+    const extRegistry = makeTestExtRegistry()
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      makeTestExtRegistry(),
+      extRegistry,
       ExtensionStateRuntime.Test(),
       eventStoreLayer,
       recorderLayer,
@@ -179,10 +180,11 @@ describe("ActorProcess", () => {
         ),
     })
 
+    const extRegistry2 = makeTestExtRegistry()
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      makeTestExtRegistry(),
+      extRegistry2,
       ExtensionStateRuntime.Test(),
       eventStoreLayer,
       recorderLayer,
