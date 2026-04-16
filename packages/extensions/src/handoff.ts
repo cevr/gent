@@ -1,68 +1,68 @@
 import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
-  type ExtensionActorDefinition,
-  type TurnAfterInput,
+  defineExtension,
+  interceptorContribution,
+  defineInterceptor,
+  toolContribution,
+  workflowContribution,
   type ExtensionHostContext,
   type Message,
+  type TurnAfterInput,
+  type WorkflowContribution,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
-import { extension } from "@gent/core/extensions/api"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
 import { AutoProtocol } from "./auto-protocol.js"
 
-// Cooldown state — per session, managed by actor lifecycle
-interface CooldownState {
-  readonly cooldown: number
-}
-
-const CooldownIntent = Schema.TaggedStruct("Suppress", { count: Schema.Number })
-type CooldownIntent = typeof CooldownIntent.Type
-
 const EXTENSION_ID = HANDOFF_EXTENSION_ID
 
-const CooldownMachineState = MState({
-  Active: {
-    cooldown: Schema.Number,
-  },
+// ── Workflow: cooldown counter ──
+//
+// State: a single integer. Suppressed by `Suppress(count)`, decremented on
+// every `TurnCompleted`. Replaces the pre-C8b actor that conflated this
+// state with a UI snapshot (the snapshot was only used for self-reads).
+// Self-reads now go through `GetCooldown` reply — typed and explicit.
+
+const CooldownState = MState({
+  Active: { cooldown: Schema.Number },
 })
 
-const CooldownMachineEvent = MEvent({
+const CooldownEvent = MEvent({
   TurnCompleted: {},
-  Suppress: {
-    count: Schema.Number,
-  },
+  Suppress: { count: Schema.Number },
+  GetCooldown: MEvent.reply({}, Schema.Number),
 })
 
 const cooldownMachine = Machine.make({
-  state: CooldownMachineState,
-  event: CooldownMachineEvent,
-  initial: CooldownMachineState.Active({ cooldown: 0 }),
+  state: CooldownState,
+  event: CooldownEvent,
+  initial: CooldownState.Active({ cooldown: 0 }),
 })
-  .on(CooldownMachineState.Active, CooldownMachineEvent.TurnCompleted, ({ state }) =>
-    state.cooldown > 0 ? CooldownMachineState.Active({ cooldown: state.cooldown - 1 }) : state,
+  .on(CooldownState.Active, CooldownEvent.TurnCompleted, ({ state }) =>
+    state.cooldown > 0 ? CooldownState.Active({ cooldown: state.cooldown - 1 }) : state,
   )
-  .on(CooldownMachineState.Active, CooldownMachineEvent.Suppress, ({ event }) =>
-    CooldownMachineState.Active({ cooldown: event.count }),
+  .on(CooldownState.Active, CooldownEvent.Suppress, ({ event }) =>
+    CooldownState.Active({ cooldown: event.count }),
+  )
+  .on(CooldownState.Active, CooldownEvent.GetCooldown, ({ state }) =>
+    Machine.reply(state, state.cooldown),
   )
 
-const cooldownActor: ExtensionActorDefinition<
-  typeof CooldownMachineState.Type,
-  typeof CooldownMachineEvent.Type
-> = {
-  machine: cooldownMachine,
-  mapEvent: (event) =>
-    event._tag === "TurnCompleted" ? CooldownMachineEvent.TurnCompleted : undefined,
-  mapCommand: (message) =>
-    Schema.is(CooldownIntent)(message) && message._tag === "Suppress"
-      ? CooldownMachineEvent.Suppress({ count: message.count })
-      : undefined,
-  snapshot: {
-    schema: Schema.Struct({ cooldown: Schema.Number }),
-    project: (state) => ({ cooldown: state.cooldown }),
-  },
-  protocols: HandoffProtocol,
-}
+const cooldownWorkflow: WorkflowContribution<typeof CooldownState.Type, typeof CooldownEvent.Type> =
+  {
+    machine: cooldownMachine,
+    mapEvent: (event) => (event._tag === "TurnCompleted" ? CooldownEvent.TurnCompleted : undefined),
+    mapCommand: (message) =>
+      HandoffProtocol.Suppress.is(message)
+        ? CooldownEvent.Suppress({ count: message.count })
+        : undefined,
+    mapRequest: (message) =>
+      HandoffProtocol.GetCooldown.is(message) ? CooldownEvent.GetCooldown : undefined,
+    protocols: HandoffProtocol,
+  }
+
+// ── Interceptor: turn.after — auto-handoff at context-fill threshold ──
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages
@@ -79,7 +79,6 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-// Auto-handoff interceptor — triggers when context fills past threshold
 const autoHandoffImpl = (
   input: TurnAfterInput,
   next: (input: TurnAfterInput) => Effect.Effect<void>,
@@ -96,12 +95,13 @@ const autoHandoffImpl = (
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 
-    // Read cooldown from own actor snapshot — self-reads are safe (local type)
-    const handoffSnap = yield* ctx.extension
-      .getUiSnapshot<CooldownState>(EXTENSION_ID)
-      .pipe(Effect.catchEager(() => Effect.void))
-    const cooldown = handoffSnap?.cooldown ?? 0
-    if (cooldown > 0) return // Cooldown active — actor handles decrement via TurnCompleted
+    // Self-read of cooldown via typed protocol — replaces the C8a-era
+    // `getUiSnapshot` self-read. Workflows do NOT carry UI snapshots; cross-
+    // and self-reads of workflow state go through typed reply messages.
+    const cooldown = yield* ctx.extension
+      .ask(HandoffProtocol.GetCooldown())
+      .pipe(Effect.catchEager(() => Effect.succeed(0)))
+    if (cooldown > 0) return // Cooldown active — workflow handles decrement via TurnCompleted
 
     const contextPercent = yield* ctx.session.estimateContextPercent()
     const handoffThreshold = 85
@@ -132,6 +132,11 @@ const autoHandoffImpl = (
     }
   }).pipe(Effect.catchEager(() => Effect.void))
 
-export const HandoffExtension = extension(EXTENSION_ID, ({ ext }) =>
-  ext.tools(HandoffTool).on("turn.after", autoHandoffImpl).actor(cooldownActor),
-)
+export const HandoffExtension = defineExtension({
+  id: EXTENSION_ID,
+  contributions: () => [
+    toolContribution(HandoffTool),
+    interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
+    workflowContribution(cooldownWorkflow),
+  ],
+})
