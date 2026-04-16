@@ -12,6 +12,8 @@
 import { Deferred, Effect, Stream } from "effect"
 import {
   TurnError,
+  ToolCallId,
+  ToolRunner,
   type TurnContext,
   type TurnEvent,
   type TurnExecutor,
@@ -120,19 +122,31 @@ export const makeAcpTurnExecutor = (
 ): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
-      // Capture current Effect context so the codemode proxy can run tool Effects
-      // from Promise-land (MCP handler is async, not Effect).
-      // The actual context has all services; tool.execute erases Deps to `any`
-      // via AnyToolDefinition, so we need the type escape hatch.
+      // Capture the Effect context so the codemode proxy can dispatch tool
+      // calls through ToolRunner.run() from Promise-land. The captured context
+      // includes ToolRunner and all its dependencies — each runTool call creates
+      // an Effect that yields ToolRunner and runs the tool, executed via
+      // runPromiseWith with the full context.
       const services = yield* Effect.context<never>()
-      const run = Effect.runPromiseWith(services)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      const runEffect: CodemodeConfig["runEffect"] = (eff: any) => run(eff as Effect.Effect<any>)
+      const run = Effect.runPromiseWith(services) as (
+        e: Effect.Effect<any, any, any>,
+      ) => Promise<any>
+
+      const runTool: CodemodeConfig["runTool"] = (toolName, args) => {
+        const toolCallId = ToolCallId.of(crypto.randomUUID())
+        const toolCtx = { ...ctx.hostCtx, toolCallId }
+        return run(
+          Effect.gen(function* () {
+            const toolRunner = yield* ToolRunner
+            return yield* toolRunner.run({ toolCallId, toolName, input: args }, toolCtx)
+          }),
+        )
+      }
 
       const codemodeConfig: CodemodeConfig = {
         tools: ctx.tools,
-        hostCtx: ctx.hostCtx,
-        runEffect,
+        runTool,
       }
 
       const session = yield* manager

@@ -35,16 +35,17 @@ export const createAcpSessionManager = (): AcpSessionManager => {
         return { conn: existing.conn, acpSessionId: existing.acpSessionId }
       }
 
+      // Spawn subprocess first — if the binary is missing, fail fast before
+      // starting the codemode server (avoids leaking an HTTP server)
+      const proc = Bun.spawn([config.command, ...config.args], {
+        stdio: ["pipe", "pipe", "inherit"],
+      })
+
       // Start codemode MCP server if tools are available
       let codemode: CodemodeServer | undefined
       if (codemodeConfig !== undefined && codemodeConfig.tools.length > 0) {
         codemode = yield* startCodemodeServer(codemodeConfig)
       }
-
-      // Spawn subprocess
-      const proc = Bun.spawn([config.command, ...config.args], {
-        stdio: ["pipe", "pipe", "inherit"],
-      })
 
       // Create a long-lived scope for the connection's fibers
       const scope = yield* Scope.make()

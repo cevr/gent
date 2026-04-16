@@ -211,6 +211,7 @@ export {
 export type { ProviderResolution } from "../providers/provider.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
+export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
 
 // ── Simple Parameter Types ──
 

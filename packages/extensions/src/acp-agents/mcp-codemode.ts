@@ -4,21 +4,16 @@
  *
  * The ACP agent in bare mode has zero built-in tools. This server gives it
  * one: `execute` — which dispatches to gent's full tool surface through
- * the proxy. `ToolRunner` is the real safety boundary.
+ * the proxy. Tool execution routes through `ToolRunner.run()` via the
+ * `runTool` callback provided by the executor.
  *
  * @module
  */
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import {
-  type AnyToolDefinition,
-  type ToolContext,
-  type ExtensionHostContext,
-  ToolCallId,
-  buildToolJsonSchema,
-} from "@gent/core/extensions/api"
+import { type AnyToolDefinition, buildToolJsonSchema } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -30,23 +25,22 @@ export interface CodemodeServer {
 
 export interface CodemodeConfig {
   readonly tools: ReadonlyArray<AnyToolDefinition>
-  readonly hostCtx: ExtensionHostContext
-  /** Bridge from Effect-land to Promise-land, carrying the parent runtime context.
-   *  Created via `Effect.runPromiseWith(services)` in the executor. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly runEffect: (effect: Effect.Effect<any, any, any>) => Promise<any>
+  /** Run a tool by name with args. Routes through ToolRunner.run() in the
+   *  parent Effect runtime — full permission checks, interceptors, and
+   *  result enrichment apply. Returns the tool result value. */
+  readonly runTool: (toolName: string, args: unknown) => Promise<unknown>
 }
 
 // ── Tool description generator ──
 
 const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>): string => {
   const lines = [
-    "Execute TypeScript with access to gent tools.",
+    "Execute JavaScript with access to gent tools.",
     "",
     "## Workflow",
-    '1. `await gent.grep({ pattern: "TODO", path: "src/" })`',
-    '2. Compose: `const files = await gent.glob({ pattern: "**/*.ts" }); ...`',
-    "3. Return results as last expression",
+    '1. `return await gent.grep({ pattern: "TODO", path: "src/" })`',
+    '2. Compose: `const files = await gent.glob({ pattern: "**/*.ts" }); return files`',
+    "3. Use `return` to send results back",
     "",
     "## Available tools",
   ]
@@ -89,34 +83,21 @@ const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>): strin
 
 const makeGentProxy = (
   tools: ReadonlyArray<AnyToolDefinition>,
-  hostCtx: ExtensionHostContext,
-  runEffect: CodemodeConfig["runEffect"],
+  runTool: CodemodeConfig["runTool"],
 ) => {
-  const toolMap = new Map(tools.map((t) => [t.name, t]))
+  const toolNames = new Set(tools.map((t) => t.name))
 
   return new Proxy(
     {},
     {
       get: (_target, toolName: string) => {
-        const tool = toolMap.get(toolName)
-        if (tool === undefined) {
+        if (!toolNames.has(toolName)) {
           return () => {
             throw new Error(`Unknown tool: ${toolName}`)
           }
         }
 
-        return async (args: unknown) => {
-          const toolCallId = ToolCallId.of(crypto.randomUUID())
-          const ctx: ToolContext = { ...hostCtx, toolCallId }
-
-          // Decode input through the tool's schema
-          const decoded = Schema.decodeUnknownSync(tool.params)(args)
-
-          // Execute the tool directly (same as ToolRunner but without interceptors —
-          // those are handled by the agent loop for the parent agent)
-          const result = await runEffect(tool.execute(decoded, ctx))
-          return result
-        }
+        return async (args: unknown) => runTool(toolName, args)
       },
     },
   )
@@ -126,8 +107,8 @@ const makeGentProxy = (
 
 export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<CodemodeServer> =>
   Effect.sync(() => {
-    const { tools, hostCtx, runEffect } = config
-    const proxy = makeGentProxy(tools, hostCtx, runEffect)
+    const { tools, runTool } = config
+    const proxy = makeGentProxy(tools, runTool)
     const toolDescription = generateToolDescription(tools)
 
     // Low-level MCP server (no zod dependency)
@@ -144,7 +125,7 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
           inputSchema: {
             type: "object" as const,
             properties: {
-              code: { type: "string", description: "TypeScript code to execute" },
+              code: { type: "string", description: "JavaScript code to execute" },
             },
             required: ["code"],
           },
@@ -163,8 +144,12 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
       }
 
       try {
+        // Wrap in async function — the ACP agent must use `return` to send back results.
         // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
-        const fn = new Function("gent", `"use strict"; return (async () => { ${args["code"]} })()`)
+        const fn = new Function(
+          "gent",
+          `"use strict"; return (async function() { ${args["code"]} })()`,
+        )
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- new Function returns Function, narrowing to callable shape
         const result: unknown = await (fn as (gent: unknown) => Promise<unknown>)(proxy)
         let text: string
