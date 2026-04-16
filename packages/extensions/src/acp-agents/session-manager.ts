@@ -41,6 +41,12 @@ export const createAcpSessionManager = (): AcpSessionManager => {
       // Create a long-lived scope for the connection's fibers
       const scope = yield* Scope.make()
 
+      // Cleanup helper — kill process + close scope on failure
+      const cleanup = Effect.gen(function* () {
+        yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+        proc.kill()
+      })
+
       // Create ACP connection over stdio (within the session scope)
       const conn = yield* makeAcpConnection({
         stdin: {
@@ -49,22 +55,29 @@ export const createAcpSessionManager = (): AcpSessionManager => {
           },
         },
         stdout: proc.stdout,
-      }).pipe(Effect.provideService(Scope.Scope, scope))
+      }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.tapError(() => cleanup),
+      )
 
       // Initialize — decline all capabilities (tools go through codemode MCP)
-      yield* conn.initialize({
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-        },
-        clientInfo: { name: "gent", version: "0.0.0" },
-      })
+      yield* conn
+        .initialize({
+          protocolVersion: 1,
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+          },
+          clientInfo: { name: "gent", version: "0.0.0" },
+        })
+        .pipe(Effect.tapError(() => cleanup))
 
       // Create session with cwd and optional MCP server
       const mcpServers: unknown[] =
         mcpUrl !== undefined ? [{ type: "http", name: "gent", url: mcpUrl }] : []
-      const sessionResponse = yield* conn.newSession({ cwd, mcpServers })
+      const sessionResponse = yield* conn
+        .newSession({ cwd, mcpServers })
+        .pipe(Effect.tapError(() => cleanup))
 
       const entry: AcpProcess = {
         conn,
