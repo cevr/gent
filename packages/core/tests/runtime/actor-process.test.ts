@@ -6,7 +6,6 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import type { Message, TextPart } from "@gent/core/domain/message"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
@@ -144,25 +143,19 @@ describe("ActorProcess", () => {
     )
   })
 
-  test("invokeTool persists assistant and tool messages, then schedules one follow-up", async () => {
-    let followUpText: string | undefined
+  test("invokeTool persists assistant and tool messages without auto-scheduling a follow-up", async () => {
+    let submitCount = 0
 
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: (message: Message) =>
+      submit: () =>
         Effect.sync(() => {
-          followUpText = message.parts
-            .filter((part): part is TextPart => part.type === "text")
-            .map((part) => part.text)
-            .join("")
+          submitCount += 1
         }),
-      run: (message: Message) =>
+      run: () =>
         Effect.sync(() => {
-          followUpText = message.parts
-            .filter((part): part is TextPart => part.type === "text")
-            .map((part) => part.text)
-            .join("")
+          submitCount += 1
         }),
       steer: () => Effect.void,
       followUp: () => Effect.void,
@@ -235,7 +228,8 @@ describe("ActorProcess", () => {
         expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
         expect(messages[0]?.parts[0]?.type).toBe("tool-call")
         expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-        expect(followUpText).toBe("Tool read completed. Review the result and continue.")
+        // invokeTool no longer auto-schedules a follow-up turn — caller decides.
+        expect(submitCount).toBe(0)
         expect(publishedTags).toContain("ToolCallStarted")
         expect(publishedTags).toContain("ToolCallSucceeded")
         expect(

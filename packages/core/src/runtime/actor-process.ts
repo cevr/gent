@@ -86,14 +86,7 @@ export type InvokeToolPayload = typeof InvokeToolPayload.Type
 
 export const ActorProcessStatus = Schema.Literals(["idle", "running", "interrupted"])
 export type ActorProcessStatus = typeof ActorProcessStatus.Type
-export const ActorProcessPhase = Schema.Literals([
-  "idle",
-  "resolving",
-  "streaming",
-  "executing-tools",
-  "waiting-for-interaction",
-  "finalizing",
-])
+export const ActorProcessPhase = Schema.Literals(["idle", "running", "waiting-for-interaction"])
 export type ActorProcessPhase = typeof ActorProcessPhase.Type
 
 export const ActorProcessState = Schema.Struct({
@@ -165,8 +158,6 @@ const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.of(`${commandId}:assistant`)
 const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.of(`${commandId}:tool-result`)
-const followUpMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.of(`${commandId}:follow-up`)
 
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,
@@ -383,35 +374,9 @@ export const LocalActorProcessLive: Layer.Layer<
             storage,
           })
 
-          const followUpMessage = new Message({
-            id: followUpMessageIdForCommand(commandId),
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            kind: "regular",
-            role: "user",
-            parts: [
-              new TextPart({
-                type: "text",
-                text: `Tool ${input.toolName} completed. Review the result and continue.`,
-              }),
-            ],
-            createdAt: yield* DateTime.nowAsDate,
-          })
-
-          yield* agentLoop.submit(followUpMessage).pipe(
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-              return eventPublisher
-                .publish(
-                  new ErrorOccurred({
-                    sessionId: input.sessionId,
-                    branchId: input.branchId,
-                    error: Cause.pretty(cause),
-                  }),
-                )
-                .pipe(Effect.catchEager(() => Effect.void))
-            }),
-          )
+          // Tool result has been published; whether to queue a follow-up turn
+          // is the caller's responsibility (via `ctx.turn.queueFollowUp` or an
+          // explicit user message). No hardcoded auto-continue here.
         }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause)))),
 
       drainQueuedMessages: (input) =>

@@ -234,14 +234,7 @@ export const SessionSnapshot = Schema.Struct({
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 
-export const RuntimePhase = Schema.Literals([
-  "idle",
-  "resolving",
-  "streaming",
-  "executing-tools",
-  "waiting-for-interaction",
-  "finalizing",
-])
+export const RuntimePhase = Schema.Literals(["idle", "running", "waiting-for-interaction"])
 export type RuntimePhase = typeof RuntimePhase.Type
 
 export const RuntimeStatus = Schema.Literals(["idle", "running", "interrupted"])
@@ -255,22 +248,10 @@ export const SessionRuntime = Schema.Struct({
 })
 export type SessionRuntime = typeof SessionRuntime.Type
 
-const SteerTargetFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-export const SteerCommand = Schema.Union([
-  Schema.TaggedStruct("Cancel", SteerTargetFields),
-  Schema.TaggedStruct("Interrupt", SteerTargetFields),
-  Schema.TaggedStruct("Interject", {
-    ...SteerTargetFields,
-    message: Schema.String,
-    agent: Schema.optional(AgentName),
-  }),
-  Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
-])
-export type SteerCommand = typeof SteerCommand.Type
+// SteerCommand is the source of truth in `runtime/agent/agent-loop.ts`.
+// Re-exported here so transport consumers don't need to reach across module
+// boundaries for the schema.
+export { SteerCommand } from "../runtime/agent/agent-loop.js"
 
 export const QueueTarget = Schema.Struct({
   sessionId: SessionId,

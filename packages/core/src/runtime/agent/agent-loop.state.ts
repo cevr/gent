@@ -247,15 +247,11 @@ export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForI
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
 
 // ── Runtime projection (transport/UI) ──
-// Phase values preserved for backwards compat with transport contract.
+// Phases mirror the 3-state machine 1:1. Sub-phase tracking (resolving,
+// executing-tools, finalizing) was declared but never emitted — collapsed
+// into "running" until we have an honest sub-phase signal.
 
-export type LoopRuntimePhase =
-  | "idle"
-  | "resolving"
-  | "streaming"
-  | "executing-tools"
-  | "waiting-for-interaction"
-  | "finalizing"
+export type LoopRuntimePhase = "idle" | "running" | "waiting-for-interaction"
 export type LoopRuntimeStatus = "idle" | "running" | "interrupted"
 export type LoopRuntimeState = {
   phase: LoopRuntimePhase
@@ -333,7 +329,7 @@ export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState =>
     case "Idle":
       return { phase: "idle", status: "idle", agent, queue }
     case "Running":
-      return { phase: "streaming", status: "running", agent, queue }
+      return { phase: "running", status: "running", agent, queue }
     case "WaitingForInteraction":
       return { phase: "waiting-for-interaction", status: "running", agent, queue }
   }
