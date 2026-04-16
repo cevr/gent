@@ -68,7 +68,10 @@ const mapToolCallUpdate = (obj: Record<string, unknown>): TurnEvent | undefined 
   return undefined
 }
 
-const mapAcpUpdateToTurnEvent = (notification: SessionNotification): TurnEvent | undefined => {
+/** @internal Exported for testing. */
+export const mapAcpUpdateToTurnEvent = (
+  notification: SessionNotification,
+): TurnEvent | undefined => {
   const update = notification.update
   if (typeof update !== "object" || update === null) return undefined
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion

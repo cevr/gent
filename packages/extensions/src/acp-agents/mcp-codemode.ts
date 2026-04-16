@@ -1,6 +1,6 @@
 /**
  * MCP Codemode Server — exposes gent's tools to ACP agents via a single
- * `execute` MCP tool that runs TypeScript-like code with a `gent.*` proxy.
+ * `execute` MCP tool that runs JavaScript code with a `gent.*` proxy.
  *
  * The ACP agent in bare mode has zero built-in tools. This server gives it
  * one: `execute` — which dispatches to gent's full tool surface through
@@ -103,6 +103,74 @@ const makeGentProxy = (
   )
 }
 
+// ── MCP server factory (one per request for stateless mode) ──
+
+const createMcpServerForRequest = (
+  proxy: ReturnType<typeof makeGentProxy>,
+  toolDescription: string,
+) => {
+  const server = new Server({ name: "gent", version: "0.0.0" }, { capabilities: { tools: {} } })
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "execute",
+        description: toolDescription,
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            code: { type: "string", description: "JavaScript code to execute" },
+          },
+          required: ["code"],
+        },
+      },
+    ],
+  }))
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params
+
+    if (name !== "execute" || typeof args?.["code"] !== "string") {
+      return {
+        content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+        isError: true,
+      }
+    }
+
+    try {
+      // Wrap in async function — the ACP agent must use `return` to send back results.
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
+      const fn = new Function(
+        "gent",
+        `"use strict"; return (async function() { ${args["code"]} })()`,
+      )
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- new Function returns Function, narrowing to callable shape
+      const result: unknown = await (fn as (gent: unknown) => Promise<unknown>)(proxy)
+      let text: string
+      if (result === undefined) {
+        text = "(no result)"
+      } else if (typeof result === "string") {
+        text = result
+      } else {
+        text = JSON.stringify(result, null, 2)
+      }
+      return { content: [{ type: "text" as const, text }] }
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+          },
+        ],
+        isError: true,
+      }
+    }
+  })
+
+  return server
+}
+
 // ── Server startup ──
 
 export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<CodemodeServer> =>
@@ -111,75 +179,15 @@ export const startCodemodeServer = (config: CodemodeConfig): Effect.Effect<Codem
     const proxy = makeGentProxy(tools, runTool)
     const toolDescription = generateToolDescription(tools)
 
-    // Low-level MCP server (no zod dependency)
-    const mcpServer = new Server(
-      { name: "gent", version: "0.0.0" },
-      { capabilities: { tools: {} } },
-    )
-
-    mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: "execute",
-          description: toolDescription,
-          inputSchema: {
-            type: "object" as const,
-            properties: {
-              code: { type: "string", description: "JavaScript code to execute" },
-            },
-            required: ["code"],
-          },
-        },
-      ],
-    }))
-
-    mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params
-
-      if (name !== "execute" || typeof args?.["code"] !== "string") {
-        return {
-          content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
-          isError: true,
-        }
-      }
-
-      try {
-        // Wrap in async function — the ACP agent must use `return` to send back results.
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: trusted ACP agent code execution
-        const fn = new Function(
-          "gent",
-          `"use strict"; return (async function() { ${args["code"]} })()`,
-        )
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- new Function returns Function, narrowing to callable shape
-        const result: unknown = await (fn as (gent: unknown) => Promise<unknown>)(proxy)
-        let text: string
-        if (result === undefined) {
-          text = "(no result)"
-        } else if (typeof result === "string") {
-          text = result
-        } else {
-          text = JSON.stringify(result, null, 2)
-        }
-        return { content: [{ type: "text" as const, text }] }
-      } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-            },
-          ],
-          isError: true,
-        }
-      }
-    })
-
-    // Start Bun HTTP server on ephemeral port
+    // Stateless: fresh Server+Transport per request. MCP SDK's Server.connect()
+    // can only be called once per instance, so we create a new server for each
+    // incoming request.
     const bunServer = Bun.serve({
       port: 0,
       async fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/mcp" && req.method === "POST") {
+          const mcpServer = createMcpServerForRequest(proxy, toolDescription)
           const transport = new WebStandardStreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
           })
