@@ -103,10 +103,20 @@ The app surface is split by concern:
 - storage/event store
 - auth/config/model registry
 - provider stack
-- extension loading
+- extension loading (delegated to `RuntimeProfileResolver`)
 - actor/runtime services
 
 It is the composition boundary. Not the domain boundary.
+
+### RuntimeProfileResolver
+
+`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Three callers historically did this independently and drifted; now every composition root uses the same resolver and only differs in scope:
+
+- **Server startup** (`server/dependencies.ts`) — resolves once at boot, holds for server lifetime. Publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
+- **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, caches by canonical path inside the server scope.
+- **Ephemeral child runs** (`runtime/agent/agent-runner.ts`) — does NOT re-resolve; forwards an already-resolved `ExtensionRegistry` from the parent.
+
+`compileBaseSections(profile)` resolves dynamic prompt sections inside the extension-services runtime so contributions like `Skills`'s prompt section can read services from their own `setup.layer`.
 
 ## Runtime
 

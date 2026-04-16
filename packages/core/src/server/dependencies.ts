@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path, Context } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
@@ -17,17 +17,14 @@ import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { discoverExtensions } from "../runtime/extensions/loader.js"
 import {
-  reconcileLoadedExtensions,
-  setupDiscoveredExtensions,
-  setupBuiltinExtensions,
-} from "../runtime/extensions/activation.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
-import { type ScheduledJobCommand } from "../runtime/extensions/scheduler.js"
+  buildExtensionLayers,
+  compileBaseSections,
+  resolveRuntimeProfile,
+  type RuntimeProfile,
+} from "../runtime/profile.js"
+import { ExtensionRegistry, type ResolvedExtensions } from "../runtime/extensions/registry.js"
+import { type ScheduledJobCommand, type SchedulerFailure } from "../runtime/extensions/scheduler.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
@@ -35,7 +32,6 @@ import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "./event-publisher.js"
-import { buildBasePromptSections } from "./system-prompt.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
 
@@ -44,6 +40,14 @@ class InteractionRecoveryTag extends Context.Service<
   InteractionRecoveryTag,
   { readonly recovered: number }
 >()("@gent/core/src/server/dependencies/InteractionRecoveryTag") {}
+
+/**
+ * Profile data published as a service so downstream layers (e.g. `agentRuntimeLive`)
+ * can reuse the resolver's prompt sections instead of recomputing them.
+ */
+class RuntimeProfileTag extends Context.Service<RuntimeProfileTag, RuntimeProfile>()(
+  "@gent/core/src/server/dependencies/RuntimeProfileTag",
+) {}
 
 export interface DependenciesConfig {
   cwd: string
@@ -68,8 +72,6 @@ export interface DependenciesConfig {
   extensions: ReadonlyArray<ExtensionInput>
 }
 
-import { readDisabledExtensions } from "../runtime/extensions/disabled.js"
-
 const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, string>> => ({
   HOME: config.home,
   ...(config.shell !== undefined ? { SHELL: config.shell } : {}),
@@ -88,106 +90,30 @@ const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") =
   return "extension.startup.failed"
 }
 
-const makeExtensionLayers = (config: DependenciesConfig) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const path = yield* Path.Path
-      const disabledSet = yield* readDisabledExtensions({
-        home: config.home,
-        cwd: config.cwd,
-        extra: config.disabledExtensions,
-      })
-
-      const userExtensionsDir = path.join(config.home, ".gent", "extensions")
-      const projectExtensionsDir = path.join(config.cwd, ".gent", "extensions")
-      const discovery = yield* discoverExtensions({
-        userDir: userExtensionsDir,
-        projectDir: projectExtensionsDir,
-      }).pipe(
-        Effect.catchEager((error) =>
-          Effect.logWarning("extension.discovery.failed").pipe(
-            Effect.annotateLogs({ error: String(error) }),
-            Effect.as({ loaded: [] as const, skipped: [] as const }),
-          ),
-        ),
+const logProfileFailures = (
+  resolved: ResolvedExtensions,
+  scheduledJobFailures: ReadonlyArray<SchedulerFailure>,
+) =>
+  Effect.gen(function* () {
+    for (const failed of resolved.failedExtensions) {
+      const message = extensionFailureLogMessage(failed.phase)
+      yield* Effect.logWarning(message).pipe(
+        Effect.annotateLogs({
+          extensionId: failed.manifest.id,
+          error: failed.error,
+        }),
       )
-
-      if (discovery.skipped.length > 0) {
-        yield* Effect.logWarning("extension.discovery.summary").pipe(
-          Effect.annotateLogs({
-            loaded: String(discovery.loaded.length),
-            skipped: String(discovery.skipped.length),
-          }),
-        )
-      }
-
-      const externalSetup = yield* setupDiscoveredExtensions({
-        extensions: discovery.loaded,
-        cwd: config.cwd,
-        home: config.home,
-        disabled: disabledSet,
-      })
-
-      const builtinSetup = yield* setupBuiltinExtensions({
-        extensions: config.extensions,
-        cwd: config.cwd,
-        home: config.home,
-        disabled: disabledSet,
-      })
-      const reconciled = yield* reconcileLoadedExtensions({
-        extensions: [...builtinSetup.active, ...externalSetup.active],
-        failedExtensions: [...builtinSetup.failed, ...externalSetup.failed],
-        home: config.home,
-        command: config.scheduledJobCommand,
-        env: scheduledJobEnv(config),
-      })
-      for (const failed of reconciled.resolved.failedExtensions) {
-        const message = extensionFailureLogMessage(failed.phase)
-        yield* Effect.logWarning(message).pipe(
-          Effect.annotateLogs({
-            extensionId: failed.manifest.id,
-            error: failed.error,
-          }),
-        )
-      }
-      for (const failure of reconciled.scheduledJobFailures) {
-        yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
-          Effect.annotateLogs({
-            extensionId: failure.extensionId,
-            jobId: failure.jobId,
-            error: failure.error,
-          }),
-        )
-      }
-
-      // Collect extension-provided layers (setup.layer — default phase)
-      const extensionLayers = reconciled.resolved.extensions
-        .filter((ext) => ext.setup.layer !== undefined)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-        .map((ext) => ext.setup.layer as Layer.Layer<any>)
-
-      // Collect bus subscriptions from extensions
-      const busSubscriptions = reconciled.resolved.extensions.flatMap((ext) =>
-        (ext.setup.busSubscriptions ?? []).map((sub) => ({
-          pattern: sub.pattern,
-          handler: sub.handler,
-        })),
+    }
+    for (const failure of scheduledJobFailures) {
+      yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
+        Effect.annotateLogs({
+          extensionId: failure.extensionId,
+          jobId: failure.jobId,
+          error: failure.error,
+        }),
       )
-
-      const extensionRuntimeLive = ExtensionStateRuntime.Live(reconciled.resolved.extensions).pipe(
-        Layer.provideMerge(ExtensionTurnControl.Live),
-      )
-
-      const baseLayers = Layer.mergeAll(
-        ExtensionRegistry.fromResolved(reconciled.resolved),
-        extensionRuntimeLive,
-        ExtensionEventBus.withSubscriptions(busSubscriptions),
-      )
-
-      if (extensionLayers.length === 0) return baseLayers
-      return Layer.mergeAll(baseLayers, ...extensionLayers)
-    }),
-  )
+    }
+  })
 
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimePlatformLive = RuntimePlatform.Live({
@@ -215,8 +141,39 @@ export const createDependencies = (config: DependenciesConfig) => {
   const authStoreLive = Layer.provide(AuthStore.Live, authStorageLive)
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
+
+  // Resolve runtime profile once: discovery + setup + reconcile + base sections.
+  // Publishes the profile via `RuntimeProfileTag` so downstream layers (agent runtime)
+  // reuse the same prompt sections without recomputation.
+  const profileLayers = Layer.unwrap(
+    Effect.gen(function* () {
+      const profile = yield* resolveRuntimeProfile({
+        cwd: config.cwd,
+        home: config.home,
+        platform: config.platform,
+        ...(config.shell !== undefined ? { shell: config.shell } : {}),
+        ...(config.osVersion !== undefined ? { osVersion: config.osVersion } : {}),
+        extensions: config.extensions,
+        ...(config.disabledExtensions !== undefined
+          ? { disabledExtensions: config.disabledExtensions }
+          : {}),
+        ...(config.scheduledJobCommand !== undefined
+          ? { scheduledJobCommand: config.scheduledJobCommand }
+          : {}),
+        scheduledJobEnv: scheduledJobEnv(config),
+      })
+      yield* logProfileFailures(profile.resolved, profile.scheduledJobFailures)
+      const extensionLayer = buildExtensionLayers(profile.resolved)
+      const profileTagLayer = Layer.succeed(RuntimeProfileTag, profile)
+      return Layer.mergeAll(extensionLayer, profileTagLayer)
+    }),
+  )
   // Extension registry needs storageLive for SqlClient (extension task layers use it)
-  const extensionRegistryLive = Layer.provide(makeExtensionLayers(config), storageLive)
+  // and ConfigService + RuntimePlatform + platform services for resolveRuntimeProfile.
+  const extensionRegistryLive = Layer.provide(
+    profileLayers,
+    Layer.mergeAll(storageLive, configServiceLive, runtimePlatformLive),
+  )
   const modelRegistryLive = Layer.provide(
     ModelRegistry.Live,
     Layer.mergeAll(runtimePlatformLive, extensionRegistryLive, authStoreLive),
@@ -346,29 +303,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const configService = yield* ConfigService
-
-        const customInstructions = yield* configService.loadInstructions(config.cwd)
-        const isGitRepo = yield* fs.exists(path.join(config.cwd, ".git"))
-        const registry = yield* ExtensionRegistry
-        const extensionSections = yield* registry.listPromptSections()
-
-        // Merge base + extension-contributed sections. Extension sections shadow base by id.
-        const coreSections = buildBasePromptSections({
-          cwd: config.cwd,
-          platform: config.platform,
-          shell: config.shell,
-          osVersion: config.osVersion,
-          isGitRepo,
-          customInstructions,
-        })
-        const sectionMap = new Map(coreSections.map((s) => [s.id, s]))
-        for (const s of extensionSections) {
-          sectionMap.set(s.id, s)
-        }
-        const baseSections = [...sectionMap.values()]
+        // Reuse the resolver's profile data and compile sections inside this
+        // runtime — extension services (e.g. `Skills`) are now in scope so any
+        // dynamic prompt section can resolve correctly.
+        const profile = yield* RuntimeProfileTag
+        const baseSections = yield* compileBaseSections(profile)
         const runnerConfig = {
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }

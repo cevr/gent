@@ -29,20 +29,13 @@ import {
   ExtensionRegistry,
 } from "./extensions/registry.js"
 import {
-  setupBuiltinExtensions,
-  setupDiscoveredExtensions,
-  reconcileLoadedExtensions,
-} from "./extensions/activation.js"
-import { discoverExtensions } from "./extensions/loader.js"
-import { readDisabledExtensions } from "./extensions/disabled.js"
-import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
 } from "./extensions/state-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
-import { buildBasePromptSections } from "../server/system-prompt.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/scheduler.js"
+import { compileBaseSections, resolveRuntimeProfile } from "./profile.js"
 
 // ── SessionProfile ──
 
@@ -100,65 +93,40 @@ export class SessionProfileCache extends Context.Service<
         const serverScope = yield* Scope.Scope
 
         // Capture platform services as a layer so initProfile can use functions
-        // that require FileSystem | Path | ChildProcessSpawner from the Effect context
+        // that require FileSystem | Path | ChildProcessSpawner | ConfigService from
+        // the Effect context (resolveRuntimeProfile loads instructions via ConfigService).
         const platformLayer = Layer.mergeAll(
           Layer.succeed(FileSystem.FileSystem, fs),
           Layer.succeed(Path.Path, pathSvc),
           Layer.succeed(ChildProcessSpawner, spawner),
+          Layer.succeed(ConfigService, configService),
         )
 
         const initProfile = (cwd: string) =>
           Effect.gen(function* () {
-            // Canonicalize cwd to avoid duplicate profiles for same directory
-            const canonicalCwd = pathSvc.resolve(cwd)
-
-            // 1. Read disabled extensions for this cwd
-            const disabledSet = yield* readDisabledExtensions({
+            // 1. Resolve runtime profile (discover, setup, reconcile, build sections)
+            //    Provided server scope so extension onShutdown + scheduled jobs survive.
+            const profileData = yield* resolveRuntimeProfile({
+              cwd,
               home: config.home,
-              cwd: canonicalCwd,
-              extra: config.disabledExtensions,
-            })
-
-            // 2. Discover project extensions
-            const userExtensionsDir = pathSvc.join(config.home, ".gent", "extensions")
-            const projectExtensionsDir = pathSvc.join(canonicalCwd, ".gent", "extensions")
-            const discovery = yield* discoverExtensions({
-              userDir: userExtensionsDir,
-              projectDir: projectExtensionsDir,
-            }).pipe(
-              Effect.catchEager((error) =>
-                Effect.logWarning("session-profile.extension.discovery.failed").pipe(
-                  Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
-                  Effect.as({ loaded: [] as const, skipped: [] as const }),
-                ),
-              ),
-            )
-
-            // 3. Setup extensions
-            const externalSetup = yield* setupDiscoveredExtensions({
-              extensions: discovery.loaded,
-              cwd: canonicalCwd,
-              home: config.home,
-              disabled: disabledSet,
-            })
-
-            const builtinSetup = yield* setupBuiltinExtensions({
+              platform: config.platform,
+              ...(config.shell !== undefined ? { shell: config.shell } : {}),
+              ...(config.osVersion !== undefined ? { osVersion: config.osVersion } : {}),
               extensions: config.extensions,
-              cwd: canonicalCwd,
-              home: config.home,
-              disabled: disabledSet,
-            })
-
-            // 4. Reconcile — uses server scope so extension lifecycle survives
-            const reconciled = yield* reconcileLoadedExtensions({
-              extensions: [...builtinSetup.active, ...externalSetup.active],
-              failedExtensions: [...builtinSetup.failed, ...externalSetup.failed],
-              home: config.home,
-              command: config.scheduledJobCommand,
-              env: config.scheduledJobEnv,
+              ...(config.disabledExtensions !== undefined
+                ? { disabledExtensions: config.disabledExtensions }
+                : {}),
+              ...(config.scheduledJobCommand !== undefined
+                ? { scheduledJobCommand: config.scheduledJobCommand }
+                : {}),
+              ...(config.scheduledJobEnv !== undefined
+                ? { scheduledJobEnv: config.scheduledJobEnv }
+                : {}),
             }).pipe(Effect.provideService(Scope.Scope, serverScope))
 
-            for (const failed of reconciled.resolved.failedExtensions) {
+            const { cwd: canonicalCwd, resolved, instructions } = profileData
+
+            for (const failed of resolved.failedExtensions) {
               yield* Effect.logWarning("session-profile.extension.failed").pipe(
                 Effect.annotateLogs({
                   extensionId: failed.manifest.id,
@@ -169,14 +137,13 @@ export class SessionProfileCache extends Context.Service<
               )
             }
 
-            // 5. Build extension-provided service layers (Skills.Live, AutoJournal.Live, etc.)
-            const extensionLayers = reconciled.resolved.extensions
+            // 2. Build extension-provided service layers (Skills.Live, AutoJournal.Live, etc.)
+            const extensionLayers = resolved.extensions
               .filter((ext) => ext.setup.layer !== undefined)
               // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
               .map((ext) => ext.setup.layer as Layer.Layer<any>)
 
-            // 6. Build registry + extension state runtime + extension layers from resolved
-            const resolved = reconciled.resolved
+            // 3. Build registry + extension state runtime + extension layers from resolved
             const registryLayer = ExtensionRegistry.fromResolved(resolved)
             const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(
               resolved.extensions,
@@ -194,26 +161,13 @@ export class SessionProfileCache extends Context.Service<
             const registryService = Context.get(combinedCtx, ExtensionRegistry)
             const stateRuntime = Context.get(combinedCtx, ExtensionStateRuntime)
 
-            // 7. Build base prompt sections for this cwd
-            const instructions = yield* configService.loadInstructions(canonicalCwd)
-            const isGitRepo = yield* fs.exists(pathSvc.join(canonicalCwd, ".git"))
-            const extensionSections = yield* registryService.listPromptSections()
-
-            const coreSections = buildBasePromptSections({
-              cwd: canonicalCwd,
-              platform: config.platform,
-              shell: config.shell,
-              osVersion: config.osVersion,
-              isGitRepo,
-              customInstructions: instructions,
-            })
-
-            // Merge: extension sections shadow core by id
-            const sectionMap = new Map(coreSections.map((s) => [s.id, s]))
-            for (const s of extensionSections) {
-              sectionMap.set(s.id, s)
-            }
-            const baseSections = [...sectionMap.values()]
+            // Compile base sections inside the built layer's runtime so any
+            // dynamic prompt section (e.g. `Skills`) can read its required
+            // services from extension `setup.layer`s now in scope.
+            const baseSections = yield* compileBaseSections(profileData).pipe(
+              // @effect-diagnostics-next-line strictEffectProvide:off
+              Effect.provide(Layer.succeedContext(combinedCtx)),
+            )
 
             const profile: SessionProfile = {
               cwd: canonicalCwd,
