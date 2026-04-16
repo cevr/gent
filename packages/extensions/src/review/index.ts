@@ -1,4 +1,7 @@
-import { extension } from "@gent/core/extensions/api"
+import { defineExtension, toolContribution } from "@gent/core/extensions/api"
 import { ReviewTool } from "./review-tool.js"
 
-export const ReviewExtension = extension("@gent/review", ({ ext }) => ext.tools(ReviewTool))
+export const ReviewExtension = defineExtension({
+  id: "@gent/review",
+  contributions: () => [toolContribution(ReviewTool)],
+})

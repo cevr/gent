@@ -1,4 +1,4 @@
-import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
+import { defineAgent, defineExtension, ModelId, agentContribution } from "@gent/core/extensions/api"
 
 const COWORK_PROMPT = `
 Cowork agent. Fast, practical, execute changes.
@@ -74,4 +74,7 @@ const title = defineAgent({
 /** Core agents — general-purpose agents not tied to a specific tool extension. */
 export const CoreAgents = [cowork, deepwork, explore, summarizer, title] as const
 
-export const AgentsExtension = extension("@gent/agents", ({ ext }) => ext.agents(...CoreAgents))
+export const AgentsExtension = defineExtension({
+  id: "@gent/agents",
+  contributions: () => CoreAgents.map((a) => agentContribution(a)),
+})

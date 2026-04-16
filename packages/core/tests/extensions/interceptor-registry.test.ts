@@ -1,20 +1,17 @@
 /**
- * InterceptorRegistry composition equivalence locks.
+ * InterceptorRegistry locks.
  *
- * Locks that `compileInterceptors` (the contribution-native facade) produces
- * the same chain as `compileHooks` did directly. Both share the underlying
- * algorithm — this test guards against accidental drift while the migration
- * to contribution-native authoring is under way.
+ * `compileInterceptors` is now the sole owner of the contribution-side
+ * interceptor composition algorithm. These tests pin its behavior:
+ *   - empty registry no-ops to the base
+ *   - chains compose left-fold inside-out (last registered is outermost)
  *
- * Tied to planify Commit 2. If the facade diverges from the hook chain, the
- * later commits (3-12) that move callers onto `InterceptorContribution` would
- * silently change semantics.
+ * Scope ordering is covered separately in `scope-precedence.test.ts`.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
-import { compileHooks } from "@gent/core/runtime/extensions/hooks"
 import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -32,7 +29,7 @@ const ext = (
 ): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, setup })
 
 describe("interceptor registry", () => {
-  it.live("compileInterceptors matches compileHooks output for the same inputs", () =>
+  it.live("composes scope-ordered chain inside-out (builtin innermost)", () =>
     Effect.gen(function* () {
       const make = (label: string) =>
         defineInterceptor("prompt.system", (input, next) =>
@@ -45,23 +42,14 @@ describe("interceptor registry", () => {
         ext("c", "project", { hooks: { interceptors: [make("project")] } }),
       ]
 
-      const direct = compileHooks(extensions)
       const facade = compileInterceptors(extensions)
-
-      const directResult = yield* direct.runInterceptor(
+      const result = yield* facade.chain.runInterceptor(
         "prompt.system",
         { basePrompt: "x", agent: Agents.cowork },
         () => Effect.succeed("base"),
         stubCtx,
       )
-      const facadeResult = yield* facade.chain.runInterceptor(
-        "prompt.system",
-        { basePrompt: "x", agent: Agents.cowork },
-        () => Effect.succeed("base"),
-        stubCtx,
-      )
-      expect(facadeResult).toBe(directResult)
-      expect(facadeResult).toBe("base[builtin][user][project]")
+      expect(result).toBe("base[builtin][user][project]")
     }),
   )
 

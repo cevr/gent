@@ -17,7 +17,7 @@ import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compileHooks } from "@gent/core/runtime/extensions/hooks"
+import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
 import { defineTool } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -124,7 +124,11 @@ describe("scope precedence", () => {
         })
 
       // Pass out of order to prove sorting, not insertion
-      const compiled = compileHooks([make("p", "project"), make("a", "builtin"), make("u", "user")])
+      const compiled = compileInterceptors([
+        make("p", "project"),
+        make("a", "builtin"),
+        make("u", "user"),
+      ]).chain
 
       return compiled
         .runInterceptor(

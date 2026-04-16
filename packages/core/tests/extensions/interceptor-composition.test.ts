@@ -15,7 +15,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
-import { compileHooks } from "@gent/core/runtime/extensions/hooks"
+import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -59,7 +59,7 @@ describe("interceptor composition", () => {
       },
     })
 
-    const compiled = compileHooks([inner, outer])
+    const compiled = compileInterceptors([inner, outer]).chain
     return compiled
       .runInterceptor(
         "prompt.system",
@@ -96,7 +96,7 @@ describe("interceptor composition", () => {
       },
     })
 
-    const compiled = compileHooks([retrying])
+    const compiled = compileInterceptors([retrying]).chain
     return compiled
       .runInterceptor(
         "prompt.system",
@@ -129,7 +129,7 @@ describe("interceptor composition", () => {
       },
     })
 
-    const compiled = compileHooks([passThrough])
+    const compiled = compileInterceptors([passThrough]).chain
     return compiled
       .runInterceptor(
         "prompt.system",
@@ -177,7 +177,7 @@ describe("interceptor composition", () => {
       },
     })
 
-    const compiled = compileHooks([inner, middle, outer])
+    const compiled = compileInterceptors([inner, middle, outer]).chain
     return compiled
       .runInterceptor(
         "prompt.system",

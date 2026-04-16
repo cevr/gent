@@ -1,4 +1,10 @@
-import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
+import {
+  agentContribution,
+  defineAgent,
+  defineExtension,
+  ModelId,
+  toolContribution,
+} from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
 const ARCHITECT_PROMPT = `
@@ -21,6 +27,7 @@ export const architect = defineAgent({
   systemPromptAddendum: ARCHITECT_PROMPT,
 })
 
-export const ResearchExtension = extension("@gent/research", ({ ext }) =>
-  ext.tools(ResearchTool).agents(architect),
-)
+export const ResearchExtension = defineExtension({
+  id: "@gent/research",
+  contributions: () => [toolContribution(ResearchTool), agentContribution(architect)],
+})

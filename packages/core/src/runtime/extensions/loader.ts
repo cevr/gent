@@ -104,7 +104,7 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
       return yield* Effect.fail(
         new ExtensionLoadError(
           "unknown",
-          `No GentExtension found in ${filePath}. Export an extension() result as default or named export.`,
+          `No GentExtension found in ${filePath}. Export a defineExtension() result as default or named export.`,
         ),
       )
     }

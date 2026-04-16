@@ -1,4 +1,11 @@
-import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
+import {
+  agentContribution,
+  defineAgent,
+  defineExtension,
+  layerContribution,
+  ModelId,
+  toolContribution,
+} from "@gent/core/extensions/api"
 import { RepoTool } from "./repo-explorer.js"
 import { GitReader } from "./git-reader.js"
 
@@ -19,6 +26,11 @@ export const librarian = defineAgent({
   systemPromptAddendum: LIBRARIAN_PROMPT,
 })
 
-export const LibrarianExtension = extension("@gent/librarian", ({ ext, ctx }) =>
-  ext.tools(RepoTool).agents(librarian).layer(GitReader.Live(ctx.home)),
-)
+export const LibrarianExtension = defineExtension({
+  id: "@gent/librarian",
+  contributions: ({ ctx }) => [
+    toolContribution(RepoTool),
+    agentContribution(librarian),
+    layerContribution(GitReader.Live(ctx.home)),
+  ],
+})

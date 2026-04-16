@@ -5,11 +5,14 @@
  * Plan artifacts are persisted via the @gent/artifacts extension.
  */
 
-import { extension } from "@gent/core/extensions/api"
+import { defineExtension, toolContribution } from "@gent/core/extensions/api"
 import { PlanTool } from "./plan-tool.js"
 
 export { PlanTool, PlanParams } from "./plan-tool.js"
 
 export const PLAN_EXTENSION_ID = "@gent/plan"
 
-export const PlanExtension = extension(PLAN_EXTENSION_ID, ({ ext }) => ext.tools(PlanTool))
+export const PlanExtension = defineExtension({
+  id: PLAN_EXTENSION_ID,
+  contributions: () => [toolContribution(PlanTool)],
+})

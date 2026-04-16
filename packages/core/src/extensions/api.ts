@@ -1,66 +1,54 @@
 /**
- * Fluent extension authoring API.
+ * Extension authoring API.
  *
- * Effect-native end-to-end: every contribution returns Effect. There are no Promise
- * edges in the contribution surface — gent is a library used inside Effect programs.
+ * Single entry point: `defineExtension({ id, contributions })`. The factory
+ * receives the setup context and returns a flat `Contribution[]` (or an
+ * Effect that yields one). Smart constructors (`toolContribution`,
+ * `agentContribution`, `layerContribution`, etc.) are re-exported from
+ * `domain/contribution.js`.
+ *
+ * Effect-native end-to-end: every contribution returns Effect. There are no
+ * Promise edges in the contribution surface — gent is a library used inside
+ * Effect programs.
  *
  * @example
  * ```ts
  * import { Effect } from "effect"
- * import { extension } from "@gent/core/extensions/api"
+ * import {
+ *   defineExtension,
+ *   defineTool,
+ *   toolContribution,
+ *   layerContribution,
+ * } from "@gent/core/extensions/api"
  *
- * export default extension("my-ext", ({ ext }) =>
- *   ext
- *     .tools({
- *       name: "greet",
- *       description: "Say hello",
- *       execute: (p) => Effect.succeed(`Hi ${p.name}!`),
- *     })
- *     .on("prompt.system", (input, next) =>
- *       next(input).pipe(Effect.map((s) => s + "\n-- house rule")),
- *     )
- *     .actor(MyActor)
- *     .layer(MyService.Live)
- *     .provider(myProvider)
- * )
+ * export default defineExtension({
+ *   id: "my-ext",
+ *   contributions: () => [
+ *     toolContribution(MyTool),
+ *     layerContribution(MyService.Live),
+ *   ],
+ * })
  * ```
  *
  * @module
  */
-import { Data, Effect, Schema, Stream, type Layer } from "effect"
-import { ChildProcess } from "effect/unstable/process"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import {
-  defineInterceptor,
+import { Effect, type Layer } from "effect"
+import type {
   ExtensionLoadError,
-  type GentExtension,
-  type ExtensionSetup,
-  type ExtensionInterceptorDescriptor,
-  type ExtensionInterceptorKey,
-  type ExtensionInterceptorMap,
-  type AnyExtensionActorDefinition,
-  type ScheduledJobContribution,
-  type CommandContribution,
-  type ExtensionSetupContext,
+  GentExtension,
+  ExtensionSetup,
+  ExtensionInterceptorDescriptor,
+  AnyExtensionActorDefinition,
+  ScheduledJobContribution,
+  CommandContribution,
+  ExtensionSetupContext,
 } from "../domain/extension.js"
-import {
-  defineTool,
-  ToolDefinitionBrand,
-  type ToolContext,
-  type AnyToolDefinition,
-} from "../domain/tool.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import type { AnyToolDefinition } from "../domain/tool.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
-import type { TurnExecutor } from "../domain/turn-executor.js"
-import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
-import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
+import type { AgentDefinition } from "../domain/agent.js"
+import type { PromptSectionInput } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
-import { ModelId } from "../domain/model.js"
 import type { PermissionRule } from "../domain/permission.js"
-import {
-  createExtensionStorage,
-  type ExtensionStorage,
-} from "../runtime/extensions/extension-storage.js"
 import { type Contribution, filterByKind } from "../domain/contribution.js"
 import type { AnyMutationContribution } from "../domain/mutation.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
@@ -213,6 +201,8 @@ export {
   type BusSubscriptionContribution,
   type LifecycleContribution,
   type ProjectionKindContribution,
+  type QueryKindContribution,
+  type MutationKindContribution,
   type WorkflowKindContribution,
   filterByKind,
   // smart constructors
@@ -231,6 +221,8 @@ export {
   onStartup as onStartupContribution,
   onShutdown as onShutdownContribution,
   projection as projectionContribution,
+  query as queryContribution,
+  mutation as mutationContribution,
   workflow as workflowContribution,
 } from "../domain/contribution.js"
 export type {
@@ -276,42 +268,6 @@ export { InterceptorError } from "../domain/interceptor.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
-
-// ── Simple Parameter Types ──
-
-interface SimpleParam {
-  readonly type: "string" | "number" | "boolean"
-  readonly description?: string
-  readonly optional?: boolean
-}
-
-type SimpleParams = Record<string, SimpleParam>
-
-// ── Simple Tool Definition ──
-
-export interface SimpleToolDef {
-  readonly name: string
-  readonly description: string
-  readonly parameters?: SimpleParams
-  readonly concurrency?: "serial" | "parallel"
-  readonly idempotent?: boolean
-  readonly interactive?: boolean
-  readonly promptSnippet?: string
-  readonly promptGuidelines?: ReadonlyArray<string>
-  readonly execute: (params: Record<string, unknown>, ctx: ToolContext) => Effect.Effect<unknown>
-}
-
-// ── Simple Agent Definition ──
-
-export interface SimpleAgentDef {
-  readonly name: string
-  readonly model: string
-  readonly systemPromptAddendum?: string
-  readonly description?: string
-  readonly allowedTools?: ReadonlyArray<string>
-  readonly deniedTools?: ReadonlyArray<string>
-  readonly temperature?: number
-}
 
 // ── Simple Event (curated subset of AgentEvent for external authors) ──
 
@@ -374,160 +330,19 @@ type LegacySimpleAgentRunEvent =
 
 type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
-// ── Errors ──
-
-export class ExecError extends Data.TaggedError("@gent/core/src/extensions/api/ExecError")<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
-
-export interface ExecResult {
-  readonly stdout: string
-  readonly stderr: string
-  readonly exitCode: number
-  readonly timedOut: boolean
-}
-
-// ── Internal Helpers ──
-
-const isFullToolDef = (def: SimpleToolDef | AnyToolDefinition): def is AnyToolDefinition =>
-  typeof def === "object" && def !== null && ToolDefinitionBrand in def
-
-const schemaTypeMap: Record<string, Schema.Schema<unknown>> = {
-  string: Schema.String as Schema.Schema<unknown>,
-  number: Schema.Number as Schema.Schema<unknown>,
-  boolean: Schema.Boolean as Schema.Schema<unknown>,
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const buildParamsSchema = (params?: SimpleParams): Schema.Decoder<any, never> => {
-  if (params === undefined || Object.keys(params).length === 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    return Schema.Struct({}) as unknown as Schema.Decoder<any, never>
-  }
-  const fields: Record<string, Schema.Schema<unknown>> = {}
-  for (const [key, param] of Object.entries(params)) {
-    const base = schemaTypeMap[param.type] ?? Schema.Unknown
-    fields[key] = param.optional === true ? Schema.optional(base) : base
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-  return Schema.Struct(fields) as unknown as Schema.Decoder<any, never>
-}
-
-const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
-  defineTool({
-    name: def.name,
-    description: def.description,
-    params: buildParamsSchema(def.parameters),
-    concurrency: def.concurrency,
-    idempotent: def.idempotent,
-    interactive: def.interactive,
-    promptSnippet: def.promptSnippet,
-    promptGuidelines: def.promptGuidelines,
-    execute: (params: Record<string, unknown>, ctx: ToolContext) => def.execute(params, ctx),
-  }) as AnyToolDefinition
-
-const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
-  defineAgent({
-    name: def.name,
-    model: ModelId.of(def.model),
-    systemPromptAddendum: def.systemPromptAddendum,
-    description: def.description,
-    allowedTools: def.allowedTools,
-    deniedTools: def.deniedTools,
-    temperature: def.temperature,
-  })
-
-// ── Extension Builder ──
-
-/** Opaque brand carried by all builder chain results. Used as the factory return type
- *  so that `Omit<ExtensionBuilder<P>, ...>` is assignable to it. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface ExtensionBuilderResult<_Provides = never> {}
-
-export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResult<Provides> {
-  // ── Registration (single-call, variadic where applicable) ──
-
-  /** Register tools. Accepts SimpleToolDef or full AnyToolDefinition. Single call. */
-  tools(
-    ...defs: ReadonlyArray<SimpleToolDef | AnyToolDefinition>
-  ): Omit<ExtensionBuilder<Provides>, "tools">
-  /** Register agents. Accepts SimpleAgentDef or full AgentDefinition. Single call. */
-  agents(
-    ...defs: ReadonlyArray<SimpleAgentDef | AgentDefinition>
-  ): Omit<ExtensionBuilder<Provides>, "agents">
-  /** Register a slash command. Multiple calls ok. Handler returns Effect. */
-  command(
-    name: string,
-    options: {
-      description?: string
-      handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
-    },
-  ): ExtensionBuilder<Provides>
-  /** Register prompt sections. Static or dynamic. Single call.
-   *  Dynamic sections' R is constrained to Provides — services must come from .layer(). */
-  promptSections(
-    ...sections: ReadonlyArray<PromptSection | DynamicPromptSection<Provides>>
-  ): Omit<ExtensionBuilder<Provides>, "promptSections">
-  /** Register permission deny/allow rules. Single call. */
-  permissionRules(
-    ...rules: ReadonlyArray<PermissionRule>
-  ): Omit<ExtensionBuilder<Provides>, "permissionRules">
-  /** Register an external driver (turn executor) for external agent dispatch.
-   *  Multiple calls ok. */
-  externalDriver(id: string, executor: TurnExecutor): ExtensionBuilder<Provides>
-  /** Register an Effect-native interceptor hook. Multiple calls ok. */
-  on<K extends ExtensionInterceptorKey>(
-    key: K,
-    handler: ExtensionInterceptorMap[K],
-  ): ExtensionBuilder<Provides>
-  /** Spawn a shell command at setup time. Returns Effect. For runtime exec during turns,
-   *  use the bash tool instead. */
-  exec(
-    command: string,
-    args?: ReadonlyArray<string>,
-    options?: { cwd?: string; timeout?: number },
-  ): Effect.Effect<ExecResult, ExecError>
-  /** Register a startup hook. Effect-only. Multiple calls compose in order. */
-  onStartup(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
-  /** Register a shutdown hook. Effect-only. Multiple calls compose in order. */
-  onShutdown(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
-
-  /** File-backed key-value storage, namespaced by extension ID.
-   *  All methods return Effect — pipe the result, don't await. */
-  readonly storage: ExtensionStorage
-
-  // ── Full-power path (Effect-aware) ──
-
-  /** Register a stateful actor. Single call. */
-  actor(actor: AnyExtensionActorDefinition): Omit<ExtensionBuilder<Provides>, "actor">
-  /** Provide a service Layer. Single call — compose with Layer.merge before passing. Widens Provides.
-   *  Layers with unsatisfied requirements (R) are accepted — the runtime provides them (e.g. SqlClient). */
-  layer<A, R>(layer: Layer.Layer<A, never, R>): Omit<ExtensionBuilder<Provides | A>, "layer">
-  /** Register an AI model driver (provider). Single call. */
-  modelDriver(driver: ModelDriverContribution): Omit<ExtensionBuilder<Provides>, "modelDriver">
-  /** Register durable host-owned scheduled jobs. Single call. */
-  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): Omit<ExtensionBuilder<Provides>, "jobs">
-  /** Subscribe to a bus channel. Effect-only handler. Multiple calls ok. */
-  bus(
-    pattern: string,
-    handler: (envelope: {
-      channel: string
-      payload: unknown
-      sessionId?: string
-      branchId?: string
-    }) => Effect.Effect<void>,
-  ): ExtensionBuilder<Provides>
-  /** Register a read-only projection (derives from services; surfaces prompt/ui/policy).
-   *  Multiple calls ok. The projection's R requirement must be satisfied by `.layer()`. */
-  projection(p: AnyProjectionContribution): ExtensionBuilder<Provides>
-  /** Register a typed read-only RPC handler — invoked via `ctx.extension.query(ref, input)`.
-   *  Multiple calls ok. The query's R requirement must be satisfied by `.layer()`. */
-  query(q: AnyQueryContribution): ExtensionBuilder<Provides>
-  /** Register a typed write RPC handler — invoked via `ctx.extension.mutate(ref, input)`.
-   *  Multiple calls ok. The mutation's R requirement must be satisfied by `.layer()`. */
-  mutation(m: AnyMutationContribution): ExtensionBuilder<Provides>
-}
+// ── Removed in C12 ──
+//
+// `ExtensionBuilder`, `extension(id, factory)`, `SimpleToolDef`/`SimpleAgentDef`,
+// and `ext.exec()` (`ExecError`/`ExecResult`) were the legacy fluent-builder
+// authoring surface. All builtin and example extensions now compose
+// `Contribution[]` arrays via `defineExtension({ id, contributions })`. The
+// interceptor compilation algorithm moved to `runtime/extensions/interceptor-registry.ts`;
+// the `runtime/extensions/hooks.ts` shell is gone.
+//
+// The `LoweredBuckets`/`placeContribution`/`bucketsToSetup` helpers below
+// remain — they lower contributions into the runtime `ExtensionSetup` shape
+// that the registry consumes today. Subtraction continues in a follow-up
+// when the registry reads `Contribution[]` directly (post-planify).
 
 // ── Public API ──
 
@@ -543,16 +358,13 @@ const mergeEffectHooks = (
   effects.length === 0 ? undefined : Effect.all(effects, { discard: true }).pipe(Effect.asVoid)
 
 /**
- * Lower a flat `Contribution[]` array into the legacy `ExtensionSetup` shape.
+ * Lower a flat `Contribution[]` array into the runtime `ExtensionSetup` shape.
  *
  * Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs)
- * are merged in registration order — later contributions append to the same field.
- * Multi-call kinds (commands/interceptors/turnExecutors/jobs/bus/lifecycle) accumulate.
- *
- * This is the canonical lowering used by both `extension(...)` (builder) and
- * `defineExtension({...})`. As later commits migrate the runtime to consume
- * `Contribution[]` directly, this helper shrinks; once the registry is contribution-native
- * (Commit 12), the helper goes away with the legacy `ExtensionSetup` shape.
+ * accumulate in registration order; multi-call kinds (commands/interceptors/jobs/bus/lifecycle)
+ * are appended. Used by `defineExtension({...})` to materialize the registry-facing setup
+ * bag from the canonical contribution array. Goes away with `ExtensionSetup` in a follow-up
+ * when the registry reads `Contribution[]` directly.
  */
 interface LoweredBuckets {
   tools: AnyToolDefinition[]
@@ -760,233 +572,5 @@ export const defineExtension = (params: {
       const result = params.contributions({ ctx })
       const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
       return lowerContributions(contribs)
-    }),
-})
-
-/** Effect-native shell exec via ChildProcess. Used by `ext.exec()` at setup time.
- *  Captures the spawner from setup context — no service requirement leaks. */
-const execEffect = (
-  spawner: ChildProcessSpawner["Service"],
-  defaultCwd: string,
-  command: string,
-  args: ReadonlyArray<string> | undefined,
-  options: { cwd?: string; timeout?: number } | undefined,
-): Effect.Effect<ExecResult, ExecError> => {
-  const timeoutMs = options?.timeout ?? 30_000
-  const program = Effect.gen(function* () {
-    const cmd = ChildProcess.make(command, args ?? [], {
-      cwd: options?.cwd ?? defaultCwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const handle = yield* spawner.spawn(cmd)
-    const decoder = new TextDecoder()
-    const decode = (chunks: ReadonlyArray<Uint8Array>) =>
-      chunks.map((c) => decoder.decode(c)).join("")
-    const [stdoutChunks, stderrChunks, exitCode] = yield* Effect.all(
-      [Stream.runCollect(handle.stdout), Stream.runCollect(handle.stderr), handle.exitCode],
-      { concurrency: "unbounded" },
-    )
-    return {
-      stdout: decode(stdoutChunks),
-      stderr: decode(stderrChunks),
-      exitCode,
-      timedOut: false,
-    } satisfies ExecResult
-  })
-  return program.pipe(
-    Effect.scoped,
-    Effect.timeoutOrElse({
-      duration: timeoutMs,
-      orElse: () =>
-        Effect.succeed<ExecResult>({ stdout: "", stderr: "", exitCode: -1, timedOut: true }),
-    }),
-    Effect.catchEager((e) => Effect.fail(new ExecError({ message: String(e), cause: e }))),
-  )
-}
-
-/**
- * Create an extension. One API for both simple and full-power extensions.
- *
- * The callback runs synchronously inside the setup Effect. It receives `{ ext, ctx }`
- * and must return the builder (for fluent chaining). For async work, use `onStartup`.
- *
- * @example
- * ```ts
- * // Simple
- * export const MyExt = extension("my-ext", ({ ext }) =>
- *   ext.tools(MyTool, OtherTool)
- * )
- *
- * // With layer + dynamic prompt section (Provides tracking)
- * export const MyExt = extension("my-ext", ({ ext, ctx }) =>
- *   ext
- *     .layer(MyService.Live)
- *     .tools(MyTool)
- *     .promptSections({ id: "x", priority: 80, resolve: Effect.gen(...) })
- * )
- * ```
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const extension = <P = never>(
-  id: string,
-  factory: (args: {
-    ext: ExtensionBuilder<never>
-    ctx: ExtensionSetupContext
-  }) => ExtensionBuilderResult<P>,
-): GentExtension => ({
-  manifest: { id },
-  setup: (ctx) =>
-    Effect.gen(function* () {
-      // Builder lowers into a flat Contribution[] — single source of truth.
-      // Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs)
-      // are guarded by name; multi-call kinds accumulate.
-      const _contributions: Contribution[] = []
-      const _calledOnce = new Set<string>()
-
-      const guardSingle = (name: string) => {
-        if (_calledOnce.has(name)) {
-          throw new Error(`extension "${id}": ${name}() can only be called once`)
-        }
-        _calledOnce.add(name)
-      }
-
-      const extensionStorage = createExtensionStorage(
-        id,
-        `${ctx.home}/.gent/extensions`,
-        ctx.fs,
-        ctx.path,
-      )
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const builder: ExtensionBuilder<any> = {
-        storage: extensionStorage,
-
-        tools: (...defs) => {
-          guardSingle("tools")
-          for (const def of defs) {
-            const t = isFullToolDef(def) ? def : convertSimpleTool(def as SimpleToolDef)
-            _contributions.push({ _kind: "tool", tool: t })
-          }
-          return builder
-        },
-
-        agents: (...defs) => {
-          guardSingle("agents")
-          for (const def of defs) {
-            const a =
-              AgentDefinitionBrand in def || "_tag" in def
-                ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                  (def as AgentDefinition)
-                : // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                  convertSimpleAgent(def as SimpleAgentDef)
-            _contributions.push({ _kind: "agent", agent: a })
-          }
-          return builder
-        },
-
-        externalDriver: (id, executor) => {
-          _contributions.push({ _kind: "external-driver", driver: { id, executor } })
-          return builder
-        },
-
-        command: (name, options) => {
-          _contributions.push({
-            _kind: "command",
-            command: { name, description: options.description, handler: options.handler },
-          })
-          return builder
-        },
-
-        promptSections: (...sections) => {
-          guardSingle("promptSections")
-          for (const s of sections) {
-            _contributions.push({
-              _kind: "prompt-section",
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              section: s as PromptSectionInput,
-            })
-          }
-          return builder
-        },
-
-        permissionRules: (...rules) => {
-          guardSingle("permissionRules")
-          for (const r of rules) _contributions.push({ _kind: "permission-rule", rule: r })
-          return builder
-        },
-
-        on: <K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
-          _contributions.push({
-            _kind: "interceptor",
-            descriptor: defineInterceptor(key, handler),
-          })
-          return builder
-        },
-
-        exec: (command, args, options) => execEffect(ctx.spawner, ctx.cwd, command, args, options),
-
-        onStartup: (effect) => {
-          _contributions.push({ _kind: "lifecycle", phase: "startup", effect })
-          return builder
-        },
-        onShutdown: (effect) => {
-          _contributions.push({ _kind: "lifecycle", phase: "shutdown", effect })
-          return builder
-        },
-
-        // Full-power methods
-
-        actor: (a) => {
-          guardSingle("actor")
-          _contributions.push({ _kind: "actor", actor: a })
-          return builder
-        },
-
-        layer: (l) => {
-          guardSingle("layer")
-          _contributions.push({
-            _kind: "layer",
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            layer: l as Layer.Layer<never, never, object>,
-          })
-          return builder
-        },
-        modelDriver: (d) => {
-          guardSingle("modelDriver")
-          _contributions.push({ _kind: "model-driver", driver: d })
-          return builder
-        },
-        jobs: (...entries) => {
-          guardSingle("jobs")
-          for (const j of entries) _contributions.push({ _kind: "job", job: j })
-          return builder
-        },
-        bus: (pattern, handler) => {
-          _contributions.push({ _kind: "bus-subscription", pattern, handler })
-          return builder
-        },
-        projection: (p) => {
-          _contributions.push({ _kind: "projection", projection: p })
-          return builder
-        },
-        query: (q) => {
-          _contributions.push({ _kind: "query", query: q })
-          return builder
-        },
-        mutation: (m) => {
-          _contributions.push({ _kind: "mutation", mutation: m })
-          return builder
-        },
-      }
-
-      // Run factory — synchronous; mutations land on the builder
-      yield* Effect.try({
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        try: () => factory({ ext: builder as ExtensionBuilder<never>, ctx }),
-        catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
-      })
-
-      return lowerContributions(_contributions)
     }),
 })

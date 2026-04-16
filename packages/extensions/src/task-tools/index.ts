@@ -16,7 +16,14 @@
  * @module
  */
 import { Layer } from "effect"
-import { extension } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  layerContribution,
+  mutationContribution,
+  projectionContribution,
+  queryContribution,
+  toolContribution,
+} from "@gent/core/extensions/api"
 import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
@@ -36,17 +43,22 @@ import {
 
 export type { TaskEntry } from "./identity.js"
 
-export const TaskExtension = extension(TASK_TOOLS_EXTENSION_ID, ({ ext }) =>
-  ext
-    .tools(TaskCreateTool, TaskListTool, TaskGetTool, TaskUpdateTool)
-    .layer(Layer.merge(TaskStorage.Live, TaskService.Live))
-    .projection(TaskProjection)
-    .query(TaskGetQuery)
-    .query(TaskListQuery)
-    .query(TaskGetDepsQuery)
-    .mutation(TaskCreateMutation)
-    .mutation(TaskUpdateMutation)
-    .mutation(TaskDeleteMutation)
-    .mutation(TaskAddDepMutation)
-    .mutation(TaskRemoveDepMutation),
-)
+export const TaskExtension = defineExtension({
+  id: TASK_TOOLS_EXTENSION_ID,
+  contributions: () => [
+    toolContribution(TaskCreateTool),
+    toolContribution(TaskListTool),
+    toolContribution(TaskGetTool),
+    toolContribution(TaskUpdateTool),
+    layerContribution(Layer.merge(TaskStorage.Live, TaskService.Live)),
+    projectionContribution(TaskProjection),
+    queryContribution(TaskGetQuery),
+    queryContribution(TaskListQuery),
+    queryContribution(TaskGetDepsQuery),
+    mutationContribution(TaskCreateMutation),
+    mutationContribution(TaskUpdateMutation),
+    mutationContribution(TaskDeleteMutation),
+    mutationContribution(TaskAddDepMutation),
+    mutationContribution(TaskRemoveDepMutation),
+  ],
+})

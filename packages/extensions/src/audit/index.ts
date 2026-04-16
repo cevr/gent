@@ -1,4 +1,10 @@
-import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
+import {
+  agentContribution,
+  defineAgent,
+  defineExtension,
+  ModelId,
+  toolContribution,
+} from "@gent/core/extensions/api"
 import { AuditTool } from "./audit-tool.js"
 
 const AUDITOR_PROMPT = `
@@ -17,6 +23,7 @@ export const auditor = defineAgent({
   systemPromptAddendum: AUDITOR_PROMPT,
 })
 
-export const AuditExtension = extension("@gent/audit", ({ ext }) =>
-  ext.tools(AuditTool).agents(auditor),
-)
+export const AuditExtension = defineExtension({
+  id: "@gent/audit",
+  contributions: () => [toolContribution(AuditTool), agentContribution(auditor)],
+})

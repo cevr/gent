@@ -1,4 +1,8 @@
-import { extension } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  promptSectionContribution,
+  toolContribution,
+} from "@gent/core/extensions/api"
 import { PRINCIPLE_NAMES } from "./data.js"
 import { PrinciplesTool } from "./principles-tool.js"
 
@@ -9,8 +13,10 @@ Use the \`principles\` tool to read specific principles before making decisions.
 
 ${PRINCIPLE_NAMES.map((name) => `- ${name}`).join("\n")}`
 
-export const PrinciplesExtension = extension("@gent/principles", ({ ext }) =>
-  ext
-    .promptSections({ id: "principles", content: PRINCIPLES_LIST, priority: 55 })
-    .tools(PrinciplesTool),
-)
+export const PrinciplesExtension = defineExtension({
+  id: "@gent/principles",
+  contributions: () => [
+    promptSectionContribution({ id: "principles", content: PRINCIPLES_LIST, priority: 55 }),
+    toolContribution(PrinciplesTool),
+  ],
+})

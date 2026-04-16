@@ -20,7 +20,7 @@ import type {
   ScheduledJobContribution,
 } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
-import type { PromptSectionInput } from "./prompt.js"
+import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./prompt.js"
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
@@ -187,9 +187,19 @@ export const permissionRule = (r: PermissionRule): PermissionRuleContribution =>
   rule: r,
 })
 
-export const promptSection = (s: PromptSectionInput): PromptSectionContribution => ({
+/**
+ * Smart constructor accepts either a static `PromptSection` or a
+ * `DynamicPromptSection<R>` for any `R`. The extension's `layerContribution`
+ * is responsible for providing `R` at the runtime boundary; the contribution
+ * itself stores the section with `R` erased to `never`, mirroring the legacy
+ * builder's behavior.
+ */
+export const promptSection = <R = never>(
+  s: PromptSection | DynamicPromptSection<R>,
+): PromptSectionContribution => ({
   _kind: "prompt-section",
-  section: s,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  section: s as PromptSectionInput,
 })
 
 export const busSubscription = (

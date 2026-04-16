@@ -3,16 +3,28 @@
  *
  * Uses a closure counter incremented on turn.after, injected via prompt.system.
  */
-import { extension } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  defineInterceptor,
+  interceptorContribution,
+} from "@gent/core/extensions/api"
 
-export default extension("turn-counter", ({ ext }) => {
-  let turns = 0
-  return ext
-    .on("turn.after", (_input, next) => {
-      turns++
-      return next(_input)
-    })
-    .on("prompt.system", (input, next) =>
-      next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns + 1}.` }),
-    )
+export default defineExtension({
+  id: "turn-counter",
+  contributions: () => {
+    let turns = 0
+    return [
+      interceptorContribution(
+        defineInterceptor("turn.after", (input, next) => {
+          turns++
+          return next(input)
+        }),
+      ),
+      interceptorContribution(
+        defineInterceptor("prompt.system", (input, next) =>
+          next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns + 1}.` }),
+        ),
+      ),
+    ]
+  },
 })

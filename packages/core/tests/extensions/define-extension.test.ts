@@ -35,7 +35,7 @@ import {
   type SystemPromptInput,
 } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compileHooks } from "@gent/core/runtime/extensions/hooks"
+import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -216,7 +216,7 @@ describe("defineExtension", () => {
       const resolved = resolveExtensions([loaded])
       expect(resolved.tools.get("from-define")?.name).toBe("from-define")
 
-      const compiled = compileHooks([loaded])
+      const compiled = compileInterceptors([loaded]).chain
       const result = yield* compiled.runInterceptor(
         "prompt.system",
         { basePrompt: "yo", agent: Agents.cowork },

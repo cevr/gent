@@ -12,10 +12,12 @@
 import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import {
-  extension,
+  actorContribution,
   ArtifactId,
   BranchId,
+  defineExtension,
   defineTool,
+  toolContribution,
   type ExtensionActorDefinition,
   type ExtensionTurnContext,
   type TurnProjection,
@@ -347,8 +349,13 @@ const ArtifactClearTool = defineTool({
 
 // ── Extension ──
 
-export const ArtifactsExtension = extension(ARTIFACTS_EXTENSION_ID, ({ ext }) =>
-  ext
-    .actor(artifactsActor)
-    .tools(ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool),
-)
+export const ArtifactsExtension = defineExtension({
+  id: ARTIFACTS_EXTENSION_ID,
+  contributions: () => [
+    actorContribution(artifactsActor),
+    toolContribution(ArtifactSaveTool),
+    toolContribution(ArtifactReadTool),
+    toolContribution(ArtifactUpdateTool),
+    toolContribution(ArtifactClearTool),
+  ],
+})

@@ -18,7 +18,7 @@ import {
 } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
-import { type CompiledHookMap, compileHooks } from "./hooks.js"
+import { type CompiledHookMap, compileInterceptors } from "./interceptor-registry.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileQueries, type CompiledQueries } from "./query-registry.js"
 import { compileMutations, type CompiledMutations } from "./mutation-registry.js"
@@ -114,7 +114,7 @@ export const resolveExtensions = (
     }
   }
 
-  const hooks = compileHooks(sorted)
+  const hooks = compileInterceptors(sorted).chain
   const projections = compileProjections(sorted)
   const queries = compileQueries(sorted)
   const mutations = compileMutations(sorted)

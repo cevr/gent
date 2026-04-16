@@ -1,6 +1,13 @@
 import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
-import { extension, type ExtensionActorDefinition } from "@gent/core/extensions/api"
+import {
+  actorContribution,
+  defineExtension,
+  layerContribution,
+  promptSectionContribution,
+  toolContribution,
+  type ExtensionActorDefinition,
+} from "@gent/core/extensions/api"
 import { Skills, formatSkillsForPrompt } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
@@ -90,12 +97,14 @@ const skillsActor: ExtensionActorDefinition<
 
 // ── Extension ──
 
-export const SkillsExtension = extension("@gent/skills", ({ ext, ctx }) =>
-  ext
-    .layer(Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie))
-    .tools(SkillsTool, SearchSkillsTool)
-    .actor(skillsActor)
-    .promptSections({
+export const SkillsExtension = defineExtension({
+  id: "@gent/skills",
+  contributions: ({ ctx }) => [
+    layerContribution(Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie)),
+    toolContribution(SkillsTool),
+    toolContribution(SearchSkillsTool),
+    actorContribution(skillsActor),
+    promptSectionContribution({
       id: "skills",
       priority: 80,
       resolve: Effect.gen(function* () {
@@ -104,4 +113,5 @@ export const SkillsExtension = extension("@gent/skills", ({ ext, ctx }) =>
         return formatSkillsForPrompt(allSkills)
       }),
     }),
-)
+  ],
+})
