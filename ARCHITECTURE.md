@@ -161,7 +161,7 @@ client responds via respondInteraction RPC
           → continues normally
 ```
 
-**Actor-snapshot-driven UI.** The `@gent/interaction-tools` extension has an actor that tracks `InteractionPresented`/`InteractionResolved` events. Its UI snapshot reflects the pending interaction state (`{ requestId, text, metadata }` or `{}`). The client reads this from `extensionSnapshots` — no dedicated `activeInteraction` field on the transport contract.
+**Projection-driven UI.** The `@gent/interaction-tools` extension contributes a `ProjectionContribution` that derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation. Its UI snapshot reflects the pending interaction state (`{ requestId, text, metadata }` or `{}`). The client reads this from `extensionSnapshots` — no dedicated `activeInteraction` field on the transport contract. Source of truth is the storage row, not an in-memory mirror (`derive-do-not-create-states`).
 
 Key properties:
 
@@ -170,7 +170,7 @@ Key properties:
 - **Tool re-execution on resume.** The full `executeToolsPhase` re-runs. Pre-interaction side effects re-execute (idempotent by convention). No continuation payloads.
 - **Permissions are not interactive.** Default-allow with explicit deny rules. `Permission.check` is a synchronous policy check, never blocks.
 
-Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-tools/index.ts` (interaction actor), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
+Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-tools/projection.ts` (InteractionProjection — UI from storage), `interaction-pending-reader.ts` (read-only seam for extensions), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
 
 ## Platform Boundaries
 
@@ -402,9 +402,9 @@ One test file per source file. No god tests. Names match source owners.
 
 ## Interaction Tools Extension
 
-`@gent/interaction-tools` — `ask_user` and `prompt` tools, plus the interaction actor.
+`@gent/interaction-tools` — `ask_user` and `prompt` tools, plus an `InteractionProjection`.
 
-The actor tracks `InteractionPresented`/`InteractionResolved` events. Its UI snapshot is the single source of pending interaction state for clients. The client reads the snapshot from `extensionSnapshots` and renders the appropriate interaction UI (routed by `metadata.type`).
+The projection derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation (storage row is the source of truth — no actor mirror). Its UI snapshot shape is `{ requestId?, text?, metadata? }`. The client reads the snapshot from `extensionSnapshots` and renders the appropriate interaction UI (routed by `metadata.type`). Both event-driven hydration (via `EventPublisherLive` re-evaluating projections) and cold-start hydration (via `SessionQueries.getSessionSnapshot` calling `projections.evaluateUi`) include this snapshot.
 
 ## Artifacts Extension
 

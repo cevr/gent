@@ -325,7 +325,7 @@ export function useSessionFeed(
                   sessionId: session,
                   branchId: branch,
                 })
-                // Hydrate pending interaction from @gent/interaction-tools actor snapshot
+                // Hydrate pending interaction from @gent/interaction-tools projection snapshot
                 const interactionSnap = snapshot.extensionSnapshots?.find(
                   (s) => s.extensionId === "@gent/interaction-tools",
                 )

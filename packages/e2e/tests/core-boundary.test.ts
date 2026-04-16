@@ -106,7 +106,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
+    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test(), runtimePlatformLayer)
     return Layer.provideMerge(AppServicesLive, deps)
   }
 
@@ -204,7 +204,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
+    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test(), runtimePlatformLayer)
     const layer = Layer.provideMerge(AppServicesLive, deps)
 
     await Effect.runPromise(

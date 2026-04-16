@@ -9,6 +9,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { CheckpointStorage } from "./checkpoint-storage.js"
 import { InteractionStorage } from "./interaction-storage.js"
+import { InteractionPendingReader } from "./interaction-pending-reader.js"
 import { SearchStorage } from "./search-storage.js"
 
 // Schema decoders - Effect-based (no sync throws)
@@ -914,10 +915,12 @@ export class Storage extends Context.Service<Storage, StorageService>()(
         return yield* makeStorage
       }),
     ).pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+    const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
       Layer.provide(CheckpointStorage.Live, base),
-      Layer.provide(InteractionStorage.Live, base),
+      interactionStorage,
+      Layer.provide(InteractionPendingReader.Live, interactionStorage),
       Layer.provide(SearchStorage.Live, base),
     )
   }
@@ -934,10 +937,12 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
+    const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
       Layer.provide(CheckpointStorage.Live, base),
-      Layer.provide(InteractionStorage.Live, base),
+      interactionStorage,
+      Layer.provide(InteractionPendingReader.Live, interactionStorage),
       Layer.provide(SearchStorage.Live, base),
     )
   }

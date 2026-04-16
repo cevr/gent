@@ -24,6 +24,9 @@ import { encodeInteractionParams } from "@gent/core/domain/interaction-request"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ProjectionUiContext } from "@gent/core/domain/projection"
 
+// `Storage.MemoryWithSql()` provides `InteractionStorage` AND
+// `InteractionPendingReader` (the read-only seam used by the projection).
+
 const sid1 = SessionId.of("019d97e0-0000-7000-aaaa-000000000001")
 const bid1 = BranchId.of("019d97e0-0000-7001-aaaa-000000000001")
 const sid2 = SessionId.of("019d97e0-0000-7000-bbbb-000000000002")
@@ -109,6 +112,26 @@ describe("InteractionProjection", () => {
       })
       const value = yield* InteractionProjection.query(ctx(sid1, bid1))
       expect(value.model).toEqual({})
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("pending without metadata: model has no metadata key (not metadata: undefined)", () =>
+    Effect.gen(function* () {
+      const storage = yield* InteractionStorage
+      const paramsJson = yield* encodeInteractionParams({ text: "no meta" })
+      yield* storage.persist({
+        requestId: "req-no-meta",
+        type: "approval",
+        sessionId: sid1,
+        branchId: bid1,
+        paramsJson,
+        status: "pending",
+        createdAt: 1,
+      })
+      const value = yield* InteractionProjection.query(ctx(sid1, bid1))
+      expect(value.model.requestId).toBe("req-no-meta")
+      expect(value.model.text).toBe("no meta")
+      expect(Object.hasOwn(value.model, "metadata")).toBe(false)
     }).pipe(Effect.provide(layer)),
   )
 

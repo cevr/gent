@@ -6,6 +6,8 @@ import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
@@ -50,6 +52,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const storage = yield* Storage
       const actorProcess = yield* ActorProcess
       const extensionStateRuntime = yield* ExtensionStateRuntime
+      const extensionRegistry = yield* ExtensionRegistry
+      const platform = yield* RuntimePlatform
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
         const sessions = yield* storage.listSessions()
@@ -154,8 +158,13 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
             Effect.catchEager(() => Effect.succeed(idleRuntime)),
           )
 
-        // Extension UI snapshots for cold-start hydration
-        const extensionSnapshots = yield* extensionStateRuntime
+        // Extension UI snapshots for cold-start hydration. Two sources:
+        //  - actors  → `ExtensionStateRuntime.getUiSnapshots` (in-memory state)
+        //  - projections → `projections.evaluateUi` (re-derived from disk)
+        // Compile-time UI ownership rule (projection-registry) guarantees an
+        // extensionId cannot own both an actor.snapshot and a projection.ui,
+        // so concatenation is safe — no dedupe needed.
+        const actorSnapshots = yield* extensionStateRuntime
           .getUiSnapshots(input.sessionId, input.branchId)
           .pipe(
             Effect.map((snapshots) =>
@@ -167,6 +176,25 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
             ),
             Effect.catchEager(() => Effect.succeed([] as const)),
           )
+        const projectionSnapshots = yield* extensionRegistry
+          .getResolved()
+          .projections.evaluateUi({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            cwd: platform.cwd,
+            home: platform.home,
+          })
+          .pipe(
+            Effect.map((evalResult) =>
+              evalResult.uiSnapshots.map((s) => ({
+                extensionId: s.extensionId,
+                epoch: s.epoch,
+                model: s.model,
+              })),
+            ),
+            Effect.catchEager(() => Effect.succeed([] as const)),
+          )
+        const extensionSnapshots = [...actorSnapshots, ...projectionSnapshots]
 
         return {
           sessionId: input.sessionId,

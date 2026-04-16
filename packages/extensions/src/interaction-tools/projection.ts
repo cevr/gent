@@ -1,6 +1,6 @@
 /**
  * InteractionProjection — derives the active pending-interaction snapshot
- * from `InteractionStorage`.
+ * from `InteractionPendingReader` (a read-only seam over `InteractionStorage`).
  *
  * Replaces the actor-as-mirror that mapped `InteractionPresented`/
  * `InteractionResolved` events into a `Pending` state. The actor's only
@@ -8,12 +8,17 @@
  * `AgentLoop.WaitingForInteraction` + `ApprovalService`. The actor was
  * pure projection mislabeled (`derive-do-not-create-states`).
  *
+ * Boundary: the extension does NOT see `InteractionStorage` (which has
+ * `persist`/`resolve`/`deletePending`). It sees `InteractionPendingReader`
+ * — a read-only view that decodes params at the seam and exposes only
+ * `listPending(scope?)`. This is `boundary-discipline`: the contract a
+ * projection can hold is structurally read-only, not enforced by lint
+ * method-name allowlists alone.
+ *
  * Surfaces:
  *   - `ui` — `{ requestId?, text?, metadata? }`. Empty object when no
- *     pending interaction exists for this session+branch. Shape is
- *     preserved exactly so the TUI snapshot reader (which destructures
- *     `requestId`, `text`, `metadata` from `interactionSnap.model`) is
- *     unchanged.
+ *     pending interaction exists for this session+branch. Shape matches
+ *     the TUI snapshot reader's destructure (`use-session-feed.ts:333`).
  *
  * @module
  */
@@ -22,8 +27,7 @@ import { Effect, Schema } from "effect"
 import {
   type ProjectionContribution,
   ProjectionError,
-  InteractionStorage,
-  decodeInteractionParams,
+  InteractionPendingReader,
 } from "@gent/core/extensions/api"
 
 export const InteractionUiModel = Schema.Struct({
@@ -39,7 +43,7 @@ interface InteractionProjectionValue {
 
 export const InteractionProjection: ProjectionContribution<
   InteractionProjectionValue,
-  InteractionStorage
+  InteractionPendingReader
 > = {
   id: "interaction-pending",
   query: (ctx) =>
@@ -48,36 +52,26 @@ export const InteractionProjection: ProjectionContribution<
       // we cannot scope, so return an empty model. Production always has
       // both for UI evaluation (event-publisher passes the real branch).
       if (ctx.branchId === undefined) return { model: {} }
-      const storage = yield* InteractionStorage
-      const pending = yield* storage
+      const reader = yield* InteractionPendingReader
+      const pending = yield* reader
         .listPending({ sessionId: ctx.sessionId, branchId: ctx.branchId })
         .pipe(
           Effect.catchEager((e) =>
             Effect.fail(
               new ProjectionError({
                 projectionId: "interaction-pending",
-                reason: `InteractionStorage.listPending failed: ${String(e)}`,
+                reason: `InteractionPendingReader.listPending failed: ${String(e)}`,
               }),
             ),
           ),
         )
       const first = pending[0]
       if (first === undefined) return { model: {} }
-      const params = yield* decodeInteractionParams(first.paramsJson).pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new ProjectionError({
-              projectionId: "interaction-pending",
-              reason: `decodeInteractionParams failed: ${String(e)}`,
-            }),
-          ),
-        ),
-      )
       return {
         model: {
           requestId: first.requestId,
-          text: params.text,
-          ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
+          text: first.text,
+          ...(first.metadata !== undefined ? { metadata: first.metadata } : {}),
         },
       }
     }),
