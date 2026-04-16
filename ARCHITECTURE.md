@@ -291,7 +291,9 @@ Internally both go through `lowerContributions()` → `ExtensionSetup`. The `Con
 
 - Stateless: tools, interceptors (`ext.on(key, handler)`), jobs, bus subscriptions
 - Stateful: `actor` contribution + optional `layer`, `tools`, `interceptors`, `provider`
-- `layer` extends extension service graph; later commits add `Projection`, `Interceptor`, `Workflow`, `Query`, `Mutation`, `ModelDriver`, `ExternalDriver` kinds.
+- `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`ui`/`policy` projectors. Replaces the actor-as-mirror pattern; lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
+- `Interceptor` (`interceptorContribution(...)`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, etc.). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
+- `layer` extends extension service graph; later commits add `Workflow`, `Query`, `Mutation`, `ModelDriver`, `ExternalDriver` kinds.
 - Lifecycle effects (`onStartup`/`onShutdown`) compose in registration order; failures isolate the extension instead of crashing host startup.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.

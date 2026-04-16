@@ -17,6 +17,8 @@
     "gent/no-positional-log-error": "error",
     // Custom — extensions must not import from runtime/, storage/, server/
     "gent/no-extension-internal-imports": "error",
+    // Custom — projection.query Effects must be read-only
+    "gent/no-projection-writes": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)

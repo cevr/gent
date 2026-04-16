@@ -21,6 +21,7 @@ import {
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type CompiledHookMap, compileHooks } from "./hooks.js"
+import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
 // Resolved snapshot — the immutable compiled state
@@ -34,6 +35,7 @@ export interface ResolvedExtensions {
   readonly commands: ReadonlyArray<CommandContribution>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly hooks: CompiledHookMap
+  readonly projections: CompiledProjections
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
@@ -116,6 +118,7 @@ export const resolveExtensions = (
   }
 
   const hooks = compileHooks(sorted)
+  const projections = compileProjections(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
@@ -144,6 +147,7 @@ export const resolveExtensions = (
     commands,
     permissionRules,
     hooks,
+    projections,
     extensions: sorted,
     failedExtensions: mergedFailures,
     extensionStatuses,

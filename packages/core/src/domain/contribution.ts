@@ -20,6 +20,7 @@ import type {
 } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSectionInput } from "./prompt.js"
+import type { AnyProjectionContribution } from "./projection.js"
 import type { ProviderContribution } from "./provider-contribution.js"
 import type { AnyToolDefinition } from "./tool.js"
 import type { TurnExecutorContribution } from "./turn-executor.js"
@@ -98,6 +99,11 @@ export interface LifecycleContribution {
   readonly effect: Effect.Effect<void>
 }
 
+export interface ProjectionKindContribution {
+  readonly _kind: "projection"
+  readonly projection: AnyProjectionContribution
+}
+
 // ── Union ──
 
 export type Contribution =
@@ -114,6 +120,7 @@ export type Contribution =
   | PromptSectionContribution
   | BusSubscriptionContribution
   | LifecycleContribution
+  | ProjectionKindContribution
 
 export type ContributionKind = Contribution["_kind"]
 
@@ -180,6 +187,11 @@ export const onShutdown = (effect: Effect.Effect<void>): LifecycleContribution =
   _kind: "lifecycle",
   phase: "shutdown",
   effect,
+})
+
+export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
+  _kind: "projection",
+  projection: p,
 })
 
 // ── Filters ──

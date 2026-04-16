@@ -62,6 +62,7 @@ import {
   type ExtensionStorage,
 } from "../runtime/extensions/extension-storage.js"
 import { type Contribution, filterByKind } from "../domain/contribution.js"
+import type { AnyProjectionContribution } from "../domain/projection.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -204,6 +205,7 @@ export {
   type PromptSectionContribution,
   type BusSubscriptionContribution,
   type LifecycleContribution,
+  type ProjectionKindContribution,
   filterByKind,
   // smart constructors
   tool as toolContribution,
@@ -220,7 +222,21 @@ export {
   busSubscription as busSubscriptionContribution,
   onStartup as onStartupContribution,
   onShutdown as onShutdownContribution,
+  projection as projectionContribution,
 } from "../domain/contribution.js"
+export type {
+  ProjectionContribution,
+  ProjectionContext,
+  ProjectionUiSurface,
+  AnyProjectionContribution,
+} from "../domain/projection.js"
+export { ProjectionError } from "../domain/projection.js"
+export type {
+  InterceptorContribution as InterceptorContributionDescriptor,
+  InterceptorKey,
+  InterceptorMap,
+} from "../domain/interceptor.js"
+export { InterceptorError } from "../domain/interceptor.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
@@ -506,6 +522,7 @@ interface LoweredBuckets {
   turnExecutors: TurnExecutorContribution[]
   jobs: ScheduledJobContribution[]
   busSubscriptions: BusSubscriptionEntry[]
+  projections: AnyProjectionContribution[]
   startupEffects: Array<Effect.Effect<void>>
   shutdownEffects: Array<Effect.Effect<void>>
   actor: AnyExtensionActorDefinition | undefined
@@ -523,6 +540,7 @@ const emptyBuckets = (): LoweredBuckets => ({
   turnExecutors: [],
   jobs: [],
   busSubscriptions: [],
+  projections: [],
   startupEffects: [],
   shutdownEffects: [],
   actor: undefined,
@@ -561,6 +579,9 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
     case "bus-subscription":
       b.busSubscriptions.push({ pattern: c.pattern, handler: c.handler })
       return
+    case "projection":
+      b.projections.push(c.projection)
+      return
     case "lifecycle":
       if (c.phase === "startup") b.startupEffects.push(c.effect)
       else b.shutdownEffects.push(c.effect)
@@ -594,6 +615,7 @@ const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
     ...(b.turnExecutors.length > 0 ? { turnExecutors: b.turnExecutors } : {}),
     ...(b.jobs.length > 0 ? { jobs: b.jobs } : {}),
     ...(b.busSubscriptions.length > 0 ? { busSubscriptions: b.busSubscriptions } : {}),
+    ...(b.projections.length > 0 ? { projections: b.projections } : {}),
     ...(b.actor !== undefined ? { actor: b.actor } : {}),
     ...(b.permissionRules.length > 0 ? { permissionRules: b.permissionRules } : {}),
     onStartup,

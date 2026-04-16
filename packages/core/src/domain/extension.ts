@@ -8,6 +8,7 @@ import type { Message, MessageMetadata, MessagePart } from "./message"
 import type { PermissionResult, PermissionRule } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
+import type { AnyProjectionContribution } from "./projection.js"
 import type { PromptSection, PromptSectionInput } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -428,6 +429,8 @@ export interface ExtensionSetup {
       branchId?: string
     }) => Effect.Effect<void>
   }>
+  /** Read-only projections — derived views of services for prompt/UI/policy. */
+  readonly projections?: ReadonlyArray<AnyProjectionContribution>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
   /** Cleanup effect — runs as scope finalizer during graceful shutdown. */
