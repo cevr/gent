@@ -354,10 +354,11 @@ export const ReviewTool = defineTool({
       return { mode, comments: [], summary, raw: report.raw, output: "No findings to fix." }
     }
 
+    // Executor applies fixes — durable so the user can navigate to the child session.
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(report.comments, params.description),
-      runSpec: { parentToolCallId: ctx.toolCallId },
+      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

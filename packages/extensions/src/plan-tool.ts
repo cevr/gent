@@ -130,6 +130,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
       agent: params.architect,
       prompt,
       runSpec: {
+        persistence: "ephemeral",
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         parentToolCallId: params.toolCallId as never,
         overrides: { modelId },
@@ -239,10 +240,12 @@ export const PlanTool = defineTool({
     }
 
     // Fix mode: single cycle — plan + execute. Agent uses @gent/auto for iteration.
+    // Executor runs the actual implementation — durable so the user can
+    // navigate to the child session via session:// link.
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(synthesizedPlan),
-      runSpec: { parentToolCallId: ctx.toolCallId },
+      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

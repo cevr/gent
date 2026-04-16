@@ -335,10 +335,11 @@ export const AuditTool = defineTool({
       return { mode, output: "No findings to fix.", findings: [], paths }
     }
 
+    // Executor applies fixes — durable so the user can navigate to the child session.
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutionPrompt(report.findings, params.prompt),
-      runSpec: { parentToolCallId: ctx.toolCallId },
+      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
