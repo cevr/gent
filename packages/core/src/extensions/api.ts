@@ -249,6 +249,18 @@ export type {
   AnyMutationContribution,
 } from "../domain/mutation.js"
 export { MutationError, MutationNotFoundError } from "../domain/mutation.js"
+export {
+  InteractionStorage,
+  type InteractionStorageService,
+} from "../storage/interaction-storage.js"
+export {
+  decodeInteractionParams,
+  encodeInteractionParams,
+  type InteractionRequestRecord,
+  type ApprovalRequest,
+  type ApprovalDecision,
+  INTERACTION_TYPE,
+} from "../domain/interaction-request.js"
 export type {
   InterceptorContribution as InterceptorContributionDescriptor,
   InterceptorKey,

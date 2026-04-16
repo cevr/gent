@@ -34,7 +34,13 @@ export interface InteractionStorageService {
     record: InteractionRequestRecord,
   ) => Effect.Effect<InteractionRequestRecord, StorageError>
   readonly resolve: (requestId: string) => Effect.Effect<void, StorageError>
-  readonly listPending: () => Effect.Effect<ReadonlyArray<InteractionRequestRecord>, StorageError>
+  /** List pending interactions. Pass `scope` to narrow to a specific session+branch
+   *  (used by the projection for per-session UI). Omit `scope` for a global scan
+   *  (used by server startup for rehydration). */
+  readonly listPending: (scope?: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<ReadonlyArray<InteractionRequestRecord>, StorageError>
   readonly deletePending: (
     sessionId: SessionId,
     branchId: BranchId,
@@ -67,9 +73,11 @@ export class InteractionStorage extends Context.Service<
         ),
 
         listPending: Effect.fn("InteractionStorage.listPending")(
-          function* () {
+          function* (scope?: { sessionId: SessionId; branchId: BranchId }) {
             const rows =
-              yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' ORDER BY created_at ASC`
+              scope === undefined
+                ? yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' ORDER BY created_at ASC`
+                : yield* sql<InteractionRequestRow>`SELECT request_id, type, session_id, branch_id, params_json, status, created_at FROM interaction_requests WHERE status = 'pending' AND session_id = ${scope.sessionId} AND branch_id = ${scope.branchId} ORDER BY created_at ASC`
             return rows.map(fromRow)
           },
           Effect.mapError(mapError("Failed to list pending interaction requests")),
