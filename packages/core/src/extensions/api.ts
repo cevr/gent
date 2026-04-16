@@ -530,22 +530,54 @@ const emptyBuckets = (): LoweredBuckets => ({
 })
 
 const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
-  if (c._kind === "tool") b.tools.push(c.tool)
-  else if (c._kind === "agent") b.agents.push(c.agent)
-  else if (c._kind === "interceptor") b.interceptors.push(c.descriptor)
-  else if (c._kind === "command") b.commands.push(c.command)
-  else if (c._kind === "prompt-section") b.promptSections.push(c.section)
-  else if (c._kind === "permission-rule") b.permissionRules.push(c.rule)
-  else if (c._kind === "provider") b.providers.push(c.provider)
-  else if (c._kind === "turn-executor") b.turnExecutors.push(c.executor)
-  else if (c._kind === "job") b.jobs.push(c.job)
-  else if (c._kind === "bus-subscription")
-    b.busSubscriptions.push({ pattern: c.pattern, handler: c.handler })
-  else if (c._kind === "lifecycle") {
-    if (c.phase === "startup") b.startupEffects.push(c.effect)
-    else b.shutdownEffects.push(c.effect)
-  } else if (c._kind === "actor") b.actor = c.actor
-  else if (c._kind === "layer") b.layer = c.layer
+  switch (c._kind) {
+    case "tool":
+      b.tools.push(c.tool)
+      return
+    case "agent":
+      b.agents.push(c.agent)
+      return
+    case "interceptor":
+      b.interceptors.push(c.descriptor)
+      return
+    case "command":
+      b.commands.push(c.command)
+      return
+    case "prompt-section":
+      b.promptSections.push(c.section)
+      return
+    case "permission-rule":
+      b.permissionRules.push(c.rule)
+      return
+    case "provider":
+      b.providers.push(c.provider)
+      return
+    case "turn-executor":
+      b.turnExecutors.push(c.executor)
+      return
+    case "job":
+      b.jobs.push(c.job)
+      return
+    case "bus-subscription":
+      b.busSubscriptions.push({ pattern: c.pattern, handler: c.handler })
+      return
+    case "lifecycle":
+      if (c.phase === "startup") b.startupEffects.push(c.effect)
+      else b.shutdownEffects.push(c.effect)
+      return
+    case "actor":
+      b.actor = c.actor
+      return
+    case "layer":
+      b.layer = c.layer
+      return
+    default: {
+      // Exhaustiveness: adding a new Contribution kind without updating this switch
+      // is a compile error here. Future commits depend on this guard.
+      const _exhaustive: never = c
+      return _exhaustive
+    }
+  }
 }
 
 const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {

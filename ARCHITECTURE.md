@@ -282,24 +282,28 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-- `extension()` is the unified authoring API — all builtins and external extensions use it
-- Stateless path: `ext.tool()`, `ext.on()`, `ext.jobs()` — no actor required
-- Stateful path: `ext.actor()` with optional `ext.tool()`, `ext.on()`, `ext.layer()`, `ext.provider()` — one actor-owned boundary, extra facets optional
-- `defineExtension()` deleted — `extension()` is the only way to create extensions
-- `ExtensionSetup.layer` — extensions provide services via `Layer.Any`
-- `ext.layer(layer)` — layers merge into the main extension graph; services that need `SubagentRunnerService` resolve it lazily at call time
-- `ExtensionSetup.onStartup` — one-time startup effect; failures isolate the extension from activation instead of crashing host startup
-- Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`
-- `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send
+Two authoring shapes, same lowering. Both produce a flat `Contribution[]` consumed by the runtime registry:
+
+- `extension(id, ({ ext }) => ext.tools(...).layer(...))` — fluent builder. Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs) guarded; multi-call kinds (commands/interceptors/turnExecutors/jobs/bus/lifecycle) accumulate.
+- `defineExtension({ id, contributions: ({ ctx }) => [toolContribution(t), layerContribution(l), ...] })` — flat array, no chain. Smart constructors live in `@gent/core/extensions/api`.
+
+Internally both go through `lowerContributions()` → `ExtensionSetup`. The `Contribution` union is the foundational data structure (`packages/core/src/domain/contribution.ts`) — adding a new kind to the union triggers a compile error in `placeContribution` until handled.
+
+- Stateless: tools, interceptors (`ext.on(key, handler)`), jobs, bus subscriptions
+- Stateful: `actor` contribution + optional `layer`, `tools`, `interceptors`, `provider`
+- `layer` extends extension service graph; later commits add `Projection`, `Interceptor`, `Workflow`, `Query`, `Mutation`, `ModelDriver`, `ExternalDriver` kinds.
+- Lifecycle effects (`onStartup`/`onShutdown`) compose in registration order; failures isolate the extension instead of crashing host startup.
+- Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
+- `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
 ### Extension Event Bus
 
 `ExtensionEventBus` — channel-based pub/sub for extension communication (`runtime/extensions/event-bus.ts`).
 
 - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
-- `ext.bus.on("agent:*", handler)` — wildcard subscription, replaces deprecated `ext.observe()`
-- `ext.bus.on("extensionId:channel", handler)` — targeted side-effect handlers
-- Handlers can return `void`, `Promise<void>`, or `Effect<void>`
+- `ext.bus("agent:*", handler)` — wildcard subscription
+- `ext.bus("extensionId:channel", handler)` — targeted side-effect handlers
+- Handlers MUST return `Effect<void>` — Effect-native end-to-end, no Promise edges
 - Bus is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
 
 ### Task Service Ownership

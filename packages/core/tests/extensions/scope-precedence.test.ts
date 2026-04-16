@@ -2,8 +2,12 @@
  * Scope precedence regression locks.
  *
  * Locks the rule that builtin < user < project across:
- *  - keyed contributions (tools, agents, providers, prompt sections, turn executors) — later wins
+ *  - keyed contributions (tools, agents, prompt sections) — later scope wins
  *  - interceptor chain (later scope wraps earlier — outermost runs first)
+ *  - alphabetical tie-break on extension id within the same scope
+ *
+ * Providers and turn executors share the keyed-contribution code path
+ * (`compileContributions` in registry.ts) — the tools test exercises that path.
  *
  * Tied to the planify Commit 1 substrate. If the registry stops honoring scope precedence
  * across these dimensions, the contribution model has regressed.
