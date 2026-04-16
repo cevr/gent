@@ -1,20 +1,24 @@
 /**
  * Fluent extension authoring API.
  *
+ * Effect-native end-to-end: every contribution returns Effect. There are no Promise
+ * edges in the contribution surface — gent is a library used inside Effect programs.
+ *
  * @example
  * ```ts
+ * import { Effect } from "effect"
  * import { extension } from "@gent/core/extensions/api"
  *
- * // Simple — tools, agents, commands
  * export default extension("my-ext", ({ ext }) =>
- *   ext.tools({ name: "greet", description: "Say hello", execute: async (p) => `Hi ${p.name}!` })
- * )
- *
- * // Effect path — hooks, layers, providers
- * export default extension("@gent/my-builtin", ({ ext }) =>
  *   ext
- *     .tools(MyTool)
- *     .on("prompt.system", (input, next) => next(input).pipe(Effect.map(...)))
+ *     .tools({
+ *       name: "greet",
+ *       description: "Say hello",
+ *       execute: (p) => Effect.succeed(`Hi ${p.name}!`),
+ *     })
+ *     .on("prompt.system", (input, next) =>
+ *       next(input).pipe(Effect.map((s) => s + "\n-- house rule")),
+ *     )
  *     .actor(MyActor)
  *     .layer(MyService.Live)
  *     .provider(myProvider)
@@ -23,7 +27,7 @@
  *
  * @module
  */
-import { Effect, Schema, Data, type Layer } from "effect"
+import { Data, Effect, Schema, type Layer } from "effect"
 import {
   defineInterceptor,
   ExtensionLoadError,
@@ -32,26 +36,12 @@ import {
   type ExtensionInterceptorDescriptor,
   type ExtensionInterceptorKey,
   type ExtensionInterceptorMap,
-  type SystemPromptInput,
-  type ToolExecuteInput,
-  type PermissionCheckInput,
-  type ContextMessagesInput,
-  type TurnBeforeInput,
-  type TurnAfterInput,
-  type ToolResultInput,
-  type MessageInputInput,
-  type MessageOutputInput,
-  type ExtensionTurnContext,
   type AnyExtensionActorDefinition,
-  type ExtensionReduceContext,
-  type ReduceResult,
-  type ExtensionEffect,
   type ProviderContribution,
   type ScheduledJobContribution,
   type CommandContribution,
   type ExtensionSetupContext,
 } from "../domain/extension.js"
-import { type AnyExtensionCommandMessage } from "../domain/extension-protocol.js"
 import {
   defineTool,
   ToolDefinitionBrand,
@@ -59,20 +49,12 @@ import {
   type AnyToolDefinition,
 } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import { toExtensionAsyncContext, type ExtensionContext } from "../domain/extension-context.js"
 import type { TurnExecutorContribution } from "../domain/turn-executor.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
-import { isRecord } from "../domain/guards.js"
-import { SessionId, BranchId } from "../domain/ids.js"
 import { ModelId } from "../domain/model.js"
-import type { PermissionRule, PermissionResult } from "../domain/permission.js"
-import type { Message, MessageMetadata } from "../domain/message.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
-import { interpretEffects } from "../runtime/extensions/extension-actor-shared.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import type { PermissionRule } from "../domain/permission.js"
 import {
   createExtensionStorage,
   type ExtensionStorage,
@@ -179,12 +161,6 @@ export {
   TaskDeleted,
 } from "../domain/event.js"
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
-export {
-  type ExtensionAsyncContext,
-  type ExtensionContext,
-  toExtensionAsyncContext,
-  toExtensionContext,
-} from "../domain/extension-context.js"
 export { SessionId, BranchId, TaskId, ArtifactId, MessageId, ToolCallId } from "../domain/ids.js"
 export { ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
@@ -208,7 +184,7 @@ export {
   type ExtensionPackage,
   type ExtensionInput,
 } from "../domain/extension-package.js"
-export type { ProviderResolution } from "../providers/provider.js"
+export type { ProviderResolution } from "../domain/provider-contribution.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
@@ -234,10 +210,7 @@ export interface SimpleToolDef {
   readonly interactive?: boolean
   readonly promptSnippet?: string
   readonly promptGuidelines?: ReadonlyArray<string>
-  readonly execute: (
-    params: Record<string, unknown>,
-    ctx: ToolContext,
-  ) => unknown | Promise<unknown>
+  readonly execute: (params: Record<string, unknown>, ctx: ToolContext) => Effect.Effect<unknown>
 }
 
 // ── Simple Agent Definition ──
@@ -313,160 +286,21 @@ type LegacySimpleAgentRunEvent =
 
 type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
-// ── Async Hook Types (used by ext.async.on()) ──
+// ── Errors ──
 
-type AsyncTransformHandler<I, O> = (
-  input: I,
-  next: (input: I) => Promise<O>,
-  ctx: ExtensionContext,
-) => O | Promise<O>
-type AsyncFireAndForgetHandler<I> = (
-  input: I,
-  next: (input: I) => Promise<void>,
-  ctx: ExtensionContext,
-) => void | Promise<void>
+export class ExecError extends Data.TaggedError("@gent/core/src/extensions/api/ExecError")<{
+  readonly message: string
+  readonly cause?: unknown
+}> {}
 
-interface AsyncHookHandlers {
-  readonly "prompt.system": AsyncTransformHandler<SystemPromptInput, string>
-  readonly "tool.execute": AsyncTransformHandler<ToolExecuteInput, unknown>
-  readonly "permission.check": AsyncTransformHandler<PermissionCheckInput, PermissionResult>
-  readonly "context.messages": AsyncTransformHandler<ContextMessagesInput, ReadonlyArray<Message>>
-  readonly "turn.before": AsyncFireAndForgetHandler<TurnBeforeInput>
-  readonly "turn.after": AsyncFireAndForgetHandler<TurnAfterInput>
-  readonly "tool.result": AsyncTransformHandler<ToolResultInput, unknown>
-  readonly "message.input": AsyncTransformHandler<MessageInputInput, string>
-  readonly "message.output": AsyncFireAndForgetHandler<MessageOutputInput>
-}
-
-// ── Actor Result ──
-
-// ── Extension Builder ──
-
-/** Opaque brand carried by all builder chain results. Used as the factory return type
- *  so that `Omit<ExtensionBuilder<P>, ...>` is assignable to it. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface ExtensionBuilderResult<_Provides = never> {}
-
-export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResult<Provides> {
-  // ── Registration (single-call, variadic where applicable) ──
-
-  /** Register tools. Accepts SimpleToolDef or full AnyToolDefinition. Single call. */
-  tools(
-    ...defs: ReadonlyArray<SimpleToolDef | AnyToolDefinition>
-  ): Omit<ExtensionBuilder<Provides>, "tools">
-  /** Register agents. Accepts SimpleAgentDef or full AgentDefinition. Single call. */
-  agents(
-    ...defs: ReadonlyArray<SimpleAgentDef | AgentDefinition>
-  ): Omit<ExtensionBuilder<Provides>, "agents">
-  /** Register a slash command. Multiple calls ok. */
-  command(
-    name: string,
-    options: {
-      description?: string
-      handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
-    },
-  ): ExtensionBuilder<Provides>
-  /** Register prompt sections. Static or dynamic. Single call.
-   *  Dynamic sections' R is constrained to Provides — services must come from .layer(). */
-  promptSections(
-    ...sections: ReadonlyArray<PromptSection | DynamicPromptSection<Provides>>
-  ): Omit<ExtensionBuilder<Provides>, "promptSections">
-  /** Register permission deny/allow rules. Single call. */
-  permissionRules(
-    ...rules: ReadonlyArray<PermissionRule>
-  ): Omit<ExtensionBuilder<Provides>, "permissionRules">
-  /** Register a turn executor for external agent dispatch. Multiple calls ok. */
-  turnExecutor(
-    id: string,
-    executor: TurnExecutorContribution["executor"],
-  ): ExtensionBuilder<Provides>
-  /** Register an Effect-native interceptor hook. Multiple calls ok. */
-  on<K extends ExtensionInterceptorKey>(
-    key: K,
-    handler: ExtensionInterceptorMap[K],
-  ): ExtensionBuilder<Provides>
-  /** Execute a shell command at setup time. Returns stdout, stderr, and exitCode.
-   *  For runtime exec during turns, use the bash tool instead. */
-  exec(
-    command: string,
-    args?: ReadonlyArray<string>,
-    options?: { cwd?: string; timeout?: number },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }>
-  /** Register a startup hook. Multiple calls compose in order. */
-  onStartup(fn: () => void | Promise<void>): ExtensionBuilder<Provides>
-  /** Register a shutdown hook. Multiple calls compose in order. */
-  onShutdown(fn: () => void | Promise<void>): ExtensionBuilder<Provides>
-
-  // ── Imperative side effects (usable from ext.async.on() handlers) ──
-
-  /** Send a follow-up message after the current turn completes. */
-  sendMessage(content: string, metadata?: MessageMetadata): void
-  /** Inject a user message mid-turn (interrupts the current turn). */
-  sendUserMessage(content: string): void
-  /** Publish a message to the event bus. */
-  busEmit(channel: string, payload: unknown): void
-  /** Send a command message to another extension's actor (fire-and-forget). */
-  send(message: AnyExtensionCommandMessage): void
-
-  /** File-backed key-value storage, namespaced by extension ID. */
-  readonly storage: ExtensionStorage
-
-  // ── Full-power path (Effect-aware) ──
-
-  /** Register a stateful actor. Single call. */
-  actor(actor: AnyExtensionActorDefinition): Omit<ExtensionBuilder<Provides>, "actor">
-  /** Provide a service Layer. Single call — compose with Layer.merge before passing. Widens Provides.
-   *  Layers with unsatisfied requirements (R) are accepted — the runtime provides them (e.g. SqlClient). */
-  layer<A, R>(layer: Layer.Layer<A, never, R>): Omit<ExtensionBuilder<Provides | A>, "layer">
-  /** Register an AI model provider. Single call. */
-  provider(provider: ProviderContribution): Omit<ExtensionBuilder<Provides>, "provider">
-  /** Register durable host-owned scheduled jobs. Single call. */
-  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): Omit<ExtensionBuilder<Provides>, "jobs">
-  /** Register an Effect-based startup hook. Composes with onStartup(). */
-  onStartupEffect(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
-  /** Register an Effect-based shutdown hook. Composes with onShutdown(). */
-  onShutdownEffect(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
-  /** Subscribe to a bus channel. Multiple calls ok. */
-  bus(
-    pattern: string,
-    handler: (envelope: {
-      channel: string
-      payload: unknown
-      sessionId?: string
-      branchId?: string
-    }) => void | Promise<void> | Effect.Effect<void>,
-  ): ExtensionBuilder<Provides>
-
-  // ── Async surface (Promise-based handlers with ExtensionContext) ──
-
-  /** Promise-based counterpart to Effect-native methods. */
-  readonly async: AsyncExtensionBuilder
-}
-
-export interface AsyncExtensionBuilder {
-  /** Register an async interceptor hook. Handler receives ExtensionContext (Promise-based). */
-  on<K extends keyof AsyncHookHandlers>(key: K, handler: AsyncHookHandlers[K]): void
-  /** Register a slash command. Handler receives ExtensionContext (Promise-based). */
-  command(
-    name: string,
-    options: {
-      description?: string
-      handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
-    },
-  ): void
+export interface ExecResult {
+  readonly stdout: string
+  readonly stderr: string
+  readonly exitCode: number
+  readonly timedOut: boolean
 }
 
 // ── Internal Helpers ──
-
-class SimpleToolError extends Data.TaggedError("@gent/core/src/extensions/api/SimpleToolError")<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
-
-class SimpleHookError extends Data.TaggedError("@gent/core/src/extensions/api/SimpleHookError")<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
 
 const isFullToolDef = (def: SimpleToolDef | AnyToolDefinition): def is AnyToolDefinition =>
   typeof def === "object" && def !== null && ToolDefinitionBrand in def
@@ -502,11 +336,7 @@ const convertSimpleTool = (def: SimpleToolDef): AnyToolDefinition =>
     interactive: def.interactive,
     promptSnippet: def.promptSnippet,
     promptGuidelines: def.promptGuidelines,
-    execute: (params: Record<string, unknown>, ctx: ToolContext) =>
-      Effect.tryPromise({
-        try: () => Promise.resolve(def.execute(params, ctx)),
-        catch: (e) => new SimpleToolError({ message: String(e), cause: e }),
-      }),
+    execute: (params: Record<string, unknown>, ctx: ToolContext) => def.execute(params, ctx),
   }) as AnyToolDefinition
 
 const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
@@ -520,123 +350,89 @@ const convertSimpleAgent = (def: SimpleAgentDef): AgentDefinition =>
     temperature: def.temperature,
   })
 
-/** Extract sessionId/branchId from hook input for effect draining */
-const extractContext = (
-  _key: string,
-  input: unknown,
-): { sessionId?: string; branchId?: string } => {
-  if (!isRecord(input)) return {}
-  return {
-    sessionId: typeof input["sessionId"] === "string" ? input["sessionId"] : undefined,
-    branchId: typeof input["branchId"] === "string" ? input["branchId"] : undefined,
-  }
+// ── Extension Builder ──
+
+/** Opaque brand carried by all builder chain results. Used as the factory return type
+ *  so that `Omit<ExtensionBuilder<P>, ...>` is assignable to it. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface ExtensionBuilderResult<_Provides = never> {}
+
+export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResult<Provides> {
+  // ── Registration (single-call, variadic where applicable) ──
+
+  /** Register tools. Accepts SimpleToolDef or full AnyToolDefinition. Single call. */
+  tools(
+    ...defs: ReadonlyArray<SimpleToolDef | AnyToolDefinition>
+  ): Omit<ExtensionBuilder<Provides>, "tools">
+  /** Register agents. Accepts SimpleAgentDef or full AgentDefinition. Single call. */
+  agents(
+    ...defs: ReadonlyArray<SimpleAgentDef | AgentDefinition>
+  ): Omit<ExtensionBuilder<Provides>, "agents">
+  /** Register a slash command. Multiple calls ok. Handler returns Effect. */
+  command(
+    name: string,
+    options: {
+      description?: string
+      handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
+    },
+  ): ExtensionBuilder<Provides>
+  /** Register prompt sections. Static or dynamic. Single call.
+   *  Dynamic sections' R is constrained to Provides — services must come from .layer(). */
+  promptSections(
+    ...sections: ReadonlyArray<PromptSection | DynamicPromptSection<Provides>>
+  ): Omit<ExtensionBuilder<Provides>, "promptSections">
+  /** Register permission deny/allow rules. Single call. */
+  permissionRules(
+    ...rules: ReadonlyArray<PermissionRule>
+  ): Omit<ExtensionBuilder<Provides>, "permissionRules">
+  /** Register a turn executor for external agent dispatch. Multiple calls ok. */
+  turnExecutor(
+    id: string,
+    executor: TurnExecutorContribution["executor"],
+  ): ExtensionBuilder<Provides>
+  /** Register an Effect-native interceptor hook. Multiple calls ok. */
+  on<K extends ExtensionInterceptorKey>(
+    key: K,
+    handler: ExtensionInterceptorMap[K],
+  ): ExtensionBuilder<Provides>
+  /** Spawn a shell command at setup time. Returns Effect. For runtime exec during turns,
+   *  use the bash tool instead. */
+  exec(
+    command: string,
+    args?: ReadonlyArray<string>,
+    options?: { cwd?: string; timeout?: number },
+  ): Effect.Effect<ExecResult, ExecError>
+  /** Register a startup hook. Effect-only. Multiple calls compose in order. */
+  onStartup(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
+  /** Register a shutdown hook. Effect-only. Multiple calls compose in order. */
+  onShutdown(effect: Effect.Effect<void>): ExtensionBuilder<Provides>
+
+  /** File-backed key-value storage, namespaced by extension ID.
+   *  All methods return Effect — pipe the result, don't await. */
+  readonly storage: ExtensionStorage
+
+  // ── Full-power path (Effect-aware) ──
+
+  /** Register a stateful actor. Single call. */
+  actor(actor: AnyExtensionActorDefinition): Omit<ExtensionBuilder<Provides>, "actor">
+  /** Provide a service Layer. Single call — compose with Layer.merge before passing. Widens Provides.
+   *  Layers with unsatisfied requirements (R) are accepted — the runtime provides them (e.g. SqlClient). */
+  layer<A, R>(layer: Layer.Layer<A, never, R>): Omit<ExtensionBuilder<Provides | A>, "layer">
+  /** Register an AI model provider. Single call. */
+  provider(provider: ProviderContribution): Omit<ExtensionBuilder<Provides>, "provider">
+  /** Register durable host-owned scheduled jobs. Single call. */
+  jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): Omit<ExtensionBuilder<Provides>, "jobs">
+  /** Subscribe to a bus channel. Effect-only handler. Multiple calls ok. */
+  bus(
+    pattern: string,
+    handler: (envelope: {
+      channel: string
+      payload: unknown
+      sessionId?: string
+      branchId?: string
+    }) => Effect.Effect<void>,
+  ): ExtensionBuilder<Provides>
 }
-
-/** Keys where queueFollowUp/interject are allowed (have sessionId/branchId in input) */
-const EFFECT_CAPABLE_HOOKS = new Set([
-  "turn.before",
-  "turn.after",
-  "tool.execute",
-  "tool.result",
-  "context.messages",
-  "message.input",
-  "message.output",
-])
-
-type EffectBinder = {
-  bind: (effects: ExtensionEffect[], hookKey: string) => void
-  unbind: () => void
-}
-
-const drainEffects = (effects: ExtensionEffect[], hookKey: string, input: unknown) =>
-  Effect.gen(function* () {
-    if (effects.length === 0) return
-    const ctx = extractContext(hookKey, input)
-    const tc = yield* Effect.serviceOption(ExtensionTurnControl)
-    if (tc._tag === "Some" && ctx.sessionId !== undefined) {
-      const bus = yield* Effect.serviceOption(ExtensionEventBus)
-      const stateRuntime = yield* Effect.serviceOption(ExtensionStateRuntime)
-      yield* interpretEffects(
-        effects,
-        SessionId.of(ctx.sessionId ?? ""),
-        BranchId.of(ctx.branchId ?? ""),
-        {
-          turnControl: tc.value,
-          busEmit:
-            bus._tag === "Some"
-              ? (channel, payload) =>
-                  bus.value.emit({
-                    channel,
-                    payload,
-                    sessionId: SessionId.of(ctx.sessionId ?? ""),
-                    branchId: BranchId.of(ctx.branchId ?? ""),
-                  })
-              : undefined,
-          send:
-            stateRuntime._tag === "Some"
-              ? (sessionId, message) =>
-                  stateRuntime.value
-                    .send(sessionId, message)
-                    .pipe(Effect.catchEager(() => Effect.void))
-              : undefined,
-        },
-      ).pipe(Effect.catchDefect(() => Effect.void))
-    }
-  })
-
-const wrapTransformHandler =
-  <I, O>(
-    handler: AsyncTransformHandler<I, O>,
-    hookKey: string,
-    effectBinder: EffectBinder,
-  ): ((
-    input: I,
-    next: (input: I) => Effect.Effect<O>,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<O>) =>
-  (input, next, ctx) => {
-    const effects: ExtensionEffect[] = []
-    effectBinder.bind(effects, hookKey)
-    return Effect.tryPromise({
-      try: () => {
-        const effectNext = (i: I) => Effect.runPromise(next(i))
-        return Promise.resolve(handler(input, effectNext, toExtensionAsyncContext(ctx)))
-      },
-      catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
-    }).pipe(
-      Effect.orDie,
-      // Always unbind (even on failure) to keep the stack clean
-      Effect.ensuring(Effect.sync(() => effectBinder.unbind())),
-      // Drain effects only on success
-      Effect.tap(() => drainEffects(effects, hookKey, input)),
-    ) as Effect.Effect<O>
-  }
-
-const wrapFireAndForgetHandler =
-  <I>(
-    handler: AsyncFireAndForgetHandler<I>,
-    hookKey: string,
-    effectBinder: EffectBinder,
-  ): ((
-    input: I,
-    next: (input: I) => Effect.Effect<void>,
-    ctx: ExtensionHostContext,
-  ) => Effect.Effect<void>) =>
-  (input, next, ctx) =>
-    Effect.gen(function* () {
-      const effects: ExtensionEffect[] = []
-      effectBinder.bind(effects, hookKey)
-      // Bridge Effect→Promise for async handler — intentional runPromise inside Effect
-      // @effect-diagnostics-next-line runEffectInsideEffect:off
-      yield* Effect.tryPromise({
-        try: () => {
-          const effectNext = (i: I) => Effect.runPromise(next(i))
-          return Promise.resolve(handler(input, effectNext, toExtensionAsyncContext(ctx)))
-        },
-        catch: (e) => new SimpleHookError({ message: String(e), cause: e }),
-      }).pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => effectBinder.unbind())))
-      yield* drainEffects(effects, hookKey, input)
-    })
 
 // ── Public API ──
 
@@ -645,39 +441,63 @@ export type { ExtensionSetupContext } from "../domain/extension.js"
 
 type BusSubscriptionEntry = NonNullable<ExtensionSetup["busSubscriptions"]>[number]
 
-/** Merge startup hooks into a single Effect. Extracted to reduce generator complexity. */
-const mergeStartupHooks = (
-  fns: Array<() => void | Promise<void>>,
-  effects: Array<Effect.Effect<void>>,
-): Effect.Effect<void> | undefined => {
-  const all: Effect.Effect<void>[] = [
-    ...fns.map((fn) =>
-      Effect.tryPromise({
-        try: () => Promise.resolve(fn()),
-        catch: (e) => new SimpleHookError({ message: `onStartup: ${String(e)}`, cause: e }),
-      }).pipe(Effect.orDie, Effect.asVoid),
-    ),
-    ...effects,
-  ]
-  return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
-}
+/** Merge startup effects in registration order. */
+const mergeEffectHooks = (
+  effects: ReadonlyArray<Effect.Effect<void>>,
+): Effect.Effect<void> | undefined =>
+  effects.length === 0 ? undefined : Effect.all(effects, { discard: true }).pipe(Effect.asVoid)
 
-/** Merge shutdown hooks into a single Effect. Extracted to reduce generator complexity. */
-const mergeShutdownHooks = (
-  fns: Array<() => void | Promise<void>>,
-  effects: Array<Effect.Effect<void>>,
-): Effect.Effect<void> | undefined => {
-  const all: Effect.Effect<void>[] = [
-    ...fns.map((fn) =>
-      Effect.tryPromise({
-        try: () => Promise.resolve(fn()),
-        catch: (e) => new SimpleHookError({ message: `onShutdown: ${String(e)}`, cause: e }),
-      }).pipe(Effect.orDie, Effect.asVoid),
-    ),
-    ...effects,
-  ]
-  return all.length > 0 ? Effect.all(all, { discard: true }).pipe(Effect.asVoid) : undefined
-}
+/** Effect-native shell exec via Bun.spawn. Used by `ext.exec()` at setup time. */
+const execEffect = (
+  command: string,
+  args: ReadonlyArray<string> | undefined,
+  options: { cwd?: string; timeout?: number } | undefined,
+  defaultCwd: string,
+): Effect.Effect<ExecResult, ExecError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const timeoutMs = options?.timeout ?? 30_000
+      const proc = Bun.spawn([command, ...(args ?? [])], {
+        cwd: options?.cwd ?? defaultCwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+
+      let timer: ReturnType<typeof setTimeout> | undefined
+
+      const completion = (async () => {
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
+        const exitCode = await proc.exited
+        if (timer !== undefined) clearTimeout(timer)
+        return { stdout, stderr, exitCode, timedOut: false as const }
+      })()
+
+      const deadline = new Promise<ExecResult>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            process.kill(-proc.pid, "SIGTERM")
+          } catch {
+            // already dead
+          }
+          setTimeout(() => {
+            try {
+              process.kill(-proc.pid, 0)
+              process.kill(-proc.pid, "SIGKILL")
+            } catch {
+              // already dead
+            }
+          }, 3000)
+          resolve({ stdout: "", stderr: "", exitCode: -1, timedOut: true })
+        }, timeoutMs)
+      })
+
+      return Promise.race([completion, deadline])
+    },
+    catch: (e) => new ExecError({ message: String(e), cause: e }),
+  })
 
 /**
  * Create an extension. One API for both simple and full-power extensions.
@@ -707,7 +527,7 @@ export const extension = <P = never>(
   factory: (args: {
     ext: ExtensionBuilder<never>
     ctx: ExtensionSetupContext
-  }) => ExtensionBuilderResult<P> | Promise<ExtensionBuilderResult<P>>,
+  }) => ExtensionBuilderResult<P>,
 ): GentExtension => ({
   manifest: { id },
   setup: (ctx) =>
@@ -717,8 +537,6 @@ export const extension = <P = never>(
       const _commands: CommandContribution[] = []
       let _promptSections: PromptSectionInput[] | undefined
       const _interceptors: ExtensionInterceptorDescriptor[] = []
-      const _startupFns: Array<() => void | Promise<void>> = []
-      const _shutdownFns: Array<() => void | Promise<void>> = []
       const _startupEffects: Array<Effect.Effect<void>> = []
       const _shutdownEffects: Array<Effect.Effect<void>> = []
       let _provider: ProviderContribution | undefined
@@ -735,47 +553,18 @@ export const extension = <P = never>(
         }
       }
 
-      // Stack-based effect buffer for imperative side effects.
-      const effectStack: Array<{ effects: ExtensionEffect[]; hookKey: string }> = []
-      const effectBinder: EffectBinder = {
-        bind: (effects, hookKey) => {
-          effectStack.push({ effects, hookKey })
-        },
-        unbind: () => {
-          effectStack.pop()
-        },
-      }
-
       const extensionStorage = createExtensionStorage(
         id,
         `${ctx.home}/.gent/extensions`,
         ctx.fs,
         ctx.path,
-        ctx.runEffect,
       )
-
-      const pushEffect = (caller: string, effect: ExtensionEffect) => {
-        const top = effectStack[effectStack.length - 1]
-        if (top === undefined) {
-          throw new Error(
-            `ext.${caller}() called outside of a hook handler. ` +
-              `Use it inside ext.on("turn.after", ...) or ext.on("tool.execute", ...).`,
-          )
-        }
-        if (!EFFECT_CAPABLE_HOOKS.has(top.hookKey)) {
-          throw new Error(
-            `ext.${caller}() is not available in "${top.hookKey}" handlers. ` +
-              `Use it in turn.after, tool.execute, tool.result, or context.messages handlers.`,
-          )
-        }
-        top.effects.push(effect)
-      }
 
       const registerCommand = (
         name: string,
         options: {
           description?: string
-          handler: (args: string, ctx: ExtensionContext) => void | Promise<void>
+          handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
         },
       ) => _commands.push({ name, description: options.description, handler: options.handler })
 
@@ -842,72 +631,14 @@ export const extension = <P = never>(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any,
 
-        sendMessage: (content, metadata?) => {
-          pushEffect("sendMessage", { _tag: "QueueFollowUp", content, metadata })
-        },
-        sendUserMessage: (content) => {
-          pushEffect("sendUserMessage", { _tag: "Interject", content })
-        },
-        busEmit: (channel, payload) => {
-          pushEffect("busEmit", { _tag: "BusEmit", channel, payload })
-        },
-        send: (message) => {
-          pushEffect("send", { _tag: "Send", message })
-        },
+        exec: (command, args, options) => execEffect(command, args, options, ctx.cwd),
 
-        exec: async (command, args, options) => {
-          const timeoutMs = options?.timeout ?? 30_000
-          const proc = Bun.spawn([command, ...(args ?? [])], {
-            cwd: options?.cwd ?? ctx.cwd,
-            stdout: "pipe",
-            stderr: "pipe",
-          })
-
-          let timer: ReturnType<typeof setTimeout> | undefined
-
-          const completion = (async () => {
-            const [stdout, stderr] = await Promise.all([
-              new Response(proc.stdout).text(),
-              new Response(proc.stderr).text(),
-            ])
-            const exitCode = await proc.exited
-            if (timer !== undefined) clearTimeout(timer)
-            return { stdout, stderr, exitCode, timedOut: false as const }
-          })()
-
-          const deadline = new Promise<{
-            stdout: string
-            stderr: string
-            exitCode: number
-            timedOut: true
-          }>((resolve) => {
-            timer = setTimeout(() => {
-              try {
-                process.kill(-proc.pid, "SIGTERM")
-              } catch {
-                // already dead
-              }
-              setTimeout(() => {
-                try {
-                  process.kill(-proc.pid, 0)
-                  process.kill(-proc.pid, "SIGKILL")
-                } catch {
-                  // already dead
-                }
-              }, 3000)
-              resolve({ stdout: "", stderr: "", exitCode: -1, timedOut: true })
-            }, timeoutMs)
-          })
-
-          return Promise.race([completion, deadline])
-        },
-
-        onStartup: (fn) => {
-          _startupFns.push(fn)
+        onStartup: (effect) => {
+          _startupEffects.push(effect)
           return builder
         },
-        onShutdown: (fn) => {
-          _shutdownFns.push(fn)
+        onShutdown: (effect) => {
+          _shutdownEffects.push(effect)
           return builder
         },
 
@@ -935,72 +666,21 @@ export const extension = <P = never>(
           _jobs = [...entries]
           return builder
         },
-        onStartupEffect: (e) => {
-          _startupEffects.push(e)
-          return builder
-        },
-        onShutdownEffect: (e) => {
-          _shutdownEffects.push(e)
-          return builder
-        },
         bus: (pattern, handler) => {
           _busSubscriptions.push({ pattern, handler })
           return builder
         },
-        async: {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          on: ((key: keyof AsyncHookHandlers, handler: AsyncHookHandlers[typeof key]) => {
-            if (key === "turn.before" || key === "turn.after" || key === "message.output") {
-              _interceptors.push(
-                defineInterceptor(
-                  key,
-                  wrapFireAndForgetHandler(
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-                    handler as AsyncFireAndForgetHandler<any>,
-                    key,
-                    effectBinder,
-                  ),
-                ),
-              )
-            } else {
-              _interceptors.push(
-                defineInterceptor(
-                  key,
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                  wrapTransformHandler(
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    handler as AsyncTransformHandler<any, any>,
-                    key,
-                    effectBinder,
-                  ) as never,
-                ),
-              )
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          }) as any,
-          command: (name, options) => registerCommand(name, options),
-        },
       }
 
-      // Run factory — sync factories stay sync (no Promise.resolve tick)
-      const factoryResult = Effect.try({
+      // Run factory — synchronous; mutations land on the builder
+      yield* Effect.try({
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         try: () => factory({ ext: builder as ExtensionBuilder<never>, ctx }),
         catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
       })
-      const result = yield* factoryResult
-      // If factory returned a Promise, await it
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      if (result !== undefined && typeof (result as Promise<unknown>).then === "function") {
-        yield* Effect.tryPromise({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          try: () => result as Promise<unknown>,
-          catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
-        })
-      }
 
-      const onStartup = mergeStartupHooks(_startupFns, _startupEffects)
-      const onShutdown = mergeShutdownHooks(_shutdownFns, _shutdownEffects)
+      const onStartup = mergeEffectHooks(_startupEffects)
+      const onShutdown = mergeEffectHooks(_shutdownEffects)
       return {
         ...(_tools !== undefined && _tools.length > 0 ? { tools: _tools } : {}),
         ...(_agents !== undefined && _agents.length > 0 ? { agents: _agents } : {}),

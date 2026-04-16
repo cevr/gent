@@ -164,9 +164,10 @@ describe("ExtensionEventBus", () => {
           ExtensionEventBus.withSubscriptions([
             {
               pattern: "pre:registered",
-              handler: (env) => {
-                received.push(env as BusEnvelope)
-              },
+              handler: (env) =>
+                Effect.sync(() => {
+                  received.push(env as BusEnvelope)
+                }),
             },
           ]),
         ),

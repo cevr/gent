@@ -32,7 +32,6 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { AgentRunnerService } from "../domain/agent.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { toExtensionAsyncContext } from "../domain/extension-context.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ServerIdentity } from "./server-identity.js"
@@ -411,8 +410,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             { sessionId, branchId, sessionCwd: cmdSession?.cwd },
             hostDeps,
           )
-          const ctx = toExtensionAsyncContext(hostCtx)
-          yield* Effect.promise(() => Promise.resolve(cmd.handler(args, ctx)))
+          yield* cmd.handler(args, hostCtx)
         }),
 
       // -- actor --

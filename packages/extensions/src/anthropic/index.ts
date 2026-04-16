@@ -75,18 +75,14 @@ const loadCredentialsEffect = (
       // Persist refreshed creds
       const persist = authInfo?.persist
       if (persist !== undefined) {
-        yield* Effect.tryPromise({
-          try: () =>
-            persist({
-              access: refreshed.accessToken,
-              refresh: refreshed.refreshToken,
-              expires: refreshed.expiresAt,
-            }),
-          catch: (cause) => ({ _tag: "PersistError" as const, cause }),
+        yield* persist({
+          access: refreshed.accessToken,
+          refresh: refreshed.refreshToken,
+          expires: refreshed.expiresAt,
         }).pipe(
-          Effect.catchEager((e) =>
+          Effect.catchDefect((cause) =>
             Effect.logWarning("anthropic.persist.refreshed.credentials.failed").pipe(
-              Effect.annotateLogs({ error: String(e.cause) }),
+              Effect.annotateLogs({ error: String(cause) }),
             ),
           ),
         )

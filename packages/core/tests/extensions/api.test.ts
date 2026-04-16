@@ -23,7 +23,7 @@ describe("extension api", () => {
           name: "greet",
           description: "Say hello",
           parameters: { name: { type: "string" } },
-          execute: async (params) => `Hello, ${params.name}!`,
+          execute: (params) => Effect.succeed(`Hello, ${params["name"] as string}!`),
         })
         .promptSections({ id: "custom-rules", content: "Be nice.", priority: 50 })
         .agents({
@@ -39,11 +39,10 @@ describe("extension api", () => {
     expect(setup.agents?.map((agent) => agent.name)).toEqual(["helper"])
   })
 
-  test("factory receives setup context and can be async", async () => {
+  test("factory receives setup context", async () => {
     let receivedCwd = ""
     let receivedSource = ""
-    const ext = extension("ctx-test", async ({ ext, ctx }) => {
-      await Promise.resolve()
+    const ext = extension("ctx-test", ({ ext, ctx }) => {
       receivedCwd = ctx.cwd
       receivedSource = ctx.source
       return ext
@@ -68,11 +67,10 @@ describe("extension api", () => {
   test("interceptors register through the extension setup", async () => {
     const ext = extension("hook-test", ({ ext }) =>
       ext
-        .on("prompt.system", async (input, next) => {
-          const result = await next(input)
-          return `${result}\n-- Added by extension`
-        })
-        .on("turn.after", async () => {}),
+        .on("prompt.system", (input, next) =>
+          next(input).pipe(Effect.map((result) => `${result}\n-- Added by extension`)),
+        )
+        .on("turn.after", () => Effect.void),
     )
 
     const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
@@ -86,19 +84,15 @@ describe("extension api", () => {
     const order: string[] = []
     const ext = extension("lifecycle-test", ({ ext }) =>
       ext
-        .onStartup(() => {
-          order.push("startup:sync")
-        })
-        .onStartupEffect(Effect.sync(() => order.push("startup:effect")))
-        .onShutdown(() => {
-          order.push("shutdown")
-        }),
+        .onStartup(Effect.sync(() => order.push("startup:1")))
+        .onStartup(Effect.sync(() => order.push("startup:2")))
+        .onShutdown(Effect.sync(() => order.push("shutdown"))),
     )
 
     const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     await Effect.runPromise(setup.onStartup!)
     await Effect.runPromise(setup.onShutdown!)
-    expect(order).toEqual(["startup:sync", "startup:effect", "shutdown"])
+    expect(order).toEqual(["startup:1", "startup:2", "shutdown"])
   })
 
   test("integrates with extension registry", async () => {
@@ -107,7 +101,7 @@ describe("extension api", () => {
         .tools({
           name: "my_tool",
           description: "test tool",
-          execute: async () => "ok",
+          execute: () => Effect.succeed("ok"),
         })
         .promptSections({ id: "test-section", content: "test content", priority: 90 }),
     )
@@ -139,9 +133,9 @@ describe("extension api", () => {
       ext
         .command("deploy", {
           description: "Deploy the app",
-          handler: async (_args, _ctx) => {},
+          handler: () => Effect.void,
         })
-        .command("rollback", { handler: async () => {} }),
+        .command("rollback", { handler: () => Effect.void }),
     )
 
     const loaded = {
@@ -217,23 +211,27 @@ describe("extension api", () => {
 
   test("ext.exec() runs shell commands", async () => {
     const ext = extension("exec-test", ({ ext }) =>
-      ext.onStartup(async () => {
-        const result = await ext.exec("echo", ["hello"])
-        expect(result.exitCode).toBe(0)
-        expect(result.stdout.trim()).toBe("hello")
-        expect(result.stderr).toBe("")
-      }),
+      ext.onStartup(
+        Effect.gen(function* () {
+          const result = yield* ext.exec("echo", ["hello"])
+          expect(result.exitCode).toBe(0)
+          expect(result.stdout.trim()).toBe("hello")
+          expect(result.stderr).toBe("")
+        }),
+      ),
     )
 
     const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
     await Effect.runPromise(setup.onStartup!)
   })
   test("ext.exec() returns timedOut on timeout", async () => {
-    let result: { exitCode: number; timedOut?: boolean } | undefined
+    let result: { exitCode: number; timedOut: boolean } | undefined
     const ext = extension("exec-timeout-test", ({ ext }) =>
-      ext.onStartup(async () => {
-        result = await ext.exec("sleep", ["10"], { timeout: 1 })
-      }),
+      ext.onStartup(
+        Effect.gen(function* () {
+          result = yield* ext.exec("sleep", ["10"], { timeout: 1 })
+        }),
+      ),
     )
 
     const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
@@ -241,103 +239,6 @@ describe("extension api", () => {
 
     expect(result).toBeDefined()
     expect(result!.timedOut).toBe(true)
-  })
-
-  test("ext.async.on() handlers receive ExtensionContext with Promise methods", async () => {
-    let receivedCtx: unknown = undefined
-    const ext = extension("async-ctx-test", ({ ext }) => {
-      ext.async.on("turn.after", async (input, next, ctx) => {
-        await next(input)
-        receivedCtx = ctx
-      })
-      return ext
-    })
-
-    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
-    const loaded = {
-      manifest: ext.manifest,
-      kind: "user" as const,
-      sourcePath: "test",
-      setup,
-    }
-
-    const resolved = resolveExtensions([loaded])
-    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
-    const compiled = compileHooks(resolved.extensions)
-    const stubCtx = {
-      sessionId: SessionId.of("async-s"),
-      branchId: BranchId.of("async-b"),
-      cwd: "/tmp",
-      home: "/tmp",
-      session: {
-        listMessages: () => Effect.succeed([]),
-      },
-    } as ExtensionHostContext
-
-    await Effect.runPromise(
-      compiled.runInterceptor(
-        "turn.after",
-        {
-          sessionId: SessionId.of("async-s"),
-          branchId: BranchId.of("async-b"),
-          durationMs: 42,
-          agentName: "cowork" as never,
-          interrupted: false,
-        },
-        () => Effect.void,
-        stubCtx,
-      ),
-    )
-
-    expect(receivedCtx).toBeDefined()
-    // ExtensionContext has Promise-returning methods, not Effect
-    const ctx = receivedCtx as { sessionId: string; session: { listMessages: () => unknown } }
-    expect(ctx.sessionId).toBe("async-s")
-    const result = ctx.session.listMessages()
-    expect(result).toBeInstanceOf(Promise)
-  })
-
-  test("ext.async.on() turn.after handler can skip next", async () => {
-    let nextCalled = false
-    const ext = extension("async-skip-test", ({ ext }) => {
-      ext.async.on("turn.after", async (_input, _next) => {
-        // intentionally not calling next
-      })
-      return ext
-    })
-
-    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
-    const resolved = resolveExtensions([
-      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
-    ])
-    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
-    const compiled = compileHooks(resolved.extensions)
-    const stubCtx = {
-      sessionId: SessionId.of("s"),
-      branchId: BranchId.of("b"),
-      cwd: "/tmp",
-      home: "/tmp",
-    } as ExtensionHostContext
-
-    await Effect.runPromise(
-      compiled.runInterceptor(
-        "turn.after",
-        {
-          sessionId: SessionId.of("s"),
-          branchId: BranchId.of("b"),
-          durationMs: 0,
-          agentName: "cowork" as never,
-          interrupted: false,
-        },
-        () => {
-          nextCalled = true
-          return Effect.void
-        },
-        stubCtx,
-      ),
-    )
-
-    expect(nextCalled).toBe(false)
   })
 
   test("ext.on('turn.before') registers and fires via Effect-native path", async () => {
@@ -379,48 +280,6 @@ describe("extension api", () => {
 
     expect(captured).toHaveLength(1)
     expect((captured[0] as { toolCount: number }).toolCount).toBe(3)
-  })
-
-  test("ext.async.on('turn.before') registers and fires via async path", async () => {
-    const captured: unknown[] = []
-    const ext = extension("turn-before-async-test", ({ ext }) => {
-      ext.async.on("turn.before", async (input, next) => {
-        captured.push(input)
-        await next(input)
-      })
-      return ext
-    })
-
-    const setup = await Effect.runPromise(ext.setup(testSetupCtx()))
-    const resolved = resolveExtensions([
-      { manifest: ext.manifest, kind: "user" as const, sourcePath: "test", setup },
-    ])
-    const { compileHooks } = await import("@gent/core/runtime/extensions/hooks")
-    const compiled = compileHooks(resolved.extensions)
-    const stubCtx = {
-      sessionId: SessionId.of("s"),
-      branchId: BranchId.of("b"),
-      cwd: "/tmp",
-      home: "/tmp",
-    } as ExtensionHostContext
-
-    await Effect.runPromise(
-      compiled.runInterceptor(
-        "turn.before",
-        {
-          sessionId: SessionId.of("s"),
-          branchId: BranchId.of("b"),
-          agentName: "cowork" as never,
-          toolCount: 7,
-          systemPromptLength: 1000,
-        },
-        () => Effect.void,
-        stubCtx,
-      ),
-    )
-
-    expect(captured).toHaveLength(1)
-    expect((captured[0] as { systemPromptLength: number }).systemPromptLength).toBe(1000)
   })
 
   test("message.input interceptor transforms user input", async () => {
@@ -506,10 +365,11 @@ describe("extension tools through ToolRunner.run", () => {
         name: { type: "string" },
         count: { type: "number", optional: true },
       },
-      execute: async (params) => {
-        const count = (params.count as number | undefined) ?? 1
-        return `Hello, ${params.name}! (x${String(count)})`
-      },
+      execute: (params) =>
+        Effect.sync(() => {
+          const count = (params["count"] as number | undefined) ?? 1
+          return `Hello, ${params["name"] as string}! (x${String(count)})`
+        }),
     }),
   )
 

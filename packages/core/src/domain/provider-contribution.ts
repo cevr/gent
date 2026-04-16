@@ -4,8 +4,15 @@
  * Extracted from extension.ts to reduce cognitive load on the main extension type file.
  * Re-exported from extension.ts for backwards compatibility.
  */
-import type { Effect } from "effect"
+import type { Effect, Layer } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
 import type { AuthMethod, AuthAuthorizationMethod } from "./auth-method"
+
+/** Resolution returned by a provider's resolveModel. Layer must be fully self-contained
+ *  with all provider-specific behavior baked in (auth, tool naming, cache control). */
+export interface ProviderResolution {
+  readonly layer: Layer.Layer<LanguageModel.LanguageModel>
+}
 
 // Provider Contribution — what a provider extension registers
 
@@ -22,15 +29,13 @@ export interface ProviderContribution {
   readonly id: string
   /** Display name */
   readonly name: string
-  /** Resolve a model name to a ProviderResolution (typed as unknown to avoid domain→ai dep).
-   *  The resolved value should be a `{ layer }` object where `layer` is a
-   *  `Layer<LanguageModel.LanguageModel>` with all provider-specific behavior baked in
-   *  (auth, tool naming, cache control, etc.) via Layer composition. */
+  /** Resolve a model name to a ProviderResolution. The Layer must be fully self-contained
+   *  with all provider-specific behavior baked in (auth, tool naming, cache control). */
   readonly resolveModel: (
     modelName: string,
     authInfo?: ProviderAuthInfo,
     hints?: ProviderHints,
-  ) => unknown
+  ) => ProviderResolution
   /** Filter/extend the model catalog for this provider. authInfo provided when stored auth exists. */
   readonly listModels?: (
     baseCatalog: ReadonlyArray<unknown>,
@@ -64,7 +69,7 @@ export interface ProviderAuthInfo {
     refresh: string
     expires: number
     accountId?: string
-  }) => Promise<void>
+  }) => Effect.Effect<void>
 }
 
 /** Persist auth credentials — passed by ProviderAuth to extension auth handlers */

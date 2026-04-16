@@ -25,8 +25,6 @@ export interface BusEnvelope {
 
 export type BusHandler = (envelope: BusEnvelope) => Effect.Effect<void>
 
-type SubscriptionHandlerResult = void | Promise<void> | Effect.Effect<void>
-
 // ── Service ──
 
 export interface ExtensionEventBusService {
@@ -122,7 +120,7 @@ export class ExtensionEventBus extends Context.Service<
   static withSubscriptions = (
     subscriptions: ReadonlyArray<{
       readonly pattern: string
-      readonly handler: (envelope: BusEnvelope) => SubscriptionHandlerResult
+      readonly handler: BusHandler
     }>,
   ): Layer.Layer<ExtensionEventBus> => {
     if (subscriptions.length === 0) return ExtensionEventBus.Live
@@ -130,12 +128,7 @@ export class ExtensionEventBus extends Context.Service<
       Effect.gen(function* () {
         const bus = yield* ExtensionEventBus
         for (const sub of subscriptions) {
-          yield* bus.on(sub.pattern, (envelope) => {
-            const result = sub.handler(envelope)
-            if (result === undefined) return Effect.void
-            if (Effect.isEffect(result)) return result
-            return Effect.promise(() => result)
-          })
+          yield* bus.on(sub.pattern, sub.handler)
         }
       }),
     )

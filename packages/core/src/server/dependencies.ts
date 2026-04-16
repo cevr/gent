@@ -170,13 +170,7 @@ const makeExtensionLayers = (config: DependenciesConfig) =>
       const busSubscriptions = reconciled.resolved.extensions.flatMap((ext) =>
         (ext.setup.busSubscriptions ?? []).map((sub) => ({
           pattern: sub.pattern,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          handler: sub.handler as (envelope: {
-            channel: string
-            payload: unknown
-            sessionId?: string
-            branchId?: string
-          }) => void | Promise<void>,
+          handler: sub.handler,
         })),
       )
 

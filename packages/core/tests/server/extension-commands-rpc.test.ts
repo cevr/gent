@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { type ExtensionContext, toExtensionContext } from "@gent/core/domain/extension-context"
 import type { GentExtension } from "@gent/core/domain/extension"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import {
@@ -28,11 +28,12 @@ describe("extension command RPCs", () => {
           {
             name: "greet",
             description: "Say hello",
-            handler: async (args: string, ctx: ExtensionContext) => {
-              invoked.push({ args, sessionId: ctx.sessionId })
-            },
+            handler: (args: string, ctx: ExtensionHostContext) =>
+              Effect.sync(() => {
+                invoked.push({ args, sessionId: ctx.sessionId })
+              }),
           },
-          { name: "noop", handler: async () => {} },
+          { name: "noop", handler: () => Effect.void },
         ],
       }),
   }
@@ -54,7 +55,7 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("invokeCommand calls handler with ExtensionContext", async () => {
+  test("invokeCommand calls handler with ExtensionHostContext", async () => {
     invoked.length = 0
 
     await Effect.runPromise(
@@ -93,8 +94,7 @@ describe("extension command RPCs", () => {
             eventPublisher,
           },
         )
-        const ctx = toExtensionContext(hostCtx)
-        yield* Effect.promise(() => Promise.resolve(cmd.handler("world", ctx)))
+        yield* cmd.handler("world", hostCtx)
       }).pipe(Effect.provide(layer)),
     )
 

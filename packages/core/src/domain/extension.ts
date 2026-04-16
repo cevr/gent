@@ -7,7 +7,6 @@ import type { Message, MessageMetadata, MessagePart } from "./message"
 import type { PermissionResult, PermissionRule } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
-import type { ExtensionAsyncContext } from "./extension-context"
 import type { PromptSection, PromptSectionInput } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -352,7 +351,7 @@ export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any
 export interface CommandContribution {
   readonly name: string
   readonly description?: string
-  readonly handler: (args: string, ctx: ExtensionAsyncContext) => void | Promise<void>
+  readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
 }
 
 // Turn Executor Contribution — re-exported from dedicated file
@@ -418,8 +417,7 @@ export interface ExtensionSetup {
    *  Can be static PromptSection or Effect<PromptSection> for sections needing service access. */
   readonly promptSections?: ReadonlyArray<PromptSectionInput>
   /** Bus channel subscriptions — registered at startup time.
-   *  Each entry: { pattern, handler } where handler receives BusEnvelope.
-   *  Handler can return void, Promise<void>, or Effect<void>. */
+   *  Each entry: { pattern, handler } where handler receives BusEnvelope and returns Effect<void>. */
   readonly busSubscriptions?: ReadonlyArray<{
     readonly pattern: string
     readonly handler: (envelope: {
@@ -427,7 +425,7 @@ export interface ExtensionSetup {
       payload: unknown
       sessionId?: string
       branchId?: string
-    }) => void | Promise<void> | Effect.Effect<void>
+    }) => Effect.Effect<void>
   }>
   /** One-time startup effect — runs during dependency initialization. No service requirements. */
   readonly onStartup?: Effect.Effect<void>
@@ -447,8 +445,6 @@ export interface ExtensionSetupContext {
   readonly fs: FileSystem.FileSystem
   /** Platform Path service (captured from Effect context at setup time). */
   readonly path: Path.Path
-  /** Run an Effect with platform services. For async extension code that needs FileSystem/Path. */
-  readonly runEffect: <A>(effect: Effect.Effect<A>) => Promise<A>
 }
 
 export interface GentExtension {

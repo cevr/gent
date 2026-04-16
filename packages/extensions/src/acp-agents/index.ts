@@ -28,5 +28,5 @@ export const AcpAgentsExtension = extension("@gent/acp-agents", ({ ext }) => {
     builder = builder.turnExecutor(`acp-${name}`, makeAcpTurnExecutor(config, manager))
   }
 
-  return builder.onShutdownEffect(manager.disposeAll())
+  return builder.onShutdown(manager.disposeAll())
 })

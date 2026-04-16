@@ -2,9 +2,12 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import type { ProviderResolution } from "@gent/core/domain/provider-contribution"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const setup = (ext: ReturnType<typeof extension>) => Effect.runPromise(ext.setup(testSetupCtx()))
+
+const stubResolution: ProviderResolution = { layer: Layer.empty as never }
 
 describe("fluent builder", () => {
   // ── Variadic registration ──
@@ -12,8 +15,8 @@ describe("fluent builder", () => {
   test("tools() registers multiple tools", async () => {
     const ext = extension("multi-tools", ({ ext }) =>
       ext.tools(
-        { name: "a", description: "A", execute: async () => "a" },
-        { name: "b", description: "B", execute: async () => "b" },
+        { name: "a", description: "A", execute: () => Effect.succeed("a") },
+        { name: "b", description: "B", execute: () => Effect.succeed("b") },
       ),
     )
     const s = await setup(ext)
@@ -91,19 +94,17 @@ describe("fluent builder", () => {
     expect(() =>
       extension("double-tools", ({ ext }) =>
         // @ts-expect-error — tools not in return type after first call
-        ext.tools({ name: "a", description: "A", execute: async () => "a" }).tools({
-          name: "b",
-          description: "B",
-          execute: async () => "b",
-        }),
+        ext
+          .tools({ name: "a", description: "A", execute: () => Effect.succeed("a") })
+          .tools({ name: "b", description: "B", execute: () => Effect.succeed("b") }),
       ),
     ).not.toThrow() // TS catches it; runtime guard is belt-and-suspenders
 
     // But runtime does throw:
     const ext = extension("double-tools-rt", ({ ext }) => {
-      const b = ext.tools({ name: "a", description: "A", execute: async () => "a" })
+      const b = ext.tools({ name: "a", description: "A", execute: () => Effect.succeed("a") })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(b as any).tools({ name: "b", description: "B", execute: async () => "b" })
+      ;(b as any).tools({ name: "b", description: "B", execute: () => Effect.succeed("b") })
       return b
     })
     await expect(setup(ext)).rejects.toThrow(/tools\(\) can only be called once/)
@@ -132,9 +133,9 @@ describe("fluent builder", () => {
 
   test("provider() throws on second call", async () => {
     const ext = extension("double-provider", ({ ext }) => {
-      const b = ext.provider({ id: "a", name: "A", resolveModel: () => null })
+      const b = ext.provider({ id: "a", name: "A", resolveModel: () => stubResolution })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(b as any).provider({ id: "b", name: "B", resolveModel: () => null })
+      ;(b as any).provider({ id: "b", name: "B", resolveModel: () => stubResolution })
       return b
     })
     await expect(setup(ext)).rejects.toThrow(/provider\(\) can only be called once/)
@@ -144,7 +145,7 @@ describe("fluent builder", () => {
 
   test("on() allows multiple hook registrations", async () => {
     const ext = extension("multi-on", ({ ext }) =>
-      ext.on("turn.after", async () => {}).on("message.input", (input, next) => next(input)),
+      ext.on("turn.after", () => Effect.void).on("message.input", (input, next) => next(input)),
     )
     const s = await setup(ext)
     expect(s.hooks?.interceptors?.map((i) => i.key)).toEqual(["turn.after", "message.input"])
@@ -152,7 +153,7 @@ describe("fluent builder", () => {
 
   test("command() allows multiple registrations", async () => {
     const ext = extension("multi-cmd", ({ ext }) =>
-      ext.command("a", { handler: async () => {} }).command("b", { handler: async () => {} }),
+      ext.command("a", { handler: () => Effect.void }).command("b", { handler: () => Effect.void }),
     )
     const s = await setup(ext)
     expect(s.commands?.map((c) => c.name)).toEqual(["a", "b"])
@@ -160,7 +161,7 @@ describe("fluent builder", () => {
 
   test("bus() allows multiple subscriptions", async () => {
     const ext = extension("multi-bus", ({ ext }) =>
-      ext.bus("channel:a", () => {}).bus("channel:b", () => {}),
+      ext.bus("channel:a", () => Effect.void).bus("channel:b", () => Effect.void),
     )
     const s = await setup(ext)
     expect(s.busSubscriptions).toHaveLength(2)
@@ -169,13 +170,7 @@ describe("fluent builder", () => {
   test("onStartup() composes multiple hooks", async () => {
     const order: number[] = []
     const ext = extension("multi-startup", ({ ext }) =>
-      ext
-        .onStartup(() => {
-          order.push(1)
-        })
-        .onStartup(() => {
-          order.push(2)
-        }),
+      ext.onStartup(Effect.sync(() => order.push(1))).onStartup(Effect.sync(() => order.push(2))),
     )
     const s = await setup(ext)
     await Effect.runPromise(s.onStartup!)
@@ -187,13 +182,13 @@ describe("fluent builder", () => {
   test("full chain produces complete setup", async () => {
     const ext = extension("full-chain", ({ ext }) =>
       ext
-        .tools({ name: "t", description: "T", execute: async () => "t" })
+        .tools({ name: "t", description: "T", execute: () => Effect.succeed("t") })
         .agents({ name: "a", model: "test/m" })
         .promptSections({ id: "p", content: "P", priority: 10 })
-        .on("turn.after", async () => {})
-        .command("cmd", { handler: async () => {} })
-        .onStartup(() => {})
-        .onShutdown(() => {}),
+        .on("turn.after", () => Effect.void)
+        .command("cmd", { handler: () => Effect.void })
+        .onStartup(Effect.void)
+        .onShutdown(Effect.void),
     )
     const s = await setup(ext)
     expect(s.tools).toHaveLength(1)
@@ -272,7 +267,7 @@ describe("fluent builder", () => {
 
   test("provider() produces single-element providers array in setup", async () => {
     const ext = extension("provider-test", ({ ext }) =>
-      ext.provider({ id: "test-provider", name: "Test", resolveModel: () => null }),
+      ext.provider({ id: "test-provider", name: "Test", resolveModel: () => stubResolution }),
     )
     const s = await setup(ext)
     expect(s.providers).toHaveLength(1)

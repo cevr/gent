@@ -234,7 +234,6 @@ export const setupExtension = (
     const { extension, kind, sourcePath } = discovered
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
     const setup: ExtensionSetup = yield* extension
       .setup({
         cwd,
@@ -242,8 +241,6 @@ export const setupExtension = (
         home,
         fs,
         path,
-        // @effect-diagnostics-next-line runEffectInsideEffect:off — intentional: creating a runner for extension async code
-        runEffect: (effect) => Effect.runPromise(Effect.provide(effect, services)),
       })
       .pipe(
         Effect.catchDefect((defect) =>

@@ -3,6 +3,7 @@
  *
  * Place in ~/.gent/extensions/ or .gent/extensions/
  */
+import { Effect } from "effect"
 import { extension } from "@gent/core/extensions/api"
 
 export default extension("hello-tool", ({ ext }) =>
@@ -12,6 +13,6 @@ export default extension("hello-tool", ({ ext }) =>
     parameters: {
       name: { type: "string", description: "Who to greet" },
     },
-    execute: async (params) => `Hello, ${params.name}!`,
+    execute: (params) => Effect.succeed(`Hello, ${String(params["name"])}!`),
   }),
 )

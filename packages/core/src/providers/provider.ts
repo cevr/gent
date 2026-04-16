@@ -14,12 +14,8 @@ import * as AiError from "effect/unstable/ai/AiError"
 
 // ── Provider Resolution ──
 
-/** What an extension returns from resolveModel (typed as unknown at the boundary).
- *  The Layer should be fully self-contained — all provider-specific behavior
- *  (auth, tool naming, cache control) baked in via Layer composition. */
-export interface ProviderResolution {
-  readonly layer: Layer.Layer<LanguageModel.LanguageModel>
-}
+// Canonical ProviderResolution lives in domain — re-export for callers importing from providers
+export type { ProviderResolution } from "../domain/provider-contribution.js"
 
 // ── Provider Info ──
 
@@ -55,7 +51,6 @@ const makeModelResolver = (
       })
     }
     const [providerName, modelName] = parsed
-    const services = yield* Effect.context<never>()
 
     const extensionProvider = yield* extensionRegistry.getProvider(providerName)
     if (extensionProvider === undefined) {
@@ -77,26 +72,23 @@ const makeModelResolver = (
         expires: authInfo.expires,
         accountId: authInfo.accountId,
         persist: (updated) =>
-          Effect.runPromiseWith(services)(
-            authStore
-              .set(
-                providerName,
-                new AuthOauth({
-                  type: "oauth",
-                  access: updated.access,
-                  refresh: updated.refresh,
-                  expires: updated.expires,
-                  ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
-                }),
-              )
-              .pipe(Effect.catchEager(() => Effect.void)),
-          ),
+          authStore
+            .set(
+              providerName,
+              new AuthOauth({
+                type: "oauth",
+                access: updated.access,
+                refresh: updated.refresh,
+                expires: updated.expires,
+                ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
+              }),
+            )
+            .pipe(Effect.catchEager(() => Effect.void)),
       }
     }
 
     const resolved = yield* Effect.try({
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      try: () => extensionProvider.resolveModel(modelName, authParam, hints) as ProviderResolution,
+      try: () => extensionProvider.resolveModel(modelName, authParam, hints),
       catch: (e) =>
         new ProviderError({
           message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,

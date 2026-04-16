@@ -196,7 +196,6 @@ export const testSetupCtx = (
   home: overrides?.home ?? "/tmp",
   fs: _testFs,
   path: _testPath,
-  runEffect: (effect) => Effect.runPromise(Effect.provide(effect, _platformServices)),
 })
 
 // Mock Helpers

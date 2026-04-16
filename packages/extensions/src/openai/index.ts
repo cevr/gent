@@ -54,9 +54,11 @@ const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
 
     // Persist back to AuthStore
     if (authInfo.persist !== undefined) {
-      await authInfo.persist(current).catch((e) => {
+      try {
+        await Effect.runPromise(authInfo.persist(current))
+      } catch (e) {
         console.warn("[openai] failed to persist refreshed OAuth tokens:", e)
-      })
+      }
     }
 
     return new AuthOauth({
