@@ -2,8 +2,8 @@
  * Contribution union — the foundational data structure for extension authoring.
  *
  * Every extension reduces to a flat array of `Contribution` values. This is the
- * canonical shape consumed by the runtime registry; the fluent `ExtensionBuilder`
- * (in `extensions/api.ts`) is sugar that lowers into a `Contribution[]`.
+ * canonical authoring shape — `defineExtension({ id, contributions })` lowers
+ * the array into the runtime `ExtensionSetup` consumed by the registry.
  *
  * The discriminator is `_kind`. New kinds are added by extending the union, not
  * by adding fields to a setup bag.

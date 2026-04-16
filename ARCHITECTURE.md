@@ -249,10 +249,11 @@ Rules:
 
 Extension shape lives in:
 
-- `packages/core/src/extensions/api.ts` — public authoring surface (re-exports from domain/, providers/, runtime/)
+- `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
+- `packages/core/src/domain/contribution.ts` — `Contribution` union (foundational data structure)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
 - `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
-- `packages/core/src/runtime/extensions/hooks.ts` — interceptor compilation
+- `packages/core/src/runtime/extensions/interceptor-registry.ts` — interceptor compilation (`compileInterceptors`)
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
 - `packages/extensions/src/` — all 27 builtin extension implementations
 - `apps/tui/src/extensions/` — TUI discovery, loading, resolution
@@ -293,19 +294,17 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-Two authoring shapes, same lowering. Both produce a flat `Contribution[]` consumed by the runtime registry:
+One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `layerContribution`, `permissionRuleContribution`, `commandContribution`, `jobContribution`, `busSubscriptionContribution`, `onStartupContribution`/`onShutdownContribution`, `workflowContribution`, `actorContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
 
-- `extension(id, ({ ext }) => ext.tools(...).layer(...))` — fluent builder. Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs) guarded; multi-call kinds (commands/interceptors/turnExecutors/jobs/bus/lifecycle) accumulate.
-- `defineExtension({ id, contributions: ({ ctx }) => [toolContribution(t), layerContribution(l), ...] })` — flat array, no chain. Smart constructors live in `@gent/core/extensions/api`.
+Internally `defineExtension` lowers the contribution array into `ExtensionSetup` for the runtime registry. The `Contribution` union (`packages/core/src/domain/contribution.ts`) is the foundational data structure — adding a new kind triggers a compile error in `placeContribution` until handled.
 
-Internally both go through `lowerContributions()` → `ExtensionSetup`. The `Contribution` union is the foundational data structure (`packages/core/src/domain/contribution.ts`) — adding a new kind to the union triggers a compile error in `placeContribution` until handled.
-
-- Stateless: tools, interceptors (`ext.on(key, handler)`), jobs, bus subscriptions
-- Stateful: `actor` contribution + optional `layer`, `tools`, `interceptors`, `provider`
+- Stateless: tools, interceptors, jobs, bus subscriptions
+- Stateful: `actorContribution` (legacy) or `workflowContribution` (preferred — `effect-machine` machine + declared effects) + optional `layerContribution`
 - `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`ui`/`policy` projectors. Replaces the actor-as-mirror pattern; lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
-- `Interceptor` (`interceptorContribution(...)`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, etc.). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
-- `layer` extends extension service graph; later commits add `Workflow`, `Query`, `Mutation`, `ModelDriver`, `ExternalDriver` kinds.
-- Lifecycle effects (`onStartup`/`onShutdown`) compose in registration order; failures isolate the extension instead of crashing host startup.
+- `Interceptor` (`interceptorContribution(defineInterceptor(key, handler))`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `turn.before`, `turn.after`, `message.input`, `message.output`). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
+- `Query` / `Mutation` (`queryContribution(...)` / `mutationContribution(...)`) — typed RPC handlers invoked via `ctx.extension.query(ref, input)` / `ctx.extension.mutate(ref, input)` from tools or other extensions.
+- `ModelDriver` / `ExternalDriver` — LLM providers and out-of-process turn executors (e.g. ACP). See `packages/core/src/domain/driver.ts`.
+- Lifecycle effects (`onStartupContribution`/`onShutdownContribution`) compose in registration order; failures isolate the extension instead of crashing host startup.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
@@ -314,8 +313,8 @@ Internally both go through `lowerContributions()` → `ExtensionSetup`. The `Con
 `ExtensionEventBus` — channel-based pub/sub for extension communication (`runtime/extensions/event-bus.ts`).
 
 - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
-- `ext.bus("agent:*", handler)` — wildcard subscription
-- `ext.bus("extensionId:channel", handler)` — targeted side-effect handlers
+- `busSubscriptionContribution("agent:*", handler)` — wildcard subscription
+- `busSubscriptionContribution("extensionId:channel", handler)` — targeted side-effect handlers
 - Handlers MUST return `Effect<void>` — Effect-native end-to-end, no Promise edges
 - Bus is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
 

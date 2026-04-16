@@ -46,7 +46,7 @@ export type DriverRef = typeof DriverRef.Type
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName
 
-/** Brand symbol for detecting full AgentDefinition vs SimpleAgentDef in overloaded APIs */
+/** Brand symbol identifying values produced by `defineAgent`. */
 export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefinition")
 
 /**

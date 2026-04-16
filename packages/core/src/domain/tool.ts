@@ -38,7 +38,7 @@ export interface ToolContext extends ExtensionHostContext {
 
 // Tool Factory
 
-/** Brand symbol for detecting full ToolDefinition vs SimpleToolDef in overloaded APIs */
+/** Brand symbol identifying values produced by `defineTool`. */
 export const ToolDefinitionBrand: unique symbol = Symbol.for("@gent/ToolDefinition")
 
 export const defineTool = <
