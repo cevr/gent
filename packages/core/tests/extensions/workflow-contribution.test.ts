@@ -63,7 +63,6 @@ const machine = Machine.make({
   )
 
 const testWorkflow: WorkflowContribution<typeof TestState.Type, typeof TestEvent.Type> = {
-  id: "test-workflow",
   machine,
   // mapEvent — TurnCompleted ticks the counter
   mapEvent: (event) => (event._tag === "TurnCompleted" ? TestEvent.Tick() : undefined),
@@ -93,33 +92,99 @@ describe("WorkflowContribution", () => {
     }),
   )
 
-  it.live("workflow afterTransition declared effects round-trip through lowering", () =>
+  it.live(
+    "workflow afterTransition declared effects survive the lowering and dispatch on every transition",
+    () =>
+      Effect.gen(function* () {
+        // Use a workflow whose afterTransition unconditionally emits an effect
+        // for ANY transition. We assert (a) the function reference is preserved
+        // and (b) calling it produces a non-empty array of structured effects.
+        const flagged: WorkflowContribution<typeof TestState.Type, typeof TestEvent.Type> = {
+          ...testWorkflow,
+          afterTransition: (before, after) => [
+            {
+              _tag: "BusEmit" as const,
+              channel: "wf.transition",
+              payload: { fromCount: before.count, toCount: after.count },
+            },
+          ],
+        }
+
+        const ext = defineExtension({
+          id: "@gent/test-workflow",
+          contributions: () => [workflowContribution(flagged)],
+        })
+        const setup = yield* ext.setup(testSetupCtx())
+
+        expect(setup.actor?.afterTransition).toBeDefined()
+
+        const before = TestState.Active({ count: 0, suppressed: false })
+        const after = TestState.Active({ count: 1, suppressed: false })
+        const effects = setup.actor!.afterTransition!(before, after)
+
+        // Effect identity preserved end-to-end
+        expect(effects.length).toBe(1)
+        const [effect] = effects
+        expect(effect?._tag).toBe("BusEmit")
+        // Payload comes from the workflow author's closure — proves the
+        // function reference, not just a stub, was forwarded
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const busEmit = effect as { _tag: "BusEmit"; channel: string; payload: unknown }
+        expect(busEmit.channel).toBe("wf.transition")
+        expect(busEmit.payload).toEqual({ fromCount: 0, toCount: 1 })
+      }),
+  )
+
+  it.live(
+    "lowering throws when an extension declares more than one workflow (single-slot constraint)",
+    () =>
+      Effect.gen(function* () {
+        const ext = defineExtension({
+          id: "@gent/two-workflows",
+          contributions: () => [
+            workflowContribution(testWorkflow),
+            workflowContribution(testWorkflow),
+          ],
+        })
+
+        const exit = yield* Effect.exit(ext.setup(testSetupCtx()))
+        expect(exit._tag).toBe("Failure")
+        // The current single-slot constraint is enforced via a thrown error
+        // that surfaces through the effect failure cause.
+        if (exit._tag === "Failure") {
+          const text = String(exit.cause)
+          expect(text).toContain("at most one workflow or actor")
+        }
+      }),
+  )
+
+  it.live("optional fields (slots, stateSchema, onInit, mapRequest) round-trip when present", () =>
     Effect.gen(function* () {
-      // Workflow with declared effect on transition — ensures the field
-      // survives the lowering and is visible to the runtime dispatcher.
-      const flagged: WorkflowContribution<typeof TestState.Type, typeof TestEvent.Type> = {
-        ...testWorkflow,
-        afterTransition: (before, after) =>
-          before._tag !== after._tag
-            ? [{ _tag: "BusEmit" as const, channel: "x", payload: { from: before._tag } }]
-            : [],
+      const slots = () => Effect.succeed({} as Record<string, never>)
+      const stateSchema = TestState
+      const onInit = () => Effect.void
+      const mapRequest = () => undefined
+
+      const wf: WorkflowContribution<typeof TestState.Type, typeof TestEvent.Type> = {
+        machine,
+        slots,
+        stateSchema,
+        onInit,
+        mapRequest,
       }
 
       const ext = defineExtension({
-        id: "@gent/test-workflow",
-        contributions: () => [workflowContribution(flagged)],
+        id: "@gent/test-optional",
+        contributions: () => [workflowContribution(wf)],
       })
       const setup = yield* ext.setup(testSetupCtx())
 
-      // afterTransition is preserved on the lowered actor
-      expect(setup.actor?.afterTransition).toBeDefined()
-
-      // Sanity-check that calling it produces the declared effects
-      const before = TestState.Active({ count: 0, suppressed: false })
-      const after = TestState.Active({ count: 1, suppressed: true })
-      const effects = setup.actor!.afterTransition!(before, after)
-      // No state-tag transition here, so empty
-      expect(effects.length).toBe(0)
+      // Object identity — proves the lowering forwards by reference, not
+      // through a coerce/clone path that could silently drop nested config.
+      expect(setup.actor?.slots).toBe(slots)
+      expect(setup.actor?.stateSchema).toBe(stateSchema)
+      expect(setup.actor?.onInit).toBe(onInit)
+      expect(setup.actor?.mapRequest).toBe(mapRequest)
     }),
   )
 })

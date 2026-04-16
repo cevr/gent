@@ -638,14 +638,16 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
       else b.shutdownEffects.push(c.effect)
       return
     case "actor":
-      b.actor = c.actor
+      placeActor(b, c.actor)
       return
     case "workflow":
       // Workflows lower into the actor shape so the existing
-      // `ExtensionStateRuntime` hosts them. Commit 12 splits the runtime and
-      // deletes the actor primitive entirely; until then this is a structural
-      // alias, not a parallel runtime path.
-      b.actor = workflowToActor(c.workflow)
+      // `ExtensionStateRuntime` hosts them. The dedicated `workflow-runtime.ts`
+      // and the deletion of the actor primitive happen later in C8 once the
+      // in-tree consumers (auto, handoff, ACP) have migrated to the workflow
+      // surface. Same single-slot constraint as actors today: at most one
+      // workflow per extension.
+      placeActor(b, workflowToActor(c.workflow))
       return
     case "layer":
       b.layer = c.layer
@@ -657,6 +659,17 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
       return _exhaustive
     }
   }
+}
+
+/** Single-slot guard: extensions declare at most one actor or workflow today,
+ *  inherited from the legacy `ExtensionSetup.actor` shape. */
+const placeActor = (b: LoweredBuckets, def: AnyExtensionActorDefinition): void => {
+  if (b.actor !== undefined) {
+    throw new Error(
+      "extension may declare at most one workflow or actor (single-slot constraint inherited from ExtensionSetup.actor)",
+    )
+  }
+  b.actor = def
 }
 
 /**

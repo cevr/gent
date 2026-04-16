@@ -11,9 +11,14 @@
  * workflows declare effects, projections derive views, and the two never
  * own the same state.
  *
- * Today this lowers into the existing `ExtensionActorDefinition` shape so
- * the same `ExtensionStateRuntime` hosts both. Commit 12 splits the runtime
- * and deletes the actor primitive entirely.
+ * **Lowering today (8a → 8c):** workflow lowers into the existing
+ * `ExtensionActorDefinition` shape so the same `ExtensionStateRuntime` hosts
+ * both. The legacy `setup.actor` slot is single-valued, so this implementation
+ * intentionally accepts at most one workflow per extension — same constraint
+ * as actors today. The plan calls for a dedicated `workflow-runtime.ts` and
+ * the deletion of `state-runtime.ts` in C8 itself; that split is deferred
+ * until after 8b/8c migrate the in-tree consumers (auto, handoff, ACP) so
+ * the runtime split has concrete callers driving its shape.
  *
  * @module
  */
@@ -62,9 +67,6 @@ export interface WorkflowContribution<
   SlotsR = never,
   SD extends SlotsDef = Record<string, never>,
 > {
-  /** Stable identifier for the workflow within its extension. */
-  readonly id: string
-
   /** The state machine definition — built with `effect-machine`'s `Machine.make`. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly machine: Machine.Machine<State, Event, never, any, any, SD>
