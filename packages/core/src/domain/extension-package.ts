@@ -1,9 +1,9 @@
 import type { Schema } from "effect"
 import type { GentExtension } from "./extension"
 import type {
+  ClientContribution,
   ExtensionClientContext,
   ExtensionClientModule,
-  ExtensionClientSetup,
 } from "./extension-client.js"
 
 /**
@@ -22,7 +22,7 @@ export interface ExtensionPackage<TSnapshot = never> {
   readonly snapshot?: Schema.Decoder<TSnapshot>
   /** Create a paired TUI client module. ID is derived from this package. */
   readonly tui: <TComponent = unknown>(
-    setup: (ctx: PairedTuiContext<TSnapshot>) => ExtensionClientSetup<TComponent>,
+    setup: (ctx: PairedTuiContext<TSnapshot>) => ReadonlyArray<ClientContribution<TComponent>>,
   ) => ExtensionClientModule<TComponent>
 }
 
@@ -53,7 +53,7 @@ export const defineExtensionPackage = <TSnapshot = never>(
   const result: ExtensionPackage<TSnapshot> = {
     ...pkg,
     tui: <TComponent = unknown>(
-      setup: (ctx: PairedTuiContext<TSnapshot>) => ExtensionClientSetup<TComponent>,
+      setup: (ctx: PairedTuiContext<TSnapshot>) => ReadonlyArray<ClientContribution<TComponent>>,
     ): ExtensionClientModule<TComponent> => ({
       id: pkg.id,
       setup: (ctx: ExtensionClientContext) => {
@@ -86,7 +86,7 @@ export const defineExtensionPackage = <TSnapshot = never>(
  */
 const standaloneClientModule = <TComponent = unknown>(
   id: string,
-  setup: (ctx: ExtensionClientContext) => ExtensionClientSetup<TComponent>,
+  setup: (ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>,
 ): ExtensionClientModule<TComponent> => ({ id, setup })
 
 // Attach as static method on the ExtensionPackage namespace

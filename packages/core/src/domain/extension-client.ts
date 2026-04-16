@@ -1,8 +1,22 @@
 // TUI Extension Client Module
 //
-// Extensions export a setup(ctx) factory that returns UI contributions.
-// The TUI discovers *.client.{tsx,ts,js,mjs} files from extension directories,
-// imports them, and resolves contributions with scope precedence (project > user > builtin).
+// Extensions export a setup(ctx) factory that returns a flat
+// `ClientContribution[]` array. The TUI discovers *.client.{tsx,ts,js,mjs}
+// files from extension directories, imports them, and resolves contributions
+// with scope precedence (project > user > builtin).
+//
+// The `ClientContribution` union is the foundational data structure here —
+// adding a new kind triggers a compile error in the resolver until handled.
+// Per-kind conflict rules are preserved by the resolver:
+//   - renderers: last (highest scope) wins by tool name
+//   - widgets:   last (highest scope) wins by widget id; sorted by priority
+//   - commands:  last (highest scope) wins by command id; superseded
+//                keybind/slash entries are stripped from prior owners
+//   - overlays:  last (highest scope) wins by overlay id
+//   - interaction renderers: last (highest scope) wins by metadataType
+//   - composer surface: single slot, last (highest scope) wins
+//   - border labels: collected (no winner), sorted by priority
+//   - autocomplete: collected (no winner), scope-ordered
 
 import type { Effect, FileSystem, Path, Schema } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
@@ -30,20 +44,6 @@ export interface ComposerSurfaceProps {
   readonly mode: "editing" | "shell"
 }
 
-/** Interaction renderer contribution */
-export interface InteractionRendererContribution {
-  /** Matches against metadata.type to route to the right renderer. undefined = default renderer. */
-  readonly metadataType?: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly component: (props: InteractionRendererProps) => unknown
-}
-
-/** Factory for defining an interaction renderer */
-export const defineInteractionRenderer = (
-  component: (props: InteractionRendererProps) => unknown,
-  metadataType?: string,
-): InteractionRendererContribution => ({ metadataType, component })
-
 /** Item in an autocomplete popup */
 export interface AutocompleteItem {
   readonly id: string
@@ -51,8 +51,89 @@ export interface AutocompleteItem {
   readonly description?: string
 }
 
-/** Autocomplete popup contribution — registers a prefix trigger and item source */
+// ── Per-kind contribution shapes ──
+
+export interface RendererContribution<TComponent = unknown> {
+  readonly _kind: "renderer"
+  readonly toolNames: ReadonlyArray<string>
+  readonly component: TComponent
+}
+
+export interface WidgetContribution<TComponent = unknown> {
+  readonly _kind: "widget"
+  readonly id: string
+  readonly slot: WidgetSlot
+  /** Lower = earlier; default 100. */
+  readonly priority?: number
+  readonly component: TComponent
+}
+
+export interface PaletteLevelEntry {
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly onSelect: () => void
+}
+
+export interface PaletteLevel {
+  readonly id: string
+  readonly title: string
+  readonly source: () => ReadonlyArray<PaletteLevelEntry> | undefined
+  readonly onEnter?: () => void
+}
+
+export interface ClientCommandContribution {
+  readonly _kind: "command"
+  readonly id: string
+  readonly title: string
+  readonly description?: string
+  readonly category?: string
+  readonly keybind?: string
+  /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
+  readonly slash?: string
+  /** Additional slash names that resolve to this command */
+  readonly aliases?: ReadonlyArray<string>
+  /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
+  readonly slashPriority?: number
+  readonly onSelect: () => void
+  /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
+  readonly onSlash?: (args: string) => void
+  /** When set, selecting in the palette pushes a sub-level instead of calling onSelect. */
+  readonly paletteLevel?: () => PaletteLevel
+}
+
+export interface OverlayContribution<TComponent = unknown> {
+  readonly _kind: "overlay"
+  readonly id: string
+  /** Receives `{ open, onClose }` props at render time. */
+  readonly component: TComponent
+}
+
+export interface InteractionRendererContribution<TComponent = unknown> {
+  readonly _kind: "interaction-renderer"
+  /** Matches against metadata.type. undefined = default fallback renderer. */
+  readonly metadataType?: string
+  readonly component: TComponent
+}
+
+export interface ComposerSurfaceContribution<TComponent = unknown> {
+  readonly _kind: "composer-surface"
+  readonly component: TComponent
+}
+
+export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
+
+export interface BorderLabelContribution {
+  readonly _kind: "border-label"
+  readonly position: BorderLabelPosition
+  /** Lower = earlier; default 100. */
+  readonly priority?: number
+  readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
+}
+
 export interface AutocompleteContribution {
+  readonly _kind: "autocomplete"
   readonly prefix: string
   readonly title: string
   /** Fetch items for the given filter. Sync or async.
@@ -60,79 +141,72 @@ export interface AutocompleteContribution {
   readonly items: (
     filter: string,
   ) => ReadonlyArray<AutocompleteItem> | Promise<ReadonlyArray<AutocompleteItem>>
-  /** Format the selected item id for insertion into the draft.
-   *  Default: `${prefix}${id} ` */
+  /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */
   readonly formatInsertion?: (id: string) => string
   /** Called after an item is selected. Use for side effects like frecency tracking. */
   readonly onSelect?: (id: string, filter: string) => void
 }
 
-/** What a TUI extension contributes after setup */
-export interface ExtensionClientSetup<TComponent = unknown> {
-  /** Tool renderers keyed by tool name(s) */
-  readonly tools?: ReadonlyArray<{
-    readonly toolNames: ReadonlyArray<string>
-    readonly component: TComponent
-  }>
-  /** Persistent widgets placed at fixed slots */
-  readonly widgets?: ReadonlyArray<{
-    readonly id: string
-    readonly slot: WidgetSlot
-    readonly priority?: number // Lower = earlier, default 100
-    readonly component: TComponent
-  }>
-  /** Command palette entries */
-  readonly commands?: ReadonlyArray<{
-    readonly id: string
-    readonly title: string
-    readonly description?: string
-    readonly category?: string
-    readonly keybind?: string
-    /** Slash command trigger (without the /). When set, /name invokes onSlash (or onSelect if no onSlash). */
-    readonly slash?: string
-    /** Additional slash names that resolve to this command */
-    readonly aliases?: ReadonlyArray<string>
-    /** Slash command priority. Lower wins. Builtins are 0, default extension is 10. Set < 0 to override builtins. */
-    readonly slashPriority?: number
-    readonly onSelect: () => void
-    /** Arg-aware slash handler. Called with the args string when invoked via /command args. */
-    readonly onSlash?: (args: string) => void
-    /** When set, selecting in the palette pushes a sub-level instead of calling onSelect.
-     *  Return a factory function — called lazily when the user navigates into the level. */
-    readonly paletteLevel?: () => {
-      readonly id: string
-      readonly title: string
-      readonly source: () =>
-        | ReadonlyArray<{
-            readonly id: string
-            readonly title: string
-            readonly description?: string
-            readonly category?: string
-            readonly onSelect: () => void
-          }>
-        | undefined
-      readonly onEnter?: () => void
-    }
-  }>
-  /** Full-screen overlay panels */
-  readonly overlays?: ReadonlyArray<{
-    readonly id: string
-    readonly component: TComponent // receives { open, onClose } props
-  }>
-  /** Interaction renderers — take over composer during interactive prompts.
-   *  Use defineInteractionRenderer() for type-safe coupling. */
-  readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-  /** Custom composer surface — replaces the default textarea */
-  readonly composerSurface?: TComponent
-  /** Border label producers — called each render to contribute labels to the session border */
-  readonly borderLabels?: ReadonlyArray<{
-    readonly position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
-    readonly priority?: number
-    readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
-  }>
-  /** Autocomplete popup contributions — register prefix triggers and item sources */
-  readonly autocompleteItems?: ReadonlyArray<AutocompleteContribution>
-}
+// ── Union ──
+
+export type ClientContribution<TComponent = unknown> =
+  | RendererContribution<TComponent>
+  | WidgetContribution<TComponent>
+  | ClientCommandContribution
+  | OverlayContribution<TComponent>
+  | InteractionRendererContribution<TComponent>
+  | ComposerSurfaceContribution<TComponent>
+  | BorderLabelContribution
+  | AutocompleteContribution
+
+export type ClientContributionKind = ClientContribution["_kind"]
+
+// ── Smart constructors ──
+
+export const rendererContribution = <TComponent>(
+  toolNames: ReadonlyArray<string>,
+  component: TComponent,
+): RendererContribution<TComponent> => ({ _kind: "renderer", toolNames, component })
+
+export const widgetContribution = <TComponent>(opts: {
+  readonly id: string
+  readonly slot: WidgetSlot
+  readonly priority?: number
+  readonly component: TComponent
+}): WidgetContribution<TComponent> => ({ _kind: "widget", ...opts })
+
+export const clientCommandContribution = (
+  opts: Omit<ClientCommandContribution, "_kind">,
+): ClientCommandContribution => ({ _kind: "command", ...opts })
+
+export const overlayContribution = <TComponent>(opts: {
+  readonly id: string
+  readonly component: TComponent
+}): OverlayContribution<TComponent> => ({ _kind: "overlay", ...opts })
+
+export const interactionRendererContribution = <TComponent>(
+  component: TComponent,
+  metadataType?: string,
+): InteractionRendererContribution<TComponent> => ({
+  _kind: "interaction-renderer",
+  metadataType,
+  component,
+})
+
+/** Backwards-compatible alias for the old `defineInteractionRenderer` factory. */
+export const defineInteractionRenderer = interactionRendererContribution
+
+export const composerSurfaceContribution = <TComponent>(
+  component: TComponent,
+): ComposerSurfaceContribution<TComponent> => ({ _kind: "composer-surface", component })
+
+export const borderLabelContribution = (
+  opts: Omit<BorderLabelContribution, "_kind">,
+): BorderLabelContribution => ({ _kind: "border-label", ...opts })
+
+export const autocompleteContribution = (
+  opts: Omit<AutocompleteContribution, "_kind">,
+): AutocompleteContribution => ({ _kind: "autocomplete", ...opts })
 
 /**
  * Async filesystem proxy — every method that returns Effect<A, E> returns Promise<A> instead.
@@ -184,5 +258,5 @@ export interface ExtensionClientContext {
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
 export interface ExtensionClientModule<TComponent = unknown> {
   readonly id: string
-  readonly setup: (ctx: ExtensionClientContext) => ExtensionClientSetup<TComponent>
+  readonly setup: (ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>
 }

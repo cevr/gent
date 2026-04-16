@@ -13,8 +13,12 @@ export { ResearchToolRenderer } from "./research"
 export { SearchSessionsToolRenderer } from "./search-sessions"
 export { ReadSessionToolRenderer } from "./read-session"
 export { SkillsToolRenderer } from "./skills"
-import type { ExtensionClientSetup } from "@gent/core/domain/extension-client.js"
 import type { ToolRenderer } from "./types"
+
+interface BuiltinToolRendererEntry {
+  readonly toolNames: ReadonlyArray<string>
+  readonly component: ToolRenderer
+}
 import { ReadToolRenderer } from "./read"
 import { EditToolRenderer } from "./edit"
 import { BashToolRenderer } from "./bash"
@@ -30,8 +34,8 @@ import { SearchSessionsToolRenderer } from "./search-sessions"
 import { ReadSessionToolRenderer } from "./read-session"
 import { SkillsToolRenderer } from "./skills"
 
-/** Builtin tool renderers in ExtensionClientSetup shape for the extension resolution pipeline */
-export const BUILTIN_TOOL_RENDERERS: ExtensionClientSetup<ToolRenderer>["tools"] = [
+/** Builtin tool renderers consumed by the `@gent/tools` client extension. */
+export const BUILTIN_TOOL_RENDERERS: ReadonlyArray<BuiltinToolRendererEntry> = [
   { toolNames: ["read"], component: ReadToolRenderer },
   { toolNames: ["edit"], component: EditToolRenderer },
   { toolNames: ["bash"], component: BashToolRenderer },

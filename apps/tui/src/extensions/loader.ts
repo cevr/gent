@@ -76,14 +76,14 @@ export const loadTuiExtensions = async (
       id: ext.id,
       kind: "builtin" as const,
       filePath: `builtin:${ext.id}`,
-      setup: ext.setup(ctx),
+      contributions: ext.setup(ctx),
     }))
 
   const externalLoaded: LoadedTuiExtension[] = enabled.map((ext) => ({
     id: ext.module.id,
     kind: ext.kind,
     filePath: ext.filePath,
-    setup: ext.module.setup(ctx),
+    contributions: ext.module.setup(ctx),
   }))
 
   const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])

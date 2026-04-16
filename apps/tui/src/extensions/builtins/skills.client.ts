@@ -1,24 +1,22 @@
 import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
+import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 
-export default ExtensionPackage.tui("@gent/skills-ui", (ctx) => ({
-  autocompleteItems: [
-    {
-      prefix: "$",
-      title: "Skills",
-      items: async (filter: string) => {
-        const skills = await ctx.ask(SkillsProtocol.ListSkills())
-        const lowerFilter = filter.toLowerCase()
-        return skills
-          .filter((s) => s.name.toLowerCase().includes(lowerFilter))
-          .map((s) => ({
-            id: s.name,
-            label: s.name,
-            description:
-              s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description,
-          }))
-      },
-      formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
+export default ExtensionPackage.tui("@gent/skills-ui", (ctx) => [
+  autocompleteContribution({
+    prefix: "$",
+    title: "Skills",
+    items: async (filter: string) => {
+      const skills = await ctx.ask(SkillsProtocol.ListSkills())
+      const lowerFilter = filter.toLowerCase()
+      return skills
+        .filter((s) => s.name.toLowerCase().includes(lowerFilter))
+        .map((s) => ({
+          id: s.name,
+          label: s.name,
+          description: s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description,
+        }))
     },
-  ],
-}))
+    formatInsertion: (id: string) => `$${id.split(":").pop() ?? id} `,
+  }),
+])

@@ -1,6 +1,12 @@
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createMemo } from "solid-js"
+import {
+  borderLabelContribution,
+  clientCommandContribution,
+  overlayContribution,
+  widgetContribution,
+} from "@gent/core/domain/extension-client.js"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
 import { TaskToolsPackage } from "@gent/extensions/task-tools-package.js"
 import { useScopedKeyboard } from "../../keyboard/context"
@@ -68,51 +74,43 @@ export default TaskToolsPackage.tui((ctx) => {
     )
   }
 
-  return {
-    widgets: [
-      {
-        id: "tasks",
-        slot: "below-messages" as const,
-        priority: 20,
-        component: TrackedTaskWidget,
+  return [
+    widgetContribution({
+      id: "tasks",
+      slot: "below-messages",
+      priority: 20,
+      component: TrackedTaskWidget,
+    }),
+    widgetContribution({
+      id: "task-tracker",
+      slot: "below-input",
+      priority: 999,
+      component: () => {
+        registerKeyboard()
+        return <TaskTracker />
       },
-      {
-        id: "task-tracker",
-        slot: "below-input" as const,
-        priority: 999,
-        component: () => {
-          registerKeyboard()
-          return <TaskTracker />
-        },
+    }),
+    overlayContribution({
+      id: "tasks-dialog",
+      component: TasksDialogOverlay,
+    }),
+    clientCommandContribution({
+      id: "tasks-dialog",
+      title: "Background Tasks",
+      description: "View and manage background tasks",
+      category: "Tasks",
+      keybind: "ctrl+shift+t",
+      slash: "tasks",
+      onSelect: () => ctx.openOverlay("tasks-dialog"),
+    }),
+    borderLabelContribution({
+      position: "bottom-left",
+      priority: 50,
+      produce: () => {
+        const count = runningCount()
+        if (count === 0) return []
+        return [{ text: `${count} task${count > 1 ? "s" : ""} ↓`, color: "info" }]
       },
-    ],
-    overlays: [
-      {
-        id: "tasks-dialog",
-        component: TasksDialogOverlay,
-      },
-    ],
-    commands: [
-      {
-        id: "tasks-dialog",
-        title: "Background Tasks",
-        description: "View and manage background tasks",
-        category: "Tasks",
-        keybind: "ctrl+shift+t",
-        slash: "tasks",
-        onSelect: () => ctx.openOverlay("tasks-dialog"),
-      },
-    ],
-    borderLabels: [
-      {
-        position: "bottom-left" as const,
-        priority: 50,
-        produce: () => {
-          const count = runningCount()
-          if (count === 0) return []
-          return [{ text: `${count} task${count > 1 ? "s" : ""} ↓`, color: "info" }]
-        },
-      },
-    ],
-  }
+    }),
+  ]
 })

@@ -1,13 +1,15 @@
 /**
- * TUI extension resolution — scope-precedence merge of all extension contributions.
+ * TUI extension resolution — scope-precedence merge of all client contributions.
  *
  * Mirrors server-side resolveExtensions() from registry.ts.
  * Precedence: project > user > builtin. Same-scope collisions throw.
+ *
+ * Per-kind conflict rules are NOT uniform — see the per-kind resolvers below.
  */
 
 import type {
   AutocompleteContribution,
-  ExtensionClientSetup,
+  ClientContribution,
 } from "@gent/core/domain/extension-client.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
@@ -25,7 +27,7 @@ export interface LoadedTuiExtension {
   readonly kind: ExtensionKind
   readonly filePath: string
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly setup: ExtensionClientSetup<any>
+  readonly contributions: ReadonlyArray<ClientContribution<any>>
 }
 
 export interface ResolvedWidget {
@@ -71,48 +73,62 @@ const checkCollision = (
   }
 }
 
-const resolveRenderers = (sorted: ReadonlyArray<LoadedTuiExtension>): Map<string, ToolRenderer> => {
+// ── Per-kind extraction ──
+
+interface SortedExtension {
+  readonly ext: LoadedTuiExtension
+  readonly contribution: ClientContribution<unknown>
+}
+
+const flatten = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<SortedExtension> => {
+  const out: SortedExtension[] = []
+  for (const ext of sorted) {
+    for (const contribution of ext.contributions) out.push({ ext, contribution })
+  }
+  return out
+}
+
+// ── Per-kind resolvers ──
+
+const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, ToolRenderer> => {
   const renderers = new Map<string, ToolRenderer>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const ext of sorted) {
-    for (const entry of ext.setup.tools ?? []) {
-      for (const name of entry.toolNames) {
-        const key = name.toLowerCase()
-        checkCollision(scopes.get(key), ext, "renderer", name)
-        renderers.set(key, entry.component)
-        scopes.set(key, { kind: ext.kind, source: ext.filePath })
-      }
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "renderer") continue
+    for (const name of contribution.toolNames) {
+      const key = name.toLowerCase()
+      checkCollision(scopes.get(key), ext, "renderer", name)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      renderers.set(key, contribution.component as ToolRenderer)
+      scopes.set(key, { kind: ext.kind, source: ext.filePath })
     }
   }
 
   return renderers
 }
 
-const resolveWidgets = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-): ReadonlyArray<ResolvedWidget> => {
+const resolveWidgets = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<ResolvedWidget> => {
   const widgetMap = new Map<string, ResolvedWidget>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const ext of sorted) {
-    for (const entry of ext.setup.widgets ?? []) {
-      checkCollision(scopes.get(entry.id), ext, "widget", entry.id)
-      widgetMap.set(entry.id, {
-        id: entry.id,
-        slot: entry.slot,
-        priority: entry.priority ?? 100,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        component: entry.component as SolidComponent,
-      })
-      scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
-    }
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "widget") continue
+    checkCollision(scopes.get(contribution.id), ext, "widget", contribution.id)
+    widgetMap.set(contribution.id, {
+      id: contribution.id,
+      slot: contribution.slot,
+      priority: contribution.priority ?? 100,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      component: contribution.component as SolidComponent,
+    })
+    scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
   }
 
   return [...widgetMap.values()].sort((a, b) => a.priority - b.priority)
 }
 
-const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<Command> => {
+const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Command> => {
   const commandMap = new Map<string, Command>()
   const idScopes = new Map<string, ScopeEntry>()
   const keybindScopes = new Map<string, ScopeEntry>()
@@ -121,114 +137,138 @@ const resolveCommands = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArr
   const keybindOwner = new Map<string, string>() // keybind → command id
   const slashOwner = new Map<string, string>() // slash → command id
 
-  for (const ext of sorted) {
-    for (const entry of ext.setup.commands ?? []) {
-      checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "command") continue
+    const entry = contribution
+    checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
 
-      if (entry.keybind !== undefined) {
-        const kb = entry.keybind.toLowerCase()
-        checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
-        // Higher scope wins the keybind — strip it from the previous owner
-        const prevOwnerId = keybindOwner.get(kb)
-        if (prevOwnerId !== undefined) {
-          const prevCmd = commandMap.get(prevOwnerId)
-          if (prevCmd !== undefined) {
-            commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
-          }
+    if (entry.keybind !== undefined) {
+      const kb = entry.keybind.toLowerCase()
+      checkCollision(keybindScopes.get(kb), ext, "keybind", entry.keybind)
+      // Higher scope wins the keybind — strip it from the previous owner
+      const prevOwnerId = keybindOwner.get(kb)
+      if (prevOwnerId !== undefined) {
+        const prevCmd = commandMap.get(prevOwnerId)
+        if (prevCmd !== undefined) {
+          commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
         }
-        keybindScopes.set(kb, { kind: ext.kind, source: ext.filePath })
-        keybindOwner.set(kb, entry.id)
       }
-
-      if (entry.slash !== undefined) {
-        const sl = entry.slash.toLowerCase()
-        checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
-        // Higher scope wins the slash — strip it from the previous owner
-        const prevOwnerId = slashOwner.get(sl)
-        if (prevOwnerId !== undefined) {
-          const prevCmd = commandMap.get(prevOwnerId)
-          if (prevCmd !== undefined) {
-            commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
-          }
-        }
-        slashScopes.set(sl, { kind: ext.kind, source: ext.filePath })
-        slashOwner.set(sl, entry.id)
-      }
-
-      commandMap.set(entry.id, {
-        id: entry.id,
-        title: entry.title,
-        description: entry.description,
-        category: entry.category,
-        keybind: entry.keybind,
-        slash: entry.slash,
-        aliases: entry.aliases,
-        slashPriority: entry.slashPriority,
-        onSelect: entry.onSelect,
-        onSlash: entry.onSlash,
-        paletteLevel: entry.paletteLevel,
-      })
-      idScopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
+      keybindScopes.set(kb, { kind: ext.kind, source: ext.filePath })
+      keybindOwner.set(kb, entry.id)
     }
+
+    if (entry.slash !== undefined) {
+      const sl = entry.slash.toLowerCase()
+      checkCollision(slashScopes.get(sl), ext, "slash", entry.slash)
+      // Higher scope wins the slash — strip it from the previous owner
+      const prevOwnerId = slashOwner.get(sl)
+      if (prevOwnerId !== undefined) {
+        const prevCmd = commandMap.get(prevOwnerId)
+        if (prevCmd !== undefined) {
+          commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
+        }
+      }
+      slashScopes.set(sl, { kind: ext.kind, source: ext.filePath })
+      slashOwner.set(sl, entry.id)
+    }
+
+    commandMap.set(entry.id, {
+      id: entry.id,
+      title: entry.title,
+      description: entry.description,
+      category: entry.category,
+      keybind: entry.keybind,
+      slash: entry.slash,
+      aliases: entry.aliases,
+      slashPriority: entry.slashPriority,
+      onSelect: entry.onSelect,
+      onSlash: entry.onSlash,
+      paletteLevel: entry.paletteLevel,
+    })
+    idScopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
   }
 
   return [...commandMap.values()]
 }
 
-const resolveOverlays = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
-): Map<string, SolidComponent> => {
+const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, SolidComponent> => {
   const overlays = new Map<string, SolidComponent>()
   const scopes = new Map<string, ScopeEntry>()
 
-  for (const ext of sorted) {
-    for (const entry of ext.setup.overlays ?? []) {
-      checkCollision(scopes.get(entry.id), ext, "overlay", entry.id)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      overlays.set(entry.id, entry.component as SolidComponent)
-      scopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
-    }
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "overlay") continue
+    checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    overlays.set(contribution.id, contribution.component as SolidComponent)
+    scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
   }
 
   return overlays
 }
 
 const resolveInteractionRenderers = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
+  flat: ReadonlyArray<SortedExtension>,
 ): Map<string | undefined, SolidComponent> => {
   const renderers = new Map<string | undefined, SolidComponent>()
   const scopes = new Map<string | undefined, ScopeEntry>()
 
-  for (const ext of sorted) {
-    for (const entry of ext.setup.interactionRenderers ?? []) {
-      const key = entry.metadataType
-      const label = key ?? "(default)"
-      checkCollision(scopes.get(key), ext, "interaction renderer", label)
-      renderers.set(key, entry.component as SolidComponent)
-      scopes.set(key, { kind: ext.kind, source: ext.filePath })
-    }
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "interaction-renderer") continue
+    const key = contribution.metadataType
+    const label = key ?? "(default)"
+    checkCollision(scopes.get(key), ext, "interaction renderer", label)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    renderers.set(key, contribution.component as SolidComponent)
+    scopes.set(key, { kind: ext.kind, source: ext.filePath })
   }
 
   return renderers
 }
 
 const resolveComposerSurface = (
-  sorted: ReadonlyArray<LoadedTuiExtension>,
+  flat: ReadonlyArray<SortedExtension>,
 ): SolidComponent | undefined => {
   let winner: SolidComponent | undefined
   let winnerScope: ScopeEntry | undefined
 
-  for (const ext of sorted) {
-    if (ext.setup.composerSurface === undefined) continue
+  for (const { ext, contribution } of flat) {
+    if (contribution._kind !== "composer-surface") continue
     if (winnerScope !== undefined) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    winner = ext.setup.composerSurface as SolidComponent
+    winner = contribution.component as SolidComponent
     winnerScope = { kind: ext.kind, source: ext.filePath }
   }
 
   return winner
+}
+
+const resolveBorderLabels = (
+  flat: ReadonlyArray<SortedExtension>,
+): ReadonlyArray<ResolvedBorderLabel> => {
+  const out: ResolvedBorderLabel[] = []
+  for (const { contribution } of flat) {
+    if (contribution._kind !== "border-label") continue
+    out.push({
+      position: contribution.position,
+      priority: contribution.priority ?? 100,
+      produce: contribution.produce,
+    })
+  }
+  out.sort((a, b) => a.priority - b.priority)
+  return out
+}
+
+const resolveAutocomplete = (
+  flat: ReadonlyArray<SortedExtension>,
+): ReadonlyArray<AutocompleteContribution> => {
+  const out: AutocompleteContribution[] = []
+  for (const { contribution } of flat) {
+    if (contribution._kind !== "autocomplete") continue
+    out.push(contribution)
+  }
+  return out
 }
 
 /**
@@ -245,35 +285,16 @@ export const resolveTuiExtensions = (
     return a.id.localeCompare(b.id)
   })
 
-  // Border labels: collect all, sort by priority
-  const borderLabels: ResolvedBorderLabel[] = []
-  for (const ext of sorted) {
-    for (const entry of ext.setup.borderLabels ?? []) {
-      borderLabels.push({
-        position: entry.position,
-        priority: entry.priority ?? 100,
-        produce: entry.produce as () => ReadonlyArray<{ text: string; color: unknown }>,
-      })
-    }
-  }
-  borderLabels.sort((a, b) => a.priority - b.priority)
-
-  // Autocomplete contributions: collect all, scope-ordered (already sorted)
-  const autocompleteItems: AutocompleteContribution[] = []
-  for (const ext of sorted) {
-    for (const entry of ext.setup.autocompleteItems ?? []) {
-      autocompleteItems.push(entry)
-    }
-  }
+  const flat = flatten(sorted)
 
   return {
-    renderers: resolveRenderers(sorted),
-    widgets: resolveWidgets(sorted),
-    commands: resolveCommands(sorted),
-    overlays: resolveOverlays(sorted),
-    interactionRenderers: resolveInteractionRenderers(sorted),
-    composerSurface: resolveComposerSurface(sorted),
-    borderLabels,
-    autocompleteItems,
+    renderers: resolveRenderers(flat),
+    widgets: resolveWidgets(flat),
+    commands: resolveCommands(flat),
+    overlays: resolveOverlays(flat),
+    interactionRenderers: resolveInteractionRenderers(flat),
+    composerSurface: resolveComposerSurface(flat),
+    borderLabels: resolveBorderLabels(flat),
+    autocompleteItems: resolveAutocomplete(flat),
   }
 }

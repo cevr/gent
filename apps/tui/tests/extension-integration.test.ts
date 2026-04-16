@@ -15,7 +15,14 @@ import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions } from "../src/extensions/loader"
 import { applyExtensionSnapshot, decodeExtensionAskReply } from "../src/extensions/context"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
-import type { ExtensionClientContext } from "@gent/core/domain/extension-client.js"
+import {
+  autocompleteContribution,
+  borderLabelContribution,
+  clientCommandContribution,
+  composerSurfaceContribution,
+  interactionRendererContribution,
+  type ExtensionClientContext,
+} from "@gent/core/domain/extension-client.js"
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { defineExtensionPackage } from "@gent/core/domain/extension-package.js"
 import type { GentExtension } from "@gent/core/domain/extension.js"
@@ -116,7 +123,8 @@ beforeAll(() => {
   mkdirSync(USER_DIR, { recursive: true })
   mkdirSync(PROJECT_DIR, { recursive: true })
 
-  // User extension: custom tool renderer
+  // User extension: custom tool renderer + widget + command + overlay
+  // (Server side ext is skipped by TUI discovery — it returns server-shape, not client-shape)
   mkdirSync(join(USER_DIR, "custom-read"), { recursive: true })
   writeFileSync(
     join(USER_DIR, "custom-read", "index.ts"),
@@ -127,12 +135,12 @@ export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }
     join(USER_DIR, "custom-read", "client.ts"),
     `export default {
   id: "@test/custom-read",
-  setup: () => ({
-    tools: [{ toolNames: ["my_custom_tool"], component: () => "custom-tool-renderer" }],
-    widgets: [{ id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" }],
-    commands: [{ id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} }],
-    overlays: [{ id: "test-overlay", component: () => "test-overlay" }],
-  }),
+  setup: () => [
+    { _kind: "renderer", toolNames: ["my_custom_tool"], component: () => "custom-tool-renderer" },
+    { _kind: "widget", id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" },
+    { _kind: "command", id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} },
+    { _kind: "overlay", id: "test-overlay", component: () => "test-overlay" },
+  ],
 }`,
   )
 
@@ -141,37 +149,37 @@ export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }
     join(PROJECT_DIR, "override-bash.client.ts"),
     `export default {
   id: "@test/override-bash",
-  setup: () => ({
-    tools: [{ toolNames: ["bash"], component: () => "project-bash-override" }],
-  }),
+  setup: () => [
+    { _kind: "renderer", toolNames: ["bash"], component: () => "project-bash-override" },
+  ],
 }`,
   )
 
   // Discovery fixtures that should or should not survive the public seam
   writeFileSync(
     join(USER_DIR, "alpha.client.ts"),
-    "export default { id: '@test/alpha', setup: () => ({ commands: [{ id: 'alpha', title: 'Alpha', onSelect: () => {} }] }) }",
+    "export default { id: '@test/alpha', setup: () => [{ _kind: 'command', id: 'alpha', title: 'Alpha', onSelect: () => {} }] }",
   )
   writeFileSync(
     join(USER_DIR, "zeta.client.ts"),
-    "export default { id: '@test/zeta', setup: () => ({ commands: [{ id: 'zeta', title: 'Zeta', onSelect: () => {} }] }) }",
+    "export default { id: '@test/zeta', setup: () => [{ _kind: 'command', id: 'zeta', title: 'Zeta', onSelect: () => {} }] }",
   )
   writeFileSync(
     join(USER_DIR, ".hidden.client.tsx"),
-    "export default { id: '@test/hidden', setup: () => ({ commands: [{ id: 'hidden', title: 'Hidden', onSelect: () => {} }] }) }",
+    "export default { id: '@test/hidden', setup: () => [{ _kind: 'command', id: 'hidden', title: 'Hidden', onSelect: () => {} }] }",
   )
   writeFileSync(
     join(USER_DIR, "_internal.client.tsx"),
-    "export default { id: '@test/internal', setup: () => ({ commands: [{ id: 'internal', title: 'Internal', onSelect: () => {} }] }) }",
+    "export default { id: '@test/internal', setup: () => [{ _kind: 'command', id: 'internal', title: 'Internal', onSelect: () => {} }] }",
   )
   mkdirSync(join(USER_DIR, "__tests__"), { recursive: true })
   writeFileSync(
     join(USER_DIR, "__tests__", "test.client.tsx"),
-    "export default { id: '@test/spec-only', setup: () => ({ commands: [{ id: 'spec-only', title: 'Spec Only', onSelect: () => {} }] }) }",
+    "export default { id: '@test/spec-only', setup: () => [{ _kind: 'command', id: 'spec-only', title: 'Spec Only', onSelect: () => {} }] }",
   )
   writeFileSync(
     join(PROJECT_DIR, "prebuilt.client.mjs"),
-    "export default { id: '@test/prebuilt', setup: () => ({ commands: [{ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} }] }) }",
+    "export default { id: '@test/prebuilt', setup: () => [{ _kind: 'command', id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} }] }",
   )
 
   // Extension that uses ctx.openOverlay in a command
@@ -181,10 +189,10 @@ export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }
     join(ctxDir, "ctx-user.client.ts"),
     `export default {
   id: "@test/ctx-user",
-  setup: (ctx) => ({
-    commands: [{ id: "ctx-cmd", title: "Ctx Command", category: "test", onSelect: () => ctx.openOverlay("ctx-overlay") }],
-    overlays: [{ id: "ctx-overlay", component: () => "ctx-overlay-component" }],
-  }),
+  setup: (ctx) => [
+    { _kind: "command", id: "ctx-cmd", title: "Ctx Command", category: "test", onSelect: () => ctx.openOverlay("ctx-overlay") },
+    { _kind: "overlay", id: "ctx-overlay", component: () => "ctx-overlay-component" },
+  ],
 }`,
   )
 })
@@ -332,9 +340,9 @@ describe("loadTuiExtensions integration", () => {
       join(userBashDir, "override.client.ts"),
       `export default {
   id: "@test/user-bash",
-  setup: () => ({
-    tools: [{ toolNames: ["bash"], component: () => "user-bash-override" }],
-  }),
+  setup: () => [
+    { _kind: "renderer", toolNames: ["bash"], component: () => "user-bash-override" },
+  ],
 }`,
     )
 
@@ -391,15 +399,14 @@ export const SharedProtocol = {
 
 export default {
   id: "@test/shared-client",
-  setup: (ctx) => ({
-    commands: [
-      {
-        id: "shared.ping",
-        title: "Shared Ping",
-        onSelect: () => ctx.send(SharedProtocol.Ping({ value: "pong" })),
-      },
-    ],
-  }),
+  setup: (ctx) => [
+    {
+      _kind: "command",
+      id: "shared.ping",
+      title: "Shared Ping",
+      onSelect: () => ctx.send(SharedProtocol.Ping({ value: "pong" })),
+    },
+  ],
 }`,
     )
 
@@ -584,14 +591,14 @@ describe("same-scope collision detection", () => {
       join(collisionDir, "a.client.ts"),
       `export default {
   id: "@test/a",
-  setup: () => ({ tools: [{ toolNames: ["my_tool"], component: () => "a" }] }),
+  setup: () => [{ _kind: "renderer", toolNames: ["my_tool"], component: () => "a" }],
 }`,
     )
     writeFileSync(
       join(collisionDir, "b.client.ts"),
       `export default {
   id: "@test/b",
-  setup: () => ({ tools: [{ toolNames: ["my_tool"], component: () => "b" }] }),
+  setup: () => [{ _kind: "renderer", toolNames: ["my_tool"], component: () => "b" }],
 }`,
     )
 
@@ -616,14 +623,14 @@ describe("same-scope collision detection", () => {
       join(collisionDir, "a.client.ts"),
       `export default {
   id: "@test/a",
-  setup: () => ({ widgets: [{ id: "dup-widget", slot: "below-messages", component: () => "a" }] }),
+  setup: () => [{ _kind: "widget", id: "dup-widget", slot: "below-messages", component: () => "a" }],
 }`,
     )
     writeFileSync(
       join(collisionDir, "b.client.ts"),
       `export default {
   id: "@test/b",
-  setup: () => ({ widgets: [{ id: "dup-widget", slot: "above-input", component: () => "b" }] }),
+  setup: () => [{ _kind: "widget", id: "dup-widget", slot: "above-input", component: () => "b" }],
 }`,
     )
 
@@ -648,14 +655,14 @@ describe("same-scope collision detection", () => {
       join(collisionDir, "a.client.ts"),
       `export default {
   id: "@test/a",
-  setup: () => ({ commands: [{ id: "dup-cmd", title: "A", onSelect: () => {} }] }),
+  setup: () => [{ _kind: "command", id: "dup-cmd", title: "A", onSelect: () => {} }],
 }`,
     )
     writeFileSync(
       join(collisionDir, "b.client.ts"),
       `export default {
   id: "@test/b",
-  setup: () => ({ commands: [{ id: "dup-cmd", title: "B", onSelect: () => {} }] }),
+  setup: () => [{ _kind: "command", id: "dup-cmd", title: "B", onSelect: () => {} }],
 }`,
     )
 
@@ -680,14 +687,14 @@ describe("same-scope collision detection", () => {
       join(collisionDir, "a.client.ts"),
       `export default {
   id: "@test/a",
-  setup: () => ({ commands: [{ id: "cmd-a", title: "A", keybind: "ctrl+k", onSelect: () => {} }] }),
+  setup: () => [{ _kind: "command", id: "cmd-a", title: "A", keybind: "ctrl+k", onSelect: () => {} }],
 }`,
     )
     writeFileSync(
       join(collisionDir, "b.client.ts"),
       `export default {
   id: "@test/b",
-  setup: () => ({ commands: [{ id: "cmd-b", title: "B", keybind: "ctrl+k", onSelect: () => {} }] }),
+  setup: () => [{ _kind: "command", id: "cmd-b", title: "B", keybind: "ctrl+k", onSelect: () => {} }],
 }`,
     )
 
@@ -712,14 +719,14 @@ describe("same-scope collision detection", () => {
       join(collisionDir, "a.client.ts"),
       `export default {
   id: "@test/a",
-  setup: () => ({ overlays: [{ id: "dup-overlay", component: () => "a" }] }),
+  setup: () => [{ _kind: "overlay", id: "dup-overlay", component: () => "a" }],
 }`,
     )
     writeFileSync(
       join(collisionDir, "b.client.ts"),
       `export default {
   id: "@test/b",
-  setup: () => ({ overlays: [{ id: "dup-overlay", component: () => "b" }] }),
+  setup: () => [{ _kind: "overlay", id: "dup-overlay", component: () => "b" }],
 }`,
     )
 
@@ -800,20 +807,18 @@ describe("border label resolution", () => {
         id: "@test/bottom-labels",
         kind: "user",
         filePath: "test:bottom-labels",
-        setup: {
-          borderLabels: [
-            {
-              position: "bottom-left",
-              priority: 10,
-              produce: () => [{ text: "tasks: 2", color: "info" }],
-            },
-            {
-              position: "bottom-right",
-              priority: 20,
-              produce: () => [{ text: "v1.0", color: "textMuted" }],
-            },
-          ],
-        },
+        contributions: [
+          borderLabelContribution({
+            position: "bottom-left",
+            priority: 10,
+            produce: () => [{ text: "tasks: 2", color: "info" }],
+          }),
+          borderLabelContribution({
+            position: "bottom-right",
+            priority: 20,
+            produce: () => [{ text: "v1.0", color: "textMuted" }],
+          }),
+        ],
       },
     ]
 
@@ -834,13 +839,23 @@ describe("border label resolution", () => {
         id: "@test/a",
         kind: "user",
         filePath: "test:a",
-        setup: {
-          borderLabels: [
-            { position: "bottom-left", priority: 200, produce: () => [{ text: "low", color: "" }] },
-            { position: "bottom-left", priority: 10, produce: () => [{ text: "high", color: "" }] },
-            { position: "top-left", priority: 50, produce: () => [{ text: "mid", color: "" }] },
-          ],
-        },
+        contributions: [
+          borderLabelContribution({
+            position: "bottom-left",
+            priority: 200,
+            produce: () => [{ text: "low", color: "" }],
+          }),
+          borderLabelContribution({
+            position: "bottom-left",
+            priority: 10,
+            produce: () => [{ text: "high", color: "" }],
+          }),
+          borderLabelContribution({
+            position: "top-left",
+            priority: 50,
+            produce: () => [{ text: "mid", color: "" }],
+          }),
+        ],
       },
     ]
 
@@ -857,17 +872,27 @@ describe("resolution semantics", () => {
         id: "@test/user",
         kind: "user",
         filePath: "/test/user",
-        setup: {
-          commands: [{ id: "cmd-u", title: "User", keybind: "ctrl+k", onSelect: () => {} }],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "cmd-u",
+            title: "User",
+            keybind: "ctrl+k",
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
       {
         id: "@test/project",
         kind: "project",
         filePath: "/test/project",
-        setup: {
-          commands: [{ id: "cmd-p", title: "Project", keybind: "ctrl+k", onSelect: () => {} }],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "cmd-p",
+            title: "Project",
+            keybind: "ctrl+k",
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
@@ -883,17 +908,27 @@ describe("resolution semantics", () => {
         id: "@test/user",
         kind: "user",
         filePath: "/test/user",
-        setup: {
-          commands: [{ id: "cmd-u", title: "User", slash: "deploy", onSelect: () => {} }],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "cmd-u",
+            title: "User",
+            slash: "deploy",
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
       {
         id: "@test/project",
         kind: "project",
         filePath: "/test/project",
-        setup: {
-          commands: [{ id: "cmd-p", title: "Project", slash: "deploy", onSelect: () => {} }],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "cmd-p",
+            title: "Project",
+            slash: "deploy",
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
@@ -909,21 +944,17 @@ describe("resolution semantics", () => {
         id: "@test/user",
         kind: "user",
         filePath: "/test/user",
-        setup: {
-          composerSurface: () => "user-composer",
-        },
+        contributions: [composerSurfaceContribution(() => "user-composer")],
       } satisfies LoadedTuiExtension,
       {
         id: "@test/project",
         kind: "project",
         filePath: "/test/project",
-        setup: {
-          composerSurface: () => "project-composer",
-        },
+        contributions: [composerSurfaceContribution(() => "project-composer")],
       } satisfies LoadedTuiExtension,
     ])
 
-    expect(resolved.composerSurface?.()).toBe("project-composer")
+    expect((resolved.composerSurface as () => string)?.()).toBe("project-composer")
   })
 
   test("same-scope composer surface collision throws", () => {
@@ -933,13 +964,13 @@ describe("resolution semantics", () => {
           id: "@test/a",
           kind: "user",
           filePath: "/test/a",
-          setup: { composerSurface: () => "a" },
+          contributions: [composerSurfaceContribution(() => "a")],
         } satisfies LoadedTuiExtension,
         {
           id: "@test/b",
           kind: "user",
           filePath: "/test/b",
-          setup: { composerSurface: () => "b" },
+          contributions: [composerSurfaceContribution(() => "b")],
         } satisfies LoadedTuiExtension,
       ]),
     ).toThrow("Same-scope TUI composer surface collision")
@@ -951,38 +982,30 @@ describe("resolution semantics", () => {
         id: "@test/builtin",
         kind: "builtin",
         filePath: "builtin:@test/builtin",
-        setup: {
-          interactionRenderers: [{ metadataType: "ask-user", component: () => "builtin" }],
-        },
+        contributions: [interactionRendererContribution(() => "builtin", "ask-user")],
       } satisfies LoadedTuiExtension,
       {
         id: "@test/project",
         kind: "project",
         filePath: "/test/project",
-        setup: {
-          interactionRenderers: [{ metadataType: "ask-user", component: () => "project" }],
-        },
+        contributions: [interactionRendererContribution(() => "project", "ask-user")],
       } satisfies LoadedTuiExtension,
     ])
 
-    expect(resolved.interactionRenderers.get("ask-user")?.()).toBe("project")
+    expect((resolved.interactionRenderers.get("ask-user") as () => string)?.()).toBe("project")
     expect(() =>
       resolveTuiExtensions([
         {
           id: "@test/a",
           kind: "user",
           filePath: "/test/a",
-          setup: {
-            interactionRenderers: [{ metadataType: "ask-user", component: () => "a" }],
-          },
+          contributions: [interactionRendererContribution(() => "a", "ask-user")],
         } satisfies LoadedTuiExtension,
         {
           id: "@test/b",
           kind: "user",
           filePath: "/test/b",
-          setup: {
-            interactionRenderers: [{ metadataType: "ask-user", component: () => "b" }],
-          },
+          contributions: [interactionRendererContribution(() => "b", "ask-user")],
         } satisfies LoadedTuiExtension,
       ]),
     ).toThrow("Same-scope TUI interaction renderer collision")
@@ -994,17 +1017,15 @@ describe("resolution semantics", () => {
         id: "@test/ext",
         kind: "builtin",
         filePath: "builtin:@test/ext",
-        setup: {
-          commands: [
-            {
-              id: "custom-clear",
-              title: "Custom Clear",
-              slash: "clear",
-              slashPriority: -1,
-              onSelect: () => {},
-            },
-          ],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "custom-clear",
+            title: "Custom Clear",
+            slash: "clear",
+            slashPriority: -1,
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
@@ -1026,16 +1047,14 @@ describe("resolution semantics", () => {
         id: "@test/ext",
         kind: "builtin",
         filePath: "builtin:@test/ext",
-        setup: {
-          commands: [
-            {
-              id: "open-custom",
-              title: "Open Custom",
-              paletteLevel: levelFactory,
-              onSelect: () => {},
-            },
-          ],
-        },
+        contributions: [
+          clientCommandContribution({
+            id: "open-custom",
+            title: "Open Custom",
+            paletteLevel: levelFactory,
+            onSelect: () => {},
+          }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
@@ -1065,7 +1084,7 @@ describe("ExtensionPackage.tui()", () => {
       snapshot: TestSnapshot,
     })
 
-    const clientModule = pkg.tui(() => ({}))
+    const clientModule = pkg.tui(() => [])
     expect(clientModule.id).toBe("@test/derived-id")
   })
 
@@ -1089,7 +1108,7 @@ describe("ExtensionPackage.tui()", () => {
       // Exercise zero-arg getSnapshot during setup
       const result = ctx.getSnapshot()
       expect(result).toEqual({ value: 42 })
-      return {}
+      return []
     })
 
     clientModule.setup(mockCtx)
@@ -1118,7 +1137,7 @@ describe("ExtensionPackage.tui()", () => {
     const clientModule = pkg.tui((ctx) => {
       const result = ctx.getSnapshot("@other/ext", OtherSchema)
       expect(result).toEqual({ other: "cross" })
-      return {}
+      return []
     })
 
     clientModule.setup(mockCtx)
@@ -1136,7 +1155,7 @@ describe("ExtensionPackage.tui()", () => {
     let result: unknown = "sentinel"
     const clientModule = pkg.tui((ctx) => {
       result = ctx.getSnapshot()
-      return {}
+      return []
     })
 
     clientModule.setup(noopCtx)
@@ -1154,7 +1173,7 @@ describe("ExtensionPackage.tui()", () => {
     ]
 
     for (const pkg of pairedPackages) {
-      const clientModule = pkg.tui(() => ({}))
+      const clientModule = pkg.tui(() => [])
       expect(clientModule.id).toBe(pkg.id)
     }
   })
@@ -1200,13 +1219,12 @@ describe("composerState contract", () => {
   setup: (ctx) => {
     // Extensions can read composerState during setup and store the getter
     const getState = ctx.composerState
-    return {
-      commands: [{
-        id: "test-composer-state",
-        title: "Test",
-        onSelect: () => { getState() },
-      }],
-    }
+    return [{
+      _kind: "command",
+      id: "test-composer-state",
+      title: "Test",
+      onSelect: () => { getState() },
+    }]
   },
 }`,
     )
@@ -1245,15 +1263,13 @@ describe("autocompleteItems resolution", () => {
         id: "@test/ac",
         kind: "builtin",
         filePath: "builtin:@test/ac",
-        setup: {
-          autocompleteItems: [
-            {
-              prefix: "#",
-              title: "Tags",
-              items: () => [{ id: "tag1", label: "tag1" }],
-            },
-          ],
-        },
+        contributions: [
+          autocompleteContribution({
+            prefix: "#",
+            title: "Tags",
+            items: () => [{ id: "tag1", label: "tag1" }],
+          }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
@@ -1268,17 +1284,17 @@ describe("autocompleteItems resolution", () => {
         id: "@test/a",
         kind: "builtin",
         filePath: "builtin:@test/a",
-        setup: {
-          autocompleteItems: [{ prefix: "$", title: "Skills A", items: () => [] }],
-        },
+        contributions: [
+          autocompleteContribution({ prefix: "$", title: "Skills A", items: () => [] }),
+        ],
       } satisfies LoadedTuiExtension,
       {
         id: "@test/b",
         kind: "user",
         filePath: "/test/b",
-        setup: {
-          autocompleteItems: [{ prefix: "$", title: "Skills B", items: () => [] }],
-        },
+        contributions: [
+          autocompleteContribution({ prefix: "$", title: "Skills B", items: () => [] }),
+        ],
       } satisfies LoadedTuiExtension,
     ])
 
