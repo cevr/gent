@@ -1,5 +1,17 @@
-import { extension, defineAgent, ARCHITECT_PROMPT, ModelId } from "@gent/core/extensions/api"
+import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
+
+const ARCHITECT_PROMPT = `
+Architect agent. Design implementation approach.
+- Enumerate structure, tradeoffs, and risks.
+- Reference specific files and interfaces.
+- No code changes — read-only analysis.
+- Plans batched by commit — each batch is one shippable unit.
+- Each batch: Goal, Why, Justification (principle names), Files, Changes, Verification.
+- No addendums — plans must be cohesive, not main + appendix.
+- Use the principles tool to ground justifications.
+- End with a sequenced implementation plan.
+`.trim()
 
 export const architect = defineAgent({
   name: "architect",

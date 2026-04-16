@@ -184,21 +184,14 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       // -- message --
-      "message.send": ({
-        sessionId,
-        branchId,
-        content,
-        agentOverride,
-        executionOverrides,
-        requestId,
-      }) =>
+      "message.send": ({ sessionId, branchId, content, agentOverride, runSpec, requestId }) =>
         commands
           .sendMessage({
             sessionId,
             branchId,
             content,
             ...(agentOverride !== undefined ? { agentOverride } : {}),
-            ...(executionOverrides !== undefined ? { executionOverrides } : {}),
+            ...(runSpec !== undefined ? { runSpec } : {}),
             ...(requestId !== undefined ? { requestId } : {}),
           })
           .pipe(

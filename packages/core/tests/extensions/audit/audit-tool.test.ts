@@ -201,7 +201,7 @@ describe("Audit Tool", () => {
       agentRun: (params) =>
         Effect.sync(() => {
           if (params.prompt.includes("Audit the code for this concern:")) {
-            auditOverrides.push(params.overrides as Record<string, unknown> | undefined)
+            auditOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
           }
           if (params.prompt.includes("Identify audit concerns")) {
             return makeSuccess("1. types: Check types")

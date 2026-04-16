@@ -1,5 +1,5 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
-import { AgentExecutionOverridesSchema, AgentName, AgentRunnerService } from "../domain/agent.js"
+import { RunSpecSchema, AgentName, AgentRunnerService } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
@@ -48,7 +48,7 @@ export const SendUserMessagePayload = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   agentOverride: Schema.optional(AgentName),
-  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  runSpec: Schema.optional(RunSpecSchema),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -269,9 +269,7 @@ export const LocalActorProcessLive: Layer.Layer<
           yield* agentLoop
             .submit(message, {
               ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-              ...(input.executionOverrides !== undefined
-                ? { executionOverrides: input.executionOverrides }
-                : {}),
+              ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
             })
             .pipe(
               Effect.catchCause((cause) => {

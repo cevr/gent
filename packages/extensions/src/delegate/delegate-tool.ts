@@ -110,7 +110,7 @@ export const DelegateTool = defineTool({
         const result = yield* ctx.agent.run({
           agent: resolvedAgent,
           prompt: task.prompt ?? task.subject,
-          toolCallId: ctx.toolCallId,
+          runSpec: { parentToolCallId: ctx.toolCallId },
         })
 
         // Guard: if task was stopped/failed while running, don't overwrite terminal state
@@ -211,7 +211,7 @@ export const DelegateTool = defineTool({
         const result = yield* ctx.agent.run({
           agent: resolved.agent,
           prompt: taskWithContext,
-          toolCallId: ctx.toolCallId,
+          runSpec: { parentToolCallId: ctx.toolCallId },
         })
 
         results.push(result)
@@ -260,7 +260,7 @@ export const DelegateTool = defineTool({
             return ctx.agent.run({
               agent: resolved.agent,
               prompt: task.task,
-              toolCallId: ctx.toolCallId,
+              runSpec: { parentToolCallId: ctx.toolCallId },
             })
           }),
         )
@@ -291,7 +291,7 @@ export const DelegateTool = defineTool({
       const result = yield* ctx.agent.run({
         agent: resolved.agent,
         prompt: params.task ?? "",
-        toolCallId: ctx.toolCallId,
+        runSpec: { parentToolCallId: ctx.toolCallId },
       })
 
       if (result._tag === "error") {

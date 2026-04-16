@@ -29,7 +29,8 @@ import {
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
   resolveAgentModel,
-  type AgentExecutionOverrides,
+  type AgentRunOverrides,
+  type RunSpec,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import { type QueueSnapshot } from "../../domain/queue.js"
@@ -217,7 +218,7 @@ const persistAssistantText = (params: {
 
 const resolveTurnContext = (params: {
   agentOverride?: AgentNameType
-  executionOverrides?: AgentExecutionOverrides
+  runSpec?: RunSpec
   currentAgent?: AgentNameType
   storage: StorageService
   branchId: BranchId
@@ -247,7 +248,7 @@ const resolveTurnContext = (params: {
         .pipe(Effect.orDie)
       return undefined
     }
-    const effectiveAgent = applyAgentOverrides(agent, params.executionOverrides)
+    const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
 
     // Run context.messages interceptor — extensions can inject hidden context or filter messages
     const interceptedMessages = yield* params.extensionRegistry.hooks.runInterceptor(
@@ -273,9 +274,9 @@ const resolveTurnContext = (params: {
       agent: effectiveAgent,
       allTools,
       interactive: params.interactive,
-      tags: params.executionOverrides?.tags,
+      tags: params.runSpec?.tags,
       agentName: currentAgent,
-      parentToolCallId: params.executionOverrides?.parentToolCallId,
+      parentToolCallId: params.runSpec?.parentToolCallId,
     }
     const extensionResults = yield* params.extensionStateRuntime.deriveAll(
       params.sessionId,
@@ -308,8 +309,8 @@ const resolveTurnContext = (params: {
           branchId: params.branchId,
           agentName: currentAgent,
           interactive: params.interactive,
-          tags: params.executionOverrides?.tags,
-          parentToolCallId: params.executionOverrides?.parentToolCallId,
+          tags: params.runSpec?.tags,
+          parentToolCallId: params.runSpec?.parentToolCallId,
         },
         extensionProjections,
       )
@@ -339,7 +340,7 @@ const resolveTurnContext = (params: {
       agent: effectiveAgent,
       tools,
       systemPrompt,
-      modelId: params.executionOverrides?.modelId ?? resolveAgentModel(effectiveAgent),
+      modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(effectiveAgent),
       reasoning: resolveReasoning(effectiveAgent, session?.reasoningLevel),
       temperature: effectiveAgent.temperature,
       driver: effectiveAgent.driver,
@@ -600,7 +601,7 @@ const executeToolCalls = (params: {
 export const resolveTurnPhase = (params: {
   message: Message
   agentOverride?: AgentNameType
-  executionOverrides?: AgentExecutionOverrides
+  runSpec?: RunSpec
   currentAgent?: AgentNameType
   storage: StorageService
   branchId: BranchId
@@ -1366,7 +1367,7 @@ const resolveStoredAgent = (params: {
     return Schema.is(AgentName)(raw) ? raw : DEFAULT_AGENT_NAME
   })
 
-const hasAgentOverrides = (overrides: AgentExecutionOverrides | undefined) =>
+const hasAgentOverrides = (overrides: AgentRunOverrides | undefined) =>
   overrides?.allowedTools !== undefined ||
   overrides?.deniedTools !== undefined ||
   overrides?.reasoningEffort !== undefined ||
@@ -1382,7 +1383,7 @@ const mergeSystemPromptAddendum = (
 
 const applyAgentOverrides = (
   agent: AgentDefinition,
-  overrides: AgentExecutionOverrides | undefined,
+  overrides: AgentRunOverrides | undefined,
 ): AgentDefinition => {
   if (!hasAgentOverrides(overrides)) {
     return agent
@@ -1591,13 +1592,13 @@ export interface AgentLoopService {
     agentName: AgentNameType
     prompt: string
     interactive?: boolean
-    overrides?: AgentExecutionOverrides
+    runSpec?: RunSpec
   }) => Effect.Effect<void, AgentRunError>
   readonly submit: (
     message: Message,
     options?: {
       agentOverride?: AgentNameType
-      executionOverrides?: AgentExecutionOverrides
+      runSpec?: RunSpec
       interactive?: boolean
     },
   ) => Effect.Effect<void, AgentLoopError>
@@ -1605,7 +1606,7 @@ export interface AgentLoopService {
     message: Message,
     options?: {
       agentOverride?: AgentNameType
-      executionOverrides?: AgentExecutionOverrides
+      runSpec?: RunSpec
       interactive?: boolean
     },
   ) => Effect.Effect<void, AgentLoopError>
@@ -1934,7 +1935,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 const resolved = yield* resolveTurnPhase({
                   message: state.message,
                   agentOverride: state.agentOverride,
-                  executionOverrides: state.executionOverrides,
+                  runSpec: state.runSpec,
                   currentAgent: state.currentAgent,
                   storage,
                   branchId,
@@ -2191,7 +2192,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
-                    executionOverrides: state.executionOverrides,
+                    runSpec: state.runSpec,
                     interactive: state.interactive,
                   })
                 }),
@@ -2205,7 +2206,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
-                    executionOverrides: state.executionOverrides,
+                    runSpec: state.runSpec,
                     interactive: state.interactive,
                   }),
               )
@@ -2372,16 +2373,14 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           options?:
             | {
                 agentOverride?: AgentNameType
-                executionOverrides?: AgentExecutionOverrides
+                runSpec?: RunSpec
                 interactive?: boolean
               }
             | undefined,
         ): QueuedTurnItem => ({
           message,
           ...(options?.agentOverride !== undefined ? { agentOverride: options.agentOverride } : {}),
-          ...(options?.executionOverrides !== undefined
-            ? { executionOverrides: options.executionOverrides }
-            : {}),
+          ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
           ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
         })
 
@@ -2427,7 +2426,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             return yield* service
               .run(userMessage, {
                 agentOverride: input.agentName,
-                ...(input.overrides !== undefined ? { executionOverrides: input.overrides } : {}),
+                ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
                 ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
               })
               .pipe(
@@ -2445,7 +2444,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             message: Message,
             options?: {
               agentOverride?: AgentNameType
-              executionOverrides?: AgentExecutionOverrides
+              runSpec?: RunSpec
               interactive?: boolean
             },
           ) {
@@ -2465,7 +2464,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             message: Message,
             options?: {
               agentOverride?: AgentNameType
-              executionOverrides?: AgentExecutionOverrides
+              runSpec?: RunSpec
               interactive?: boolean
             },
           ) {

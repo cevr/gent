@@ -1,12 +1,5 @@
 import type { Effect, PlatformError } from "effect"
-import type {
-  AgentDefinition,
-  AgentExecutionOverrides,
-  AgentName,
-  AgentPersistence,
-  AgentRunError,
-  AgentRunResult,
-} from "./agent"
+import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { EventStoreError, ExtensionUiSnapshot } from "./event"
 import type {
   AnyExtensionCommandMessage,
@@ -14,7 +7,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol"
-import type { BranchId, MessageId, SessionId, ToolCallId } from "./ids"
+import type { BranchId, MessageId, SessionId } from "./ids"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -111,9 +104,7 @@ export declare namespace ExtensionHostContext {
       agent: AgentDefinition
       prompt: string
       cwd?: string
-      toolCallId?: ToolCallId
-      overrides?: AgentExecutionOverrides
-      persistence?: AgentPersistence
+      runSpec?: RunSpec
     }) => Effect.Effect<AgentRunResult, AgentRunError>
 
     readonly resolveDualModelPair: () => Effect.Effect<readonly [ModelId, ModelId]>

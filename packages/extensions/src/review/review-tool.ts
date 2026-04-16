@@ -85,7 +85,6 @@ const reviewAgent = defineAgent({
   name: "review-worker",
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: REVIEW_AGENT_PROMPT,
-  persistence: "ephemeral",
 })
 
 const decodeReviewComments = (text: string) =>
@@ -241,9 +240,12 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     ctx.agent.run({
       agent: params.worker,
       prompt,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      toolCallId: params.toolCallId as never,
-      overrides: { ...reviewOverrides, modelId },
+      runSpec: {
+        persistence: "ephemeral",
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        parentToolCallId: params.toolCallId as never,
+        overrides: { ...reviewOverrides, modelId },
+      },
     })
 
   const [reviewResultA, reviewResultB] = yield* Effect.all(
@@ -355,7 +357,7 @@ export const ReviewTool = defineTool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(report.comments, params.description),
-      toolCallId: ctx.toolCallId,
+      runSpec: { parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

@@ -3,7 +3,7 @@ import { type ActorRef, Event, State } from "effect-machine"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   AgentName,
-  AgentExecutionOverridesSchema,
+  RunSpecSchema,
   DEFAULT_AGENT_NAME,
   type AgentDefinition as AgentDefinitionType,
   type DriverRef,
@@ -21,7 +21,7 @@ import { messageText, getSingleText } from "./agent-loop.utils.js"
 const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
-  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  runSpec: Schema.optional(RunSpecSchema),
   interactive: Schema.optional(Schema.Boolean),
 })
 export type QueuedTurnItem = typeof QueuedTurnItemSchema.Type
@@ -34,7 +34,7 @@ export type LoopQueueState = typeof LoopQueueState.Type
 
 const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
   if (existing.agentOverride !== undefined || incoming.agentOverride !== undefined) return false
-  if (existing.executionOverrides !== undefined || incoming.executionOverrides !== undefined) {
+  if (existing.runSpec !== undefined || incoming.runSpec !== undefined) {
     return false
   }
   if (existing.interactive !== undefined || incoming.interactive !== undefined) return false
@@ -174,7 +174,7 @@ const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Number,
   agentOverride: Schema.optional(AgentName),
-  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  runSpec: Schema.optional(RunSpecSchema),
   interactive: Schema.optional(Schema.Boolean),
 }
 
@@ -285,7 +285,7 @@ export const buildRunningState = (
     message: item.message,
     startedAtMs: Date.now(),
     agentOverride: item.agentOverride,
-    executionOverrides: item.executionOverrides,
+    runSpec: item.runSpec,
     interactive: item.interactive,
   })
 

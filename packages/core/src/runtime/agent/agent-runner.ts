@@ -32,12 +32,12 @@ import {
   AgentRunError,
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
-  resolveAgentPersistence,
+  resolveRunPersistence,
   type AgentRunResult,
   type AgentRunToolCall,
   type AgentPersistence,
-  type AgentExecutionOverrides,
-  AgentExecutionOverridesSchema,
+  type RunSpec,
+  RunSpecSchema,
 } from "../../domain/agent.js"
 import { Session, Branch, type Message } from "../../domain/message.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
@@ -206,25 +206,36 @@ const withAgentRunFailureHandling = <E, R>(
 const overrideArray = <A>(values: ReadonlyArray<A> | undefined) =>
   values === undefined ? undefined : [...values]
 
-const normalizeOverrides = (overrides: AgentExecutionOverrides | undefined) =>
-  overrides === undefined
-    ? undefined
-    : {
-        ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
-        ...(overrides.allowedTools !== undefined
-          ? { allowedTools: overrideArray(overrides.allowedTools) }
-          : {}),
-        ...(overrides.deniedTools !== undefined
-          ? { deniedTools: overrideArray(overrides.deniedTools) }
-          : {}),
-        ...(overrides.reasoningEffort !== undefined
-          ? { reasoningEffort: overrides.reasoningEffort }
-          : {}),
-        ...(overrides.systemPromptAddendum !== undefined
-          ? { systemPromptAddendum: overrides.systemPromptAddendum }
-          : {}),
-        ...(overrides.tags !== undefined ? { tags: overrideArray(overrides.tags) } : {}),
-      }
+const normalizeRunSpec = (runSpec: RunSpec | undefined): RunSpec | undefined => {
+  if (runSpec === undefined) return undefined
+  const overrides = runSpec.overrides
+  const normalizedOverrides =
+    overrides === undefined
+      ? undefined
+      : {
+          ...(overrides.modelId !== undefined ? { modelId: overrides.modelId } : {}),
+          ...(overrides.allowedTools !== undefined
+            ? { allowedTools: overrideArray(overrides.allowedTools) }
+            : {}),
+          ...(overrides.deniedTools !== undefined
+            ? { deniedTools: overrideArray(overrides.deniedTools) }
+            : {}),
+          ...(overrides.reasoningEffort !== undefined
+            ? { reasoningEffort: overrides.reasoningEffort }
+            : {}),
+          ...(overrides.systemPromptAddendum !== undefined
+            ? { systemPromptAddendum: overrides.systemPromptAddendum }
+            : {}),
+        }
+  return {
+    ...(runSpec.persistence !== undefined ? { persistence: runSpec.persistence } : {}),
+    ...(normalizedOverrides !== undefined ? { overrides: normalizedOverrides } : {}),
+    ...(runSpec.tags !== undefined ? { tags: overrideArray(runSpec.tags) } : {}),
+    ...(runSpec.parentToolCallId !== undefined
+      ? { parentToolCallId: runSpec.parentToolCallId }
+      : {}),
+  }
+}
 
 const collectChildMetadata = (
   storage: StorageService,
@@ -554,14 +565,14 @@ const runEphemeralAgent = (params: {
   cwd: string
   agentName: string
   prompt: string
-  overrides?: AgentExecutionOverrides
+  runSpec?: RunSpec
   persistence: AgentPersistence
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
 }) => {
   const sessionId = SessionId.of(Bun.randomUUIDv7())
   const branchId = BranchId.of(Bun.randomUUIDv7())
-  const normalizedOverrides = normalizeOverrides(params.overrides)
+  const normalizedRunSpec = params.runSpec
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
     parentServices: params.parentServices,
@@ -660,10 +671,10 @@ const runEphemeralAgent = (params: {
               )
 
               return yield* Effect.gen(function* () {
-                const runOverrides =
+                const runSpec: RunSpec | undefined =
                   params.toolCallId !== undefined
-                    ? { ...normalizedOverrides, parentToolCallId: params.toolCallId }
-                    : normalizedOverrides
+                    ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
+                    : normalizedRunSpec
                 yield* runWithTimeout(
                   localLoop.runOnce({
                     sessionId,
@@ -671,7 +682,7 @@ const runEphemeralAgent = (params: {
                     agentName: params.agentName,
                     prompt: params.prompt,
                     interactive: false,
-                    ...(runOverrides !== undefined ? { overrides: runOverrides } : {}),
+                    ...(runSpec !== undefined ? { runSpec } : {}),
                   }),
                 )
 
@@ -806,8 +817,9 @@ export const InProcessRunner = (
 
       return {
         run: (params) => {
-          const persistence = resolveAgentPersistence(params.agent, params.persistence)
-          const normalizedOverrides = normalizeOverrides(params.overrides)
+          const persistence = resolveRunPersistence(params.runSpec)
+          const normalizedRunSpec = normalizeRunSpec(params.runSpec)
+          const toolCallId = params.runSpec?.parentToolCallId
 
           const handleUnexpectedFailure = (cause: Cause.Cause<unknown>) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
@@ -827,11 +839,11 @@ export const InProcessRunner = (
               parentServices,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
-              toolCallId: params.toolCallId,
+              toolCallId,
               cwd: params.cwd,
               agentName: params.agent.name,
               prompt: params.prompt,
-              overrides: params.overrides,
+              runSpec: normalizedRunSpec,
               persistence,
               parentBaseEventStore: baseEventStore,
               notifyMirroredEventObservers,
@@ -846,7 +858,7 @@ export const InProcessRunner = (
                 yield* shared.publishAgentRunSpawned({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   childBranchId: branchId,
                   agentName: params.agent.name,
@@ -858,10 +870,10 @@ export const InProcessRunner = (
                   agentName: params.agent.name,
                 })
 
-                const durableRunOverrides =
-                  params.toolCallId !== undefined
-                    ? { ...normalizedOverrides, parentToolCallId: params.toolCallId }
-                    : normalizedOverrides
+                const durableRunSpec: RunSpec | undefined =
+                  toolCallId !== undefined
+                    ? { ...(normalizedRunSpec ?? {}), parentToolCallId: toolCallId }
+                    : normalizedRunSpec
                 yield* runWithTimeout(
                   loop.runOnce({
                     sessionId,
@@ -869,9 +881,7 @@ export const InProcessRunner = (
                     agentName: params.agent.name,
                     prompt: params.prompt,
                     interactive: false,
-                    ...(durableRunOverrides !== undefined
-                      ? { overrides: durableRunOverrides }
-                      : {}),
+                    ...(durableRunSpec !== undefined ? { runSpec: durableRunSpec } : {}),
                   }),
                 )
 
@@ -893,7 +903,7 @@ export const InProcessRunner = (
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   agentName: params.agent.name,
                   usage: result.usage,
@@ -914,7 +924,7 @@ export const InProcessRunner = (
                 {
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   agentName: params.agent.name,
                   persistence,
@@ -970,7 +980,8 @@ export const SubprocessRunner = (
 
       return {
         run: (params) => {
-          const persistence = resolveAgentPersistence(params.agent, params.persistence)
+          const persistence = resolveRunPersistence(params.runSpec)
+          const toolCallId = params.runSpec?.parentToolCallId
           if (persistence === "ephemeral") {
             return runEphemeralAgent({
               runnerConfig: config,
@@ -979,11 +990,11 @@ export const SubprocessRunner = (
               parentServices,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
-              toolCallId: params.toolCallId,
+              toolCallId,
               cwd: params.cwd,
               agentName: params.agent.name,
               prompt: params.prompt,
-              overrides: params.overrides,
+              runSpec: params.runSpec,
               persistence,
               parentBaseEventStore: baseEventStore,
               notifyMirroredEventObservers,
@@ -998,7 +1009,7 @@ export const SubprocessRunner = (
                 yield* shared.publishAgentRunSpawned({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   childBranchId: branchId,
                   agentName: params.agent.name,
@@ -1011,16 +1022,14 @@ export const SubprocessRunner = (
                 )
 
                 const binary = config.subprocessBinaryPath ?? "gent"
-                // Merge parentToolCallId into overrides for subprocess
-                const subprocessOverrides: AgentExecutionOverrides | undefined =
-                  params.toolCallId !== undefined
-                    ? { ...params.overrides, parentToolCallId: params.toolCallId }
-                    : params.overrides
-                const overridesJson =
-                  subprocessOverrides !== undefined
-                    ? Schema.encodeSync(Schema.fromJsonString(AgentExecutionOverridesSchema))(
-                        subprocessOverrides,
-                      )
+                // Merge parentToolCallId into runSpec for subprocess
+                const subprocessRunSpec: RunSpec | undefined =
+                  toolCallId !== undefined
+                    ? { ...(params.runSpec ?? {}), parentToolCallId: toolCallId }
+                    : params.runSpec
+                const runSpecJson =
+                  subprocessRunSpec !== undefined
+                    ? Schema.encodeSync(Schema.fromJsonString(RunSpecSchema))(subprocessRunSpec)
                     : undefined
                 const args = [
                   binary,
@@ -1030,7 +1039,7 @@ export const SubprocessRunner = (
                   ...(config.sharedServerUrl !== undefined
                     ? ["--connect", config.sharedServerUrl]
                     : []),
-                  ...(overridesJson !== undefined ? ["--execution-overrides", overridesJson] : []),
+                  ...(runSpecJson !== undefined ? ["--run-spec", runSpecJson] : []),
                   params.prompt,
                 ]
 
@@ -1049,8 +1058,7 @@ export const SubprocessRunner = (
 
                 const [exitCode, stderrText] = yield* Effect.acquireUseRelease(
                   Effect.sync(() =>
-                    Bun.spawn({
-                      cmd: args,
+                    Bun.spawn(args, {
                       cwd: params.cwd,
                       stdout: "pipe",
                       stderr: "pipe",
@@ -1094,7 +1102,7 @@ export const SubprocessRunner = (
                   yield* shared.publishAgentRunFailed({
                     parentSessionId: params.parentSessionId,
                     parentBranchId: params.parentBranchId,
-                    toolCallId: params.toolCallId,
+                    toolCallId,
                     sessionId,
                     agentName: params.agent.name,
                   })
@@ -1129,7 +1137,7 @@ export const SubprocessRunner = (
                 yield* shared.publishAgentRunSucceeded({
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   agentName: params.agent.name,
                   usage: result.usage,
@@ -1150,7 +1158,7 @@ export const SubprocessRunner = (
                 {
                   parentSessionId: params.parentSessionId,
                   parentBranchId: params.parentBranchId,
-                  toolCallId: params.toolCallId,
+                  toolCallId,
                   sessionId,
                   agentName: params.agent.name,
                   persistence,

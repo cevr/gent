@@ -1,7 +1,7 @@
 /**
- * Execution overrides threading tests.
+ * RunSpec threading tests.
  *
- * Verifies that AgentExecutionOverrides (including parentToolCallId)
+ * Verifies that RunSpec (including parentToolCallId)
  * survive the full chain: client.message.send → RPC → session-commands
  * → actor-process → agentLoop.submit → resolveTurnContext → deriveAll.
  *
@@ -14,7 +14,7 @@ import { Effect, Schema } from "effect"
 import type { LoadedExtension, ExtensionTurnContext } from "@gent/core/domain/extension"
 import { ToolCallId } from "@gent/core/domain/ids"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
-import { AgentExecutionOverridesSchema } from "@gent/core/domain/agent"
+import { RunSpecSchema } from "@gent/core/domain/agent"
 import { reducerActor } from "../extensions/helpers/reducer-actor"
 import { createRpcHarness } from "../extensions/helpers/rpc-harness"
 
@@ -43,7 +43,7 @@ const contextCaptureExtension: LoadedExtension = {
 
 // ── Tests ──
 
-describe("executionOverrides through RPC", () => {
+describe("runSpec through RPC", () => {
   it.live(
     "parentToolCallId reaches ExtensionTurnContext via message.send",
     () =>
@@ -63,7 +63,7 @@ describe("executionOverrides through RPC", () => {
             sessionId,
             branchId,
             content: "test message",
-            executionOverrides: {
+            runSpec: {
               parentToolCallId: ToolCallId.of("tc-from-parent"),
               tags: ["subprocess-test"],
             },
@@ -81,37 +81,40 @@ describe("executionOverrides through RPC", () => {
   )
 })
 
-describe("AgentExecutionOverrides CLI serialization", () => {
-  const codec = Schema.fromJsonString(AgentExecutionOverridesSchema)
+describe("RunSpec CLI serialization", () => {
+  const codec = Schema.fromJsonString(RunSpecSchema)
 
   test("round-trips through JSON encode/decode", () => {
-    const overrides = {
-      modelId: "anthropic/claude-sonnet-4-6",
-      allowedTools: ["grep", "glob", "read"],
-      deniedTools: ["bash"],
-      reasoningEffort: "high" as const,
-      systemPromptAddendum: "Be concise.",
+    const runSpec = {
+      persistence: "ephemeral" as const,
+      overrides: {
+        modelId: "anthropic/claude-sonnet-4-6",
+        allowedTools: ["grep", "glob", "read"],
+        deniedTools: ["bash"],
+        reasoningEffort: "high" as const,
+        systemPromptAddendum: "Be concise.",
+      },
       tags: ["subprocess-test"],
       parentToolCallId: ToolCallId.of("tc-abc-123"),
     }
 
-    const json = Schema.encodeSync(codec)(overrides)
+    const json = Schema.encodeSync(codec)(runSpec)
     expect(typeof json).toBe("string")
 
     const decoded = Schema.decodeUnknownSync(codec)(json)
-    expect(decoded).toEqual(overrides)
+    expect(decoded).toEqual(runSpec)
   })
 
-  test("round-trips with minimal overrides", () => {
-    const overrides = { parentToolCallId: ToolCallId.of("tc-only") }
-    const json = Schema.encodeSync(codec)(overrides)
+  test("round-trips with minimal runSpec", () => {
+    const runSpec = { parentToolCallId: ToolCallId.of("tc-only") }
+    const json = Schema.encodeSync(codec)(runSpec)
     const decoded = Schema.decodeUnknownSync(codec)(json)
     expect(decoded.parentToolCallId).toBe("tc-only")
   })
 
-  test("round-trips empty overrides", () => {
-    const overrides = {}
-    const json = Schema.encodeSync(codec)(overrides)
+  test("round-trips empty runSpec", () => {
+    const runSpec = {}
+    const json = Schema.encodeSync(codec)(runSpec)
     const decoded = Schema.decodeUnknownSync(codec)(json)
     expect(decoded).toEqual({})
   })

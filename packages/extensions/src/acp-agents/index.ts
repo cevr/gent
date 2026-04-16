@@ -33,7 +33,6 @@ export const AcpAgentsExtension = defineExtension({
           defineAgent({
             name,
             description: `${config.command} via ACP`,
-            persistence: "ephemeral",
             driver: new ExternalDriverRef({ id: `acp-${name}` }),
           }),
         ),

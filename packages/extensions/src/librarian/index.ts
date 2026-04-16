@@ -1,6 +1,15 @@
-import { extension, defineAgent, LIBRARIAN_PROMPT, ModelId } from "@gent/core/extensions/api"
+import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
 import { RepoTool } from "./repo-explorer.js"
 import { GitReader } from "./git-reader.js"
+
+const LIBRARIAN_PROMPT = `
+Librarian agent. Answer questions about an external repository by reading its source code.
+You have access to a local clone at the path specified in the prompt.
+Use read, grep, and glob tools to explore the code. Be precise — cite file paths and line numbers.
+- Comparative architecture: compare 2-3 implementations before recommending.
+- Pattern: fetch → explore → cite → compare.
+- Always ground conclusions in specific file paths and line numbers.
+`.trim()
 
 export const librarian = defineAgent({
   name: "librarian",
@@ -8,7 +17,6 @@ export const librarian = defineAgent({
   model: ModelId.of("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
   systemPromptAddendum: LIBRARIAN_PROMPT,
-  persistence: "ephemeral",
 })
 
 export const LibrarianExtension = extension("@gent/librarian", ({ ext, ctx }) =>

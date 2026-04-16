@@ -10,7 +10,7 @@ import {
   AgentRunnerService,
   AgentRunError,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
-  type AgentExecutionOverrides,
+  type RunSpec,
 } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
@@ -71,7 +71,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
 )
 
-describe("AgentExecutionOverrides", () => {
+describe("RunSpec", () => {
   test("dual model pair resolves to cowork and deepwork models", () => {
     const registry = resolveExtensions([
       {
@@ -91,7 +91,7 @@ describe("AgentExecutionOverrides", () => {
     }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
-  test("execution overrides reach the agent loop", async () => {
+  test("runSpec reaches the agent loop", async () => {
     let capturedInput:
       | {
           sessionId: SessionId
@@ -99,7 +99,7 @@ describe("AgentExecutionOverrides", () => {
           agentName: string
           prompt: string
           interactive?: boolean
-          overrides?: AgentExecutionOverrides
+          runSpec?: RunSpec
         }
       | undefined
     const recorderLayer = SequenceRecorder.Live
@@ -149,24 +149,26 @@ describe("AgentExecutionOverrides", () => {
           parentSessionId: SessionId.of("s1"),
           parentBranchId: BranchId.of("b1"),
           cwd: "/tmp",
-          persistence: "durable",
-          overrides: {
-            modelId: ModelId.of("custom/model"),
-            allowedTools: ["bash", "grep"],
-            deniedTools: ["write"],
-            reasoningEffort: "high",
-            systemPromptAddendum: "Extra instructions",
+          runSpec: {
+            persistence: "durable",
             tags: ["auto-loop"],
+            overrides: {
+              modelId: ModelId.of("custom/model"),
+              allowedTools: ["bash", "grep"],
+              deniedTools: ["write"],
+              reasoningEffort: "high",
+              systemPromptAddendum: "Extra instructions",
+            },
           },
         })
 
         expect(capturedInput).toBeDefined()
-        expect(capturedInput!.overrides?.modelId).toBe("custom/model")
-        expect(capturedInput!.overrides?.allowedTools).toEqual(["bash", "grep"])
-        expect(capturedInput!.overrides?.deniedTools).toEqual(["write"])
-        expect(capturedInput!.overrides?.reasoningEffort).toBe("high")
-        expect(capturedInput!.overrides?.systemPromptAddendum).toBe("Extra instructions")
-        expect(capturedInput!.overrides?.tags).toEqual(["auto-loop"])
+        expect(capturedInput!.runSpec?.overrides?.modelId).toBe("custom/model")
+        expect(capturedInput!.runSpec?.overrides?.allowedTools).toEqual(["bash", "grep"])
+        expect(capturedInput!.runSpec?.overrides?.deniedTools).toEqual(["write"])
+        expect(capturedInput!.runSpec?.overrides?.reasoningEffort).toBe("high")
+        expect(capturedInput!.runSpec?.overrides?.systemPromptAddendum).toBe("Extra instructions")
+        expect(capturedInput!.runSpec?.tags).toEqual(["auto-loop"])
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -230,7 +232,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
 
         const calls = yield* recorder.getCalls()
@@ -314,7 +316,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
 
         // Without retry, failure propagates as error result
@@ -376,7 +378,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
       }).pipe(Effect.provide(layer)),
     )
@@ -440,6 +442,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          runSpec: { persistence: "ephemeral" },
         })
 
         const sessions = yield* storage.listSessions()
@@ -519,6 +522,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          runSpec: { persistence: "ephemeral" },
         })
 
         if (runResult._tag !== "success") {
@@ -624,6 +628,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
+          runSpec: { persistence: "ephemeral" },
         })
       }).pipe(Effect.provide(layer)),
     )
@@ -685,7 +690,7 @@ describe("AgentRunner", () => {
           parentSessionId: session.id,
           parentBranchId: branch.id,
           cwd: process.cwd(),
-          persistence: "durable",
+          runSpec: { persistence: "durable" },
         })
 
         const sessions = yield* storage.listSessions()
@@ -1123,6 +1128,7 @@ describe("ephemeral service propagation", () => {
           parentSessionId: SessionId.of("parent-svc-prop"),
           parentBranchId: BranchId.of("parent-svc-prop-branch"),
           cwd: process.cwd(),
+          runSpec: { persistence: "ephemeral" },
         })
 
         expect(result._tag).toBe("success")
@@ -1203,6 +1209,7 @@ describe("ephemeral service propagation", () => {
           parentSessionId: SessionId.of("parent-approve"),
           parentBranchId: BranchId.of("parent-approve-branch"),
           cwd: process.cwd(),
+          runSpec: { persistence: "ephemeral" },
         })
 
         // Should succeed — approval was auto-resolved, tool ran, text followed

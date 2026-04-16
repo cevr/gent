@@ -27,7 +27,7 @@ describe("CounselTool", () => {
     let capturedPrompt = ""
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedOverrides = params.overrides as Record<string, unknown> | undefined
+        capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
         capturedPrompt = params.prompt
         return Effect.succeed({
           _tag: "success" as const,
@@ -61,7 +61,7 @@ describe("CounselTool", () => {
     let capturedOverrides: Record<string, unknown> | undefined
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedOverrides = params.overrides as Record<string, unknown> | undefined
+        capturedOverrides = params.runSpec?.overrides as Record<string, unknown> | undefined
         return Effect.succeed({
           _tag: "success" as const,
           text: "After thorough analysis...",
@@ -134,11 +134,13 @@ describe("CounselTool", () => {
     )
   })
 
-  it.live("uses counsel-worker agent with ephemeral persistence", () => {
-    let capturedAgent: { name: string; persistence?: string } | undefined
+  it.live("uses counsel-worker agent with ephemeral persistence via runSpec", () => {
+    let capturedAgent: { name: string } | undefined
+    let capturedRunPersistence: string | undefined
     const ctx = makeCtx({
       agentRun: (params) => {
-        capturedAgent = { name: params.agent.name, persistence: params.agent.persistence }
+        capturedAgent = { name: params.agent.name }
+        capturedRunPersistence = params.runSpec?.persistence
         return Effect.succeed({
           _tag: "success" as const,
           text: "Opinion here.",
@@ -152,7 +154,7 @@ describe("CounselTool", () => {
     return CounselTool.execute({ prompt: "thoughts?" }, ctx).pipe(
       Effect.map(() => {
         expect(capturedAgent?.name).toBe("counsel-worker")
-        expect(capturedAgent?.persistence).toBe("ephemeral")
+        expect(capturedRunPersistence).toBe("ephemeral")
       }),
     )
   })

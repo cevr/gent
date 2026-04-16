@@ -174,8 +174,8 @@ describe("Plan Tool", () => {
 
     const ctx = makeCtx({
       agentRun: (params) => {
-        if (params.overrides?.modelId !== undefined) {
-          models.push(params.overrides.modelId)
+        if (params.runSpec?.overrides?.modelId !== undefined) {
+          models.push(params.runSpec.overrides.modelId)
         }
         return Effect.succeed({
           _tag: "success" as const,

@@ -43,7 +43,7 @@ export const HandoffTool = defineTool({
       const summarizeResult = yield* ctx.agent.run({
         agent: summarizer,
         prompt: `Distill this context for a handoff to a new session. Preserve: current task, key decisions, relevant files, open questions, state to carry over. Be concise.\n\n${params.context}`,
-        toolCallId: ctx.toolCallId,
+        runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
       })
       if (summarizeResult._tag === "success") {
         summary = summarizeResult.text

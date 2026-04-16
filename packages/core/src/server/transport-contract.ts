@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
-import { AgentExecutionOverridesSchema, AgentName, ReasoningEffort } from "../domain/agent.js"
+import { RunSpecSchema, AgentName, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import { AuthProviderInfo, AuthProviderQuery } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
@@ -181,8 +181,8 @@ export const SendMessageInput = Schema.Struct({
   content: Schema.String,
   /** Per-run agent override — switches agent for this message only. Uses fresh ephemeral sessions to avoid state bleed. */
   agentOverride: Schema.optional(Schema.String),
-  /** Per-run execution overrides — forwarded to the agent loop for this turn only. */
-  executionOverrides: Schema.optional(AgentExecutionOverridesSchema),
+  /** Per-run dispatch config — forwarded to the agent loop for this turn only. */
+  runSpec: Schema.optional(RunSpecSchema),
   /** Client-generated request ID for end-to-end correlation */
   requestId: Schema.optional(Schema.String),
 })

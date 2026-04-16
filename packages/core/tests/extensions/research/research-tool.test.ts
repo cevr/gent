@@ -68,8 +68,8 @@ describe("ResearchTool", () => {
     const ctx = makeCtx({
       agentRun: (params) => {
         prompts.push(params.prompt)
-        if (params.overrides?.modelId !== undefined) {
-          synthesisModelId = params.overrides.modelId
+        if (params.runSpec?.overrides?.modelId !== undefined) {
+          synthesisModelId = params.runSpec.overrides.modelId
         }
         if (params.prompt.includes("Synthesize")) {
           return Effect.succeed({

@@ -292,13 +292,7 @@ export class ExtensionRegistry extends Context.Service<
       resolveDualModelPair: () =>
         Effect.gen(function* () {
           const agents = [...resolved.agents.values()]
-          // 1. Role-based: find primary + reviewer
-          const primary = agents.find((a) => a.role === "primary")
-          const reviewer = agents.find((a) => a.role === "reviewer")
-          if (primary !== undefined && reviewer !== undefined) {
-            return [resolveAgentModel(primary), resolveAgentModel(reviewer)] as [ModelId, ModelId]
-          }
-          // 2. Name-based fallback: cowork + deepwork
+          // 1. Name-based: cowork + deepwork (the standard dual-model pair)
           const cowork = resolved.agents.get("cowork")
           const deepwork = resolved.agents.get("deepwork")
           if (cowork !== undefined && deepwork !== undefined) {

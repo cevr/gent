@@ -110,20 +110,20 @@ describe("GentClient transport contract", () => {
   }
 
   for (const transport of transportCases) {
-    test(`${transport.name} message.send accepts executionOverrides`, async () => {
+    test(`${transport.name} message.send accepts runSpec`, async () => {
       await transport.run(({ client }) =>
         Effect.gen(function* () {
           const { sessionId, branchId } = yield* client.session
             .create({ cwd: process.cwd() })
             .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          // Send with executionOverrides — should not error on schema validation
+          // Send with runSpec — should not error on schema validation
           yield* client.message
             .send({
               sessionId,
               branchId,
               content: "overrides test",
-              executionOverrides: {
+              runSpec: {
                 parentToolCallId: ToolCallId.of("tc-e2e-test"),
                 tags: ["e2e-transport-test"],
               },

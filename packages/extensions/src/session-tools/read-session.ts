@@ -141,7 +141,7 @@ export const ReadSessionTool = defineTool({
       const result = yield* ctx.agent.run({
         agent: summarizer,
         prompt,
-        toolCallId: ctx.toolCallId,
+        runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
       })
 
       if (result._tag === "error") {

@@ -16,7 +16,6 @@ If you disagree with the current approach, say so and explain why.
 
 const counselAgent = defineAgent({
   name: "counsel-worker",
-  persistence: "ephemeral",
 })
 
 export const CounselParams = Schema.Struct({
@@ -65,23 +64,26 @@ export const CounselTool = defineTool({
     const result = yield* ctx.agent.run({
       agent: counselAgent,
       prompt,
-      toolCallId: ctx.toolCallId,
-      overrides: {
-        modelId: modelB,
-        reasoningEffort: isDeep ? "high" : "medium",
-        systemPromptAddendum: isDeep ? COUNSEL_DEEP_PROMPT : COUNSEL_STANDARD_PROMPT,
-        ...(isDeep
-          ? {
-              allowedTools: [
-                "grep",
-                "glob",
-                "read",
-                "memory_search",
-                "websearch",
-                "webfetch",
-              ] as const,
-            }
-          : { allowedTools: ["grep", "glob", "read", "memory_search"] as const }),
+      runSpec: {
+        persistence: "ephemeral",
+        parentToolCallId: ctx.toolCallId,
+        overrides: {
+          modelId: modelB,
+          reasoningEffort: isDeep ? "high" : "medium",
+          systemPromptAddendum: isDeep ? COUNSEL_DEEP_PROMPT : COUNSEL_STANDARD_PROMPT,
+          ...(isDeep
+            ? {
+                allowedTools: [
+                  "grep",
+                  "glob",
+                  "read",
+                  "memory_search",
+                  "websearch",
+                  "webfetch",
+                ] as const,
+              }
+            : { allowedTools: ["grep", "glob", "read", "memory_search"] as const }),
+        },
       },
     })
 

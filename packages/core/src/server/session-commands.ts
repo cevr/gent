@@ -315,9 +315,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           branchId: input.branchId,
           content: input.content,
           ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-          ...(input.executionOverrides !== undefined
-            ? { executionOverrides: input.executionOverrides }
-            : {}),
+          ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
         })
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({

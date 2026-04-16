@@ -1,19 +1,44 @@
-import {
-  extension,
-  defineAgent,
-  COWORK_PROMPT,
-  DEEPWORK_PROMPT,
-  EXPLORE_PROMPT,
-  SUMMARIZER_PROMPT,
-  ModelId,
-} from "@gent/core/extensions/api"
+import { extension, defineAgent, ModelId } from "@gent/core/extensions/api"
+
+const COWORK_PROMPT = `
+Cowork agent. Fast, practical, execute changes.
+- Minimal prose. Summarize changes at turn end.
+- Ask only when blocked. Investigate first.
+- Prefer direct tool use over delegation for simple tasks.
+- When editing multiple files, batch related changes together.
+- Follow the plan. One commit per batch. Don't skip steps.
+- No deferring, no skipping, no backing out of plan items without asking.
+- When stuck: read more code, break the problem smaller, ask with options.
+- When unsure about an approach: use the counsel tool for a second opinion.
+- Gate after each batch: typecheck, lint, test.
+`.trim()
+
+const DEEPWORK_PROMPT = `
+Deepwork agent. Thorough analysis, careful tradeoffs, explicit assumptions.
+- Less chatty, more focused. Minimize prose, maximize analysis.
+- Prefer correctness over speed. Verify before acting.
+- Read widely before narrowing. Explore adjacent code that might be affected.
+- Cite specific file paths and line numbers for every claim.
+- Read principles before architectural decisions.
+- Still execute when confident — analysis without action is incomplete.
+`.trim()
+
+const EXPLORE_PROMPT = `
+Explore agent. Rapid codebase scanning and multi-step search.
+- Chain grep/read/glob to answer precisely. Be exhaustive.
+- Report: file paths, line numbers, brief context.
+- End with next steps or open questions.
+`.trim()
+
+const SUMMARIZER_PROMPT = `
+Summarizer agent. Summarize prior context. Focus decisions, open questions, current state.
+`.trim()
 
 const cowork = defineAgent({
   name: "cowork",
   description: "General purpose - full tool access, can execute code changes",
   model: ModelId.of("anthropic/claude-opus-4-6"),
   systemPromptAddendum: COWORK_PROMPT,
-  role: "primary",
 })
 
 const deepwork = defineAgent({
@@ -22,7 +47,6 @@ const deepwork = defineAgent({
   model: ModelId.of("openai/gpt-5.4"),
   systemPromptAddendum: DEEPWORK_PROMPT,
   reasoningEffort: "high",
-  role: "reviewer",
 })
 
 const explore = defineAgent({
@@ -31,7 +55,6 @@ const explore = defineAgent({
   model: ModelId.of("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
   systemPromptAddendum: EXPLORE_PROMPT,
-  persistence: "ephemeral",
 })
 
 const summarizer = defineAgent({
@@ -39,7 +62,6 @@ const summarizer = defineAgent({
   model: ModelId.of("openai/gpt-5.4-mini"),
   allowedTools: [],
   systemPromptAddendum: SUMMARIZER_PROMPT,
-  persistence: "ephemeral",
 })
 
 const title = defineAgent({
@@ -47,7 +69,6 @@ const title = defineAgent({
   model: ModelId.of("openai/gpt-5.4-mini"),
   allowedTools: [],
   temperature: 0.5,
-  persistence: "ephemeral",
 })
 
 /** Core agents — general-purpose agents not tied to a specific tool extension. */

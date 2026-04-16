@@ -48,7 +48,7 @@ describe("ReviewTool", () => {
     const ctx = makeCtx({
       agentRun: (params) => {
         capturedPrompt = params.prompt
-        capturedOverrides.push(params.overrides as Record<string, unknown> | undefined)
+        capturedOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
         return Effect.succeed({
           _tag: "success" as const,
           text: "[]",

@@ -223,9 +223,12 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     ctx.agent.run({
       agent,
       prompt,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      toolCallId: params.toolCallId as never,
-      overrides: { ...auditOverrides, modelId },
+      runSpec: {
+        persistence: "ephemeral",
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        parentToolCallId: params.toolCallId as never,
+        overrides: { ...auditOverrides, modelId },
+      },
     })
 
   const detectResult = yield* runAgent(
@@ -335,7 +338,7 @@ export const AuditTool = defineTool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutionPrompt(report.findings, params.prompt),
-      toolCallId: ctx.toolCallId,
+      runSpec: { parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

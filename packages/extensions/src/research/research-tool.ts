@@ -18,7 +18,6 @@ const researchAgent = defineAgent({
   name: "research-worker",
   allowedTools: ["grep", "glob", "read", "memory_search"],
   systemPromptAddendum: RESEARCHER_PROMPT,
-  persistence: "ephemeral",
 })
 
 export const ResearchParams = Schema.Struct({
@@ -112,7 +111,7 @@ export const ResearchTool = defineTool({
         ctx.agent.run({
           agent: researchAgent,
           prompt: buildResearchPrompt(params.question, path, spec, params.focus),
-          toolCallId: ctx.toolCallId,
+          runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
         }),
       { concurrency: MAX_CONCURRENCY },
     )
@@ -142,8 +141,11 @@ export const ResearchTool = defineTool({
     const synthesisResult = yield* ctx.agent.run({
       agent: researchAgent,
       prompt: buildSynthesisPrompt(params.question, findings, params.focus),
-      toolCallId: ctx.toolCallId,
-      overrides: { modelId: modelB },
+      runSpec: {
+        persistence: "ephemeral",
+        parentToolCallId: ctx.toolCallId,
+        overrides: { modelId: modelB },
+      },
     })
 
     const synthesis = yield* requireText(synthesisResult, "synthesis")

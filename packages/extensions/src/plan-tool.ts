@@ -129,9 +129,11 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     ctx.agent.run({
       agent: params.architect,
       prompt,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      toolCallId: params.toolCallId as never,
-      overrides: { modelId },
+      runSpec: {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        parentToolCallId: params.toolCallId as never,
+        overrides: { modelId },
+      },
     })
 
   const planPrompt = buildPlanPrompt(
@@ -240,7 +242,7 @@ export const PlanTool = defineTool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(synthesizedPlan),
-      toolCallId: ctx.toolCallId,
+      runSpec: { parentToolCallId: ctx.toolCallId },
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
