@@ -1,5 +1,6 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type {
   ExtensionKind,
   ExtensionSetup,
@@ -229,11 +230,16 @@ export const setupExtension = (
   discovered: DiscoveredExtension,
   cwd: string,
   home: string,
-): Effect.Effect<LoadedExtension, ExtensionLoadError, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<
+  LoadedExtension,
+  ExtensionLoadError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const { extension, kind, sourcePath } = discovered
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
+    const spawner = yield* ChildProcessSpawner
     const setup: ExtensionSetup = yield* extension
       .setup({
         cwd,
@@ -241,6 +247,7 @@ export const setupExtension = (
         home,
         fs,
         path,
+        spawner,
       })
       .pipe(
         Effect.catchDefect((defect) =>

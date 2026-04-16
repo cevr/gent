@@ -1,4 +1,5 @@
 import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import {
@@ -186,6 +187,7 @@ export const assertSequence = (
 const _platformServices = Effect.runSync(Effect.scoped(Layer.build(BunServices.layer)))
 const _testFs = Context.get(_platformServices, FileSystem.FileSystem)
 const _testPath = Context.get(_platformServices, Path.Path)
+const _testSpawner = Context.get(_platformServices, ChildProcessSpawner)
 
 /** Pre-built ExtensionSetupContext for tests. Platform services are captured once at module load. */
 export const testSetupCtx = (
@@ -196,6 +198,7 @@ export const testSetupCtx = (
   home: overrides?.home ?? "/tmp",
   fs: _testFs,
   path: _testPath,
+  spawner: _testSpawner,
 })
 
 // Mock Helpers

@@ -27,7 +27,9 @@
  *
  * @module
  */
-import { Data, Effect, Schema, type Layer } from "effect"
+import { Data, Effect, Schema, Stream, type Layer } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   defineInterceptor,
   ExtensionLoadError,
@@ -447,57 +449,47 @@ const mergeEffectHooks = (
 ): Effect.Effect<void> | undefined =>
   effects.length === 0 ? undefined : Effect.all(effects, { discard: true }).pipe(Effect.asVoid)
 
-/** Effect-native shell exec via Bun.spawn. Used by `ext.exec()` at setup time. */
+/** Effect-native shell exec via ChildProcess. Used by `ext.exec()` at setup time.
+ *  Captures the spawner from setup context — no service requirement leaks. */
 const execEffect = (
+  spawner: ChildProcessSpawner["Service"],
+  defaultCwd: string,
   command: string,
   args: ReadonlyArray<string> | undefined,
   options: { cwd?: string; timeout?: number } | undefined,
-  defaultCwd: string,
-): Effect.Effect<ExecResult, ExecError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const timeoutMs = options?.timeout ?? 30_000
-      const proc = Bun.spawn([command, ...(args ?? [])], {
-        cwd: options?.cwd ?? defaultCwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-
-      let timer: ReturnType<typeof setTimeout> | undefined
-
-      const completion = (async () => {
-        const [stdout, stderr] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-        ])
-        const exitCode = await proc.exited
-        if (timer !== undefined) clearTimeout(timer)
-        return { stdout, stderr, exitCode, timedOut: false as const }
-      })()
-
-      const deadline = new Promise<ExecResult>((resolve) => {
-        timer = setTimeout(() => {
-          try {
-            process.kill(-proc.pid, "SIGTERM")
-          } catch {
-            // already dead
-          }
-          setTimeout(() => {
-            try {
-              process.kill(-proc.pid, 0)
-              process.kill(-proc.pid, "SIGKILL")
-            } catch {
-              // already dead
-            }
-          }, 3000)
-          resolve({ stdout: "", stderr: "", exitCode: -1, timedOut: true })
-        }, timeoutMs)
-      })
-
-      return Promise.race([completion, deadline])
-    },
-    catch: (e) => new ExecError({ message: String(e), cause: e }),
+): Effect.Effect<ExecResult, ExecError> => {
+  const timeoutMs = options?.timeout ?? 30_000
+  const program = Effect.gen(function* () {
+    const cmd = ChildProcess.make(command, args ?? [], {
+      cwd: options?.cwd ?? defaultCwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const handle = yield* spawner.spawn(cmd)
+    const decoder = new TextDecoder()
+    const decode = (chunks: ReadonlyArray<Uint8Array>) =>
+      chunks.map((c) => decoder.decode(c)).join("")
+    const [stdoutChunks, stderrChunks, exitCode] = yield* Effect.all(
+      [Stream.runCollect(handle.stdout), Stream.runCollect(handle.stderr), handle.exitCode],
+      { concurrency: "unbounded" },
+    )
+    return {
+      stdout: decode(stdoutChunks),
+      stderr: decode(stderrChunks),
+      exitCode,
+      timedOut: false,
+    } satisfies ExecResult
   })
+  return program.pipe(
+    Effect.scoped,
+    Effect.timeoutOrElse({
+      duration: timeoutMs,
+      orElse: () =>
+        Effect.succeed<ExecResult>({ stdout: "", stderr: "", exitCode: -1, timedOut: true }),
+    }),
+    Effect.catchEager((e) => Effect.fail(new ExecError({ message: String(e), cause: e }))),
+  )
+}
 
 /**
  * Create an extension. One API for both simple and full-power extensions.
@@ -631,7 +623,7 @@ export const extension = <P = never>(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         }) as any,
 
-        exec: (command, args, options) => execEffect(command, args, options, ctx.cwd),
+        exec: (command, args, options) => execEffect(ctx.spawner, ctx.cwd, command, args, options),
 
         onStartup: (effect) => {
           _startupEffects.push(effect)

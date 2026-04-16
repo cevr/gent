@@ -1,4 +1,5 @@
 import type { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
@@ -445,6 +446,8 @@ export interface ExtensionSetupContext {
   readonly fs: FileSystem.FileSystem
   /** Platform Path service (captured from Effect context at setup time). */
   readonly path: Path.Path
+  /** Platform ChildProcessSpawner service (captured from Effect context at setup time). */
+  readonly spawner: ChildProcessSpawner["Service"]
 }
 
 export interface GentExtension {

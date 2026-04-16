@@ -18,6 +18,7 @@ import {
   Semaphore,
   type Scope as ScopeType,
 } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import type { LoadedExtension } from "../domain/extension.js"
 import type { PromptSection } from "../domain/prompt.js"
@@ -84,7 +85,7 @@ export class SessionProfileCache extends Context.Service<
   ): Layer.Layer<
     SessionProfileCache,
     never,
-    FileSystem.FileSystem | Path.Path | ConfigService | ScopeType.Scope
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner | ConfigService | ScopeType.Scope
   > =>
     Layer.effect(
       SessionProfileCache,
@@ -94,14 +95,16 @@ export class SessionProfileCache extends Context.Service<
         const configService = yield* ConfigService
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
+        const spawner = yield* ChildProcessSpawner
         // Capture server scope — extension lifecycle (onShutdown) ties to this
         const serverScope = yield* Scope.Scope
 
         // Capture platform services as a layer so initProfile can use functions
-        // that require FileSystem | Path from the Effect context
+        // that require FileSystem | Path | ChildProcessSpawner from the Effect context
         const platformLayer = Layer.mergeAll(
           Layer.succeed(FileSystem.FileSystem, fs),
           Layer.succeed(Path.Path, pathSvc),
+          Layer.succeed(ChildProcessSpawner, spawner),
         )
 
         const initProfile = (cwd: string) =>

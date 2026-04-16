@@ -1,5 +1,6 @@
 import { Cause, Effect } from "effect"
 import type { FileSystem, Path, Scope } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type {
   FailedExtension,
   FailedExtensionPhase,
@@ -51,7 +52,11 @@ export const setupBuiltinExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, FileSystem.FileSystem | Path.Path> =>
+}): Effect.Effect<
+  ExtensionActivationResult,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []
@@ -110,7 +115,11 @@ export const setupDiscoveredExtensions = (params: {
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
-}): Effect.Effect<ExtensionActivationResult, never, FileSystem.FileSystem | Path.Path> =>
+}): Effect.Effect<
+  ExtensionActivationResult,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const active: LoadedExtension[] = []
     const failed: FailedExtension[] = []

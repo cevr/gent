@@ -1,4 +1,4 @@
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer, Path } from "effect"
 import * as Fs from "node:fs"
@@ -17,7 +17,11 @@ import {
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
 
-const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
+const fsLayer = Layer.mergeAll(
+  BunFileSystem.layer,
+  Path.layer,
+  BunChildProcessSpawner.layer.pipe(Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+)
 
 const makeBuiltin = (
   id: string,
