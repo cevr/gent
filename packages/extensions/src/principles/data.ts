@@ -1,3 +1,25 @@
+const acknowledgeBeforeProcessing = `# Acknowledge Before Processing
+
+Whenever a caller hands off work, confirm receipt inside the minimum perceptible window — then do the work. Never let the caller face silence while processing; silence is indistinguishable from being broken.
+
+**Why:** Humans judge "working" vs "hung" in roughly 100ms. Machines time out and retry. Systems that start a long operation without first acknowledging it force every caller to implement their own "is this alive?" heuristic — retries, cancellations, duplicate submissions, anxious refreshes. A fast, explicit "I have your request" collapses that ambiguity and buys unlimited headroom for the actual work.
+
+**The Pattern:**
+
+- **Print something within 100ms:** a heading, a spinner, the parsed intent — anything that proves the request was received
+- **Separate acknowledgment from completion:** \`202 Accepted\` with a status URL beats a 30-second synchronous request. Return a handle; deliver the result out-of-band
+- **Show progress, not just eventual output:** for anything over a few seconds, stream partial results or a progress signal. Unknown duration → spinner with a status line
+- **On cancellation, acknowledge fast too:** Ctrl-C, cancel buttons, and aborts must respond immediately — even if cleanup takes longer, the caller needs to know the cancel landed
+- **Design the handoff, not just the work:** the first thing a caller experiences is receipt, not result. Make that experience deliberate
+
+**The Test:**
+
+- "If the work took 10x longer than expected, would the caller know the system is still alive?" If no, there's no acknowledgment — just silence
+- "Can the caller tell the difference between 'processing' and 'hung'?" If not, add an explicit signal
+- "Does cancellation feel instant even when cleanup isn't?" If no, the ack is coupled to the work — decouple them
+
+**See also:** [[never-block-on-the-human]] — the reverse direction: don't block *on* your caller either. [[experience-first]] — acknowledgment is the first touchpoint of the experience; design it deliberately.`
+
 const boundaryDiscipline = `# Boundary Discipline
 
 Place validation, type narrowing, and error handling at system boundaries. Trust internal code unconditionally. Business logic lives in pure functions; the shell is thin and mechanical.
@@ -27,7 +49,53 @@ Code Organization:
 **The Tests:**
 
 - "Is this data crossing a system boundary right now?" If not, validation is redundant
-- "Can this be a pure function that the shell just calls?" If yes, extract it`
+- "Can this be a pure function that the shell just calls?" If yes, extract it
+
+**See also:** [[small-interface-deep-implementation]] — once the boundary is drawn, keep the surface at it narrow and absorb complexity inside. [[test-through-public-interfaces]] — mock only at boundaries; inside the system, trust the types and exercise real code.`
+
+const chaseYNotX = `# Chase Y, Not X
+
+When solving a problem, interrogate the request before executing it. The stated problem (X) is often a proxy for the real need (Y). Solving X literally can leave Y untouched — or worse, calcify a wrong framing into the system.
+
+**Why:** Requests come pre-shaped by the asker's current mental model. That model may be incomplete, out of date, or scoped too narrowly. Jumping straight to X produces technically correct solutions that miss the point. Finding Y first makes the solution smaller, more durable, and often obviates X entirely.
+
+**The Pattern:**
+
+- **Ask "what are you trying to accomplish?"** before "how do I build X?" — the answer reframes the problem
+- **Watch for proxy requests:** "add a flag for Z" often means "the default behavior is wrong." Fix the default, skip the flag
+- **Distrust overly specific asks:** a narrow, implementation-shaped request signals the asker has already picked a solution — check whether it's the right one
+- **Solve the class, not the instance:** if Y is "I keep hitting this category of bug," the fix is structural, not a patch on X
+- **Name Y explicitly:** state the underlying goal back to the asker before building. Misalignment surfaces immediately
+
+**The Test:**
+
+- "If I deliver X exactly as asked, will the asker's real problem be solved?" If unsure, Y isn't clear yet
+- "Would a different X solve Y better?" If yes, propose it before building
+- "Is X a workaround for a missing Y?" If yes, build Y and let X fall away
+
+**See also:** [[fix-root-causes]] — same "surface isn't substance" spine, but applied to debugging (a bug exists) rather than requirements (a request arrived).`
+
+const compositionOverFlags = `# Composition Over Flags
+
+Build primitives that compose, not monoliths with configuration flags. When a component, function, or API grows boolean props to switch behavior, the right move is usually to split it into distinct primitives that share underlying pieces.
+
+**Why:** Each flag doubles the state space. Five booleans = 32 branches to reason about, most invalid. Worse, flags couple unrelated concerns into one implementation — every consumer pays the cost of every variant. Primitives that compose stay small, testable, and truthful about what they do. The caller assembles exactly what they need; nothing more is loaded, rendered, or reasoned about.
+
+**The Pattern:**
+
+- **Split by variant, not by flag:** \`<ThreadComposer>\` and \`<EditComposer>\` beat \`<Composer isThread isEditing>\`. Each variant wraps its own provider and composes only what it needs
+- **Children over configuration:** prefer \`children\` / slot composition over \`renderHeader\` / \`renderFooter\` props. Reserve render props for when the parent must pass data back
+- **Compound components:** expose \`Thing.Frame\`, \`Thing.Input\`, \`Thing.Submit\` with shared context. The consumer renders pieces to opt in
+- **Primitives first, convenience later:** ship the composable pieces. If a common combination emerges, offer a thin wrapper — don't start with the wrapper
+- **Decouple behavior from shell:** the container defines the contract (\`state\`, \`actions\`, \`meta\`); swappable providers implement it. Same consumers, different backing stores
+
+**The Test:**
+
+- "How many branches does this component have internally?" If every method starts with \`if (isX)\`, the flag should be a separate primitive
+- "Can I delete this flag by splitting the component?" If yes, split it
+- "Does the caller have to understand implementation details to pick the right flag combo?" Then the flags are leaking the wrong abstraction — expose the primitives directly
+
+**See also:** [[progressive-disclosure]] — primitives + sensible defaults let simple cases stay simple while advanced cases compose. [[subtract-before-you-add]] — flags accrete; splitting into primitives is the subtraction move.`
 
 const costAwareDelegation = `# Cost-Aware Delegation
 
@@ -59,7 +127,9 @@ Compute values from existing state rather than introducing new state that must b
 **The Test:**
 
 - "If the source changes, does this value automatically reflect the change?" If not, you have synchronization — convert to derivation
-- "Can I delete this state and recompute it from what already exists?" If yes, it shouldn't be stored independently`
+- "Can I delete this state and recompute it from what already exists?" If yes, it shouldn't be stored independently
+
+**See also:** [[make-impossible-states-unrepresentable]] — derivation and tight state modeling both collapse the space of things that can go wrong.`
 
 const encodeLessonsInStructure = `# Encode Lessons in Structure
 
@@ -133,7 +203,9 @@ When debugging, never paper over symptoms. Trace every problem to its root cause
 - When stuck, instrument — don't guess (add logging, read the actual error)
 
 **Restart Bugs: Suspect State Before Code**
-Code doesn't change between runs. State does. When "fails after restart," suspect stale persistent state first — config files, caches, lock files, serialized state. If clearing a state file restores behavior, prioritize state validation as the fix.`
+Code doesn't change between runs. State does. When "fails after restart," suspect stale persistent state first — config files, caches, lock files, serialized state. If clearing a state file restores behavior, prioritize state validation as the fix.
+
+**See also:** [[chase-y-not-x]] — the requirements-side analogue: interrogate the framing of an incoming request before building, not just the framing of a bug before fixing.`
 
 const foundationalThinking = `# Foundational Thinking
 
@@ -162,6 +234,28 @@ The context window is finite and non-renewable within a session. Every token tha
 - **Keep frequently-used content inline:** Templates and references used on every invocation belong in the skill file, not in separate files that cost a read each time
 - **Size phases and cap scope:** Limit files per phase, set turn budgets, account for mechanism costs
 - **Emit paths, not content:** When outputting reference material to agents, prefer file paths over inlined content. Agents can choose what to read; inlined content is always consumed. (Vercel finding: condensed indexes with paths outperform full content dumps.)`
+
+const makeImpossibleStatesUnrepresentable = `# Make Impossible States Unrepresentable
+
+Model state so invalid combinations can't be constructed, not just avoided. The type system is the cheapest test you will ever write — use it to encode what "valid" means.
+
+**Why:** Boolean pairs and optional fields create silent junk states. \`isLoading=true, isError=true, data=null\` compiles fine and means nothing. Every consumer then has to defend against the junk — or forget to, and ship a bug. Discriminated unions collapse the valid space to exactly the states that exist, and TypeScript narrows each branch to just the fields it needs.
+
+**The Pattern:**
+
+- **Discriminated unions over boolean clusters:** replace \`isLoading / isError / isSuccess\` with \`{ status: 'idle' | 'loading' | 'success' | 'error' }\`. Each branch carries only its relevant fields
+- **Fields belong to the state they describe:** \`data\` lives on \`success\`, \`error\` lives on \`error\`. No \`data?: T\` or \`error?: Error\` on the parent
+- **Guard transitions at the reducer:** not every action is valid in every state. Invalid transitions no-op or error — they don't silently corrupt
+- **Exhaustive switches:** use \`satisfies\` / \`never\` defaults so adding a new state breaks the compile rather than slipping through
+- **Name by lifecycle, not by flag:** \`'closed' | 'opening' | 'open' | 'closing'\` beats \`isOpen + isAnimating + isClosing\`
+
+**The Test:**
+
+- "Can I write down a state that compiles but shouldn't exist?" If yes, the model is too loose — collapse to a union
+- "Does every consumer need a \`?? null\` or \`if (data)\` guard?" The state shape is lying about what's actually present
+- "Would a junior reading this know which fields are meaningful when?" If not, the discriminant isn't doing its job
+
+**See also:** [[name-events-not-setters]] — the transitions between these states should be named as facts, not as field assignments. [[derive-dont-sync]] — once the state space is tight, derived values project from it rather than living alongside.`
 
 const makeOperationsIdempotent = `# Make Operations Idempotent
 
@@ -203,6 +297,28 @@ When we decide a new API is the right design, migrate callers and remove the old
 
 Keeping both old and new APIs creates dual-path complexity, slows cleanup, and makes the codebase feel append-only.`
 
+const nameEventsNotSetters = `# Name Events, Not Setters
+
+Name actions, messages, and state transitions after what happened in the domain — not after the mechanism that applies the change. \`'submitted'\`, \`'item_added'\`, \`'payment_failed'\` — never \`'set_loading'\`, \`'set_items'\`, \`'update_state'\`.
+
+**Why:** Setter names couple the caller to the current implementation. If the handler later needs to update three fields, emit an analytics event, or trigger a workflow, every caller saying \`setLoading(true)\` has to change. Event names describe the fact that occurred; the handler decides what to do about it. This makes reducers, state machines, and pub/sub systems resilient to change and readable as a domain log.
+
+**The Pattern:**
+
+- **Reducer actions:** \`{ type: 'submitted' }\` not \`{ type: 'set_status', status: 'submitting' }\`. The reducer translates the event into whatever state change that implies
+- **Callbacks / props:** \`onSubmitted\`, \`onItemAdded\` over \`onSetState\`, \`onChange\` (when something more specific is meant)
+- **Messages / RPC:** name by domain fact (\`OrderPlaced\`, \`UserInvited\`), not by operation (\`InsertOrderRow\`)
+- **Events carry facts, handlers carry policy:** the event says "the user clicked submit"; the handler decides whether to validate, retry, dispatch, or ignore
+- **Past tense for things that happened; imperative for commands:** \`OrderPlaced\` (event) vs \`PlaceOrder\` (command). Mixing them blurs what's authoritative
+
+**The Test:**
+
+- "If I changed how this is handled, would every caller need to update?" If yes, the name leaked the mechanism
+- "Does the name describe a fact about the domain, or a field on the state?" Field-shaped names are setters in disguise
+- "Could a non-engineer reading the event log understand what happened?" If not, the vocabulary is too technical — it's probably a setter
+
+**See also:** [[make-impossible-states-unrepresentable]] — events are the transitions over a tight state space; the two principles pair tightly.`
+
 const neverBlockOnTheHuman = `# Never Block on the Human
 
 The human supervises asynchronously. Agents must stay unblocked — make reasonable decisions, proceed, and let the human course-correct after the fact. Code is cheap; waiting is expensive.
@@ -221,7 +337,9 @@ The human supervises asynchronously. Agents must stay unblocked — make reasona
 
 - **Irreversible actions** (force-push, delete production data, send external messages) still require confirmation
 - **Reversible actions** (write code, edit notes, split tasks) should proceed without blocking
-- **Product direction** comes from the human; _execution_ should not block`
+- **Product direction** comes from the human; _execution_ should not block
+
+**See also:** [[acknowledge-before-processing]] — the inverse direction: don't force *your caller* to wait in silence either. Both principles say "collapse ambiguity fast; don't let anyone hang."`
 
 const outcomeOrientedExecution = `# Outcome-Oriented Execution
 
@@ -259,7 +377,9 @@ Reveal complexity only when needed. Start with the simplest correct interface; e
 **The Test:**
 
 - "Does the consumer need this information right now?" If not, hide it behind a deliberate action
-- "Would removing this from the default view break the primary workflow?" If not, it belongs in progressive disclosure`
+- "Would removing this from the default view break the primary workflow?" If not, it belongs in progressive disclosure
+
+**See also:** [[small-interface-deep-implementation]] — the smallest front door with the most capability behind it is progressive disclosure at the API level. [[composition-over-flags]] — primitives with defaults beat monoliths with toggles.`
 
 const proveItWorks = `# Prove It Works
 
@@ -289,7 +409,9 @@ Cross-session artifacts: verify before ending:
 Files written during a session can fail to persist (interrupted writes, path errors, tool failures). If an artifact is needed in a future session, verify it exists (\`ls\` or \`Read\`) before closing. Unverified writes are lost work.
 
 API Research: trust source over docs/agents:
-When migrating between library versions, grep the actual source (via \`repo-explorer\`) rather than relying on docs or research agent summaries. Docs lag releases; agent output can be wrong on 2/5 API changes. Read the types directly.`
+When migrating between library versions, grep the actual source (via \`repo-explorer\`) rather than relying on docs or research agent summaries. Docs lag releases; agent output can be wrong on 2/5 API changes. Read the types directly.
+
+**See also:** [[test-through-public-interfaces]] — *how* to verify: through the caller's surface, not internal inspection. This principle says verify; that one says verify from the outside in.`
 
 const redesignFromFirstPrinciples = `# Redesign From First Principles
 
@@ -314,6 +436,28 @@ When concurrent actors share mutable state, enforce serialization structurally �
 2. **If shared state exists, serialize access** (lockfiles, sequential phases, or exclusive ownership)
 3. **If serialization is impractical, eliminate the sharing** (give each actor its own copy: worktrees, separate files, isolated state directories)`
 
+const smallInterfaceDeepImplementation = `# Small Interface, Deep Implementation
+
+A module's public surface should be the smallest that fully delivers its capability. Complexity belongs inside, absorbed by the implementation, not spread across the contract for every caller to reassemble.
+
+**Why:** Every method, parameter, and exported type is a promise to every caller, forever. Shallow modules — large surface, thin body — push their complexity outward: callers wire pieces together, duplicate glue logic, and depend on details that should have been hidden. Deep modules — small surface, substantial body — absorb complexity once so N callers don't have to solve it N times. The best abstractions give you a lot of power through a narrow door.
+
+**The Pattern:**
+
+- **Minimize what's public, maximize what's hidden:** if something can be an implementation detail, make it one
+- **Fewer methods, simpler parameters:** each additional method or flag is a tax on every future reader, tester, and caller
+- **Absorb, don't delegate:** if every caller has to do the same follow-up step, that step belongs inside the module
+- **Default to private:** export on demand, with a concrete use case. Reverse the polarity of the usual "I might need this later"
+- **Interface size is not proportional to capability:** a 3-method module can be far more powerful than a 30-method one. Count what's hidden, not what's listed
+
+**The Test:**
+
+- "Does the caller have to understand the internals to use this correctly?" If yes, the interface is too shallow
+- "Can I delete this method, parameter, or type and have callers do the same thing another way?" If yes, delete it
+- "Is this module mostly forwarding to something else?" If yes, either delete the layer or move real logic into it
+
+**See also:** [[boundary-discipline]] — boundaries decide *where* to draw the line; this principle decides *how much* to expose at each one. [[progressive-disclosure]] — same instinct applied to APIs: minimum required up front, everything else on demand.`
+
 const subtractBeforeYouAdd = `# Subtract Before You Add
 
 When evolving a system, remove complexity first, then build. Deletion creates a simpler substrate that makes subsequent additions cleaner, smaller, and less error-prone.
@@ -330,8 +474,56 @@ When evolving a system, remove complexity first, then build. Deletion creates a 
 
 This is about _when_ to act — an ordering principle that says subtraction comes before addition.`
 
+const testThroughPublicInterfaces = `# Test Through Public Interfaces
+
+Tests must verify behavior through the same public surface a real caller would use. Never reach past the interface to assert on internal state, mock internal collaborators, or inspect side effects directly.
+
+**Why:** Tests coupled to internals break on every refactor — even when behavior is unchanged — and pass when behavior breaks but the internal shape happens to match. Tests coupled to the public interface survive refactors, catch real regressions, and double as executable documentation of the contract. If a test can only be written by reaching inside, the interface is probably wrong, not the test.
+
+**The Pattern:**
+
+- **Act through the API, assert through the API:** if \`createUser\` is the entry point, verify by calling \`getUser\` — not by querying the underlying store
+- **Mock only at system boundaries:** external services, the clock, the network, the filesystem. Don't mock your own modules
+- **No white-box assertions:** peeking at private fields, spying on internal method calls, or checking "was this function called?" couples the test to the implementation
+- **If it's hard to test through the interface, the interface is wrong:** treat test pain as interface feedback, not test-framework trivia
+- **One real path per behavior:** integration-shaped tests that exercise the full code path beat a hundred unit tests mocking every collaborator
+
+**The Test:**
+
+- "If I rewrite the internals completely but keep the interface, will this test still pass?" If no, it's coupled to internals
+- "Does this test know anything a caller wouldn't?" If yes, remove that knowledge
+- "Would this test catch a real bug a user would see?" If no, it's testing the mock, not the code
+
+**See also:** [[prove-it-works]] — the *what* of verification (don't claim done without evidence); this principle is the *how* (verify through the caller's eyes). [[boundary-discipline]] — mocks belong at system boundaries, not inside them.`
+
+const useThePlatform = `# Use the Platform
+
+Before reaching for a library, a framework feature, or a hand-rolled abstraction, check what the platform already gives you. The runtime, the OS, the protocol, and the standard library have solved most common problems — durably, performantly, and for free.
+
+**Why:** Custom solutions carry ongoing cost: tests, edge cases, bundle or binary size, drift from standards, and onboarding friction for anyone who expects the native behavior. Platform features are battle-tested, interoperable by default, inspectable with standard tools, and outlive framework churn. Reinventing them is a tax paid on every feature afterward, and the reinvention is almost always a worse version.
+
+**The Pattern:**
+
+- **Use built-in data structures and algorithms before custom ones:** hash maps, sets, sorted collections, streams, iterators — the standard library beats a bespoke container
+- **Use the protocol, not a wrapper:** HTTP status codes, cache headers, content negotiation, signals, exit codes — these already encode meaning everyone understands
+- **Use the system's own state stores:** URL / query string, filesystem, environment variables, database — before adding an in-process state layer that shadows them
+- **Prefer standard formats:** JSON, CSV, semver, ISO-8601, UUIDs — pick the format the ecosystem already speaks so tools compose for free
+- **Default to native primitives:** OS-level locking, process supervision, scheduled jobs, pipes — before a framework abstraction that reimplements them
+- **Let the platform handle concerns it owns:** cancellation, timeouts, backpressure, auth, i18n — reach for the standard mechanism before inventing parallel plumbing
+
+**The Test:**
+
+- "Is there a built-in that does 80% of this?" If yes, start there and layer on only what's missing
+- "Am I reimplementing behavior the platform already provides?" Pause — check first
+- "Would a newcomer expect the native mechanism here?" If yes, using anything else is surprise tax
+
+**See also:** [[subtract-before-you-add]] — the platform already exists; reaching for it is the subtraction move. [[boundary-discipline]] — the platform sits at a boundary; trust what it gives you rather than re-validating inside.`
+
 const PRINCIPLES: ReadonlyArray<readonly [string, string]> = [
+  ["acknowledge-before-processing", acknowledgeBeforeProcessing],
   ["boundary-discipline", boundaryDiscipline],
+  ["chase-y-not-x", chaseYNotX],
+  ["composition-over-flags", compositionOverFlags],
   ["cost-aware-delegation", costAwareDelegation],
   ["derive-dont-sync", deriveDontSync],
   ["encode-lessons-in-structure", encodeLessonsInStructure],
@@ -340,15 +532,20 @@ const PRINCIPLES: ReadonlyArray<readonly [string, string]> = [
   ["fix-root-causes", fixRootCauses],
   ["foundational-thinking", foundationalThinking],
   ["guard-the-context-window", guardTheContextWindow],
+  ["make-impossible-states-unrepresentable", makeImpossibleStatesUnrepresentable],
   ["make-operations-idempotent", makeOperationsIdempotent],
   ["migrate-callers-then-delete-legacy-apis", migrateCallersThenDeleteLegacyApis],
+  ["name-events-not-setters", nameEventsNotSetters],
   ["never-block-on-the-human", neverBlockOnTheHuman],
   ["outcome-oriented-execution", outcomeOrientedExecution],
   ["progressive-disclosure", progressiveDisclosure],
   ["prove-it-works", proveItWorks],
   ["redesign-from-first-principles", redesignFromFirstPrinciples],
   ["serialize-shared-state-mutations", serializeSharedStateMutations],
+  ["small-interface-deep-implementation", smallInterfaceDeepImplementation],
   ["subtract-before-you-add", subtractBeforeYouAdd],
+  ["test-through-public-interfaces", testThroughPublicInterfaces],
+  ["use-the-platform", useThePlatform],
 ]
 
 /** Sorted list of all principle names */
