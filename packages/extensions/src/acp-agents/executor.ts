@@ -128,10 +128,9 @@ export const makeAcpTurnExecutor = (
       // an Effect that yields ToolRunner and runs the tool, executed via
       // runPromiseWith with the full context.
       const services = yield* Effect.context<never>()
+      const baseRun = Effect.runPromiseWith(services)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      const run = Effect.runPromiseWith(services) as (
-        e: Effect.Effect<any, any, any>,
-      ) => Promise<any>
+      const run = baseRun as (e: Effect.Effect<any, any, any>) => Promise<any>
 
       const runTool: CodemodeConfig["runTool"] = (toolName, args) => {
         const toolCallId = ToolCallId.of(crypto.randomUUID())
