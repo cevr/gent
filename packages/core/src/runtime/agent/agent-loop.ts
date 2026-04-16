@@ -52,7 +52,8 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
-import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
+import { MessageId, ToolCallId } from "../../domain/ids.js"
+import type { BranchId, SessionId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
@@ -1324,24 +1325,11 @@ export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("A
   cause: Schema.optional(Schema.Defect),
 }) {}
 
-// Steer Command
-
-const SteerTargetFields = {
-  sessionId: SessionId,
-  branchId: BranchId,
-}
-
-export const SteerCommand = Schema.Union([
-  Schema.TaggedStruct("Cancel", SteerTargetFields),
-  Schema.TaggedStruct("Interrupt", SteerTargetFields),
-  Schema.TaggedStruct("Interject", {
-    ...SteerTargetFields,
-    message: Schema.String,
-    agent: Schema.optional(AgentName),
-  }),
-  Schema.TaggedStruct("SwitchAgent", { ...SteerTargetFields, agent: AgentName }),
-])
-export type SteerCommand = typeof SteerCommand.Type
+// Steer Command lives in `domain/steer.ts` so transport-contract and runtime
+// can both import without taking a dependency on each other. Re-exported here
+// for backwards-compatible call sites that already import from agent-loop.
+import { SteerCommand } from "../../domain/steer.js"
+export { SteerCommand }
 
 // Agent Loop Context
 

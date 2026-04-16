@@ -180,7 +180,7 @@ describe("ClientProvider session lifecycle", () => {
           lastEventId: null
           reasoningLevel: "high"
           runtime: {
-            phase: "streaming"
+            phase: "running"
             status: "running"
             agent: "deepwork"
             queue: { steering: []; followUp: [] }
@@ -202,7 +202,7 @@ describe("ClientProvider session lifecycle", () => {
       lastEventId: null
       reasoningLevel: "high"
       runtime: {
-        phase: "streaming"
+        phase: "running"
         status: "running"
         agent: "deepwork"
         queue: { steering: []; followUp: [] }
@@ -288,7 +288,7 @@ describe("ClientProvider session lifecycle", () => {
       lastEventId: null,
       reasoningLevel: "high",
       runtime: {
-        phase: "streaming",
+        phase: "running",
         status: "running",
         agent: "deepwork",
         queue: { steering: [], followUp: [] },

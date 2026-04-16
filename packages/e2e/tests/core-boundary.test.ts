@@ -235,7 +235,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       isRunning: () => Effect.succeed(true),
       getState: () =>
         Effect.succeed({
-          phase: "streaming" as const,
+          phase: "running" as const,
           status: "interrupted" as const,
           agent: "deepwork" as const,
           queue: {
@@ -273,7 +273,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     )
 
     expect(result).toEqual({
-      phase: "streaming",
+      phase: "running",
       status: "interrupted",
       agent: "deepwork",
       queue: {

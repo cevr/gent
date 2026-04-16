@@ -248,10 +248,7 @@ export const SessionRuntime = Schema.Struct({
 })
 export type SessionRuntime = typeof SessionRuntime.Type
 
-// SteerCommand is the source of truth in `runtime/agent/agent-loop.ts`.
-// Re-exported here so transport consumers don't need to reach across module
-// boundaries for the schema.
-export { SteerCommand } from "../runtime/agent/agent-loop.js"
+export { SteerCommand } from "../domain/steer.js"
 
 export const QueueTarget = Schema.Struct({
   sessionId: SessionId,
