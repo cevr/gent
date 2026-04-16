@@ -10,3 +10,4 @@ bin/
 .gent/data.db
 .gent/plans/
 .gent/prompts/
+.claude/scheduled_tasks.lock

@@ -17,25 +17,27 @@
  *
  * @module
  */
-import { Data, type Effect, type Schema } from "effect"
+import { type Effect, Schema } from "effect"
 import type { BranchId, SessionId } from "./ids.js"
 
 /** Failure raised by a mutation handler. */
-export class MutationError extends Data.TaggedError(
+export class MutationError extends Schema.TaggedErrorClass<MutationError>()(
   "@gent/core/src/domain/mutation/MutationError",
-)<{
-  readonly extensionId: string
-  readonly mutationId: string
-  readonly reason: string
-}> {}
+  {
+    extensionId: Schema.String,
+    mutationId: Schema.String,
+    reason: Schema.String,
+  },
+) {}
 
 /** Failure raised when a mutation is invoked with an id that has no contribution. */
-export class MutationNotFoundError extends Data.TaggedError(
+export class MutationNotFoundError extends Schema.TaggedErrorClass<MutationNotFoundError>()(
   "@gent/core/src/domain/mutation/MutationNotFoundError",
-)<{
-  readonly extensionId: string
-  readonly mutationId: string
-}> {}
+  {
+    extensionId: Schema.String,
+    mutationId: Schema.String,
+  },
+) {}
 
 /** Context handed to a mutation's `handler` Effect. */
 export interface MutationContext {

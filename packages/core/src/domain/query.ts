@@ -19,23 +19,27 @@
  *
  * @module
  */
-import { Data, type Effect, type Schema } from "effect"
+import { type Effect, Schema } from "effect"
 import type { BranchId, SessionId } from "./ids.js"
 
 /** Failure raised by a query handler. Carries query id + cause for diagnostics. */
-export class QueryError extends Data.TaggedError("@gent/core/src/domain/query/QueryError")<{
-  readonly extensionId: string
-  readonly queryId: string
-  readonly reason: string
-}> {}
+export class QueryError extends Schema.TaggedErrorClass<QueryError>()(
+  "@gent/core/src/domain/query/QueryError",
+  {
+    extensionId: Schema.String,
+    queryId: Schema.String,
+    reason: Schema.String,
+  },
+) {}
 
 /** Failure raised when a query is invoked with an id that has no contribution. */
-export class QueryNotFoundError extends Data.TaggedError(
+export class QueryNotFoundError extends Schema.TaggedErrorClass<QueryNotFoundError>()(
   "@gent/core/src/domain/query/QueryNotFoundError",
-)<{
-  readonly extensionId: string
-  readonly queryId: string
-}> {}
+  {
+    extensionId: Schema.String,
+    queryId: Schema.String,
+  },
+) {}
 
 /** Context handed to a query's `handler` Effect.
  *
@@ -58,8 +62,9 @@ export interface QueryContext {
  *    extension's contributed `layer`
  *  - the handler must be read-only — no `.create(`, `.update(`, `.delete(`,
  *    `.set(`, `.write(` calls on service interfaces. Enforced by
- *    `gent/no-projection-writes` (same lint rule as projections — both are
- *    read surfaces).
+ *    `gent/no-projection-writes`, which scans `QueryContribution.handler`
+ *    bodies for write-shaped method calls (same rule as projections — both
+ *    are read surfaces).
  */
 export interface QueryContribution<Input = unknown, Output = unknown, R = never> {
   /** Stable id (extension-local). Used for routing. */
