@@ -126,16 +126,34 @@ export const makeAcpTurnExecutor = (
       // Signal for when the prompt completes
       const promptDone = yield* Deferred.make<string, TurnError>()
 
-      // Fork the prompt call — runs concurrently with the update stream
-      yield* Effect.gen(function* () {
-        const result = yield* session.conn
-          .prompt({
-            sessionId: session.acpSessionId,
-            prompt: [{ type: "text", text: extractLastUserMessage(ctx.messages) }],
-          })
-          .pipe(Effect.mapError((e) => new TurnError({ message: e.message })))
-        yield* Deferred.succeed(promptDone, result.stopReason)
-      }).pipe(Effect.forkScoped)
+      // Wire abort signal → ACP cancellation
+      if (ctx.abortSignal) {
+        ctx.abortSignal.addEventListener(
+          "abort",
+          () => {
+            Effect.runFork(session.conn.cancel(session.acpSessionId))
+          },
+          { once: true },
+        )
+      }
+
+      // Fork the prompt call — runs concurrently with the update stream.
+      // On failure, fail the deferred so the stream doesn't hang.
+      yield* session.conn
+        .prompt({
+          sessionId: session.acpSessionId,
+          prompt: [{ type: "text", text: extractLastUserMessage(ctx.messages) }],
+        })
+        .pipe(
+          Effect.tap((result) => Deferred.succeed(promptDone, result.stopReason)),
+          Effect.catchEager((e) =>
+            Deferred.fail(
+              promptDone,
+              new TurnError({ message: e instanceof AcpError ? e.message : String(e) }),
+            ),
+          ),
+          Effect.forkScoped,
+        )
 
       // Stream updates until the prompt completes
       const updateStream: Stream.Stream<TurnEvent, TurnError> = session.conn.updates.pipe(
