@@ -11,9 +11,9 @@ import { Effect, type Layer } from "effect"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
-import { SkillsExtension } from "@gent/core/extensions/skills"
-import { SkillsProtocol } from "@gent/core/extensions/skills/protocol"
-import { Skill, Skills } from "@gent/core/extensions/skills/skills"
+import { SkillsExtension } from "@gent/extensions/skills"
+import { SkillsProtocol } from "@gent/extensions/skills/protocol"
+import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { createRpcHarness } from "../helpers/rpc-harness"
 
 const testSkills = [

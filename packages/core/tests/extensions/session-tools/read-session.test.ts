@@ -3,7 +3,7 @@ import {
   truncate,
   renderMessageParts,
   renderSessionTree,
-} from "@gent/core/extensions/session-tools/read-session"
+} from "@gent/extensions/session-tools/read-session"
 import {
   TextPart,
   ToolCallPart,

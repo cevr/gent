@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@gent/core": "workspace:*",
+    "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*",
     "@gent/server-http": "workspace:*"
   },

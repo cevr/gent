@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { GrepTool } from "@gent/core/extensions/fs-tools/grep"
+import { GrepTool } from "@gent/extensions/fs-tools/grep"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { FallbackFileIndexLive } from "@gent/core/runtime/file-index/index"

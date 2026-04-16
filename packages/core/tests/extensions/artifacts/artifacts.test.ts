@@ -1,12 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
-import type { Artifact } from "@gent/core/extensions/artifacts-protocol"
+import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { e2ePreset } from "../helpers/test-preset.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { SessionStarted } from "@gent/core/domain/event"
-import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "@gent/core/extensions/artifacts-protocol"
+import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
 
 const sessionId = SessionId.of("art-test-session")
 const branchId = BranchId.of("art-test-branch")
@@ -18,7 +19,7 @@ const withRuntime = (
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
-    const e2eLayer = createE2ELayer({ providerLayer })
+    const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
     yield* Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime

@@ -5,7 +5,7 @@ import {
   injectGitTrailers,
   stripBackground,
   BashTool,
-} from "@gent/core/extensions/exec-tools/bash"
+} from "@gent/extensions/exec-tools/bash"
 import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 

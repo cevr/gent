@@ -19,12 +19,12 @@ import type { ExtensionClientContext } from "@gent/core/domain/extension-client.
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { defineExtensionPackage } from "@gent/core/domain/extension-package.js"
 import type { GentExtension } from "@gent/core/domain/extension.js"
-import { AutoPackage } from "@gent/core/extensions/auto-package.js"
-import { PlanPackage } from "@gent/core/extensions/plan-package.js"
-import { TaskToolsPackage } from "@gent/core/extensions/task-tools-package.js"
-import { HandoffPackage } from "@gent/core/extensions/handoff-package.js"
-import { InteractionToolsPackage } from "@gent/core/extensions/interaction-tools-package.js"
-import { ArtifactsPackage } from "@gent/core/extensions/artifacts-package.js"
+import { AutoPackage } from "@gent/extensions/auto-package.js"
+import { PlanPackage } from "@gent/extensions/plan-package.js"
+import { TaskToolsPackage } from "@gent/extensions/task-tools-package.js"
+import { HandoffPackage } from "@gent/extensions/handoff-package.js"
+import { InteractionToolsPackage } from "@gent/extensions/interaction-tools-package.js"
+import { ArtifactsPackage } from "@gent/extensions/artifacts-package.js"
 
 const TEST_DIR = join(import.meta.dir, ".tmp-ext-integration")
 const USER_DIR = join(TEST_DIR, "user")

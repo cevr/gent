@@ -1,4 +1,4 @@
-import { PlanPackage } from "@gent/core/extensions/plan-package.js"
+import { PlanPackage } from "@gent/extensions/plan-package.js"
 
 export default PlanPackage.tui((ctx) => ({
   commands: [

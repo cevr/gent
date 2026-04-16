@@ -1,5 +1,5 @@
-import { AutoPackage } from "@gent/core/extensions/auto-package.js"
-import { AutoProtocol } from "@gent/core/extensions/auto-protocol.js"
+import { AutoPackage } from "@gent/extensions/auto-package.js"
+import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
 
 export default AutoPackage.tui((ctx) => ({

@@ -10,18 +10,18 @@ import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { ExecutorUiModel } from "@gent/core/extensions/executor/actor"
-import { executorActor } from "@gent/core/extensions/executor/actor"
+import type { ExecutorUiModel } from "@gent/extensions/executor/actor"
+import { executorActor } from "@gent/extensions/executor/actor"
 import {
   type ExecutorMcpToolResult,
   type ResolvedExecutorSettings,
   ExecutorSettingsDefaults,
   EXECUTOR_EXTENSION_ID,
-} from "@gent/core/extensions/executor/domain"
-import { ExecutorMcpBridge } from "@gent/core/extensions/executor/mcp-bridge"
-import { ExecutorSidecar } from "@gent/core/extensions/executor/sidecar"
-import { ExecutorProtocol } from "@gent/core/extensions/executor/protocol"
-import { ExecuteTool, ResumeTool } from "@gent/core/extensions/executor/tools"
+} from "@gent/extensions/executor/domain"
+import { ExecutorMcpBridge } from "@gent/extensions/executor/mcp-bridge"
+import { ExecutorSidecar } from "@gent/extensions/executor/sidecar"
+import { ExecutorProtocol } from "@gent/extensions/executor/protocol"
+import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStarted } from "@gent/core/domain/event"

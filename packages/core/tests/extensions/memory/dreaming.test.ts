@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { MemoryExtension } from "@gent/core/extensions/memory"
+import { MemoryExtension } from "@gent/extensions/memory"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 describe("memory scheduled jobs", () => {

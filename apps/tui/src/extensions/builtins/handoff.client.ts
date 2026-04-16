@@ -1,5 +1,5 @@
 import { defineInteractionRenderer } from "@gent/core/domain/extension-client.js"
-import { HandoffPackage } from "@gent/core/extensions/handoff-package.js"
+import { HandoffPackage } from "@gent/extensions/handoff-package.js"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 
 export default HandoffPackage.tui((ctx) => ({

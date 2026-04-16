@@ -1,0 +1,28 @@
+{
+  "name": "@gent/extensions",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@effect/ai-anthropic": "catalog:",
+    "@effect/ai-openai": "catalog:",
+    "@effect/ai-openai-compat": "catalog:",
+    "@gent/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1",
+    "@types/turndown": "^5.0.6",
+    "es-git": "^0.6.0",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.4"
+  },
+  "peerDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "effect": "catalog:",
+    "effect-machine": "catalog:"
+  }
+}

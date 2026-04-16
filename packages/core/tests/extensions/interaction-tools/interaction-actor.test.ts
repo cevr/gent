@@ -14,7 +14,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import {
   INTERACTION_TOOLS_EXTENSION_ID,
   interactionActor,
-} from "@gent/core/extensions/interaction-tools"
+} from "@gent/extensions/interaction-tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"

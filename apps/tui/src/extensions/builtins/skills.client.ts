@@ -1,5 +1,5 @@
 import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
-import { SkillsProtocol } from "@gent/core/extensions/skills/protocol"
+import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 
 export default ExtensionPackage.tui("@gent/skills-ui", (ctx) => ({
   autocompleteItems: [

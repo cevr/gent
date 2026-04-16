@@ -9,7 +9,6 @@
  */
 
 import { Effect, Layer, Ref } from "effect"
-import { tmpdir } from "node:os"
 import { BunServices } from "@effect/platform-bun"
 import {
   DEFAULT_MODEL_ID,
@@ -18,7 +17,6 @@ import {
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
-import { AllBuiltinAgents } from "../extensions/all-agents.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -26,7 +24,6 @@ import type { LoadedExtension } from "../domain/extension.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
-import { BuiltinExtensions } from "../extensions/index.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
@@ -44,31 +41,27 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { Test as MemoryVaultTest } from "../extensions/memory/vault.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
-/** Test-safe layer overrides for extension setup.layer fields */
-const TEST_LAYER_OVERRIDES: Record<string, () => Layer.Layer<never>> = {
-  "@gent/memory": () => MemoryVaultTest(`${tmpdir()}/gent-e2e-${Date.now()}`) as Layer.Layer<never>,
-}
-
 export interface E2ELayerConfig {
   /** Provider layer — typically from createSequenceProvider */
   readonly providerLayer: Layer.Layer<Provider>
-  /** Extensions to wire. Default: all builtins */
+  /** Agents to register in the extension registry */
+  readonly agents: ReadonlyArray<AgentDefinition>
+  /** Extension inputs for setup */
+  readonly extensionInputs: ReadonlyArray<ExtensionInput>
+  /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** AgentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
-  /** Agents to register. Default: AllBuiltinAgents */
-  readonly agents?: ReadonlyArray<AgentDefinition>
-  /** Extension inputs for setup. Default: BuiltinExtensions */
-  readonly extensionInputs?: ReadonlyArray<ExtensionInput>
+  /** Per-extension layer overrides (e.g., memory vault test layer) */
+  readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
 
 /**
@@ -82,9 +75,8 @@ export interface E2ELayerConfig {
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions
-  const agents = config.agents ?? AllBuiltinAgents
   const builtinSetup = {
-    agents: [...agents],
+    agents: [...config.agents],
     tools: [] as const,
   }
 
@@ -93,7 +85,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const setupResult = config.extensions
         ? { active: config.extensions, failed: [] as const }
         : yield* setupBuiltinExtensions({
-            extensions: config.extensionInputs ?? BuiltinExtensions,
+            extensions: config.extensionInputs,
             cwd: "/tmp",
             home: "/tmp",
             disabled: new Set(),
@@ -110,7 +102,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             ...setupResult.active,
           ]
         : setupResult.active.map((ext) => {
-            const override = TEST_LAYER_OVERRIDES[ext.manifest.id]
+            const override = config.layerOverrides?.[ext.manifest.id]
             return override === undefined
               ? ext
               : {

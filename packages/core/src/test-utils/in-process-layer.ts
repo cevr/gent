@@ -7,7 +7,7 @@
 
 import { Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { AllBuiltinAgents } from "../extensions/all-agents.js"
+import type { AgentDefinition } from "../domain/agent.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -29,18 +29,17 @@ import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
-import { GitReader } from "../extensions/librarian/git-reader.js"
 
 type HarnessProviderMode = "debug-scripted" | "debug-slow"
 
-const sharedInfra = () => {
+const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
   const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
   const extensionRegistryLive = testExtensionRegistryLayer([
     {
       manifest: { id: "test-agents" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { agents: [...AllBuiltinAgents], tools: [] },
+      setup: { agents: [...agents], tools: [] },
     },
   ])
 
@@ -51,8 +50,13 @@ const sharedInfra = () => {
   return { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive }
 }
 
-const buildLayer = (providerLive: Layer.Layer<Provider>) => {
-  const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra()
+export interface InProcessLayerConfig {
+  readonly agents: ReadonlyArray<AgentDefinition>
+  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+}
+
+const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerConfig) => {
+  const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(config.agents)
   const extensionRuntimeLive = ExtensionStateRuntime.Test().pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
@@ -71,7 +75,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
     authGuardLive,
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
-    GitReader.Test,
+    ...(config.extraLayers ?? []),
   )
 
   const eventStoreLive = Layer.provide(EventStoreLive, baseDeps)
@@ -96,9 +100,13 @@ const buildLayer = (providerLive: Layer.Layer<Provider>) => {
 }
 
 /** Build a complete in-process test layer with a standard debug provider mode. */
-export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
-  buildLayer(providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider())
+export const baseLocalLayer = (
+  config: InProcessLayerConfig,
+  providerMode: HarnessProviderMode = "debug-scripted",
+) => buildLayer(providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider(), config)
 
 /** Build a complete in-process test layer with a custom provider layer (e.g. createSignalProvider). */
-export const baseLocalLayerWithProvider = (providerLayer: Layer.Layer<Provider>) =>
-  buildLayer(providerLayer)
+export const baseLocalLayerWithProvider = (
+  providerLayer: Layer.Layer<Provider>,
+  config: InProcessLayerConfig,
+) => buildLayer(providerLayer, config)

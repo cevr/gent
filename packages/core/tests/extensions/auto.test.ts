@@ -14,9 +14,9 @@ import {
   AutoExtension,
   AutoState,
   type AutoUiModel,
-} from "@gent/core/extensions/auto"
-import { AutoJournal, type JournalRow } from "@gent/core/extensions/auto-journal"
-import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
+} from "@gent/extensions/auto"
+import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
+import { AutoProtocol } from "@gent/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 import { testSetupCtx } from "@gent/core/test-utils"

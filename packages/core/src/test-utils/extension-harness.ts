@@ -12,8 +12,6 @@ import {
   type AgentName,
   type AgentRunner,
 } from "../domain/agent.js"
-import { AllBuiltinAgents } from "../extensions/all-agents.js"
-import { GitReader } from "../extensions/librarian/git-reader.js"
 import {
   EventStore,
   StreamStarted,
@@ -197,12 +195,16 @@ export function createActorHarness<State, Message = void>(
 // ── Tool Test Layer ──
 
 export interface ToolTestLayerConfig {
-  /** Extensions to load (defaults to builtin agents only) */
+  /** Agents to register */
+  readonly agents: ReadonlyArray<AgentDefinition>
+  /** Extensions to load */
   readonly extensions?: ReadonlyArray<ExtensionInput>
   /** Extra tools to register */
   readonly tools?: ReadonlyArray<AnyToolDefinition>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: AgentRunner
+  /** Extra layers to merge (e.g., GitReader.Test) */
+  readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
 /**
@@ -211,9 +213,9 @@ export interface ToolTestLayerConfig {
  * Provides core services needed by most tools. Tools that need platform
  * services (FileSystem, Path) should compose with BunServices.layer.
  */
-export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
+export const createToolTestLayer = (config: ToolTestLayerConfig) => {
   const builtinSetup: ExtensionSetup = {
-    agents: [...AllBuiltinAgents],
+    agents: [...config.agents],
     tools: [...(config.tools ?? [])],
   }
 
@@ -269,7 +271,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig = {}) => {
         Permission.Test(),
         AgentLoop.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        GitReader.Test,
+        ...(config.extraLayers ?? []),
       )
       const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),

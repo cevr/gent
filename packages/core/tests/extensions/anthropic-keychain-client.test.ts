@@ -5,7 +5,7 @@ import {
   transformStreamEvent,
   transformSystem,
   SYSTEM_IDENTITY_PREFIX,
-} from "../../src/extensions/anthropic/keychain-client"
+} from "@gent/extensions/anthropic/keychain-client"
 
 // ── transformPayload ──
 

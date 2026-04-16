@@ -4,14 +4,24 @@ import * as fs from "node:fs"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
-import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
+import {
+  baseLocalLayer as _baseLocalLayer,
+  baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
+  type InProcessLayerConfig,
+} from "@gent/core/test-utils/in-process-layer.js"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
+import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 import { createWorkerEnv } from "./seam-fixture"
 export { waitFor } from "./seam-fixture"
-export {
-  baseLocalLayer,
-  baseLocalLayerWithProvider,
-} from "@gent/core/test-utils/in-process-layer.js"
+
+const defaultConfig: InProcessLayerConfig = {
+  agents: AllBuiltinAgents,
+  extraLayers: [GitReader.Test],
+}
+export const baseLocalLayer = () => _baseLocalLayer(defaultConfig)
+export const baseLocalLayerWithProvider = (providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
+  _baseLocalLayerWithProvider(providerLayer, defaultConfig)
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 

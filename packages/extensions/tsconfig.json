@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.lsp.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"]
+}

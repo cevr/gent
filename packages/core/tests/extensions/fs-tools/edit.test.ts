@@ -10,7 +10,7 @@ import {
   normalizeWhitespace,
   findMatch,
   EditTool,
-} from "@gent/core/extensions/fs-tools/edit"
+} from "@gent/extensions/fs-tools/edit"
 import { FileLockService } from "@gent/core/domain/file-lock"
 import type { ToolContext } from "@gent/core/domain/tool"
 

@@ -11,14 +11,15 @@ import {
   withTinyContextWindow,
   trackingApprovalService,
 } from "@gent/core/test-utils/e2e-layer"
+import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { AUTO_EXTENSION_ID } from "@gent/core/extensions/auto"
-import { AutoProtocol } from "@gent/core/extensions/auto-protocol"
+import { AUTO_EXTENSION_ID } from "@gent/extensions/auto"
+import { AutoProtocol } from "@gent/extensions/auto-protocol"
 
 const sessionId = SessionId.of("auto-e2e-session")
 const branchId = BranchId.of("auto-e2e-branch")
@@ -59,7 +60,7 @@ const runE2ETest = (
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* createSequenceProvider(steps)
-    const e2eLayer = createE2ELayer({
+    const e2eLayer = createE2ELayer({ ...e2ePreset,
       providerLayer,
       subagentRunner: reviewCompatibleRunner,
     })
@@ -218,7 +219,7 @@ describe("Auto extension E2E", () => {
       ]
 
       const { layer: providerLayer } = yield* createSequenceProvider(steps)
-      const e2eLayer = createE2ELayer({ providerLayer })
+      const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
@@ -263,7 +264,7 @@ describe("Auto extension E2E", () => {
         gatedCheckpoint, // Turn 2: gated — held until we release
       ])
 
-      const e2eLayer = createE2ELayer({ providerLayer })
+      const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
@@ -326,7 +327,7 @@ describe("Auto extension E2E", () => {
         }),
       ])
 
-      const e2eLayer = createE2ELayer({
+      const e2eLayer = createE2ELayer({ ...e2ePreset,
         providerLayer,
         extraLayers: [handoffLayer as Layer.Layer<never>],
       })
@@ -377,7 +378,7 @@ describe("Auto extension E2E", () => {
         }),
       ])
 
-      const e2eLayer = createE2ELayer({
+      const e2eLayer = createE2ELayer({ ...e2ePreset,
         providerLayer,
         extraLayers: [handoffLayer as Layer.Layer<never>],
       })
@@ -419,7 +420,7 @@ describe("Auto extension E2E", () => {
             textStep("Acknowledged handoff request."),
           ])
 
-          const e2eLayer = createE2ELayer({
+          const e2eLayer = createE2ELayer({ ...e2ePreset,
             providerLayer,
             extraLayers: [handoffLayer as Layer.Layer<never>],
           })

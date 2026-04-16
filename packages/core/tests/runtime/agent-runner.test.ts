@@ -12,7 +12,7 @@ import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   type AgentExecutionOverrides,
 } from "@gent/core/domain/agent"
-import { Agents } from "@gent/core/extensions/all-agents"
+import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"

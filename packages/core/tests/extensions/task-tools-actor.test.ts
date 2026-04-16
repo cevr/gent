@@ -8,7 +8,7 @@ import {
   TaskDeleted,
 } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
-import { TaskListActorConfig, type TaskListState } from "@gent/core/extensions/task-tools"
+import { TaskListActorConfig, type TaskListState } from "@gent/extensions/task-tools"
 import { createActorHarness } from "@gent/core/test-utils/extension-harness"
 
 const sessionId = SessionId.of("tt-session")

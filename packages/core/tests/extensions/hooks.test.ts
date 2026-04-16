@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { Agents } from "@gent/core/extensions/all-agents"
+import { Agents } from "@gent/extensions/all-agents"
 import type {
   ContextMessagesInput,
   ExtensionHooks,

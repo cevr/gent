@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
-    "@gent/core": "workspace:*"
+    "@gent/core": "workspace:*",
+    "@gent/extensions": "workspace:*"
   },
   "peerDependencies": {
     "effect": "catalog:"

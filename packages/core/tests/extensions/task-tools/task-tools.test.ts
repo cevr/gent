@@ -1,19 +1,20 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
-import { TaskCreateTool } from "@gent/core/extensions/task-tools/task-create"
-import { TaskListTool } from "@gent/core/extensions/task-tools/task-list"
-import { TaskGetTool } from "@gent/core/extensions/task-tools/task-get"
-import { TaskUpdateTool } from "@gent/core/extensions/task-tools/task-update"
-import { DelegateTool } from "@gent/core/extensions/delegate/delegate-tool"
-import { Agents } from "@gent/core/extensions/all-agents"
+import { TaskCreateTool } from "@gent/extensions/task-tools/task-create"
+import { TaskListTool } from "@gent/extensions/task-tools/task-list"
+import { TaskGetTool } from "@gent/extensions/task-tools/task-get"
+import { TaskUpdateTool } from "@gent/extensions/task-tools/task-update"
+import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
+import { Agents } from "@gent/extensions/all-agents"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
-import { TaskService } from "@gent/core/extensions/task-tools-service"
-import { TaskExtension } from "@gent/core/extensions/task-tools"
+import { toolPreset } from "../helpers/test-preset.js"
+import { TaskService } from "@gent/extensions/task-tools-service"
+import { TaskExtension } from "@gent/extensions/task-tools"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -62,7 +63,7 @@ const makeCtx = Effect.gen(function* () {
   }) as ToolContext
 })
 
-const layer = createToolTestLayer({
+const layer = createToolTestLayer({ ...toolPreset,
   extensions: [TaskExtension],
   subagentRunner: mockRunnerSuccess,
 })

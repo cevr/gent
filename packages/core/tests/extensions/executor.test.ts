@@ -6,13 +6,13 @@ import {
   ExecutorActorConfig,
   ExecutorState,
   projectSnapshot,
-} from "@gent/core/extensions/executor/actor"
+} from "@gent/extensions/executor/actor"
 import {
   resolveSettings,
   ExecutorSettingsDefaults,
   type ExecutorSettings,
-} from "@gent/core/extensions/executor/domain"
-import { readExecutionId, normalizeToolResult } from "@gent/core/extensions/executor/mcp-bridge"
+} from "@gent/extensions/executor/domain"
+import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/mcp-bridge"
 
 // ── Helpers ──
 

@@ -8,8 +8,7 @@
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
     "./runtime/*": "./src/runtime/*",
-    "./extensions": "./src/extensions/index.ts",
-    "./extensions/*": "./src/extensions/*",
+    "./extensions/api": "./src/extensions/api.ts",
     "./server/*": "./src/server/*",
     "./test-utils": "./src/test-utils/index.ts",
     "./test-utils/*": "./src/test-utils/*"
@@ -20,16 +19,8 @@
     "test": "bun test tests/"
   },
   "dependencies": {
-    "@effect/ai-anthropic": "catalog:",
-    "@effect/ai-openai": "catalog:",
-    "@effect/ai-openai-compat": "catalog:",
-    "@modelcontextprotocol/sdk": "^1",
-    "@types/turndown": "^5.0.6",
     "effect-machine": "catalog:",
-    "effect-wide-event": "catalog:",
-    "es-git": "^0.6.0",
-    "linkedom": "^0.18.12",
-    "turndown": "^7.2.4"
+    "effect-wide-event": "catalog:"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

@@ -6,7 +6,7 @@ import {
   addExcludedBeta,
   getNextBetaToExclude,
   LONG_CONTEXT_BETAS,
-} from "@gent/core/extensions/anthropic/oauth"
+} from "@gent/extensions/anthropic/oauth"
 
 describe("getModelBetas", () => {
   it("includes context-1m for opus 4.6", () => {

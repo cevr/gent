@@ -1,8 +1,8 @@
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import { createSignal, createMemo } from "solid-js"
-import type { TaskEntry } from "@gent/core/extensions/task-tools-protocol.js"
-import { TaskToolsPackage } from "@gent/core/extensions/task-tools-package.js"
+import type { TaskEntry } from "@gent/extensions/task-tools-protocol.js"
+import { TaskToolsPackage } from "@gent/extensions/task-tools-package.js"
 import { useScopedKeyboard } from "../../keyboard/context"
 
 export default TaskToolsPackage.tui((ctx) => {

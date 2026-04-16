@@ -18,7 +18,7 @@ import {
   type AgentName,
   type ReasoningEffort,
 } from "@gent/core/domain/agent.js"
-import { AllBuiltinAgents } from "@gent/core/extensions/all-agents.js"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 
 const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
   AllBuiltinAgents.map((a) => [a.name, a]),

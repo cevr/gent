@@ -1,8 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { DelegateTool } from "@gent/core/extensions/delegate/delegate-tool"
+import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
 import { type AgentRunResult } from "@gent/core/domain/agent"
-import { Agents } from "@gent/core/extensions/all-agents"
+import { Agents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 

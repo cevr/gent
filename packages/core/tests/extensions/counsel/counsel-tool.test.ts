@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { CounselTool } from "@gent/core/extensions/counsel/counsel-tool"
+import { CounselTool } from "@gent/extensions/counsel/counsel-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentRunResult } from "@gent/core/domain/agent"

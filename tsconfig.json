@@ -14,6 +14,8 @@
     "noEmit": true,
     "paths": {
       "@gent/core/*": ["./packages/core/src/*"],
+      "@gent/extensions": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/*": ["./packages/extensions/src/*"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"]
     }
   },

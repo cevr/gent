@@ -1,6 +1,6 @@
 import { describe, test, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { PlanExtension, PLAN_EXTENSION_ID } from "@gent/core/extensions/plan"
+import { PlanExtension, PLAN_EXTENSION_ID } from "@gent/extensions/plan"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 describe("Plan extension", () => {

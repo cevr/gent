@@ -9,7 +9,12 @@ import { useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness"
-import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
+import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
+import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+
+const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
+  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
 import { DebugProvider } from "@gent/core/debug/provider.js"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"

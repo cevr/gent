@@ -10,6 +10,7 @@ import type { Effect, Layer, Scope } from "effect"
 import type { Provider } from "@gent/core/providers/provider"
 import { Gent, type GentClientBundle } from "@gent/sdk"
 import { createE2ELayer, type E2ELayerConfig } from "@gent/core/test-utils/e2e-layer"
+import { e2ePreset } from "./test-preset.js"
 
 export interface RpcHarnessConfig extends Omit<E2ELayerConfig, "providerLayer"> {
   readonly providerLayer: Layer.Layer<Provider>
@@ -27,4 +28,5 @@ export interface RpcHarnessConfig extends Omit<E2ELayerConfig, "providerLayer"> 
  */
 export const createRpcHarness = (
   config: RpcHarnessConfig,
-): Effect.Effect<GentClientBundle, never, Scope.Scope> => Gent.test(createE2ELayer(config))
+): Effect.Effect<GentClientBundle, never, Scope.Scope> =>
+  Gent.test(createE2ELayer({ ...e2ePreset, ...config }))

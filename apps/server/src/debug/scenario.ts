@@ -25,7 +25,7 @@ import {
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime.js"
-import { TaskProtocol } from "@gent/core/extensions/task-tools-protocol.js"
+import { TaskProtocol } from "@gent/extensions/task-tools-protocol.js"
 
 export interface DebugScenarioParams {
   sessionId: SessionId

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { SkillsTool } from "@gent/core/extensions/skills/skills-tool"
-import { SearchSkillsTool } from "@gent/core/extensions/skills/search-skills"
-import { Skill, Skills } from "@gent/core/extensions/skills/skills"
+import { SkillsTool } from "@gent/extensions/skills/skills-tool"
+import { SearchSkillsTool } from "@gent/extensions/skills/search-skills"
+import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const testSkills = [

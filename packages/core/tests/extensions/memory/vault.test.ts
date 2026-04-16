@@ -10,7 +10,7 @@ import {
   projectKey,
   projectDisplayName,
   type MemoryFrontmatter,
-} from "@gent/core/extensions/memory/vault"
+} from "@gent/extensions/memory/vault"
 
 let tmpDir: string
 

@@ -1,14 +1,14 @@
 import { describe, it, expect } from "effect-bun-test"
 import { beforeAll } from "bun:test"
 import { Effect, Layer, Path } from "effect"
-import { ResearchTool } from "@gent/core/extensions/research/research-tool"
+import { ResearchTool } from "@gent/extensions/research/research-tool"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import type { AgentRunResult } from "@gent/core/domain/agent"
 import { SessionId } from "@gent/core/domain/ids"
 import { BunFileSystem } from "@effect/platform-bun"
 import { mkdirSync } from "node:fs"
-import { GitReader } from "@gent/core/extensions/librarian/git-reader"
+import { GitReader } from "@gent/extensions/librarian/git-reader"
 
 const TEST_HOME = "/tmp/test-research-" + Date.now()
 

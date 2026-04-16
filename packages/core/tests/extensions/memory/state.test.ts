@@ -9,8 +9,8 @@ import {
   memoryPath,
   newFrontmatter,
   type SessionMemory,
-} from "@gent/core/extensions/memory/state"
-import type { MemoryEntry } from "@gent/core/extensions/memory/vault"
+} from "@gent/extensions/memory/state"
+import type { MemoryEntry } from "@gent/extensions/memory/vault"
 
 const makeEntry = (path: string, title: string, scope: "global" | "project"): MemoryEntry => ({
   path,

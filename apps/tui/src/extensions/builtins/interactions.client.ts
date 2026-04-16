@@ -4,7 +4,7 @@
  */
 
 import { defineInteractionRenderer } from "@gent/core/domain/extension-client.js"
-import { InteractionToolsPackage } from "@gent/core/extensions/interaction-tools-package.js"
+import { InteractionToolsPackage } from "@gent/extensions/interaction-tools-package.js"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 

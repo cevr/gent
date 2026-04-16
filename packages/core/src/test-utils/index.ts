@@ -9,9 +9,6 @@ import {
   ToolCallChunk,
   type StreamChunk,
 } from "../providers/provider.js"
-import type { AnyToolDefinition } from "../domain/tool.js"
-import { AllBuiltinAgents } from "../extensions/all-agents.js"
-import { GitReader } from "../extensions/librarian/git-reader.js"
 import {
   BaseEventStore,
   EventStore,
@@ -19,12 +16,6 @@ import {
   matchesEventFilter,
   type EventStoreService,
 } from "../domain/event.js"
-import { Permission } from "../domain/permission.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { ApprovalService } from "../runtime/approval-service.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
-import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
-import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 
 // Re-export effect-bun-test
 export { it, describe, expect } from "effect-bun-test"
@@ -143,77 +134,6 @@ export const RecordingEventStore: Layer.Layer<
     return Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service))
   }),
 )
-
-// Test Layer Config
-
-export interface TestLayerConfig {
-  providerResponses?: ReadonlyArray<ReadonlyArray<StreamChunk>>
-  tools?: ReadonlyArray<AnyToolDefinition>
-  recording?: boolean
-  approvalDecisions?: ReadonlyArray<{ approved: boolean; notes?: string }>
-}
-
-// Create Test Layer (no recording)
-
-export const createTestLayer = (config: TestLayerConfig = {}) => {
-  const providerResponses = config.providerResponses ?? [
-    [new FinishChunk({ finishReason: "stop" })],
-  ]
-  const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
-  const tools = config.tools ?? []
-
-  return Layer.mergeAll(
-    Storage.Test(),
-    Provider.Test(providerResponses),
-    testExtensionRegistryLayer([
-      {
-        manifest: { id: "test-agents" },
-        kind: "builtin",
-        sourcePath: "test",
-        setup: { agents: [...AllBuiltinAgents], tools: [...tools] },
-      },
-    ]),
-    EventStore.Test(),
-    Permission.Test(),
-    ApprovalService.Test(approvalDecisions),
-    ExtensionTurnControl.Test(),
-    AgentLoop.Test(),
-    RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
-    GitReader.Test,
-  )
-}
-
-// Create Recording Test Layer
-
-export const createRecordingTestLayer = (config: Omit<TestLayerConfig, "recording"> = {}) => {
-  const providerResponses = config.providerResponses ?? [
-    [new FinishChunk({ finishReason: "stop" })],
-  ]
-  const approvalDecisions = config.approvalDecisions ?? [{ approved: true }]
-  const tools = config.tools ?? []
-
-  return Layer.mergeAll(
-    Storage.Test(),
-    Permission.Test(),
-    testExtensionRegistryLayer([
-      {
-        manifest: { id: "test-agents" },
-        kind: "builtin",
-        sourcePath: "test",
-        setup: { agents: [...AllBuiltinAgents], tools: [...tools] },
-      },
-    ]),
-    ApprovalService.Test(approvalDecisions),
-    ExtensionTurnControl.Test(),
-    AgentLoop.Test(),
-    RuntimePlatform.Test({ cwd: process.cwd(), home: "/tmp/test-home", platform: "test" }),
-    GitReader.Test,
-  ).pipe(
-    Layer.provideMerge(RecordingProvider(providerResponses)),
-    Layer.provideMerge(RecordingEventStore),
-    Layer.provideMerge(SequenceRecorder.Live),
-  )
-}
 
 // Sequence Assertions
 

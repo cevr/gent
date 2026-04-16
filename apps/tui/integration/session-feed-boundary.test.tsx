@@ -11,7 +11,12 @@ import {
   renderWithProviders,
 } from "../tests/render-harness"
 import { createSignalProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
-import { baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
+import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
+import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
+import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+
+const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
+  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
 import { Gent } from "@gent/sdk"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 

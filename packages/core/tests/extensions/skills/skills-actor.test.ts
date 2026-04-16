@@ -10,9 +10,9 @@ import { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
-import { SkillsExtension } from "@gent/core/extensions/skills"
-import { SkillsProtocol } from "@gent/core/extensions/skills/protocol"
-import { Skill, Skills } from "@gent/core/extensions/skills/skills"
+import { SkillsExtension } from "@gent/extensions/skills"
+import { SkillsProtocol } from "@gent/extensions/skills/protocol"
+import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { makeActorRuntimeLayer } from "../helpers/actor-runtime-layer"
 
 const sessionId = SessionId.of("skills-test-session")

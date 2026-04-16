@@ -1,4 +1,4 @@
-import { ArtifactsPackage } from "@gent/core/extensions/artifacts-package.js"
+import { ArtifactsPackage } from "@gent/extensions/artifacts-package.js"
 
 export default ArtifactsPackage.tui((ctx) => ({
   borderLabels: [

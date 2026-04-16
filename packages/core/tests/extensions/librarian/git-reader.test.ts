@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { beforeAll, afterAll } from "bun:test"
 import { Effect, Layer } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { GitReader } from "@gent/core/extensions/librarian/git-reader"
+import { GitReader } from "@gent/extensions/librarian/git-reader"
 import { $ } from "bun"
 
 // ---------------------------------------------------------------------------

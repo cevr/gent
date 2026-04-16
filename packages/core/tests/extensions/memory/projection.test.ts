@@ -1,12 +1,12 @@
 import { describe, test, expect } from "bun:test"
-import { projectMemorySnapshot, projectMemoryTurn } from "@gent/core/extensions/memory/projection"
+import { projectMemorySnapshot, projectMemoryTurn } from "@gent/extensions/memory/projection"
 import {
   initialMemoryState,
   addSessionMemory,
   updateVaultIndex,
   setProjectKey,
-} from "@gent/core/extensions/memory/state"
-import type { MemoryEntry } from "@gent/core/extensions/memory/vault"
+} from "@gent/extensions/memory/state"
+import type { MemoryEntry } from "@gent/extensions/memory/vault"
 const makeEntry = (path: string, title: string, scope: "global" | "project"): MemoryEntry => ({
   path,
   title,
