@@ -65,6 +65,7 @@ import { type Contribution, filterByKind } from "../domain/contribution.js"
 import type { AnyMutationContribution } from "../domain/mutation.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyQueryContribution } from "../domain/query.js"
+import type { AnyWorkflowContribution } from "../domain/workflow.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -208,6 +209,7 @@ export {
   type BusSubscriptionContribution,
   type LifecycleContribution,
   type ProjectionKindContribution,
+  type WorkflowKindContribution,
   filterByKind,
   // smart constructors
   tool as toolContribution,
@@ -225,6 +227,7 @@ export {
   onStartup as onStartupContribution,
   onShutdown as onShutdownContribution,
   projection as projectionContribution,
+  workflow as workflowContribution,
 } from "../domain/contribution.js"
 export type {
   ProjectionContribution,
@@ -249,6 +252,12 @@ export type {
   AnyMutationContribution,
 } from "../domain/mutation.js"
 export { MutationError, MutationNotFoundError } from "../domain/mutation.js"
+export type {
+  WorkflowContribution,
+  WorkflowEffect,
+  WorkflowInitContext,
+  AnyWorkflowContribution,
+} from "../domain/workflow.js"
 export {
   InteractionPendingReader,
   type InteractionPendingReaderService,
@@ -631,6 +640,13 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
     case "actor":
       b.actor = c.actor
       return
+    case "workflow":
+      // Workflows lower into the actor shape so the existing
+      // `ExtensionStateRuntime` hosts them. Commit 12 splits the runtime and
+      // deletes the actor primitive entirely; until then this is a structural
+      // alias, not a parallel runtime path.
+      b.actor = workflowToActor(c.workflow)
+      return
     case "layer":
       b.layer = c.layer
       return
@@ -642,6 +658,24 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
     }
   }
 }
+
+/**
+ * Lower a `WorkflowContribution` into the legacy `ExtensionActorDefinition`
+ * shape. Workflows do NOT carry UI/snapshot/turn (those belong to
+ * ProjectionContribution per `composability-not-flags`); the actor's optional
+ * fields stay undefined.
+ */
+const workflowToActor = (w: AnyWorkflowContribution): AnyExtensionActorDefinition => ({
+  machine: w.machine,
+  ...(w.slots !== undefined ? { slots: w.slots } : {}),
+  ...(w.mapEvent !== undefined ? { mapEvent: w.mapEvent } : {}),
+  ...(w.mapCommand !== undefined ? { mapCommand: w.mapCommand } : {}),
+  ...(w.mapRequest !== undefined ? { mapRequest: w.mapRequest } : {}),
+  ...(w.afterTransition !== undefined ? { afterTransition: w.afterTransition } : {}),
+  ...(w.stateSchema !== undefined ? { stateSchema: w.stateSchema } : {}),
+  ...(w.protocols !== undefined ? { protocols: w.protocols } : {}),
+  ...(w.onInit !== undefined ? { onInit: w.onInit } : {}),
+})
 
 const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
   const onStartup = mergeEffectHooks(b.startupEffects)

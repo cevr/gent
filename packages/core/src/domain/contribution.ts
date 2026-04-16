@@ -26,6 +26,7 @@ import type { ProviderContribution } from "./provider-contribution.js"
 import type { AnyQueryContribution } from "./query.js"
 import type { AnyToolDefinition } from "./tool.js"
 import type { TurnExecutorContribution } from "./turn-executor.js"
+import type { AnyWorkflowContribution } from "./workflow.js"
 
 // ── Per-kind contribution shapes ──
 
@@ -116,6 +117,11 @@ export interface MutationKindContribution {
   readonly mutation: AnyMutationContribution
 }
 
+export interface WorkflowKindContribution {
+  readonly _kind: "workflow"
+  readonly workflow: AnyWorkflowContribution
+}
+
 // ── Union ──
 
 export type Contribution =
@@ -135,6 +141,7 @@ export type Contribution =
   | ProjectionKindContribution
   | QueryKindContribution
   | MutationKindContribution
+  | WorkflowKindContribution
 
 export type ContributionKind = Contribution["_kind"]
 
@@ -216,6 +223,11 @@ export const query = (q: AnyQueryContribution): QueryKindContribution => ({
 export const mutation = (m: AnyMutationContribution): MutationKindContribution => ({
   _kind: "mutation",
   mutation: m,
+})
+
+export const workflow = (w: AnyWorkflowContribution): WorkflowKindContribution => ({
+  _kind: "workflow",
+  workflow: w,
 })
 
 // ── Filters ──
