@@ -1,14 +1,23 @@
 /**
  * Memory extension — persistent memory system for gent.
  *
+ * Composition:
+ *   - Tools (memory_remember / memory_recall / memory_forget) for the LLM
+ *   - MemoryVaultProjection — derives the on-disk vault index + project
+ *     key on demand, contributing both `prompt` and `ui` surfaces. No
+ *     actor mirror; vault files are the durable store.
+ *   - Session-memory actor — volatile per-session list, projects its own
+ *     `turn` (prompt) + `snapshot` (UI) for the session portion. Migrated
+ *     to a `WorkflowContribution` in C8.
+ *   - MemoryAgents — system agents
+ *   - MemoryDreamJobs — durable background memory promotion jobs
+ *
  * Three-tier: global, per-project, session-local.
  * Flat .md files at ~/.gent/memory/ for durability.
- * Agent tools (remember, recall, forget) + durable dream job declarations.
- * Prompt injection: compact summary + recall tool for deep dives.
  */
 
-import { Effect, Schema } from "effect"
-import { Event as MEvent, Machine, Slot, State as MState } from "effect-machine"
+import { Schema } from "effect"
+import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   extension,
   AgentEvent,
@@ -24,14 +33,12 @@ import {
   reduce,
   addSessionMemory,
   removeSessionMemory,
-  updateVaultIndex,
-  setProjectKey,
 } from "./state.js"
 import { MemoryTools } from "./tools.js"
 import { MemoryIntent } from "./intents.js"
-import { MemorySnapshot, projectMemorySnapshot, projectMemoryTurn } from "./projection.js"
+import { MemoryVaultProjection, projectSessionMemoryTurn } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
-import { MemoryEntrySchema, MemoryVault, Live as MemoryVaultLive, projectKey } from "./vault.js"
+import { Live as MemoryVaultLive } from "./vault.js"
 import { MemoryDreamJobs } from "./dreaming.js"
 
 export const MEMORY_EXTENSION_ID = "@gent/memory"
@@ -76,7 +83,7 @@ const receive = (state: MemoryState, message: MemoryIntent): ReduceResult<Memory
   }
 }
 
-// ── Actor config ──
+// ── Actor config (session memory only — vault is a projection) ──
 
 export const MemoryActorConfig = {
   id: MEMORY_EXTENSION_ID,
@@ -98,30 +105,11 @@ const MemoryMachineEvent = MEvent({
   Intent: {
     message: MemoryIntent,
   },
-  HydrateVaultIndex: {
-    entries: Schema.Array(MemoryEntrySchema),
-  },
-  SetProjectKey: {
-    key: Schema.optional(Schema.String),
-  },
-})
-
-const MemoryMachineSlots = Slot.define({
-  loadBootState: Slot.fn(
-    {
-      sessionCwd: Schema.optional(Schema.String),
-    },
-    Schema.Struct({
-      entries: Schema.Array(MemoryEntrySchema),
-      projectKey: Schema.optional(Schema.String),
-    }),
-  ),
 })
 
 const memoryMachine = Machine.make({
   state: MemoryMachineState,
   event: MemoryMachineEvent,
-  slots: MemoryMachineSlots,
   initial: MemoryMachineState.Active({ memory: initialMemoryState }),
 })
   .on(MemoryMachineState.Active, MemoryMachineEvent.Published, ({ state, event }) => {
@@ -136,67 +124,23 @@ const memoryMachine = Machine.make({
     const nextMemory = receive(state.memory as MemoryState, event.message).state
     return nextMemory === state.memory ? state : MemoryMachineState.Active({ memory: nextMemory })
   })
-  .on(MemoryMachineState.Active, MemoryMachineEvent.HydrateVaultIndex, ({ state, event }) =>
-    MemoryMachineState.Active({
-      memory: updateVaultIndex(state.memory, event.entries),
-    }),
-  )
-  .on(MemoryMachineState.Active, MemoryMachineEvent.SetProjectKey, ({ state, event }) =>
-    MemoryMachineState.Active({
-      memory: setProjectKey(state.memory, event.key),
-    }),
-  )
 
 const memoryActor: ExtensionActorDefinition<
   typeof MemoryMachineState.Type,
   typeof MemoryMachineEvent.Type,
-  MemoryVault,
-  typeof MemoryMachineSlots.definitions
+  never,
+  Record<string, never>
 > = {
   machine: memoryMachine,
-  slots: () =>
-    Effect.gen(function* () {
-      const vault = yield* MemoryVault
-      return {
-        loadBootState: ({ sessionCwd }) =>
-          Effect.gen(function* () {
-            yield* vault.ensureDirs()
-            const entries = yield* vault.list()
-            const key = sessionCwd !== undefined ? projectKey(sessionCwd) : undefined
-            if (key !== undefined) {
-              yield* vault.ensureDirs(key)
-            }
-            return {
-              entries,
-              projectKey: key,
-            }
-          }),
-      }
-    }),
   mapEvent: (event) => MemoryMachineEvent.Published({ event }),
   mapCommand: (message) =>
     Schema.is(MemoryIntent)(message) ? MemoryMachineEvent.Intent({ message }) : undefined,
-  snapshot: {
-    schema: MemorySnapshot,
-    project: (state) => projectMemorySnapshot(state.memory),
-  },
+  // No `snapshot` — UI surface is owned by `MemoryVaultProjection` (compile-time
+  // structural conflict rule in projection-registry forbids both at once for the
+  // same extensionId; vault entries are the user-visible memory state).
   turn: {
-    project: (state) => projectMemoryTurn(state.memory),
+    project: (state) => projectSessionMemoryTurn(state.memory),
   },
-  onInit: ({ send, sessionCwd, slots }) =>
-    Effect.gen(function* () {
-      if (slots === undefined) return
-      const boot = yield* slots.loadBootState({ sessionCwd })
-      yield* send(
-        MemoryMachineEvent.HydrateVaultIndex({
-          entries: boot.entries,
-        }),
-      )
-
-      if (boot.projectKey !== undefined) {
-        yield* send(MemoryMachineEvent.SetProjectKey({ key: boot.projectKey }))
-      }
-    }),
 }
 
 // ── Extension ──
@@ -206,6 +150,7 @@ export const MemoryExtension = extension("@gent/memory", ({ ext }) =>
     .tools(...(MemoryTools as ReadonlyArray<AnyToolDefinition>))
     .agents(...MemoryAgents)
     .actor(memoryActor)
+    .projection(MemoryVaultProjection)
     .layer(MemoryVaultLive())
     .jobs(...MemoryDreamJobs()),
 )

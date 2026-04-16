@@ -1,9 +1,14 @@
 /**
  * Memory extension state — volatile, session-local.
  *
- * Session memories are ephemeral (lost on restart).
- * Vault index is re-read from disk on SessionStarted.
- * No stateSchema on actor definition — vault files are the durable store.
+ * Session memories are ephemeral (lost on restart). The vault index and
+ * project key are NOT stored here — they are derived from `MemoryVault`
+ * on demand by `MemoryVaultProjection`. This is the
+ * `derive-do-not-create-states` principle: disk is the source of truth;
+ * there is no actor mirror to keep in sync.
+ *
+ * No stateSchema on actor definition — session memories don't survive a
+ * process restart by design (use scope="project"/"global" tools to persist).
  */
 
 import { Schema } from "effect"
@@ -12,12 +17,7 @@ import {
   type ExtensionReduceContext,
   type ReduceResult,
 } from "@gent/core/extensions/api"
-import {
-  MemoryEntrySchema,
-  type MemoryEntry,
-  type MemoryScope,
-  type MemorySource,
-} from "./vault.js"
+import { type MemoryScope, type MemorySource } from "./vault.js"
 
 // ── Session memory (volatile) ──
 
@@ -34,22 +34,14 @@ export type SessionMemory = typeof SessionMemory.Type
 export interface MemoryState {
   /** Session-local memories — volatile, not persisted to disk */
   readonly sessionMemories: ReadonlyArray<SessionMemory>
-  /** Cached vault index — refreshed on session start */
-  readonly vaultIndex: ReadonlyArray<MemoryEntry>
-  /** Detected project key for this session (if any) */
-  readonly projectKey?: string
 }
 
 export const MemoryStateSchema = Schema.Struct({
   sessionMemories: Schema.Array(SessionMemory),
-  vaultIndex: Schema.Array(MemoryEntrySchema),
-  projectKey: Schema.optional(Schema.String),
 })
 
 export const initialMemoryState: MemoryState = {
   sessionMemories: [],
-  vaultIndex: [],
-  projectKey: undefined,
 }
 
 // ── Reduce ──
@@ -79,19 +71,6 @@ export const addSessionMemory = (state: MemoryState, memory: SessionMemory): Mem
 export const removeSessionMemory = (state: MemoryState, title: string): MemoryState => ({
   ...state,
   sessionMemories: state.sessionMemories.filter((m) => m.title !== title),
-})
-
-export const updateVaultIndex = (
-  state: MemoryState,
-  index: ReadonlyArray<MemoryEntry>,
-): MemoryState => ({
-  ...state,
-  vaultIndex: index,
-})
-
-export const setProjectKey = (state: MemoryState, key: string | undefined): MemoryState => ({
-  ...state,
-  projectKey: key,
 })
 
 // ── Slug generation ──
