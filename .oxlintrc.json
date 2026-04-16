@@ -84,7 +84,12 @@
         "**/extensions/openai/**",
         "**/extensions/bedrock/**",
         "**/extensions/google/**",
-        "**/extensions/mistral/**"
+        "**/extensions/mistral/**",
+        "**/extensions/src/anthropic/**",
+        "**/extensions/src/openai/**",
+        "**/extensions/src/bedrock/**",
+        "**/extensions/src/google/**",
+        "**/extensions/src/mistral/**"
       ],
       "rules": {
         "node/no-process-env": "off",

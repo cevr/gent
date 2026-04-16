@@ -1,7 +1,6 @@
 import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
-import { Storage } from "../storage/sqlite-storage.js"
 import {
   Provider,
   FinishChunk,

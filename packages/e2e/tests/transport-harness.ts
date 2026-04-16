@@ -20,8 +20,9 @@ const defaultConfig: InProcessLayerConfig = {
   extraLayers: [GitReader.Test],
 }
 export const baseLocalLayer = () => _baseLocalLayer(defaultConfig)
-export const baseLocalLayerWithProvider = (providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
-  _baseLocalLayerWithProvider(providerLayer, defaultConfig)
+export const baseLocalLayerWithProvider = (
+  providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0],
+) => _baseLocalLayerWithProvider(providerLayer, defaultConfig)
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")
 

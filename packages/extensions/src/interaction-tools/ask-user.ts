@@ -1,5 +1,10 @@
 import { Effect, Schema } from "effect"
-import { defineTool, QuestionSchema, QuestionOptionSchema, type Question } from "@gent/core/extensions/api"
+import {
+  defineTool,
+  QuestionSchema,
+  QuestionOptionSchema,
+  type Question,
+} from "@gent/core/extensions/api"
 
 const parseAnswers = (notes: string): string[][] => {
   try {

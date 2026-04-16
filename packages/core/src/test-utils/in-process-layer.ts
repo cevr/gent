@@ -56,7 +56,9 @@ export interface InProcessLayerConfig {
 }
 
 const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerConfig) => {
-  const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(config.agents)
+  const { authStoreLive, extensionRegistryLive, authGuardLive, providerAuthLive } = sharedInfra(
+    config.agents,
+  )
   const extensionRuntimeLive = ExtensionStateRuntime.Test().pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
@@ -103,7 +105,11 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
 export const baseLocalLayer = (
   config: InProcessLayerConfig,
   providerMode: HarnessProviderMode = "debug-scripted",
-) => buildLayer(providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider(), config)
+) =>
+  buildLayer(
+    providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider(),
+    config,
+  )
 
 /** Build a complete in-process test layer with a custom provider layer (e.g. createSignalProvider). */
 export const baseLocalLayerWithProvider = (

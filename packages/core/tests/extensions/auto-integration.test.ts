@@ -60,7 +60,8 @@ const runE2ETest = (
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* createSequenceProvider(steps)
-    const e2eLayer = createE2ELayer({ ...e2ePreset,
+    const e2eLayer = createE2ELayer({
+      ...e2ePreset,
       providerLayer,
       subagentRunner: reviewCompatibleRunner,
     })
@@ -327,7 +328,8 @@ describe("Auto extension E2E", () => {
         }),
       ])
 
-      const e2eLayer = createE2ELayer({ ...e2ePreset,
+      const e2eLayer = createE2ELayer({
+        ...e2ePreset,
         providerLayer,
         extraLayers: [handoffLayer as Layer.Layer<never>],
       })
@@ -378,7 +380,8 @@ describe("Auto extension E2E", () => {
         }),
       ])
 
-      const e2eLayer = createE2ELayer({ ...e2ePreset,
+      const e2eLayer = createE2ELayer({
+        ...e2ePreset,
         providerLayer,
         extraLayers: [handoffLayer as Layer.Layer<never>],
       })
@@ -420,7 +423,8 @@ describe("Auto extension E2E", () => {
             textStep("Acknowledged handoff request."),
           ])
 
-          const e2eLayer = createE2ELayer({ ...e2ePreset,
+          const e2eLayer = createE2ELayer({
+            ...e2ePreset,
             providerLayer,
             extraLayers: [handoffLayer as Layer.Layer<never>],
           })

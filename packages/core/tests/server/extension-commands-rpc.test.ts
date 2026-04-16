@@ -15,8 +15,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
-import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
-import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+import { toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []

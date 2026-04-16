@@ -6,11 +6,12 @@ import { startLocalSupervisor } from "../src/local-supervisor"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
-import { baseLocalLayer as _baseLocalLayer, type InProcessLayerConfig } from "@gent/core/test-utils/in-process-layer.js"
+import { baseLocalLayer as _baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 
-const baseLocalLayer = () => _baseLocalLayer({ agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
+const baseLocalLayer = () =>
+  _baseLocalLayer({ agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
 import { RpcTest } from "effect/unstable/rpc"
 
 const repoRoot = path.resolve(import.meta.dir, "../../..")

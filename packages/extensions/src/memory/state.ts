@@ -7,7 +7,11 @@
  */
 
 import { Schema } from "effect"
-import { type AgentEvent, type ExtensionReduceContext, type ReduceResult } from "@gent/core/extensions/api"
+import {
+  type AgentEvent,
+  type ExtensionReduceContext,
+  type ReduceResult,
+} from "@gent/core/extensions/api"
 import {
   MemoryEntrySchema,
   type MemoryEntry,

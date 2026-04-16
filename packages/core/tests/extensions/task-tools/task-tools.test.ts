@@ -63,7 +63,8 @@ const makeCtx = Effect.gen(function* () {
   }) as ToolContext
 })
 
-const layer = createToolTestLayer({ ...toolPreset,
+const layer = createToolTestLayer({
+  ...toolPreset,
   extensions: [TaskExtension],
   subagentRunner: mockRunnerSuccess,
 })
