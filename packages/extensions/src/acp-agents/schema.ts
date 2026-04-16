@@ -16,21 +16,20 @@ export class Implementation extends Schema.Class<Implementation>("AcpImplementat
   version: Schema.String,
 }) {}
 
-// ── Content Blocks ──
+// ── Content Blocks (discriminated on `type`, not `_tag` — matches ACP wire format) ──
 
-export class TextContent extends Schema.TaggedClass<TextContent>()("text", {
+export class TextContent extends Schema.Class<TextContent>("AcpTextContent")({
   type: Schema.Literal("text"),
   text: Schema.String,
 }) {}
 
-export class ImageContent extends Schema.TaggedClass<ImageContent>()("image", {
+export class ImageContent extends Schema.Class<ImageContent>("AcpImageContent")({
   type: Schema.Literal("image"),
   data: Schema.String,
   mimeType: Schema.String,
 }) {}
 
-export const ContentBlock = Schema.Union([TextContent, ImageContent])
-export type ContentBlock = typeof ContentBlock.Type
+export type ContentBlock = TextContent | ImageContent
 
 // ── MCP Server Config ──
 

@@ -82,6 +82,72 @@ export const makeAcpConnection = (
     )
 
     // Parse incoming lines
+    // Handle a response to one of our pending requests
+    const handleResponse = (parsed: Record<string, unknown>) =>
+      Effect.gen(function* () {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const id = parsed["id"] as RequestId
+        const pending = yield* Ref.get(pendingRef)
+        const entry = HashMap.get(pending, id)
+        if (entry._tag === "None") return
+
+        yield* Ref.update(pendingRef, HashMap.remove(id))
+
+        if ("error" in parsed) {
+          const err = parsed["error"]
+          const message =
+            typeof err === "object" && err !== null && "message" in err
+              ? String((err as Record<string, unknown>)["message"])
+              : "Unknown ACP error"
+          yield* Deferred.fail(entry.value.resolve, new AcpError({ message }))
+        } else {
+          yield* Deferred.succeed(entry.value.resolve, parsed["result"])
+        }
+      })
+
+    // Handle an incoming request from the agent (e.g. permission)
+    const handleIncomingRequest = (
+      method: string,
+      reqId: number | string | null,
+      params: unknown,
+    ) =>
+      Effect.gen(function* () {
+        if (incomingRequestHandler !== undefined) {
+          const result = yield* incomingRequestHandler(method, params).pipe(
+            Effect.catchEager((err: AcpError) =>
+              Effect.gen(function* () {
+                yield* write(encodeErrorResponse(reqId, -32603, err.message))
+                return undefined
+              }),
+            ),
+          )
+          if (result !== undefined) {
+            yield* write(encodeResponse(reqId, result))
+          }
+          return
+        }
+
+        // Auto-approve permissions (bare mode agents shouldn't ask, but just in case)
+        if (method === "session/request_permission") {
+          try {
+            const req = Schema.decodeUnknownSync(S.RequestPermissionRequest)(params)
+            const allowOption = req.options.find((o) => o.kind === "allow_once")
+            yield* write(
+              encodeResponse(reqId, {
+                outcome: allowOption
+                  ? { outcome: "selected", optionId: allowOption.optionId }
+                  : { outcome: "cancelled" },
+              }),
+            )
+          } catch {
+            yield* write(encodeErrorResponse(reqId, -32602, "Invalid permission request"))
+          }
+        } else {
+          yield* write(encodeErrorResponse(reqId, -32601, `Method not supported: ${method}`))
+        }
+      })
+
+    // Route a parsed JSON-RPC line
     const handleLine = (line: string) =>
       Effect.gen(function* () {
         if (line.trim() === "") return
@@ -99,73 +165,30 @@ export const makeAcpConnection = (
 
         // Response to one of our requests
         if ("id" in parsed && parsed["id"] !== null && !("method" in parsed)) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          const id = parsed["id"] as RequestId
-          const pending = yield* Ref.get(pendingRef)
-          const entry = HashMap.get(pending, id)
-          if (entry._tag === "None") return
-
-          yield* Ref.update(pendingRef, HashMap.remove(id))
-
-          if ("error" in parsed) {
-            const err = parsed["error"]
-            const message =
-              typeof err === "object" && err !== null && "message" in err
-                ? String((err as Record<string, unknown>)["message"])
-                : "Unknown ACP error"
-            yield* Deferred.fail(entry.value.resolve, new AcpError({ message }))
-          } else {
-            yield* Deferred.succeed(entry.value.resolve, parsed["result"])
-          }
+          yield* handleResponse(parsed)
           return
         }
 
         // Notification from agent (no id, has method)
         if ("method" in parsed && !("id" in parsed)) {
-          const method = parsed["method"]
-          if (method === "session/update") {
-            const notification = Schema.decodeUnknownSync(S.SessionNotification)(parsed["params"])
-            yield* PubSub.publish(updatesPubSub, notification)
+          if (parsed["method"] === "session/update") {
+            try {
+              const notification = Schema.decodeUnknownSync(S.SessionNotification)(parsed["params"])
+              yield* PubSub.publish(updatesPubSub, notification)
+            } catch (decodeErr) {
+              yield* Effect.logWarning("acp: failed to decode session/update").pipe(
+                Effect.annotateLogs({ error: String(decodeErr) }),
+              )
+            }
           }
           return
         }
 
         // Incoming request from agent (has id + method)
         if ("method" in parsed && "id" in parsed) {
-          const method = String(parsed["method"])
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          const reqId = parsed["id"] as number | string | null
-          const params = parsed["params"]
-
-          if (incomingRequestHandler !== undefined) {
-            const result = yield* incomingRequestHandler(method, params).pipe(
-              Effect.catchEager((err: AcpError) =>
-                Effect.gen(function* () {
-                  yield* write(encodeErrorResponse(reqId, -32603, err.message))
-                  return undefined
-                }),
-              ),
-            )
-            if (result !== undefined) {
-              yield* write(encodeResponse(reqId, result))
-            }
-          } else {
-            // Auto-approve permissions (bare mode agents shouldn't ask, but just in case)
-            if (method === "session/request_permission") {
-              const req = Schema.decodeUnknownSync(S.RequestPermissionRequest)(params)
-              const allowOption = req.options.find((o) => o.kind === "allow_once")
-              yield* write(
-                encodeResponse(reqId, {
-                  outcome: allowOption
-                    ? { outcome: "selected", optionId: allowOption.optionId }
-                    : { outcome: "cancelled" },
-                }),
-              )
-            } else {
-              yield* write(encodeErrorResponse(reqId, -32601, `Method not supported: ${method}`))
-            }
-          }
-          return
+          const rawId = parsed["id"]
+          const reqId = typeof rawId === "number" || typeof rawId === "string" ? rawId : null
+          yield* handleIncomingRequest(String(parsed["method"]), reqId, parsed["params"])
         }
       })
 
