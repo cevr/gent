@@ -86,21 +86,15 @@ export const resolveExtensions = (
     (p) => p.id,
   )
 
-  // Turn executors: keyed by id, later scope wins. Duplicate IDs within same scope are caught.
+  // Turn executors: keyed by id, later scope wins (same as tools/agents/providers)
+  const turnExecutorContribs = compileContributions(
+    sorted,
+    (s) => s.turnExecutors,
+    (te) => te.id,
+  )
   const turnExecutors = new Map<string, TurnExecutor>()
-  for (const ext of sorted) {
-    for (const contrib of ext.setup.turnExecutors ?? []) {
-      if (turnExecutors.has(contrib.id)) {
-        mergedFailures.push({
-          manifest: ext.manifest,
-          kind: ext.kind,
-          sourcePath: ext.sourcePath,
-          phase: "validation",
-          error: `Duplicate turn executor ID "${contrib.id}"`,
-        })
-      }
-      turnExecutors.set(contrib.id, contrib.executor)
-    }
+  for (const [id, contrib] of turnExecutorContribs) {
+    turnExecutors.set(id, contrib.executor)
   }
 
   // Prompt sections: last scope wins by section id

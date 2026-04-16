@@ -761,7 +761,7 @@ export const collectExternalTurn = (params: {
       messages: params.resolved.messages,
       tools: params.resolved.tools,
       systemPrompt: params.resolved.systemPrompt,
-      cwd: process.cwd(),
+      cwd: params.hostCtx.cwd,
       abortSignal: params.activeStream.abortController.signal,
       hostCtx: params.hostCtx,
     })
@@ -846,6 +846,15 @@ export const collectExternalTurn = (params: {
           yield* params
             .publishEvent(
               new StreamEnded({ sessionId: params.sessionId, branchId: params.branchId }),
+            )
+            .pipe(Effect.orDie)
+          yield* params
+            .publishEvent(
+              new ErrorOccurred({
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                error: `External turn executor error: ${String(err)}`,
+              }),
             )
             .pipe(Effect.orDie)
           return true
