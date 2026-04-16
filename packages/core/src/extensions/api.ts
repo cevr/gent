@@ -155,9 +155,9 @@ export type {
   TurnExecutorContribution,
   TurnContext,
   TurnEvent,
-  TurnError,
 } from "../domain/turn-executor.js"
 export {
+  TurnError,
   TextDelta,
   ReasoningDelta,
   ToolStarted,
