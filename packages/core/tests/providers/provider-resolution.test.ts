@@ -131,4 +131,94 @@ describe("Provider model resolution", () => {
     )
     expect(result._tag).toBe("Failure")
   })
+
+  // ── Per-turn driver registry override (per-cwd profile shadowing) ──
+
+  test("per-request driverRegistry overrides the captured one for model resolution", async () => {
+    // Captured registry has only "captured-only" — would fail to find "shadowed"
+    const capturedLayer = buildProviderLayer([
+      makeExt("captured", [makeProvider("captured-only", "Captured")]),
+    ])
+    // Per-turn registry has "shadowed" — should win
+    const shadowedResolved = resolveExtensions([
+      makeExt("shadowed", [makeProvider("shadowed", "Shadowed")]),
+    ])
+    const overrideRegistry = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* DriverRegistry
+      }).pipe(
+        Effect.provide(
+          DriverRegistry.fromResolved({
+            modelDrivers: shadowedResolved.modelDrivers,
+            externalDrivers: shadowedResolved.externalDrivers,
+          }),
+        ),
+      ),
+    )
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "shadowed/some-model",
+          messages: [],
+          systemPrompt: "",
+          driverRegistry: overrideRegistry,
+        })
+        yield* Stream.runHead(stream)
+      }).pipe(Effect.provide(capturedLayer)),
+    )
+
+    // Resolution should NOT fail with "Unknown provider" — overrideRegistry has "shadowed".
+    if (result._tag === "Failure") {
+      const pretty = result.cause.toString()
+      expect(pretty).not.toContain("Unknown provider")
+    }
+  })
+
+  // ── ModelDriverRef.id override ──
+
+  test("driverId override picks a driver other than the one parsed from modelId", async () => {
+    // Both drivers registered. Default parse from "primary/foo" → "primary".
+    // We force "alt" via driverId override and check `alt` was chosen by giving it
+    // a recognizable resolveModel side effect.
+    let chosenDriver: string | undefined
+    const layer = buildProviderLayer([
+      makeExt("primary-ext", [
+        {
+          id: "primary",
+          name: "Primary",
+          resolveModel: () => {
+            chosenDriver = "primary"
+            return fakeResolution()
+          },
+        },
+      ]),
+      makeExt("alt-ext", [
+        {
+          id: "alt",
+          name: "Alt",
+          resolveModel: () => {
+            chosenDriver = "alt"
+            return fakeResolution()
+          },
+        },
+      ]),
+    ])
+
+    await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "primary/foo",
+          messages: [],
+          systemPrompt: "",
+          driverId: "alt",
+        })
+        yield* Stream.runHead(stream)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(chosenDriver).toBe("alt")
+  })
 })

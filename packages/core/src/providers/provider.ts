@@ -35,13 +35,30 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
 
 // ── Model Resolver ──
 
-const makeModelResolver = (authStore: AuthStoreService, driverRegistry: DriverRegistryService) => {
+const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) => {
   const resolveAuthFromStore = (providerName: string) =>
     authStore
       .get(providerName)
       .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
 
-  return Effect.fn("Provider.resolveModel")(function* (modelId: string, hints?: ProviderHints) {
+  return Effect.fn("Provider.resolveModel")(function* (
+    modelId: string,
+    hints?: ProviderHints,
+    /**
+     * Per-turn driver registry override. When the agent loop resolves a turn
+     * inside a per-cwd profile, it forwards that profile's `DriverRegistry`
+     * here so project/user-scope driver overrides take effect for model turns.
+     * Falls back to the registry captured at `Provider.Live` construction.
+     */
+    overrideRegistry?: DriverRegistryService,
+    /**
+     * Optional model-driver id from `agent.driver: ModelDriverRef`. When set,
+     * overrides the provider segment parsed from `modelId` so an agent can
+     * pick a non-default driver for a model that exists under multiple driver
+     * implementations.
+     */
+    driverIdOverride?: string,
+  ) {
     const parsed = parseModelId(modelId)
     if (parsed === undefined) {
       return yield* new ProviderError({
@@ -49,7 +66,9 @@ const makeModelResolver = (authStore: AuthStoreService, driverRegistry: DriverRe
         model: modelId,
       })
     }
-    const [providerName, modelName] = parsed
+    const [parsedProviderName, modelName] = parsed
+    const providerName = driverIdOverride ?? parsedProviderName
+    const driverRegistry = overrideRegistry ?? defaultRegistry
 
     const extensionProvider = yield* driverRegistry.getModel(providerName)
     if (extensionProvider === undefined) {
@@ -148,6 +167,10 @@ export interface ProviderRequest {
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
   readonly abortSignal?: AbortSignal
   readonly providerOptions?: unknown
+  /** Per-turn driver registry override (per-cwd profile). */
+  readonly driverRegistry?: DriverRegistryService
+  /** Per-agent driver id override (from `ModelDriverRef.id`). */
+  readonly driverId?: string
 }
 
 // Simple generate request (no tools, no streaming)
@@ -157,6 +180,10 @@ export interface GenerateRequest {
   readonly prompt: string
   readonly systemPrompt?: string
   readonly maxTokens?: number
+  /** Per-turn driver registry override (per-cwd profile). */
+  readonly driverRegistry?: DriverRegistryService
+  /** Per-agent driver id override (from `ModelDriverRef.id`). */
+  readonly driverId?: string
 }
 
 // ── Provider Service ──
@@ -343,7 +370,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
             maxTokens: request.maxTokens,
             temperature: request.temperature,
           }
-          const resolution = yield* getModel(request.model, hints)
+          const resolution = yield* getModel(
+            request.model,
+            hints,
+            request.driverRegistry,
+            request.driverId,
+          )
           const modelLayer = resolution.layer
 
           // Build prompt
@@ -386,7 +418,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
 
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
           const hints: ProviderHints = { maxTokens: request.maxTokens }
-          const resolution = yield* getModel(request.model, hints)
+          const resolution = yield* getModel(
+            request.model,
+            hints,
+            request.driverRegistry,
+            request.driverId,
+          )
           const modelLayer = resolution.layer
 
           const promptMessages: Prompt.Message[] =

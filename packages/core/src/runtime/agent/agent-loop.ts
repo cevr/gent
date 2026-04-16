@@ -941,12 +941,28 @@ export const collectExternalTurn = (params: {
     return { draft, interrupted: false, streamFailed: false }
   })
 
+/** Project per-turn `ResolvedTurn` for the model-stream path with tools attached. */
+const makeStreamResolved = (
+  resolved: ResolvedTurnContext,
+  tools: ReadonlyArray<AnyToolDefinition>,
+): ResolvedTurn => ({
+  currentTurnAgent: resolved.currentTurnAgent,
+  messages: resolved.messages,
+  systemPrompt: resolved.systemPrompt,
+  modelId: resolved.modelId,
+  tools,
+  ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+  ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+  ...(resolved.driver !== undefined ? { driver: resolved.driver } : {}),
+})
+
 export const streamTurnPhase = (params: {
   messageId: MessageId
   step: number
   resolved: ResolvedTurn
   provider: ProviderService
   extensionRegistry: ExtensionRegistryService
+  driverRegistry?: DriverRegistryService
   hostCtx: ExtensionHostContext
   publishEvent: PublishEvent
   storage: StorageService
@@ -993,6 +1009,10 @@ export const streamTurnPhase = (params: {
             : {}),
           ...(params.resolved.reasoning !== undefined
             ? { reasoning: params.resolved.reasoning }
+            : {}),
+          ...(params.driverRegistry !== undefined ? { driverRegistry: params.driverRegistry } : {}),
+          ...(params.resolved.driver?._tag === "model" && params.resolved.driver.id !== undefined
+            ? { driverId: params.resolved.driver.id }
             : {}),
         }),
         undefined,
@@ -1983,22 +2003,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   break
                 }
 
+                const turnTools = yield* Ref.get(turnToolsRef)
+                const streamResolved = makeStreamResolved(resolved, turnTools)
                 const collected = yield* streamTurnPhase({
                   messageId: state.message.id,
                   step,
-                  resolved: {
-                    currentTurnAgent: resolved.currentTurnAgent,
-                    messages: resolved.messages,
-                    systemPrompt: resolved.systemPrompt,
-                    modelId: resolved.modelId,
-                    tools: yield* Ref.get(turnToolsRef),
-                    ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
-                    ...(resolved.temperature !== undefined
-                      ? { temperature: resolved.temperature }
-                      : {}),
-                  },
+                  resolved: streamResolved,
                   provider,
                   extensionRegistry: turnExtensionRegistry,
+                  driverRegistry: turnDriverRegistry,
                   hostCtx: turnHostCtx,
                   publishEvent: publishEventOrDie,
                   storage,

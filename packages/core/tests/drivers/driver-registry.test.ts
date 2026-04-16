@@ -164,4 +164,48 @@ describe("DriverRegistry", () => {
     expect(result.some((m) => (m as { id: string }).id === "added")).toBe(true)
     expect(result.some((m) => (m as { id: string }).id === "dropped")).toBe(false)
   })
+
+  test("filterModelCatalog passes resolveAuth(driverId) into each driver's listModels", async () => {
+    const seenAuth: Array<{ driverId: string; auth: unknown }> = []
+    const driverA: ModelDriverContribution = {
+      id: "auth-a",
+      name: "AuthA",
+      resolveModel: stubResolution,
+      listModels: (catalog, auth) => {
+        seenAuth.push({ driverId: "auth-a", auth })
+        return catalog
+      },
+    }
+    const driverB: ModelDriverContribution = {
+      id: "auth-b",
+      name: "AuthB",
+      resolveModel: stubResolution,
+      listModels: (catalog, auth) => {
+        seenAuth.push({ driverId: "auth-b", auth })
+        return catalog
+      },
+    }
+    const layer = buildRegistry([
+      makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
+    ])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.filterModelCatalog([{ id: "x" }], (driverId) =>
+          Effect.succeed(
+            driverId === "auth-a" ? { type: "api" as const, key: "secret-a" } : undefined,
+          ),
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    // Each driver's listModels should have been called with the auth from resolveAuth(its id)
+    const authA = seenAuth.find((s) => s.driverId === "auth-a")?.auth as
+      | { type: string; key?: string }
+      | undefined
+    const authB = seenAuth.find((s) => s.driverId === "auth-b")?.auth
+    expect(authA?.key).toBe("secret-a")
+    expect(authB).toBeUndefined()
+  })
 })
