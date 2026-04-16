@@ -365,7 +365,7 @@ export type {
 } from "./turn-executor.js"
 import type { TurnExecutorContribution } from "./turn-executor.js"
 
-// Provider Contribution — re-exported from dedicated file for backwards compatibility
+// Provider Contribution — re-exported from dedicated file
 
 export type {
   ProviderContribution,

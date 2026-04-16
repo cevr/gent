@@ -494,8 +494,8 @@ const execEffect = (
 /**
  * Create an extension. One API for both simple and full-power extensions.
  *
- * The callback receives `{ ext, ctx }` and must return the builder (for fluent chaining).
- * Sync factories work — async/Promise is optional.
+ * The callback runs synchronously inside the setup Effect. It receives `{ ext, ctx }`
+ * and must return the builder (for fluent chaining). For async work, use `onStartup`.
  *
  * @example
  * ```ts
@@ -615,13 +615,10 @@ export const extension = <P = never>(
           return builder
         },
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        on: (<K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          _interceptors.push(defineInterceptor(key, handler as never))
+        on: <K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
+          _interceptors.push(defineInterceptor(key, handler))
           return builder
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as any,
+        },
 
         exec: (command, args, options) => execEffect(ctx.spawner, ctx.cwd, command, args, options),
 

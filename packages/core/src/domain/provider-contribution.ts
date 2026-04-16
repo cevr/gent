@@ -2,7 +2,6 @@
  * Provider contribution types — what a provider extension registers.
  *
  * Extracted from extension.ts to reduce cognitive load on the main extension type file.
- * Re-exported from extension.ts for backwards compatibility.
  */
 import type { Effect, Layer } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -43,12 +42,6 @@ export interface ProviderContribution {
   ) => ReadonlyArray<unknown>
   /** Auth configuration — methods + authorize/callback handlers */
   readonly auth?: ProviderAuthContribution
-  /** @deprecated Use hints parameter on resolveModel instead. Kept for bridge compatibility. */
-  readonly buildOptions?: (
-    modelId: string,
-    reasoning: string | undefined,
-    existing: unknown,
-  ) => unknown
 }
 
 /** Auth info passed to resolveModel — mirrors AuthStore entries */

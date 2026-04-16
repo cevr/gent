@@ -14,7 +14,6 @@ import * as AiError from "effect/unstable/ai/AiError"
 
 // ── Provider Resolution ──
 
-// Canonical ProviderResolution lives in domain — re-export for callers importing from providers
 export type { ProviderResolution } from "../domain/provider-contribution.js"
 
 // ── Provider Info ──
