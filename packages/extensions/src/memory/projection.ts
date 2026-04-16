@@ -94,26 +94,32 @@ interface VaultProjectionValue {
 
 /**
  * Reads the on-disk vault index per evaluation, derives prompt + ui from it.
- * `query` is read-only (lint-enforced).
+ * `query` is read-only (lint-enforced) — no `ensureDirs` / `write` calls.
+ *
+ * Performance: scopes the disk walk to the relevant slice (global + the
+ * derived project key only) rather than scanning every project under
+ * `~/.gent/memory/project/`. Cheap O(N) where N = entries in the active
+ * session's project + global, not all projects across the user's history.
  */
 export const MemoryVaultProjection: ProjectionContribution<VaultProjectionValue, MemoryVault> = {
   id: "memory-vault",
   query: (ctx) =>
     Effect.gen(function* () {
       const vault = yield* MemoryVault
-      yield* vault.ensureDirs()
-      const entries = yield* vault.list().pipe(
-        Effect.catchEager((e) =>
-          Effect.fail(
-            new ProjectionError({
-              projectionId: "memory-vault",
-              reason: `MemoryVault.list failed: ${String(e)}`,
-            }),
-          ),
-        ),
-      )
       const key = ctx.cwd !== undefined ? projectKeyOf(ctx.cwd) : undefined
-      return { entries, projectKey: key }
+      const failed = (e: unknown): ProjectionError =>
+        new ProjectionError({
+          projectionId: "memory-vault",
+          reason: `MemoryVault.list failed: ${String(e)}`,
+        })
+      const globalEntries = yield* vault
+        .list("global")
+        .pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
+      const projectEntries =
+        key !== undefined
+          ? yield* vault.list("project", key).pipe(Effect.catchEager((e) => Effect.fail(failed(e))))
+          : []
+      return { entries: [...globalEntries, ...projectEntries], projectKey: key }
     }),
   prompt: (value) => {
     const section = buildVaultPromptSection(value.entries, value.projectKey)

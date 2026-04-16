@@ -131,6 +131,43 @@ describe("MemoryVaultProjection", () => {
   })
 })
 
+describe("MemoryVaultProjection — read-only and scoped", () => {
+  test("query does not create vault directories (read-only contract)", async () => {
+    // Vault with no global/ or project/ subdirs at all
+    expect(Fs.existsSync(Path.join(tmpDir, "global"))).toBe(false)
+    expect(Fs.existsSync(Path.join(tmpDir, "project"))).toBe(false)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const value = yield* MemoryVaultProjection.query(turnCtx("/some/repo"))
+        expect(value.entries).toEqual([])
+      }).pipe(Effect.provide(MemoryVaultTest(tmpDir))),
+    )
+
+    // Projection must not have created the dirs as a side-effect
+    expect(Fs.existsSync(Path.join(tmpDir, "global"))).toBe(false)
+    expect(Fs.existsSync(Path.join(tmpDir, "project"))).toBe(false)
+  })
+
+  test("project list is scoped to active project — unrelated projects do not leak in", async () => {
+    const { projectKey: pk } = await import("@gent/extensions/memory/vault")
+    const activeKey = pk("/active-repo")
+    const otherKey = pk("/other-repo")
+    writeFile(`project/${activeKey}/active.md`, "# Active\n\nMine.", "project")
+    writeFile(`project/${otherKey}/other.md`, "# Other\n\nNot mine.", "project")
+    writeFile("global/g.md", "# G\n\nGlobal entry.")
+
+    const value = await Effect.runPromise(
+      MemoryVaultProjection.query(turnCtx("/active-repo")).pipe(
+        Effect.provide(MemoryVaultTest(tmpDir)),
+      ),
+    )
+    const titles = value.entries.map((e) => e.title).sort()
+    expect(titles).toEqual(["Active", "G"])
+    expect(titles).not.toContain("Other")
+  })
+})
+
 describe("session-memory projection helpers", () => {
   test("empty session produces no prompt section", () => {
     const result = projectSessionMemoryTurn(initialMemoryState)

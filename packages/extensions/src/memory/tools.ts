@@ -7,7 +7,7 @@
 
 import { Effect, Schema } from "effect"
 import { defineTool } from "@gent/core/extensions/api"
-import { MemoryVault } from "./vault.js"
+import { MemoryVault, projectKey as projectKeyOf } from "./vault.js"
 import { memoryPath, newFrontmatter } from "./state.js"
 
 // ── memory_remember ──
@@ -47,12 +47,17 @@ export const MemoryRememberTool = defineTool({
     "Session memories are lost on restart — promote important ones to project/global.",
   ],
   params: RememberParams,
-  execute: Effect.fn("MemoryRememberTool.execute")(function* (params, _ctx) {
+  execute: Effect.fn("MemoryRememberTool.execute")(function* (params, ctx) {
     const scope = params["scope"]
     const title = params["title"]
     const content = params["content"]
     const tags = params["tags"] ?? []
-    const projectKey = params["project_key"]
+    // Auto-derive project key from session cwd when scope=project and the
+    // caller did not supply one. Without this, project memories silently
+    // fall back to the global directory (state.memoryPath line 110) and the
+    // vault projection's project section never finds them.
+    const projectKey =
+      params["project_key"] ?? (scope === "project" ? projectKeyOf(ctx.cwd) : undefined)
 
     if (scope === "session") {
       // Session memories are handled by the extension actor state, not vault.
@@ -163,10 +168,11 @@ export const MemoryForgetTool = defineTool({
   concurrency: "serial",
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,
-  execute: Effect.fn("MemoryForgetTool.execute")(function* (params, _ctx) {
+  execute: Effect.fn("MemoryForgetTool.execute")(function* (params, ctx) {
     const scope = params["scope"]
     const title = params["title"]
-    const projectKey = params["project_key"]
+    const projectKey =
+      params["project_key"] ?? (scope === "project" ? projectKeyOf(ctx.cwd) : undefined)
 
     if (scope === "session") {
       return {
