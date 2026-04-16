@@ -16,9 +16,14 @@
 import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
-  extension,
+  defineExtension,
+  defineInterceptor,
+  interceptorContribution,
   isRecord,
-  type ExtensionActorDefinition,
+  layerContribution,
+  toolContribution,
+  workflowContribution,
+  type WorkflowContribution,
   type ExtensionTurnContext,
   type ExtensionEffect,
   type ToolResultInput,
@@ -28,7 +33,7 @@ import {
   type PromptSection,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { AUTO_EXTENSION_ID, AutoProtocol } from "./auto-protocol.js"
+import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
 
@@ -139,6 +144,11 @@ const MachineEvent = MEvent({
   ReviewSignal: {},
   TurnTick: {},
   IsActive: MEvent.reply({}, Schema.Boolean),
+  /** Typed self-read for interceptors: replaces the workflow's loss of
+   *  `getUiSnapshot` by exposing the projected snapshot through a typed
+   *  protocol reply. The reply mirrors `AutoSnapshotReply` from
+   *  `auto-protocol.ts`. */
+  GetSnapshot: MEvent.reply({}, Schema.Any),
 })
 type MachineEvent = typeof MachineEvent.Type
 
@@ -349,6 +359,16 @@ const autoMachine = Machine.make({
   .on(MachineState.Inactive, MachineEvent.IsActive, ({ state }) => Machine.reply(state, false))
   .on(MachineState.Working, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
   .on(MachineState.AwaitingReview, MachineEvent.IsActive, ({ state }) => Machine.reply(state, true))
+  // GetSnapshot — pure read, returns projected UI model
+  .on(MachineState.Inactive, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, projectSnapshot(state)),
+  )
+  .on(MachineState.Working, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, projectSnapshot(state)),
+  )
+  .on(MachineState.AwaitingReview, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, projectSnapshot(state)),
+  )
 
 // ── Derive ──
 
@@ -500,160 +520,15 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
   }
 }
 
-// ── Actor Config (exported for test harness — pure reducer compat) ──
+// ── Workflow (effect-machine based) ──
+//
+// The auto extension is a genuine state machine with declared effects, so it
+// migrates to `WorkflowContribution` (per `composability-not-flags` — workflows
+// declare effects, projections derive views). The `snapshot`/`turn` fields
+// here are the C8 transitional lowering bridge; C12 deletes them when
+// `state-runtime.ts` splits and projections take over UI duties.
 
-export const AutoActorConfig = {
-  id: AUTO_EXTENSION_ID,
-  initial: MachineState.Inactive({}),
-  derive: (state: MachineState, ctx?: ExtensionTurnContext) => derive(state, ctx),
-  reduce: (state: MachineState, event: AgentEvent): { state: MachineState } => {
-    const mapped = mapEvent(event)
-    if (mapped === undefined) return { state }
-
-    // Simulate machine transitions for pure reducer testing
-    if (state._tag === "Inactive") {
-      if (mapped._tag === "StartAuto") {
-        return {
-          state: MachineState.Working({
-            iteration: 1,
-            maxIterations: mapped.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-            goal: mapped.goal,
-            learnings: [],
-            metrics: [],
-            turnsSinceCheckpoint: 0,
-          }),
-        }
-      }
-      return { state }
-    }
-
-    if (state._tag === "Working") {
-      if (mapped._tag === "AutoSignal") {
-        const newLearnings =
-          mapped.learnings !== undefined
-            ? [...state.learnings, { iteration: state.iteration, content: mapped.learnings }]
-            : state.learnings
-        const newMetrics =
-          mapped.metrics !== undefined
-            ? [...state.metrics, { iteration: state.iteration, values: mapped.metrics }]
-            : state.metrics
-
-        if (mapped.status === "complete") {
-          return {
-            state: MachineState.Inactive({
-              reason: "completed",
-              finalLearnings: newLearnings,
-              finalMetrics: newMetrics,
-            }),
-          }
-        }
-        if (mapped.status === "abandon") {
-          return {
-            state: MachineState.Inactive({
-              reason: "abandoned",
-              finalLearnings: newLearnings,
-              finalMetrics: newMetrics,
-            }),
-          }
-        }
-        return {
-          state: MachineState.AwaitingReview({
-            iteration: state.iteration,
-            maxIterations: state.maxIterations,
-            goal: state.goal,
-            learnings: newLearnings,
-            metrics: newMetrics,
-            lastSummary: mapped.summary,
-            nextIdea: mapped.nextIdea,
-          }),
-        }
-      }
-      if (mapped._tag === "TurnTick") {
-        const next = state.turnsSinceCheckpoint + 1
-        if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
-          return { state: MachineState.Inactive({ reason: "wedged" }) }
-        }
-        return { state: MachineState.Working.with(state, { turnsSinceCheckpoint: next }) }
-      }
-      if (mapped._tag === "CancelAuto") {
-        return { state: MachineState.Inactive({ reason: "cancelled" }) }
-      }
-      return { state }
-    }
-
-    if (state._tag === "AwaitingReview") {
-      if (mapped._tag === "ReviewSignal") {
-        if (state.iteration >= state.maxIterations) {
-          return {
-            state: MachineState.Inactive({
-              reason: "completed",
-              finalLearnings: state.learnings,
-              finalMetrics: state.metrics,
-            }),
-          }
-        }
-        return {
-          state: MachineState.Working({
-            iteration: state.iteration + 1,
-            maxIterations: state.maxIterations,
-            goal: state.goal,
-            learnings: state.learnings,
-            metrics: state.metrics,
-            turnsSinceCheckpoint: 0,
-            lastSummary: state.lastSummary,
-            nextIdea: state.nextIdea,
-          }),
-        }
-      }
-      if (mapped._tag === "CancelAuto") {
-        return { state: MachineState.Inactive({ reason: "cancelled" }) }
-      }
-      return { state }
-    }
-
-    return { state }
-  },
-  receive: (state: MachineState, message: AutoIntent): { state: MachineState } => {
-    switch (message._tag) {
-      case "StartAuto": {
-        if (state._tag !== "Inactive") return { state }
-        return {
-          state: MachineState.Working({
-            iteration: 1,
-            maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-            goal: message.goal,
-            learnings: [],
-            metrics: [],
-            turnsSinceCheckpoint: 0,
-          }),
-        }
-      }
-      case "CancelAuto": {
-        if (state._tag === "Inactive") return { state }
-        return { state: MachineState.Inactive({ reason: "cancelled" }) }
-      }
-      case "ToggleAuto": {
-        if (state._tag === "Inactive") {
-          return {
-            state: MachineState.Working({
-              iteration: 1,
-              maxIterations: message.maxIterations ?? DEFAULT_MAX_ITERATIONS,
-              goal: message.goal ?? "Continue working autonomously",
-              learnings: [],
-              metrics: [],
-              turnsSinceCheckpoint: 0,
-            }),
-          }
-        }
-        return { state: MachineState.Inactive({ reason: "cancelled" }) }
-      }
-    }
-  },
-}
-
-// ── Actor (effect-machine based) ──
-
-const autoActor: ExtensionActorDefinition<
+const autoWorkflow: WorkflowContribution<
   MachineState,
   MachineEvent,
   AutoJournal,
@@ -696,8 +571,10 @@ const autoActor: ExtensionActorDefinition<
   mapRequest: (message) => {
     if (message.extensionId !== AUTO_EXTENSION_ID) return undefined
     if (message._tag === "IsActive") return MachineEvent.IsActive
+    if (message._tag === "GetSnapshot") return MachineEvent.GetSnapshot
     return undefined
   },
+  // ── Transitional lowering bridge (deleted in C12) ──
   snapshot: {
     schema: AutoUiModel,
     project: projectSnapshot,
@@ -764,8 +641,17 @@ const autoActor: ExtensionActorDefinition<
 }
 
 // ── tool.result interceptor — JSONL append on checkpoint/review ──
+//
+// Reads the workflow snapshot via `AutoProtocol.GetSnapshot` typed reply
+// instead of the actor-era `getUiSnapshot` self-read — workflows have no
+// UI snapshot pipe (per `composability-not-flags`).
 
 const EXTENSION_ID = AUTO_EXTENSION_ID
+
+const readSnapshot = (ctx: ExtensionHostContext) =>
+  ctx.extension
+    .ask(AutoProtocol.GetSnapshot())
+    .pipe(Effect.catchEager(() => Effect.succeed(undefined as AutoSnapshotReply | undefined)))
 
 const journalInterceptorImpl = (
   input: ToolResultInput,
@@ -780,25 +666,23 @@ const journalInterceptorImpl = (
       const journal = yield* Effect.serviceOption(AutoJournal)
       if (journal._tag === "None") return
 
-      const uiModel = yield* ctx.extension
-        .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
-        .pipe(Effect.catchEager(() => Effect.void))
-      if (uiModel === undefined || !uiModel.active) return
+      const snapshot = yield* readSnapshot(ctx)
+      if (snapshot === undefined || !snapshot.active) return
 
       if (input.toolName === "auto_checkpoint" && isRecord(input.input)) {
         const cp = parseCheckpointParams(input.input)
 
         const activePath = yield* journal.value.getActivePath()
-        if (activePath === undefined && uiModel.goal !== undefined) {
+        if (activePath === undefined && snapshot.goal !== undefined) {
           yield* journal.value.start({
-            goal: uiModel.goal,
-            maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+            goal: snapshot.goal,
+            maxIterations: snapshot.maxIterations ?? DEFAULT_MAX_ITERATIONS,
             sessionId: input.sessionId,
           })
         }
 
         yield* journal.value.appendCheckpoint({
-          iteration: uiModel.iteration ?? 1,
+          iteration: snapshot.iteration ?? 1,
           ...cp,
         })
 
@@ -808,7 +692,7 @@ const journalInterceptorImpl = (
       }
 
       if (input.toolName === "review") {
-        yield* journal.value.appendReview(uiModel.iteration ?? 1)
+        yield* journal.value.appendReview(snapshot.iteration ?? 1)
       }
     }).pipe(Effect.catchEager(() => Effect.void))
 
@@ -827,18 +711,16 @@ const autoHandoffImpl = (
 
     if (input.interrupted) return
 
-    // Check if auto is active
-    const uiModel = yield* ctx.extension
-      .getUiSnapshot<AutoUiModel>(EXTENSION_ID)
-      .pipe(Effect.catchEager(() => Effect.void))
-    if (uiModel === undefined || !uiModel.active) return
+    // Check if auto is active via typed reply protocol
+    const snapshot = yield* readSnapshot(ctx)
+    if (snapshot === undefined || !snapshot.active) return
 
     // Estimate context fill
     const contextPercent = yield* ctx.session.estimateContextPercent()
     if (contextPercent < 85) return
 
     yield* Effect.logInfo("auto.handoff.threshold").pipe(
-      Effect.annotateLogs({ contextPercent, iteration: uiModel.iteration }),
+      Effect.annotateLogs({ contextPercent, iteration: snapshot.iteration }),
     )
 
     // Ensure journal exists before handoff — if no checkpoint has fired yet,
@@ -847,10 +729,10 @@ const autoHandoffImpl = (
     let journalPath: string | undefined
     if (journal._tag === "Some") {
       journalPath = yield* journal.value.getActivePath()
-      if (journalPath === undefined && uiModel.goal !== undefined) {
+      if (journalPath === undefined && snapshot.goal !== undefined) {
         journalPath = yield* journal.value.start({
-          goal: uiModel.goal,
-          maxIterations: uiModel.maxIterations ?? DEFAULT_MAX_ITERATIONS,
+          goal: snapshot.goal,
+          maxIterations: snapshot.maxIterations ?? DEFAULT_MAX_ITERATIONS,
           sessionId: input.sessionId,
         })
       }
@@ -862,8 +744,8 @@ const autoHandoffImpl = (
       content: [
         `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
         `Include this context:`,
-        `- Auto loop iteration ${uiModel.iteration}/${uiModel.maxIterations}`,
-        `- Goal: ${uiModel.goal}`,
+        `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
+        `- Goal: ${snapshot.goal}`,
         journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
       ]
         .filter(Boolean)
@@ -874,11 +756,13 @@ const autoHandoffImpl = (
 
 // ── Extension ──
 
-export const AutoExtension = extension("@gent/auto", ({ ext, ctx }) =>
-  ext
-    .actor(autoActor)
-    .tools(AutoCheckpointTool)
-    .on("tool.result", journalInterceptorImpl)
-    .on("turn.after", autoHandoffImpl)
-    .layer(AutoJournal.Live({ cwd: ctx.cwd })),
-)
+export const AutoExtension = defineExtension({
+  id: EXTENSION_ID,
+  contributions: ({ ctx }) => [
+    workflowContribution(autoWorkflow),
+    toolContribution(AutoCheckpointTool),
+    interceptorContribution(defineInterceptor("tool.result", journalInterceptorImpl)),
+    interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
+    layerContribution(AutoJournal.Live({ cwd: ctx.cwd })),
+  ],
+})

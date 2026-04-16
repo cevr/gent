@@ -688,6 +688,10 @@ const workflowToActor = (w: AnyWorkflowContribution): AnyExtensionActorDefinitio
   ...(w.stateSchema !== undefined ? { stateSchema: w.stateSchema } : {}),
   ...(w.protocols !== undefined ? { protocols: w.protocols } : {}),
   ...(w.onInit !== undefined ? { onInit: w.onInit } : {}),
+  // Transitional lowering bridge (deleted in C12) — preserves UI/turn
+  // surfaces for workflows whose UI is derived from machine state today.
+  ...(w.snapshot !== undefined ? { snapshot: w.snapshot } : {}),
+  ...(w.turn !== undefined ? { turn: w.turn } : {}),
 })
 
 const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {

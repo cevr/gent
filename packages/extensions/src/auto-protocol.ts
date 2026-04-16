@@ -3,6 +3,18 @@ import { ExtensionMessage } from "@gent/core/extensions/api"
 
 export const AUTO_EXTENSION_ID = "@gent/auto"
 
+/** Snapshot reply schema mirrored from `AutoUiModel` so `GetSnapshot` consumers
+ *  do not depend on the workflow module. The fields are the read surface
+ *  interceptors care about: active + iteration + maxIterations + goal. */
+export const AutoSnapshotReply = Schema.Struct({
+  active: Schema.Boolean,
+  phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),
+  iteration: Schema.optional(Schema.Number),
+  maxIterations: Schema.optional(Schema.Number),
+  goal: Schema.optional(Schema.String),
+})
+export type AutoSnapshotReply = typeof AutoSnapshotReply.Type
+
 export const AutoProtocol = {
   StartAuto: ExtensionMessage(AUTO_EXTENSION_ID, "StartAuto", {
     goal: Schema.String,
@@ -14,4 +26,8 @@ export const AutoProtocol = {
     maxIterations: Schema.optional(Schema.Number),
   }),
   IsActive: ExtensionMessage.reply(AUTO_EXTENSION_ID, "IsActive", {}, Schema.Boolean),
+  /** Read the current workflow snapshot. Replaces `getUiSnapshot(@gent/auto)`
+   *  self-reads from the auto-handoff and journal interceptors — workflows
+   *  expose state through typed protocols, not the UI snapshot pipe. */
+  GetSnapshot: ExtensionMessage.reply(AUTO_EXTENSION_ID, "GetSnapshot", {}, AutoSnapshotReply),
 }

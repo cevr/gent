@@ -82,13 +82,43 @@ describe("WorkflowContribution", () => {
       const setup = yield* ext.setup(testSetupCtx())
       // Workflow is structurally lowered to actor today (single runtime).
       expect(setup.actor).toBeDefined()
-      // Per `composability-not-flags`, the workflow does not carry UI bits.
+      // Per `composability-not-flags`, workflows that omit `snapshot`/`turn`
+      // contribute no UI surface — only control-flow state. The transitional
+      // bridge fields are tested below.
       expect(setup.actor?.snapshot).toBeUndefined()
       expect(setup.actor?.turn).toBeUndefined()
       // Mappers and protocols round-trip through the lowering.
       expect(setup.actor?.mapEvent).toBeDefined()
       expect(setup.actor?.mapCommand).toBeDefined()
       expect(setup.actor?.protocols).toBe(TestProtocol)
+    }),
+  )
+
+  it.live("transitional bridge: snapshot/turn round-trip when present (deleted in C12)", () =>
+    Effect.gen(function* () {
+      const snapshot = {
+        project: (state: typeof TestState.Type) => ({ count: state.count }),
+      }
+      const turn = {
+        project: (state: typeof TestState.Type) => ({
+          promptSections: [{ id: "wf-test", content: `count=${state.count}`, priority: 50 }],
+        }),
+      }
+      const wf: WorkflowContribution<typeof TestState.Type, typeof TestEvent.Type> = {
+        ...testWorkflow,
+        snapshot,
+        turn,
+      }
+      const ext = defineExtension({
+        id: "@gent/test-workflow-ui",
+        contributions: () => [workflowContribution(wf)],
+      })
+      const setup = yield* ext.setup(testSetupCtx())
+
+      // Object identity — proves the lowering forwards by reference,
+      // matching the pattern used for slots/stateSchema/onInit/mapRequest.
+      expect(setup.actor?.snapshot).toBe(snapshot)
+      expect(setup.actor?.turn).toBe(turn)
     }),
   )
 
