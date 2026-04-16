@@ -61,6 +61,7 @@ import {
   createExtensionStorage,
   type ExtensionStorage,
 } from "../runtime/extensions/extension-storage.js"
+import { type Contribution, filterByKind } from "../domain/contribution.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -187,6 +188,39 @@ export {
   type ExtensionInput,
 } from "../domain/extension-package.js"
 export type { ProviderResolution } from "../domain/provider-contribution.js"
+export {
+  type Contribution,
+  type ContributionKind,
+  type ToolContribution,
+  type AgentContribution,
+  type InterceptorContribution as InterceptorKindContribution,
+  type LayerContribution,
+  type ActorContribution,
+  type CommandKindContribution,
+  type ProviderKindContribution,
+  type TurnExecutorKindContribution,
+  type JobContribution,
+  type PermissionRuleContribution,
+  type PromptSectionContribution,
+  type BusSubscriptionContribution,
+  type LifecycleContribution,
+  filterByKind,
+  // smart constructors
+  tool as toolContribution,
+  agent as agentContribution,
+  interceptor as interceptorContribution,
+  layer as layerContribution,
+  actor as actorContribution,
+  command as commandContribution,
+  provider as providerContribution,
+  turnExecutor as turnExecutorContribution,
+  job as jobContribution,
+  permissionRule as permissionRuleContribution,
+  promptSection as promptSectionContribution,
+  busSubscription as busSubscriptionContribution,
+  onStartup as onStartupContribution,
+  onShutdown as onShutdownContribution,
+} from "../domain/contribution.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
@@ -449,6 +483,133 @@ const mergeEffectHooks = (
 ): Effect.Effect<void> | undefined =>
   effects.length === 0 ? undefined : Effect.all(effects, { discard: true }).pipe(Effect.asVoid)
 
+/**
+ * Lower a flat `Contribution[]` array into the legacy `ExtensionSetup` shape.
+ *
+ * Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs)
+ * are merged in registration order — later contributions append to the same field.
+ * Multi-call kinds (commands/interceptors/turnExecutors/jobs/bus/lifecycle) accumulate.
+ *
+ * This is the canonical lowering used by both `extension(...)` (builder) and
+ * `defineExtension({...})`. As later commits migrate the runtime to consume
+ * `Contribution[]` directly, this helper shrinks; once the registry is contribution-native
+ * (Commit 12), the helper goes away with the legacy `ExtensionSetup` shape.
+ */
+interface LoweredBuckets {
+  tools: AnyToolDefinition[]
+  agents: AgentDefinition[]
+  interceptors: ExtensionInterceptorDescriptor[]
+  commands: CommandContribution[]
+  promptSections: PromptSectionInput[]
+  permissionRules: PermissionRule[]
+  providers: ProviderContribution[]
+  turnExecutors: TurnExecutorContribution[]
+  jobs: ScheduledJobContribution[]
+  busSubscriptions: BusSubscriptionEntry[]
+  startupEffects: Array<Effect.Effect<void>>
+  shutdownEffects: Array<Effect.Effect<void>>
+  actor: AnyExtensionActorDefinition | undefined
+  layer: Layer.Layer<never, never, object> | undefined
+}
+
+const emptyBuckets = (): LoweredBuckets => ({
+  tools: [],
+  agents: [],
+  interceptors: [],
+  commands: [],
+  promptSections: [],
+  permissionRules: [],
+  providers: [],
+  turnExecutors: [],
+  jobs: [],
+  busSubscriptions: [],
+  startupEffects: [],
+  shutdownEffects: [],
+  actor: undefined,
+  layer: undefined,
+})
+
+const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
+  if (c._kind === "tool") b.tools.push(c.tool)
+  else if (c._kind === "agent") b.agents.push(c.agent)
+  else if (c._kind === "interceptor") b.interceptors.push(c.descriptor)
+  else if (c._kind === "command") b.commands.push(c.command)
+  else if (c._kind === "prompt-section") b.promptSections.push(c.section)
+  else if (c._kind === "permission-rule") b.permissionRules.push(c.rule)
+  else if (c._kind === "provider") b.providers.push(c.provider)
+  else if (c._kind === "turn-executor") b.turnExecutors.push(c.executor)
+  else if (c._kind === "job") b.jobs.push(c.job)
+  else if (c._kind === "bus-subscription")
+    b.busSubscriptions.push({ pattern: c.pattern, handler: c.handler })
+  else if (c._kind === "lifecycle") {
+    if (c.phase === "startup") b.startupEffects.push(c.effect)
+    else b.shutdownEffects.push(c.effect)
+  } else if (c._kind === "actor") b.actor = c.actor
+  else if (c._kind === "layer") b.layer = c.layer
+}
+
+const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
+  const onStartup = mergeEffectHooks(b.startupEffects)
+  const onShutdown = mergeEffectHooks(b.shutdownEffects)
+  return {
+    ...(b.tools.length > 0 ? { tools: b.tools } : {}),
+    ...(b.agents.length > 0 ? { agents: b.agents } : {}),
+    ...(b.commands.length > 0 ? { commands: b.commands } : {}),
+    ...(b.promptSections.length > 0 ? { promptSections: b.promptSections } : {}),
+    ...(b.interceptors.length > 0 ? { hooks: { interceptors: b.interceptors } } : {}),
+    ...(b.layer !== undefined ? { layer: b.layer } : {}),
+    ...(b.providers.length > 0 ? { providers: b.providers } : {}),
+    ...(b.turnExecutors.length > 0 ? { turnExecutors: b.turnExecutors } : {}),
+    ...(b.jobs.length > 0 ? { jobs: b.jobs } : {}),
+    ...(b.busSubscriptions.length > 0 ? { busSubscriptions: b.busSubscriptions } : {}),
+    ...(b.actor !== undefined ? { actor: b.actor } : {}),
+    ...(b.permissionRules.length > 0 ? { permissionRules: b.permissionRules } : {}),
+    onStartup,
+    onShutdown,
+  } satisfies ExtensionSetup
+}
+
+export const lowerContributions = (contributions: ReadonlyArray<Contribution>): ExtensionSetup => {
+  const buckets = emptyBuckets()
+  for (const c of contributions) placeContribution(buckets, c)
+  return bucketsToSetup(buckets)
+}
+
+/**
+ * Define an extension as a flat array of contributions.
+ *
+ * The canonical authoring shape — no fluent chain, no setup bag. The factory
+ * receives the setup context and returns a `Contribution[]` (or an Effect
+ * that yields one). Later scope wins per the registry's scope precedence rule.
+ *
+ * @example
+ * ```ts
+ * import { defineExtension, toolContribution, layerContribution } from "@gent/core/extensions/api"
+ *
+ * export const MyExt = defineExtension({
+ *   id: "my-ext",
+ *   contributions: ({ ctx }) => [
+ *     layerContribution(MyService.Live),
+ *     toolContribution(MyTool),
+ *   ],
+ * })
+ * ```
+ */
+export const defineExtension = (params: {
+  readonly id: string
+  readonly contributions: (args: {
+    readonly ctx: ExtensionSetupContext
+  }) => ReadonlyArray<Contribution> | Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>
+}): GentExtension => ({
+  manifest: { id: params.id },
+  setup: (ctx) =>
+    Effect.gen(function* () {
+      const result = params.contributions({ ctx })
+      const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
+      return lowerContributions(contribs)
+    }),
+})
+
 /** Effect-native shell exec via ChildProcess. Used by `ext.exec()` at setup time.
  *  Captures the spawner from setup context — no service requirement leaks. */
 const execEffect = (
@@ -524,25 +685,17 @@ export const extension = <P = never>(
   manifest: { id },
   setup: (ctx) =>
     Effect.gen(function* () {
-      let _tools: AnyToolDefinition[] | undefined
-      let _agents: AgentDefinition[] | undefined
-      const _commands: CommandContribution[] = []
-      let _promptSections: PromptSectionInput[] | undefined
-      const _interceptors: ExtensionInterceptorDescriptor[] = []
-      const _startupEffects: Array<Effect.Effect<void>> = []
-      const _shutdownEffects: Array<Effect.Effect<void>> = []
-      let _provider: ProviderContribution | undefined
-      let _jobs: ScheduledJobContribution[] | undefined
-      let _permissionRules: PermissionRule[] | undefined
-      const _busSubscriptions: BusSubscriptionEntry[] = []
-      const _turnExecutors: TurnExecutorContribution[] = []
-      let _layer: Layer.Layer<never, never, object> | undefined
-      let _actorResult: AnyExtensionActorDefinition | undefined
+      // Builder lowers into a flat Contribution[] — single source of truth.
+      // Single-call kinds (tools/agents/promptSections/permissionRules/layer/actor/provider/jobs)
+      // are guarded by name; multi-call kinds accumulate.
+      const _contributions: Contribution[] = []
+      const _calledOnce = new Set<string>()
 
-      const guardSingle = (name: string, current: unknown) => {
-        if (current !== undefined) {
+      const guardSingle = (name: string) => {
+        if (_calledOnce.has(name)) {
           throw new Error(`extension "${id}": ${name}() can only be called once`)
         }
+        _calledOnce.add(name)
       }
 
       const extensionStorage = createExtensionStorage(
@@ -552,111 +705,112 @@ export const extension = <P = never>(
         ctx.path,
       )
 
-      const registerCommand = (
-        name: string,
-        options: {
-          description?: string
-          handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
-        },
-      ) => _commands.push({ name, description: options.description, handler: options.handler })
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const builder: ExtensionBuilder<any> = {
         storage: extensionStorage,
 
         tools: (...defs) => {
-          guardSingle("tools", _tools)
-          _tools = []
+          guardSingle("tools")
           for (const def of defs) {
-            if (isFullToolDef(def)) {
-              _tools.push(def)
-            } else {
-              _tools.push(convertSimpleTool(def as SimpleToolDef))
-            }
+            const t = isFullToolDef(def) ? def : convertSimpleTool(def as SimpleToolDef)
+            _contributions.push({ _kind: "tool", tool: t })
           }
           return builder
         },
 
         agents: (...defs) => {
-          guardSingle("agents", _agents)
-          _agents = []
+          guardSingle("agents")
           for (const def of defs) {
-            if (AgentDefinitionBrand in def || "_tag" in def) {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              _agents.push(def as AgentDefinition)
-            } else {
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              _agents.push(convertSimpleAgent(def as SimpleAgentDef))
-            }
+            const a =
+              AgentDefinitionBrand in def || "_tag" in def
+                ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                  (def as AgentDefinition)
+                : // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                  convertSimpleAgent(def as SimpleAgentDef)
+            _contributions.push({ _kind: "agent", agent: a })
           }
           return builder
         },
 
         turnExecutor: (id, executor) => {
-          _turnExecutors.push({ id, executor })
+          _contributions.push({ _kind: "turn-executor", executor: { id, executor } })
           return builder
         },
 
         command: (name, options) => {
-          registerCommand(name, options)
+          _contributions.push({
+            _kind: "command",
+            command: { name, description: options.description, handler: options.handler },
+          })
           return builder
         },
 
         promptSections: (...sections) => {
-          guardSingle("promptSections", _promptSections)
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          _promptSections = sections.map((s) => s as PromptSectionInput)
+          guardSingle("promptSections")
+          for (const s of sections) {
+            _contributions.push({
+              _kind: "prompt-section",
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              section: s as PromptSectionInput,
+            })
+          }
           return builder
         },
 
         permissionRules: (...rules) => {
-          guardSingle("permissionRules", _permissionRules)
-          _permissionRules = [...rules]
+          guardSingle("permissionRules")
+          for (const r of rules) _contributions.push({ _kind: "permission-rule", rule: r })
           return builder
         },
 
         on: <K extends ExtensionInterceptorKey>(key: K, handler: ExtensionInterceptorMap[K]) => {
-          _interceptors.push(defineInterceptor(key, handler))
+          _contributions.push({
+            _kind: "interceptor",
+            descriptor: defineInterceptor(key, handler),
+          })
           return builder
         },
 
         exec: (command, args, options) => execEffect(ctx.spawner, ctx.cwd, command, args, options),
 
         onStartup: (effect) => {
-          _startupEffects.push(effect)
+          _contributions.push({ _kind: "lifecycle", phase: "startup", effect })
           return builder
         },
         onShutdown: (effect) => {
-          _shutdownEffects.push(effect)
+          _contributions.push({ _kind: "lifecycle", phase: "shutdown", effect })
           return builder
         },
 
         // Full-power methods
 
-        actor: (actor) => {
-          guardSingle("actor", _actorResult)
-          _actorResult = actor
+        actor: (a) => {
+          guardSingle("actor")
+          _contributions.push({ _kind: "actor", actor: a })
           return builder
         },
 
         layer: (l) => {
-          guardSingle("layer", _layer)
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          _layer = l as Layer.Layer<never, never, object>
+          guardSingle("layer")
+          _contributions.push({
+            _kind: "layer",
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            layer: l as Layer.Layer<never, never, object>,
+          })
           return builder
         },
         provider: (p) => {
-          guardSingle("provider", _provider)
-          _provider = p
+          guardSingle("provider")
+          _contributions.push({ _kind: "provider", provider: p })
           return builder
         },
         jobs: (...entries) => {
-          guardSingle("jobs", _jobs)
-          _jobs = [...entries]
+          guardSingle("jobs")
+          for (const j of entries) _contributions.push({ _kind: "job", job: j })
           return builder
         },
         bus: (pattern, handler) => {
-          _busSubscriptions.push({ pattern, handler })
+          _contributions.push({ _kind: "bus-subscription", pattern, handler })
           return builder
         },
       }
@@ -668,27 +822,6 @@ export const extension = <P = never>(
         catch: (e) => new ExtensionLoadError(id, `Extension factory failed: ${String(e)}`, e),
       })
 
-      const onStartup = mergeEffectHooks(_startupEffects)
-      const onShutdown = mergeEffectHooks(_shutdownEffects)
-      return {
-        ...(_tools !== undefined && _tools.length > 0 ? { tools: _tools } : {}),
-        ...(_agents !== undefined && _agents.length > 0 ? { agents: _agents } : {}),
-        ...(_commands.length > 0 ? { commands: _commands } : {}),
-        ...(_promptSections !== undefined && _promptSections.length > 0
-          ? { promptSections: _promptSections }
-          : {}),
-        ...(_interceptors.length > 0 ? { hooks: { interceptors: _interceptors } } : {}),
-        ...(_layer !== undefined ? { layer: _layer } : {}),
-        ...(_provider !== undefined ? { providers: [_provider] } : {}),
-        ...(_turnExecutors.length > 0 ? { turnExecutors: _turnExecutors } : {}),
-        ...(_jobs !== undefined && _jobs.length > 0 ? { jobs: _jobs } : {}),
-        ...(_busSubscriptions.length > 0 ? { busSubscriptions: _busSubscriptions } : {}),
-        ...(_actorResult !== undefined ? { actor: _actorResult } : {}),
-        ...(_permissionRules !== undefined && _permissionRules.length > 0
-          ? { permissionRules: _permissionRules }
-          : {}),
-        onStartup,
-        onShutdown,
-      } satisfies ExtensionSetup
+      return lowerContributions(_contributions)
     }),
 })
