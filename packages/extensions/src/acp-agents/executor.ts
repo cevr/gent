@@ -20,6 +20,7 @@ import type { AcpAgentConfig } from "./config.js"
 import type { AcpConnection } from "./protocol.js"
 import { AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
+import type { CodemodeConfig } from "./mcp-codemode.js"
 
 // ── Session Manager Interface (Batch 3 provides implementation) ──
 
@@ -33,7 +34,7 @@ export interface AcpSessionManager {
     gentSessionId: string,
     config: AcpAgentConfig,
     cwd: string,
-    mcpUrl?: string,
+    codemodeConfig?: CodemodeConfig,
   ) => Effect.Effect<AcpManagedSession, AcpError>
   readonly get: (gentSessionId: string) => AcpManagedSession | undefined
   readonly disposeAll: () => Effect.Effect<void>
@@ -119,8 +120,23 @@ export const makeAcpTurnExecutor = (
 ): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
+      // Capture current Effect context so the codemode proxy can run tool Effects
+      // from Promise-land (MCP handler is async, not Effect).
+      // The actual context has all services; tool.execute erases Deps to `any`
+      // via AnyToolDefinition, so we need the type escape hatch.
+      const services = yield* Effect.context<never>()
+      const run = Effect.runPromiseWith(services)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      const runEffect: CodemodeConfig["runEffect"] = (eff: any) => run(eff as Effect.Effect<any>)
+
+      const codemodeConfig: CodemodeConfig = {
+        tools: ctx.tools,
+        hostCtx: ctx.hostCtx,
+        runEffect,
+      }
+
       const session = yield* manager
-        .getOrCreate(ctx.sessionId, config, ctx.cwd)
+        .getOrCreate(ctx.sessionId, config, ctx.cwd, codemodeConfig)
         .pipe(Effect.mapError((e) => new TurnError({ message: e.message })))
 
       // Signal for when the prompt completes
