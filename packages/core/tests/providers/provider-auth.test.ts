@@ -4,13 +4,15 @@ import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore } from "@gent/core/domain/auth-store"
 import type { AuthApi } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
-import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 
 const pendingCallbacks = new Map<string, (code?: string) => string>()
 
-const oauthProvider: ProviderContribution = {
+const oauthProvider: ModelDriverContribution = {
   id: "openai",
   name: "OpenAI",
   resolveModel: () => ({}),
@@ -38,7 +40,7 @@ const oauthProvider: ProviderContribution = {
   },
 }
 
-const noopProvider: ProviderContribution = {
+const noopProvider: ModelDriverContribution = {
   id: "anthropic",
   name: "Anthropic",
   resolveModel: () => ({}),
@@ -47,22 +49,28 @@ const noopProvider: ProviderContribution = {
   },
 }
 
-const testRegistry = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "test" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { providers: [oauthProvider, noopProvider] },
-    } satisfies LoadedExtension,
-  ]),
-)
+const testResolved = resolveExtensions([
+  {
+    manifest: { id: "test" },
+    kind: "builtin",
+    sourcePath: "test",
+    setup: { modelDrivers: [oauthProvider, noopProvider] },
+  } satisfies LoadedExtension,
+])
+const testRegistry = ExtensionRegistry.fromResolved(testResolved)
+const testDriverRegistry = DriverRegistry.fromResolved({
+  modelDrivers: testResolved.modelDrivers,
+  externalDrivers: testResolved.externalDrivers,
+})
 
 describe("ProviderAuth", () => {
   it("extension authorize + callback stores credentials", async () => {
     pendingCallbacks.clear()
     const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const layer = Layer.provideMerge(ProviderAuth.Test(), Layer.merge(authStoreLayer, testRegistry))
+    const layer = Layer.provideMerge(
+      ProviderAuth.Test(),
+      Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+    )
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -86,7 +94,10 @@ describe("ProviderAuth", () => {
 
   it("listMethods returns methods from extension providers", async () => {
     const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
-    const layer = Layer.provideMerge(ProviderAuth.Test(), Layer.merge(authStoreLayer, testRegistry))
+    const layer = Layer.provideMerge(
+      ProviderAuth.Test(),
+      Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
+    )
 
     const methods = await Effect.runPromise(
       Effect.gen(function* () {

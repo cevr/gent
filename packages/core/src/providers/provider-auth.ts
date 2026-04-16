@@ -2,8 +2,11 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
 import { AuthAuthorization } from "../domain/auth-method.js"
 import type { AuthMethod } from "../domain/auth-method.js"
-import type { PersistAuth } from "../domain/extension.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
+import type { PersistAuth } from "../domain/driver.js"
+import {
+  DriverRegistry,
+  type DriverRegistryService,
+} from "../runtime/extensions/driver-registry.js"
 
 export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
   "ProviderAuthError",
@@ -32,26 +35,26 @@ export interface ProviderAuthService {
 export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/providers/provider-auth/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, AuthStore | ExtensionRegistry> = Layer.effect(
+  static Live: Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry> = Layer.effect(
     ProviderAuth,
     Effect.gen(function* () {
-      const extensionRegistry = yield* ExtensionRegistry
-      return yield* makeProviderAuth(extensionRegistry)
+      const driverRegistry = yield* DriverRegistry
+      return yield* makeProviderAuth(driverRegistry)
     }),
   )
 
-  static Test = (): Layer.Layer<ProviderAuth, never, AuthStore | ExtensionRegistry> =>
+  static Test = (): Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry> =>
     Layer.effect(
       ProviderAuth,
       Effect.gen(function* () {
-        const extensionRegistry = yield* ExtensionRegistry
-        return yield* makeProviderAuth(extensionRegistry)
+        const driverRegistry = yield* DriverRegistry
+        return yield* makeProviderAuth(driverRegistry)
       }),
     )
 }
 
 const makeProviderAuth = (
-  extensionRegistry: ExtensionRegistryService,
+  driverRegistry: DriverRegistryService,
 ): Effect.Effect<ProviderAuthService, never, AuthStore> =>
   Effect.gen(function* () {
     const authStore = yield* AuthStore
@@ -81,7 +84,7 @@ const makeProviderAuth = (
 
     const listMethods = Effect.fn("ProviderAuth.listMethods")(function* () {
       const result: Record<string, ReadonlyArray<typeof AuthMethod.Type>> = {}
-      const registeredProviders = yield* extensionRegistry.listProviders()
+      const registeredProviders = yield* driverRegistry.listModels()
       for (const provider of registeredProviders) {
         if (provider.auth !== undefined && provider.auth.methods.length > 0) {
           result[provider.id] = provider.auth.methods
@@ -95,7 +98,7 @@ const makeProviderAuth = (
       provider: string,
       method: number,
     ) {
-      const extProvider = yield* extensionRegistry.getProvider(provider)
+      const extProvider = yield* driverRegistry.getModel(provider)
       if (extProvider?.auth?.authorize === undefined) {
         return yield* new ProviderAuthError({
           message: `Provider "${provider}" does not support authorize`,
@@ -135,7 +138,7 @@ const makeProviderAuth = (
       authorizationId: string,
       code?: string,
     ) {
-      const extProvider = yield* extensionRegistry.getProvider(provider)
+      const extProvider = yield* driverRegistry.getModel(provider)
       if (extProvider?.auth?.callback === undefined) {
         // No callback handler — auth completed during authorize (e.g. "done" method)
         return

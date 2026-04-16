@@ -1,16 +1,13 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import type {
-  ExtensionHooks,
-  LoadedExtension,
-  ProviderContribution,
-  RunContext,
-} from "@gent/core/domain/extension"
+import type { ExtensionHooks, LoadedExtension, RunContext } from "@gent/core/domain/extension"
+import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { PromptSectionInput } from "@gent/core/domain/prompt"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 
 const makeTool = (name: string): AnyToolDefinition => ({
   name,
@@ -22,7 +19,7 @@ const makeTool = (name: string): AnyToolDefinition => ({
 const makeAgent = (name: string, options?: ConstructorParameters<typeof AgentDefinition>[0]) =>
   new AgentDefinition({ name: name as never, ...options })
 
-const makeProvider = (providerId: string, name?: string): ProviderContribution => ({
+const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
   name: name ?? providerId,
   resolveModel: (modelName) => ({ modelId: `${providerId}/${modelName}` }),
@@ -35,7 +32,7 @@ const makeExt = (
     tools?: AnyToolDefinition[]
     agents?: AgentDefinition[]
     hooks?: ExtensionHooks
-    providers?: ProviderContribution[]
+    modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSectionInput[]
   },
 ): LoadedExtension => ({
@@ -46,7 +43,7 @@ const makeExt = (
     tools: opts?.tools,
     agents: opts?.agents,
     hooks: opts?.hooks,
-    providers: opts?.providers,
+    modelDrivers: opts?.modelDrivers,
     promptSections: opts?.promptSections,
   },
 })
@@ -112,19 +109,21 @@ describe("resolveExtensions", () => {
 
   test("collects providers from extensions", () => {
     const resolved = resolveExtensions([
-      makeExt("a", "builtin", { providers: [makeProvider("anthropic"), makeProvider("openai")] }),
+      makeExt("a", "builtin", {
+        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
+      }),
     ])
-    expect(resolved.providers.size).toBe(2)
-    expect(resolved.providers.has("anthropic")).toBe(true)
-    expect(resolved.providers.has("openai")).toBe(true)
+    expect(resolved.modelDrivers.size).toBe(2)
+    expect(resolved.modelDrivers.has("anthropic")).toBe(true)
+    expect(resolved.modelDrivers.has("openai")).toBe(true)
   })
 
   test("later scope wins for same-id provider", () => {
     const resolved = resolveExtensions([
-      makeExt("a", "builtin", { providers: [makeProvider("anthropic", "Builtin Anthropic")] }),
-      makeExt("b", "project", { providers: [makeProvider("anthropic", "Custom Anthropic")] }),
+      makeExt("a", "builtin", { modelDrivers: [makeProvider("anthropic", "Builtin Anthropic")] }),
+      makeExt("b", "project", { modelDrivers: [makeProvider("anthropic", "Custom Anthropic")] }),
     ])
-    expect(resolved.providers.get("anthropic")?.name).toBe("Custom Anthropic")
+    expect(resolved.modelDrivers.get("anthropic")?.name).toBe("Custom Anthropic")
   })
 
   test("merges scheduled job failures into extension statuses", () => {
@@ -221,14 +220,14 @@ describe("resolveExtensions — disabled filtering", () => {
   test("disabled extensions providers are excluded", () => {
     const disabledSet = new Set(["@gent/openai"])
     const extensions = [
-      makeExt("@gent/anthropic", "builtin", { providers: [makeProvider("anthropic")] }),
-      makeExt("@gent/openai", "builtin", { providers: [makeProvider("openai")] }),
+      makeExt("@gent/anthropic", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
+      makeExt("@gent/openai", "builtin", { modelDrivers: [makeProvider("openai")] }),
     ]
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
     const resolved = resolveExtensions(enabled)
 
-    expect(resolved.providers.has("anthropic")).toBe(true)
-    expect(resolved.providers.has("openai")).toBe(false)
+    expect(resolved.modelDrivers.has("anthropic")).toBe(true)
+    expect(resolved.modelDrivers.has("openai")).toBe(false)
   })
 
   test("multiple disabled extensions are all excluded", () => {
@@ -238,7 +237,7 @@ describe("resolveExtensions — disabled filtering", () => {
       makeExt("@gent/agents", "builtin", {
         agents: [makeAgent("cowork", { model: "anthropic/claude-opus-4-6" as never })],
       }),
-      makeExt("@gent/openai", "builtin", { providers: [makeProvider("openai")] }),
+      makeExt("@gent/openai", "builtin", { modelDrivers: [makeProvider("openai")] }),
       makeExt("@gent/fs-tools", "builtin", { tools: [makeTool("read")] }),
     ]
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
@@ -247,7 +246,7 @@ describe("resolveExtensions — disabled filtering", () => {
     expect(resolved.tools.size).toBe(1)
     expect(resolved.tools.has("read")).toBe(true)
     expect(resolved.agents.size).toBe(0)
-    expect(resolved.providers.size).toBe(0)
+    expect(resolved.modelDrivers.size).toBe(0)
   })
 })
 
@@ -260,6 +259,23 @@ describe("ExtensionRegistry", () => {
     return ManagedRuntime.make(ExtensionRegistry.fromResolved(resolved)).runPromise(
       Effect.gen(function* () {
         return yield* ExtensionRegistry
+      }),
+    )
+  }
+
+  const buildDriverRegistry = (
+    extensions: LoadedExtension[],
+    failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
+  ) => {
+    const resolved = resolveExtensions(extensions, failedExtensions)
+    return ManagedRuntime.make(
+      DriverRegistry.fromResolved({
+        modelDrivers: resolved.modelDrivers,
+        externalDrivers: resolved.externalDrivers,
+      }),
+    ).runPromise(
+      Effect.gen(function* () {
+        return yield* DriverRegistry
       }),
     )
   }
@@ -434,44 +450,50 @@ describe("ExtensionRegistry", () => {
     expect(tools.map((t) => t.name)).not.toContain("secret")
   })
 
-  test("registered provider is findable by ID", async () => {
-    const registry = await buildRegistry([
-      makeExt("a", "builtin", { providers: [makeProvider("anthropic")] }),
+  test("registered model driver is findable by ID", async () => {
+    const registry = await buildDriverRegistry([
+      makeExt("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
     ])
-    const provider = await Effect.runPromise(registry.getProvider("anthropic"))
+    const provider = await Effect.runPromise(registry.getModel("anthropic"))
     expect(provider?.id).toBe("anthropic")
   })
 
-  test("unregistered provider ID returns undefined", async () => {
-    const registry = await buildRegistry([])
-    const provider = await Effect.runPromise(registry.getProvider("nonexistent"))
+  test("unregistered model driver ID returns undefined", async () => {
+    const registry = await buildDriverRegistry([])
+    const provider = await Effect.runPromise(registry.getModel("nonexistent"))
     expect(provider).toBeUndefined()
   })
 
-  test("lists all registered providers", async () => {
-    const registry = await buildRegistry([
+  test("lists all registered model drivers", async () => {
+    const registry = await buildDriverRegistry([
       makeExt("a", "builtin", {
-        providers: [makeProvider("anthropic"), makeProvider("openai")],
+        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
       }),
     ])
-    const providers = await Effect.runPromise(registry.listProviders())
+    const providers = await Effect.runPromise(registry.listModels())
     expect(providers.length).toBe(2)
   })
 
   test("test layer starts with empty registry", async () => {
-    const registry = await ManagedRuntime.make(ExtensionRegistry.Test()).runPromise(
+    const layer = Layer.merge(
+      ExtensionRegistry.Test(),
+      DriverRegistry.fromResolved({ modelDrivers: new Map(), externalDrivers: new Map() }),
+    )
+    const registries = await ManagedRuntime.make(layer).runPromise(
       Effect.gen(function* () {
-        return yield* ExtensionRegistry
+        const ext = yield* ExtensionRegistry
+        const driver = yield* DriverRegistry
+        return { ext, driver }
       }),
     )
 
-    const tools = await Effect.runPromise(registry.listTools())
+    const tools = await Effect.runPromise(registries.ext.listTools())
     expect(tools.length).toBe(0)
 
-    const agents = await Effect.runPromise(registry.listAgents())
+    const agents = await Effect.runPromise(registries.ext.listAgents())
     expect(agents.length).toBe(0)
 
-    const providers = await Effect.runPromise(registry.listProviders())
+    const providers = await Effect.runPromise(registries.driver.listModels())
     expect(providers.length).toBe(0)
   })
 

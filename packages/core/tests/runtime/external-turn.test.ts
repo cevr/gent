@@ -9,13 +9,14 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Provider, FinishChunk } from "@gent/core/providers/provider"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { AgentDefinition, ExternalExecution } from "@gent/core/domain/agent"
+import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/turn-executor"
 import { TurnError } from "@gent/core/domain/turn-executor"
 import type { AgentEvent } from "@gent/core/domain/event"
@@ -62,23 +63,30 @@ const makeFailingExecutor = (message: string): TurnExecutor => ({
 
 const externalAgent = new AgentDefinition({
   name: "test-external" as never,
-  execution: new ExternalExecution({ runnerId: "test-runner" }),
+  driver: new ExternalDriverRef({ id: "test-runner" }),
 })
 
-const makeExtRegistry = (executor: TurnExecutor) =>
-  ExtensionRegistry.fromResolved(
-    resolveExtensions([
-      {
-        manifest: { id: "test-ext" },
-        kind: "builtin" as const,
-        sourcePath: "test",
-        setup: {
-          agents: [externalAgent],
-          turnExecutors: [{ id: "test-runner", executor }],
-        },
+const makeResolved = (executor: TurnExecutor) =>
+  resolveExtensions([
+    {
+      manifest: { id: "test-ext" },
+      kind: "builtin" as const,
+      sourcePath: "test",
+      setup: {
+        agents: [externalAgent],
+        externalDrivers: [{ id: "test-runner", executor }],
       },
-    ]),
-  )
+    },
+  ])
+
+const makeExtRegistry = (executor: TurnExecutor) =>
+  ExtensionRegistry.fromResolved(makeResolved(executor))
+
+const makeDriverRegistry = (executor: TurnExecutor) =>
+  DriverRegistry.fromResolved({
+    modelDrivers: makeResolved(executor).modelDrivers,
+    externalDrivers: makeResolved(executor).externalDrivers,
+  })
 
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
@@ -112,6 +120,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(executor),
+    makeDriverRegistry(executor),
     ExtensionStateRuntime.Test(),
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
@@ -279,19 +288,22 @@ describe("external turn execution", () => {
       generate: () => Effect.succeed("test"),
     })
 
+    const agentsResolved = resolveExtensions([
+      {
+        manifest: { id: "agents" },
+        kind: "builtin" as const,
+        sourcePath: "test",
+        setup: { agents: Object.values(Agents) },
+      },
+    ])
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
       providerLayer,
-      ExtensionRegistry.fromResolved(
-        resolveExtensions([
-          {
-            manifest: { id: "agents" },
-            kind: "builtin" as const,
-            sourcePath: "test",
-            setup: { agents: Object.values(Agents) },
-          },
-        ]),
-      ),
+      ExtensionRegistry.fromResolved(agentsResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: agentsResolved.modelDrivers,
+        externalDrivers: agentsResolved.externalDrivers,
+      }),
       ExtensionStateRuntime.Test(),
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),

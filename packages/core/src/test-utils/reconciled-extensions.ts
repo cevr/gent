@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import type { FailedExtension, LoadedExtension } from "../domain/extension.js"
 import { reconcileLoadedExtensions } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 
 const reconcileTestExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -23,6 +24,14 @@ export const testExtensionRegistryLayer = (
 ) =>
   Layer.unwrap(
     reconcileTestExtensions(extensions, failedExtensions, home).pipe(
-      Effect.map(ExtensionRegistry.fromResolved),
+      Effect.map((resolved) =>
+        Layer.merge(
+          ExtensionRegistry.fromResolved(resolved),
+          DriverRegistry.fromResolved({
+            modelDrivers: resolved.modelDrivers,
+            externalDrivers: resolved.externalDrivers,
+          }),
+        ),
+      ),
     ),
   ).pipe(Layer.provide(BunServices.layer))

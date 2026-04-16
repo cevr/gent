@@ -1,12 +1,13 @@
 /**
- * TurnExecutor primitive — unit tests.
+ * ExternalDriver primitive — unit tests.
  *
- * Covers: registry compilation, getTurnExecutor resolution,
- * duplicate ID handling, and TurnEvent schema roundtrip.
+ * Covers: registry compilation, getExternalExecutor resolution,
+ * duplicate ID handling.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Stream } from "effect"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type {
   TurnError,
@@ -29,34 +30,34 @@ const echoExecutor: TurnExecutor = {
 
 const makeExt = (
   id: string,
-  turnExecutors?: Array<{ id: string; executor: TurnExecutor }>,
+  externalDrivers?: Array<{ id: string; executor: TurnExecutor }>,
 ): LoadedExtension => ({
   manifest: { id },
   kind: "builtin" as const,
   sourcePath: `/test/${id}`,
   setup: {
-    turnExecutors,
+    externalDrivers,
   },
 })
 
-describe("TurnExecutor registry", () => {
-  test("compiles turn executors from extensions", () => {
+describe("ExternalDriver registry", () => {
+  test("compiles external drivers from extensions", () => {
     const resolved = resolveExtensions([
       makeExt("ext-a", [{ id: "acp-claude-code", executor: noopExecutor }]),
       makeExt("ext-b", [{ id: "acp-opencode", executor: echoExecutor }]),
     ])
 
-    expect(resolved.turnExecutors.size).toBe(2)
-    expect(resolved.turnExecutors.has("acp-claude-code")).toBe(true)
-    expect(resolved.turnExecutors.has("acp-opencode")).toBe(true)
+    expect(resolved.externalDrivers.size).toBe(2)
+    expect(resolved.externalDrivers.has("acp-claude-code")).toBe(true)
+    expect(resolved.externalDrivers.has("acp-opencode")).toBe(true)
   })
 
-  test("empty extensions produce empty turn executor map", () => {
+  test("empty extensions produce empty external driver map", () => {
     const resolved = resolveExtensions([])
-    expect(resolved.turnExecutors.size).toBe(0)
+    expect(resolved.externalDrivers.size).toBe(0)
   })
 
-  test("single extension with multiple executors", () => {
+  test("single extension with multiple drivers", () => {
     const resolved = resolveExtensions([
       makeExt("ext-multi", [
         { id: "exec-a", executor: noopExecutor },
@@ -64,46 +65,51 @@ describe("TurnExecutor registry", () => {
       ]),
     ])
 
-    expect(resolved.turnExecutors.size).toBe(2)
-    expect(resolved.turnExecutors.get("exec-a")).toBe(noopExecutor)
-    expect(resolved.turnExecutors.get("exec-b")).toBe(echoExecutor)
+    expect(resolved.externalDrivers.size).toBe(2)
+    expect(resolved.externalDrivers.get("exec-a")?.executor).toBe(noopExecutor)
+    expect(resolved.externalDrivers.get("exec-b")?.executor).toBe(echoExecutor)
   })
 
-  test("later scope wins for same-ID executor", () => {
+  test("later scope wins for same-ID driver", () => {
     const resolved = resolveExtensions([
       makeExt("ext-first", [{ id: "shared-id", executor: noopExecutor }]),
       makeExt("ext-second", [{ id: "shared-id", executor: echoExecutor }]),
     ])
 
-    expect(resolved.turnExecutors.size).toBe(1)
-    expect(resolved.turnExecutors.get("shared-id")).toBe(echoExecutor)
+    expect(resolved.externalDrivers.size).toBe(1)
+    expect(resolved.externalDrivers.get("shared-id")?.executor).toBe(echoExecutor)
   })
 
-  test("getTurnExecutor resolves from registry service", async () => {
+  test("getExternalExecutor resolves from driver registry service", async () => {
     const resolved = resolveExtensions([
       makeExt("ext-a", [{ id: "test-executor", executor: echoExecutor }]),
     ])
-    const registryLayer = ExtensionRegistry.fromResolved(resolved)
+    const registryLayer = DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    })
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const registry = yield* ExtensionRegistry
-        const executor = yield* registry.getTurnExecutor("test-executor")
-        return executor
+        const registry = yield* DriverRegistry
+        return yield* registry.getExternalExecutor("test-executor")
       }).pipe(Effect.provide(registryLayer)),
     )
 
     expect(result).toBe(echoExecutor)
   })
 
-  test("getTurnExecutor returns undefined for missing ID", async () => {
+  test("getExternalExecutor returns undefined for missing ID", async () => {
     const resolved = resolveExtensions([makeExt("ext-a", [])])
-    const registryLayer = ExtensionRegistry.fromResolved(resolved)
+    const registryLayer = DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    })
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const registry = yield* ExtensionRegistry
-        return yield* registry.getTurnExecutor("nonexistent")
+        const registry = yield* DriverRegistry
+        return yield* registry.getExternalExecutor("nonexistent")
       }).pipe(Effect.provide(registryLayer)),
     )
 

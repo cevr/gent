@@ -25,16 +25,26 @@ export type AgentPersistence = typeof AgentPersistence.Type
 export const AgentRole = Schema.Literals(["primary", "reviewer"])
 export type AgentRole = typeof AgentRole.Type
 
-// Agent execution strategy — model-backed (default) or external (TurnExecutor dispatch)
+// Agent driver — discriminated reference into `DriverRegistry`.
+//
+// Optional: when omitted, the loop resolves a model driver from the agent's
+// model id (`provider/model` parses out the driver id). Specify
+// `{ _tag: "external", id }` to route through an `ExternalDriverContribution`
+// (e.g. ACP agents) instead of a model provider.
 
-export class ModelExecution extends Schema.TaggedClass<ModelExecution>()("model", {}) {}
-
-export class ExternalExecution extends Schema.TaggedClass<ExternalExecution>()("external", {
-  runnerId: Schema.String,
+export class ModelDriverRef extends Schema.TaggedClass<ModelDriverRef>()("model", {
+  /** Optional model-driver id override. When omitted, the loop derives it from
+   *  the agent's model id segment. */
+  id: Schema.optional(Schema.String),
 }) {}
 
-export const AgentExecution = Schema.Union([ModelExecution, ExternalExecution])
-export type AgentExecution = typeof AgentExecution.Type
+export class ExternalDriverRef extends Schema.TaggedClass<ExternalDriverRef>()("external", {
+  /** External driver id — must match a registered `ExternalDriverContribution.id`. */
+  id: Schema.String,
+}) {}
+
+export const DriverRef = Schema.Union([ModelDriverRef, ExternalDriverRef])
+export type DriverRef = typeof DriverRef.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName
@@ -53,7 +63,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   reasoningEffort: Schema.optional(ReasoningEffort),
   persistence: Schema.optional(AgentPersistence),
   role: Schema.optional(AgentRole),
-  execution: Schema.optional(AgentExecution),
+  driver: Schema.optional(DriverRef),
 }) {}
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]

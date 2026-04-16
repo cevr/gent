@@ -4,7 +4,7 @@ import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model, ModelId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
-import { ExtensionRegistry } from "./extensions/registry.js"
+import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
 const MODELS_URL = "https://models.dev"
@@ -77,7 +77,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     | FileSystem.FileSystem
     | Path.Path
     | RuntimePlatform
-    | ExtensionRegistry
+    | DriverRegistry
     | AuthStore
     | HttpClientService.HttpClient
   > = Layer.effect(
@@ -87,7 +87,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const path = yield* Path.Path
       const http = yield* HttpClient.HttpClient
       const runtimePlatform = yield* RuntimePlatform
-      const extensionRegistry = yield* ExtensionRegistry
+      const driverRegistry = yield* DriverRegistry
       const authStore = yield* AuthStore
       const homeOption = yield* Effect.gen(function* () {
         return yield* Config.option(Config.string("HOME"))
@@ -181,7 +181,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         )
 
       const applyFilters = (models: readonly Model[]) =>
-        extensionRegistry.filterProviderModels(models, resolveAuth).pipe(
+        driverRegistry.filterModelCatalog(models, resolveAuth).pipe(
           // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
           Effect.map((filtered) => filtered as readonly Model[]),
           Effect.catchEager(() => Effect.succeed(models)),

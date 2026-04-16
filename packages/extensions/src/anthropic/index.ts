@@ -1,9 +1,10 @@
 import { Clock, Effect, Layer, Redacted } from "effect"
 import {
-  extension,
+  defineExtension,
+  modelDriverContribution,
   AuthMethod,
+  type ModelDriverContribution,
   type ProviderAuthInfo,
-  type ProviderContribution,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
@@ -122,87 +123,90 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
   return config
 }
 
-export const AnthropicExtension = extension("@gent/provider-anthropic", ({ ext }) => {
-  const env: AnthropicKeychainEnv = {
-    betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
-    cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
-    userAgent: readEnv("ANTHROPIC_USER_AGENT"),
-  }
-  initAnthropicKeychainEnv(env)
+export const AnthropicExtension = defineExtension({
+  id: "@gent/provider-anthropic",
+  contributions: () => {
+    const env: AnthropicKeychainEnv = {
+      betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
+      cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
+      userAgent: readEnv("ANTHROPIC_USER_AGENT"),
+    }
+    initAnthropicKeychainEnv(env)
 
-  // Credential cache owned by this extension closure
-  const credentialCache: CredentialCache = { creds: null, at: 0 }
+    // Credential cache owned by this extension closure
+    const credentialCache: CredentialCache = { creds: null, at: 0 }
 
-  const anthropicProvider: ProviderContribution = {
-    id: "anthropic",
-    name: "Anthropic",
-    resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-      // Precedence: stored API key > env API key > keychain/OAuth
-      const storedApiKey =
-        authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-      const envApiKey = readEnv("ANTHROPIC_API_KEY")
-      const apiKey = storedApiKey ?? envApiKey
+    const anthropicProvider: ModelDriverContribution = {
+      id: "anthropic",
+      name: "Anthropic",
+      resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+        // Precedence: stored API key > env API key > keychain/OAuth
+        const storedApiKey =
+          authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+        const envApiKey = readEnv("ANTHROPIC_API_KEY")
+        const apiKey = storedApiKey ?? envApiKey
 
-      const config = buildAnthropicConfig(hints)
+        const config = buildAnthropicConfig(hints)
 
-      if (apiKey !== undefined) {
-        const clientLayer = AnthropicClient.layer({
-          apiKey: Redacted.make(apiKey),
-        }).pipe(Layer.provide(FetchHttpClient.layer))
+        if (apiKey !== undefined) {
+          const clientLayer = AnthropicClient.layer({
+            apiKey: Redacted.make(apiKey),
+          }).pipe(Layer.provide(FetchHttpClient.layer))
+          const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
+            Layer.provide(clientLayer),
+          )
+          return { layer: modelLayer }
+        }
+
+        // Fall back to keychain/OAuth with extension-owned credential cache.
+        // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
+        // system identity injection, and cache control at the structured payload level.
+        // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
+        const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
+        const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
+
+        const customFetchLayer = Layer.succeed(
+          FetchHttpClient.Fetch,
+          keychainFetch as typeof globalThis.fetch,
+        )
+        const baseClientLayer = AnthropicClient.layer({
+          apiKey: Redacted.make("oauth-placeholder"),
+        }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
+        // Wrap the base client with keychain transforms (mcp_, identity, cache control)
+        const wrappedClientLayer = keychainClient.pipe(Layer.provide(baseClientLayer))
         const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-          Layer.provide(clientLayer),
+          Layer.provide(wrappedClientLayer),
         )
         return { layer: modelLayer }
-      }
+      },
+      auth: {
+        methods: [
+          new AuthMethod({ type: "oauth", label: "Claude Code" }),
+          new AuthMethod({ type: "api", label: "Manually enter API key" }),
+        ],
+        authorize: (ctx) =>
+          Effect.gen(function* () {
+            if (ctx.methodIndex !== 0) return undefined
+            let creds = yield* readClaudeCodeCredentials()
+            if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
+              yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
+              creds = yield* readClaudeCodeCredentials()
+            }
+            // Persist keychain creds to AuthStore
+            yield* ctx.persist({
+              type: "oauth",
+              access: creds.accessToken,
+              refresh: creds.refreshToken,
+              expires: creds.expiresAt,
+            })
+            return {
+              url: "" as string,
+              method: "done" as const,
+            }
+          }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+      },
+    }
 
-      // Fall back to keychain/OAuth with extension-owned credential cache.
-      // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
-      // system identity injection, and cache control at the structured payload level.
-      // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
-      const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
-      const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
-
-      const customFetchLayer = Layer.succeed(
-        FetchHttpClient.Fetch,
-        keychainFetch as typeof globalThis.fetch,
-      )
-      const baseClientLayer = AnthropicClient.layer({
-        apiKey: Redacted.make("oauth-placeholder"),
-      }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
-      // Wrap the base client with keychain transforms (mcp_, identity, cache control)
-      const wrappedClientLayer = keychainClient.pipe(Layer.provide(baseClientLayer))
-      const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(wrappedClientLayer),
-      )
-      return { layer: modelLayer }
-    },
-    auth: {
-      methods: [
-        new AuthMethod({ type: "oauth", label: "Claude Code" }),
-        new AuthMethod({ type: "api", label: "Manually enter API key" }),
-      ],
-      authorize: (ctx) =>
-        Effect.gen(function* () {
-          if (ctx.methodIndex !== 0) return undefined
-          let creds = yield* readClaudeCodeCredentials()
-          if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
-            yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-            creds = yield* readClaudeCodeCredentials()
-          }
-          // Persist keychain creds to AuthStore
-          yield* ctx.persist({
-            type: "oauth",
-            access: creds.accessToken,
-            refresh: creds.refreshToken,
-            expires: creds.expiresAt,
-          })
-          return {
-            url: "" as string,
-            method: "done" as const,
-          }
-        }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-    },
-  }
-
-  return ext.provider(anthropicProvider)
+    return [modelDriverContribution(anthropicProvider)]
+  },
 })

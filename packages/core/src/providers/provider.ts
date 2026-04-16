@@ -3,8 +3,11 @@ import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
-import type { ProviderAuthInfo, ProviderHints } from "../domain/extension.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry"
+import type { ProviderAuthInfo, ProviderHints } from "../domain/driver.js"
+import {
+  DriverRegistry,
+  type DriverRegistryService,
+} from "../runtime/extensions/driver-registry.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type * as Response from "effect/unstable/ai/Response"
@@ -14,7 +17,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 
 // ── Provider Resolution ──
 
-export type { ProviderResolution } from "../domain/provider-contribution.js"
+export type { ProviderResolution } from "../domain/driver.js"
 
 // ── Provider Info ──
 
@@ -32,10 +35,7 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
 
 // ── Model Resolver ──
 
-const makeModelResolver = (
-  authStore: AuthStoreService,
-  extensionRegistry: ExtensionRegistryService,
-) => {
+const makeModelResolver = (authStore: AuthStoreService, driverRegistry: DriverRegistryService) => {
   const resolveAuthFromStore = (providerName: string) =>
     authStore
       .get(providerName)
@@ -51,7 +51,7 @@ const makeModelResolver = (
     }
     const [providerName, modelName] = parsed
 
-    const extensionProvider = yield* extensionRegistry.getProvider(providerName)
+    const extensionProvider = yield* driverRegistry.getModel(providerName)
     if (extensionProvider === undefined) {
       return yield* new ProviderError({
         message: `Unknown provider: ${providerName}`,
@@ -329,11 +329,11 @@ export const toStreamChunk =
 export class Provider extends Context.Service<Provider, ProviderService>()(
   "@gent/core/src/providers/provider",
 ) {
-  static Live: Layer.Layer<Provider, never, AuthStore | ExtensionRegistry> = Layer.effect(
+  static Live: Layer.Layer<Provider, never, AuthStore | DriverRegistry> = Layer.effect(
     Provider,
     Effect.gen(function* () {
       const authStore = yield* AuthStore
-      const registry = yield* ExtensionRegistry
+      const registry = yield* DriverRegistry
       const getModel = makeModelResolver(authStore, registry)
 
       return {

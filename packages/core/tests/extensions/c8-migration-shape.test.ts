@@ -11,7 +11,7 @@
  *
  * Coverage:
  *  - `MemoryExtension`     — workflow + projection + tools + agents + layer + jobs
- *  - `AcpAgentsExtension`  — agents + turnExecutors + onShutdown
+ *  - `AcpAgentsExtension`  — agents + externalDrivers + onShutdown
  *  - `HandoffExtension`    — workflow + tool + interceptor (turn.after)
  *  - `AutoExtension`       — workflow (with transitional snapshot/turn) + tool +
  *                            two interceptors + layer
@@ -43,15 +43,15 @@ describe("C8 migration shape", () => {
     }),
   )
 
-  it.live("AcpAgentsExtension lowers into agents + turnExecutors + onShutdown", () =>
+  it.live("AcpAgentsExtension lowers into agents + externalDrivers + onShutdown", () =>
     Effect.gen(function* () {
       const setup = yield* AcpAgentsExtension.setup(testSetupCtx())
       // No actor — ACP "session manager" is a per-process resource cache.
       expect(setup.actor).toBeUndefined()
-      // Agents and turn executors come in matching pairs (one per ACP_AGENTS entry).
+      // Agents and external drivers come in matching pairs (one per ACP_AGENTS entry).
       expect((setup.agents?.length ?? 0) > 0).toBe(true)
-      expect((setup.turnExecutors?.length ?? 0) > 0).toBe(true)
-      expect(setup.agents?.length).toBe(setup.turnExecutors?.length)
+      expect((setup.externalDrivers?.length ?? 0) > 0).toBe(true)
+      expect(setup.agents?.length).toBe(setup.externalDrivers?.length)
       // Subprocess shutdown is registered as a finalizer.
       expect(setup.onShutdown).toBeDefined()
     }),

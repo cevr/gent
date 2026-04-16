@@ -6,6 +6,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -56,17 +57,23 @@ import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 // Shared helpers
 // ============================================================================
 
-const makeExtRegistry = (tools: AnyToolDefinition[] = []) =>
-  ExtensionRegistry.fromResolved(
-    resolveExtensions([
-      {
-        manifest: { id: "agents" },
-        kind: "builtin" as const,
-        sourcePath: "test",
-        setup: { agents: Object.values(Agents), tools },
-      },
-    ]),
+const makeExtRegistry = (tools: AnyToolDefinition[] = []) => {
+  const resolved = resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin" as const,
+      sourcePath: "test",
+      setup: { agents: Object.values(Agents), tools },
+    },
+  ])
+  return Layer.merge(
+    ExtensionRegistry.fromResolved(resolved),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    }),
   )
+}
 
 const makeMessage = (sessionId: string, branchId: string, text: string) =>
   new Message({
@@ -1468,18 +1475,23 @@ describe("recovery", () => {
       Layer.provide(BunServices.layer),
     )
     const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-    const extensionLayer = ExtensionRegistry.fromResolved(
-      resolveExtensions([
-        {
-          manifest: { id: "test-recovery" },
-          kind: "builtin",
-          sourcePath: "test",
-          setup: {
-            agents: Object.values(Agents),
-            tools: [idempotentTestTool],
-          },
+    const recoveryResolved = resolveExtensions([
+      {
+        manifest: { id: "test-recovery" },
+        kind: "builtin",
+        sourcePath: "test",
+        setup: {
+          agents: Object.values(Agents),
+          tools: [idempotentTestTool],
         },
-      ]),
+      },
+    ])
+    const extensionLayer = Layer.merge(
+      ExtensionRegistry.fromResolved(recoveryResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: recoveryResolved.modelDrivers,
+        externalDrivers: recoveryResolved.externalDrivers,
+      }),
     )
     const providerLayer = Layer.succeed(Provider, {
       stream: () =>

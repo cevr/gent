@@ -358,20 +358,17 @@ export interface CommandContribution {
   readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
 }
 
-// Turn Executor Contribution — re-exported from dedicated file
-export type {
-  TurnExecutor,
-  TurnExecutorContribution,
-  TurnContext,
-  TurnEvent,
-  TurnError,
-} from "./turn-executor.js"
-import type { TurnExecutorContribution } from "./turn-executor.js"
+// Turn executor types — still defined in turn-executor.ts (the executor shape
+// is model-independent and used by external drivers).
+export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./turn-executor.js"
 
-// Provider Contribution — re-exported from dedicated file
+// Driver auth + hint shared types — re-exported from dedicated file
+//
+// Lives in driver.ts now (was provider-contribution.ts pre-C9). Re-exported
+// here so existing internal consumers keep their import paths through
+// `domain/extension.js`.
 
 export type {
-  ProviderContribution,
   ProviderAuthInfo,
   ProviderHints,
   PersistAuth,
@@ -379,8 +376,8 @@ export type {
   ProviderCallbackContext,
   ProviderAuthContribution,
   ProviderAuthorizationResult,
-} from "./provider-contribution.js"
-import type { ProviderContribution } from "./provider-contribution.js"
+} from "./driver.js"
+import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 
 export interface ScheduledJobHeadlessAgentTarget {
   readonly kind: "headless-agent"
@@ -409,10 +406,10 @@ export interface ExtensionSetup {
   readonly actor?: AnyExtensionActorDefinition
   /** Slash commands contributed by this extension. */
   readonly commands?: ReadonlyArray<CommandContribution>
-  /** Provider contributions — register AI provider implementations */
-  readonly providers?: ReadonlyArray<ProviderContribution>
-  /** Turn executor contributions — external agent execution strategies */
-  readonly turnExecutors?: ReadonlyArray<TurnExecutorContribution>
+  /** Model driver contributions — register an LLM provider as a driver. */
+  readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
+  /** External driver contributions — register a `TurnExecutor`-shaped runner. */
+  readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
   /** Permission deny/allow rules contributed by this extension. */

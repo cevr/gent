@@ -1,7 +1,7 @@
 import { describe, it, test, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
-import { type LoadedExtension, type ProviderContribution } from "@gent/core/domain/extension"
-import type { ProviderResolution } from "@gent/core/domain/provider-contribution"
+import { type LoadedExtension } from "@gent/core/domain/extension"
+import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
 import { extension } from "@gent/core/extensions/api"
 import {
   validateExtensions,
@@ -22,7 +22,7 @@ const makeLoaded = (
   opts: {
     toolNames?: string[]
     agentNames?: string[]
-    providers?: ReadonlyArray<ProviderContribution>
+    modelDrivers?: ReadonlyArray<ModelDriverContribution>
     promptSections?: ReadonlyArray<PromptSection>
   } = {},
 ): LoadedExtension => ({
@@ -45,7 +45,7 @@ const makeLoaded = (
               }) as never,
           )
         : undefined,
-    providers: opts.providers,
+    modelDrivers: opts.modelDrivers,
     promptSections: opts.promptSections,
   },
 })
@@ -101,10 +101,10 @@ describe("validateExtensions", () => {
   it.live("fails on same-id provider from two extensions in same scope", () => {
     const exts = [
       makeLoaded("ext-a", "user", {
-        providers: [{ id: "my-provider", name: "P1", resolveModel: () => stubResolution }],
+        modelDrivers: [{ id: "my-provider", name: "P1", resolveModel: () => stubResolution }],
       }),
       makeLoaded("ext-b", "user", {
-        providers: [{ id: "my-provider", name: "P2", resolveModel: () => stubResolution }],
+        modelDrivers: [{ id: "my-provider", name: "P2", resolveModel: () => stubResolution }],
       }),
     ]
     return validateExtensions(exts).pipe(
@@ -116,10 +116,10 @@ describe("validateExtensions", () => {
   it.live("allows same-id provider in different scopes", () => {
     const exts = [
       makeLoaded("ext-a", "builtin", {
-        providers: [{ id: "my-provider", name: "P1", resolveModel: () => stubResolution }],
+        modelDrivers: [{ id: "my-provider", name: "P1", resolveModel: () => stubResolution }],
       }),
       makeLoaded("ext-b", "project", {
-        providers: [{ id: "my-provider", name: "P2", resolveModel: () => stubResolution }],
+        modelDrivers: [{ id: "my-provider", name: "P2", resolveModel: () => stubResolution }],
       }),
     ]
     return validateExtensions(exts)

@@ -79,6 +79,7 @@ import { hasMessage } from "../../domain/guards.js"
 import { withRetry } from "../retry"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
 import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
@@ -341,7 +342,7 @@ const resolveTurnContext = (params: {
       modelId: params.executionOverrides?.modelId ?? resolveAgentModel(effectiveAgent),
       reasoning: resolveReasoning(effectiveAgent, session?.reasoningLevel),
       temperature: effectiveAgent.temperature,
-      execution: effectiveAgent.execution,
+      driver: effectiveAgent.driver,
     }
   })
 
@@ -639,7 +640,7 @@ export const resolveTurnPhase = (params: {
       agent: resolved.agent,
       ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-      ...(resolved.execution !== undefined ? { execution: resolved.execution } : {}),
+      ...(resolved.driver !== undefined ? { driver: resolved.driver } : {}),
     } satisfies ResolvedTurn
   })
 
@@ -666,13 +667,14 @@ const runTurnBeforeHook = (
     .pipe(Effect.catchEager(() => Effect.void))
 
 /**
- * Attempt to dispatch a turn to an external TurnExecutor.
- * Returns undefined if the agent uses model execution (caller should fall through to streamTurnPhase).
+ * Attempt to dispatch a turn to an external driver (TurnExecutor).
+ * Returns undefined if the agent's driver is model-shaped or unset (caller falls through to streamTurnPhase).
  * Returns { interrupted, streamFailed } if the external turn was handled.
  */
 const dispatchExternalTurn = (params: {
   resolved: ResolvedTurn
   extensionRegistry: ExtensionRegistryService
+  driverRegistry: DriverRegistryService
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
@@ -687,16 +689,16 @@ const dispatchExternalTurn = (params: {
 }) =>
   Effect.gen(function* () {
     const { resolved } = params
-    if (resolved.execution?._tag !== "external" || resolved.agent === undefined) return undefined
+    if (resolved.driver?._tag !== "external" || resolved.agent === undefined) return undefined
 
-    const executor = yield* params.extensionRegistry.getTurnExecutor(resolved.execution.runnerId)
+    const executor = yield* params.driverRegistry.getExternalExecutor(resolved.driver.id)
     if (executor === undefined) {
       yield* params
         .publishEvent(
           new ErrorOccurred({
             sessionId: params.sessionId,
             branchId: params.branchId,
-            error: `Turn executor "${resolved.execution.runnerId}" not found`,
+            error: `External driver "${resolved.driver.id}" not found`,
           }),
         )
         .pipe(Effect.orDie)
@@ -763,10 +765,8 @@ export const collectExternalTurn = (params: {
     yield* Effect.logInfo("external-turn.start").pipe(
       Effect.annotateLogs({
         agent: params.resolved.currentTurnAgent,
-        runnerId:
-          params.resolved.execution?._tag === "external"
-            ? params.resolved.execution.runnerId
-            : "unknown",
+        driverId:
+          params.resolved.driver?._tag === "external" ? params.resolved.driver.id : "unknown",
       }),
     )
 
@@ -1633,6 +1633,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | CheckpointStorage
     | Provider
     | ExtensionRegistry
+    | DriverRegistry
     | ExtensionStateRuntime
     | ExtensionTurnControl
     | EventPublisher
@@ -1645,6 +1646,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const checkpointStorage = yield* CheckpointStorage
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
+        const driverRegistry = yield* DriverRegistry
         const extensionStateRuntime = yield* ExtensionStateRuntime
         const extensionTurnControl = yield* ExtensionTurnControl
         const eventPublisher = yield* EventPublisher
@@ -1760,6 +1762,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 )
                 return {
                   turnExtensionRegistry: profile.registryService,
+                  turnDriverRegistry: profile.driverRegistryService,
                   turnExtensionStateRuntime: profile.extensionStateRuntime,
                   turnBaseSections: profile.baseSections,
                   turnHostCtx,
@@ -1768,6 +1771,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
               return {
                 turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
+                turnDriverRegistry: driverRegistry as DriverRegistryService,
                 turnExtensionStateRuntime: extensionStateRuntime as ExtensionStateRuntimeService,
                 turnBaseSections: config.baseSections,
                 turnHostCtx: defaultHostCtx,
@@ -1826,6 +1830,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               // Resolve per-turn profile (session cwd → extension registry + baseSections)
               const {
                 turnExtensionRegistry,
+                turnDriverRegistry,
                 turnExtensionStateRuntime,
                 turnBaseSections,
                 turnHostCtx,
@@ -1959,6 +1964,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 const externalResult = yield* dispatchExternalTurn({
                   resolved,
                   extensionRegistry: turnExtensionRegistry,
+                  driverRegistry: turnDriverRegistry,
                   publishEvent: publishEventOrDie,
                   sessionId,
                   branchId,

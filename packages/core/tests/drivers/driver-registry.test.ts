@@ -1,0 +1,167 @@
+/**
+ * DriverRegistry — unit tests for the unified driver lookup.
+ *
+ * Covers both kinds (model + external) under one registry, scope precedence
+ * across kinds, requireModel/requireExternal failure, and filterModelCatalog
+ * composition. Pinned at this seam because every agent turn dispatches through
+ * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence or
+ * the require* fallthrough silently breaks per-cwd extension resolution.
+ */
+import { describe, test, expect } from "bun:test"
+import { Effect, Layer, Stream } from "effect"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
+import type { TurnError, TurnEvent, TurnExecutor } from "@gent/core/domain/turn-executor"
+
+const stubResolution = (): ProviderResolution => ({ layer: Layer.empty as never })
+
+const makeModel = (id: string, name?: string): ModelDriverContribution => ({
+  id,
+  name: name ?? id,
+  resolveModel: stubResolution,
+})
+
+const makeExecutor = (label: string): TurnExecutor => ({
+  executeTurn: () =>
+    Stream.fromIterable<TurnEvent, TurnError>([
+      { _tag: "text-delta", text: label },
+      { _tag: "finished", stopReason: "stop" },
+    ]),
+})
+
+const makeExt = (
+  id: string,
+  kind: "builtin" | "user" | "project",
+  setup: LoadedExtension["setup"],
+): LoadedExtension => ({
+  manifest: { id },
+  kind,
+  sourcePath: `/test/${id}`,
+  setup,
+})
+
+const buildRegistry = (extensions: ReadonlyArray<LoadedExtension>) => {
+  const resolved = resolveExtensions(extensions)
+  return DriverRegistry.fromResolved({
+    modelDrivers: resolved.modelDrivers,
+    externalDrivers: resolved.externalDrivers,
+  })
+}
+
+describe("DriverRegistry", () => {
+  test("getModel resolves a registered model driver", async () => {
+    const layer = buildRegistry([
+      makeExt("anthropic-ext", "builtin", { modelDrivers: [makeModel("anthropic")] }),
+    ])
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.getModel("anthropic")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result?.id).toBe("anthropic")
+  })
+
+  test("getExternal resolves a registered external driver", async () => {
+    const exec = makeExecutor("hello")
+    const layer = buildRegistry([
+      makeExt("acp-ext", "builtin", {
+        externalDrivers: [{ id: "acp-claude-code", executor: exec }],
+      }),
+    ])
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.getExternal("acp-claude-code")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result?.id).toBe("acp-claude-code")
+    expect(result?.executor).toBe(exec)
+  })
+
+  test("project scope shadows builtin for same model driver id", async () => {
+    const layer = buildRegistry([
+      makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
+      makeExt("ext-project", "project", { modelDrivers: [makeModel("openai", "Project")] }),
+    ])
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.getModel("openai")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result?.name).toBe("Project")
+  })
+
+  test("project scope shadows builtin for same external driver id", async () => {
+    const builtinExec = makeExecutor("builtin")
+    const projectExec = makeExecutor("project")
+    const layer = buildRegistry([
+      makeExt("ext-builtin", "builtin", {
+        externalDrivers: [{ id: "shared", executor: builtinExec }],
+      }),
+      makeExt("ext-project", "project", {
+        externalDrivers: [{ id: "shared", executor: projectExec }],
+      }),
+    ])
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.getExternalExecutor("shared")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result).toBe(projectExec)
+  })
+
+  test("requireModel fails with DriverError when missing", async () => {
+    const layer = buildRegistry([])
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.requireModel("nonexistent")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result._tag).toBe("Failure")
+  })
+
+  test("requireExternal fails with DriverError when missing", async () => {
+    const layer = buildRegistry([])
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.requireExternal("missing")
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result._tag).toBe("Failure")
+  })
+
+  test("filterModelCatalog composes every driver's listModels filter", async () => {
+    const dropper: ModelDriverContribution = {
+      id: "dropper",
+      name: "Dropper",
+      resolveModel: stubResolution,
+      listModels: (catalog) => catalog.filter((m) => (m as { keep?: boolean }).keep === true),
+    }
+    const adder: ModelDriverContribution = {
+      id: "adder",
+      name: "Adder",
+      resolveModel: stubResolution,
+      listModels: (catalog) => [...catalog, { id: "added", keep: true }],
+    }
+    const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [dropper, adder] })])
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.filterModelCatalog([{ id: "kept", keep: true }, { id: "dropped" }])
+      }).pipe(Effect.provide(layer)),
+    )
+
+    // dropper removes the unkept entry; adder appends one — two remain
+    expect(result.length).toBe(2)
+    expect(result.some((m) => (m as { id: string }).id === "added")).toBe(true)
+    expect(result.some((m) => (m as { id: string }).id === "dropped")).toBe(false)
+  })
+})

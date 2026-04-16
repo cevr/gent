@@ -45,6 +45,7 @@ import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { Provider } from "../../providers/provider.js"
 import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
@@ -466,6 +467,10 @@ const buildEphemeralLayer = (params: {
 
   // Registry (forwarded from parent — read-only resolved data)
   const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
+  const driverRegistryLayer = DriverRegistry.fromResolved({
+    modelDrivers: resolved.modelDrivers,
+    externalDrivers: resolved.externalDrivers,
+  })
 
   // Event publisher on ephemeral storage — must include bus so extension subscriptions fire.
   // RuntimePlatform comes from the parent context (forwarded via parentLayer); EventPublisherLive
@@ -499,6 +504,7 @@ const buildEphemeralLayer = (params: {
     eventStoreLayer,
     eventPublisherLayer,
     registryLayer,
+    driverRegistryLayer,
     extensionStateRuntimeLayer,
     extensionTurnControlLayer,
     extensionEventBusLayer,

@@ -32,6 +32,7 @@ import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -154,7 +155,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Auth
       const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
       const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
-      const authDeps = Layer.merge(authStoreLive, extensionRegistryLive)
+      const driverRegistryLive = DriverRegistry.fromResolved({
+        modelDrivers: resolved.modelDrivers,
+        externalDrivers: resolved.externalDrivers,
+      })
+      const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
       const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
       const extensionRuntimeLive = ExtensionStateRuntime.Live(resolved.extensions).pipe(
@@ -167,6 +172,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         storageLayer,
         config.providerLayer,
         extensionRegistryLive,
+        driverRegistryLive,
         extensionRuntimeLive,
         Permission.Test(),
         ApprovalService.Test(),

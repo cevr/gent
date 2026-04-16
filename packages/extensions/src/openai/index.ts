@@ -1,10 +1,11 @@
 import { Effect, Layer, Redacted } from "effect"
 import {
-  extension,
+  defineExtension,
+  modelDriverContribution,
   AuthOauth,
   AuthMethod,
+  type ModelDriverContribution,
   type ProviderAuthInfo,
-  type ProviderContribution,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
@@ -89,120 +90,123 @@ const buildOpenAiConfig = (hints?: ProviderHints) => {
   return config
 }
 
-export const OpenAIExtension = extension("@gent/provider-openai", ({ ext }) => {
-  // Pending OAuth callbacks keyed by authorizationId (closure state)
-  const pendingCallbacks = new Map<string, OAuthCallback>()
-  const openaiProvider: ProviderContribution = {
-    id: "openai",
-    name: "OpenAI",
-    resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-      const config = buildOpenAiConfig(hints)
+export const OpenAIExtension = defineExtension({
+  id: "@gent/provider-openai",
+  contributions: () => {
+    // Pending OAuth callbacks keyed by authorizationId (closure state)
+    const pendingCallbacks = new Map<string, OAuthCallback>()
+    const openaiProvider: ModelDriverContribution = {
+      id: "openai",
+      name: "OpenAI",
+      resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+        const config = buildOpenAiConfig(hints)
 
-      // Stored OAuth — handle inline with token refresh
-      // Uses openai-compat (Chat Completions) since the Codex endpoint expects that format
-      if (authInfo?.type === "oauth") {
-        if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
-          throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
+        // Stored OAuth — handle inline with token refresh
+        // Uses openai-compat (Chat Completions) since the Codex endpoint expects that format
+        if (authInfo?.type === "oauth") {
+          if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+            throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
+          }
+          const loadAuth = buildOAuthLoader(authInfo)
+          const oauthFetch = createOpenAIOAuthFetch(loadAuth)
+
+          // Provide custom fetch via FetchHttpClient.Fetch layer
+          const customFetchLayer = Layer.succeed(
+            FetchHttpClient.Fetch,
+            oauthFetch as typeof globalThis.fetch,
+          )
+          const clientLayer = OpenAiClient.layer({
+            apiKey: Redacted.make("oauth"),
+          }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
+          const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+            Layer.provide(clientLayer),
+          )
+          return { layer: modelLayer }
         }
-        const loadAuth = buildOAuthLoader(authInfo)
-        const oauthFetch = createOpenAIOAuthFetch(loadAuth)
 
-        // Provide custom fetch via FetchHttpClient.Fetch layer
-        const customFetchLayer = Layer.succeed(
-          FetchHttpClient.Fetch,
-          oauthFetch as typeof globalThis.fetch,
-        )
-        const clientLayer = OpenAiClient.layer({
-          apiKey: Redacted.make("oauth"),
-        }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
+        // Stored API key takes precedence over env var
+        const storedApiKey =
+          authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+        const envApiKey = readEnv("OPENAI_API_KEY")
+        const apiKey = storedApiKey ?? envApiKey
+
+        if (apiKey !== undefined) {
+          const clientLayer = OpenAiClient.layer({
+            apiKey: Redacted.make(apiKey),
+          }).pipe(Layer.provide(FetchHttpClient.layer))
+          const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+            Layer.provide(clientLayer),
+          )
+          return { layer: modelLayer }
+        }
+
+        // No auth available — try unauthenticated (will fail at API call time)
+        const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
         const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
           Layer.provide(clientLayer),
         )
         return { layer: modelLayer }
-      }
-
-      // Stored API key takes precedence over env var
-      const storedApiKey =
-        authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-      const envApiKey = readEnv("OPENAI_API_KEY")
-      const apiKey = storedApiKey ?? envApiKey
-
-      if (apiKey !== undefined) {
-        const clientLayer = OpenAiClient.layer({
-          apiKey: Redacted.make(apiKey),
-        }).pipe(Layer.provide(FetchHttpClient.layer))
-        const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-          Layer.provide(clientLayer),
-        )
-        return { layer: modelLayer }
-      }
-
-      // No auth available — try unauthenticated (will fail at API call time)
-      const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
-      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(clientLayer),
-      )
-      return { layer: modelLayer }
-    },
-    listModels: (baseCatalog, authInfo) => {
-      // When OAuth is active, filter to allowed models + zero pricing
-      if (authInfo?.type !== "oauth") return baseCatalog
-      return baseCatalog
-        .filter((model) => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          const m = model as { provider?: string; id?: string }
-          if (m.provider !== "openai") return true
-          const parts = String(m.id ?? "").split("/", 2)
-          const modelName = parts[1]
-          return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
-        })
-        .map((model) => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          const m = model as { provider?: string; pricing?: unknown }
-          if (m.provider !== "openai") return model
-          return { ...m, pricing: { input: 0, output: 0 } }
-        })
-    },
-    auth: {
-      methods: [
-        new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
-        new AuthMethod({ type: "api", label: "Manually enter API key" }),
-      ],
-      authorize: (ctx) =>
-        Effect.tryPromise({
-          try: async () => {
-            if (ctx.methodIndex !== 0) return undefined
-            const { authorization, callback: cb } = await authorizeOpenAI()
-            pendingCallbacks.set(ctx.authorizationId, cb)
-            return authorization
-          },
-          catch: (e) => ({
-            _tag: "OpenAIOAuthError" as const,
-            cause: e,
-          }),
-        }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-      callback: (ctx) =>
-        Effect.gen(function* () {
-          const cb = pendingCallbacks.get(ctx.authorizationId)
-          pendingCallbacks.delete(ctx.authorizationId)
-          if (cb === undefined) return
-          const result = yield* Effect.tryPromise({
-            try: () => cb(ctx.code),
+      },
+      listModels: (baseCatalog, authInfo) => {
+        // When OAuth is active, filter to allowed models + zero pricing
+        if (authInfo?.type !== "oauth") return baseCatalog
+        return baseCatalog
+          .filter((model) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            const m = model as { provider?: string; id?: string }
+            if (m.provider !== "openai") return true
+            const parts = String(m.id ?? "").split("/", 2)
+            const modelName = parts[1]
+            return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+          })
+          .map((model) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            const m = model as { provider?: string; pricing?: unknown }
+            if (m.provider !== "openai") return model
+            return { ...m, pricing: { input: 0, output: 0 } }
+          })
+      },
+      auth: {
+        methods: [
+          new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
+          new AuthMethod({ type: "api", label: "Manually enter API key" }),
+        ],
+        authorize: (ctx) =>
+          Effect.tryPromise({
+            try: async () => {
+              if (ctx.methodIndex !== 0) return undefined
+              const { authorization, callback: cb } = await authorizeOpenAI()
+              pendingCallbacks.set(ctx.authorizationId, cb)
+              return authorization
+            },
             catch: (e) => ({
-              _tag: "OpenAIOAuthCallbackError" as const,
+              _tag: "OpenAIOAuthError" as const,
               cause: e,
             }),
-          })
-          yield* ctx.persist({
-            type: "oauth",
-            access: result.access,
-            refresh: result.refresh,
-            expires: result.expires,
-            ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
-          })
-        }).pipe(Effect.catchEager(() => Effect.void)),
-    },
-  }
+          }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+        callback: (ctx) =>
+          Effect.gen(function* () {
+            const cb = pendingCallbacks.get(ctx.authorizationId)
+            pendingCallbacks.delete(ctx.authorizationId)
+            if (cb === undefined) return
+            const result = yield* Effect.tryPromise({
+              try: () => cb(ctx.code),
+              catch: (e) => ({
+                _tag: "OpenAIOAuthCallbackError" as const,
+                cause: e,
+              }),
+            })
+            yield* ctx.persist({
+              type: "oauth",
+              access: result.access,
+              refresh: result.refresh,
+              expires: result.expires,
+              ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
+            })
+          }).pipe(Effect.catchEager(() => Effect.void)),
+      },
+    }
 
-  return ext.provider(openaiProvider)
+    return [modelDriverContribution(openaiProvider)]
+  },
 })

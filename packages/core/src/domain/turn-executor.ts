@@ -74,16 +74,9 @@ export interface TurnContext {
   readonly hostCtx: ExtensionHostContext
 }
 
-// ── TurnExecutor — registered by extensions, dispatched by agent loop ──
+// ── TurnExecutor — implementation registered through `ExternalDriverContribution` ──
 
 export interface TurnExecutor {
   readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
   readonly cancel?: (sessionId: string) => Effect.Effect<void>
-}
-
-// ── TurnExecutor contribution — what ExtensionSetup carries ──
-
-export interface TurnExecutorContribution {
-  readonly id: string
-  readonly executor: TurnExecutor
 }

@@ -12,6 +12,7 @@
  */
 import type { Effect, Layer } from "effect"
 import type { AgentDefinition } from "./agent.js"
+import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type {
   AnyExtensionActorDefinition,
   CommandContribution,
@@ -22,10 +23,8 @@ import type { PermissionRule } from "./permission.js"
 import type { PromptSectionInput } from "./prompt.js"
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyProjectionContribution } from "./projection.js"
-import type { ProviderContribution } from "./provider-contribution.js"
 import type { AnyQueryContribution } from "./query.js"
 import type { AnyToolDefinition } from "./tool.js"
-import type { TurnExecutorContribution } from "./turn-executor.js"
 import type { AnyWorkflowContribution } from "./workflow.js"
 
 // ── Per-kind contribution shapes ──
@@ -60,14 +59,14 @@ export interface CommandKindContribution {
   readonly command: CommandContribution
 }
 
-export interface ProviderKindContribution {
-  readonly _kind: "provider"
-  readonly provider: ProviderContribution
+export interface ModelDriverKindContribution {
+  readonly _kind: "model-driver"
+  readonly driver: ModelDriverContribution
 }
 
-export interface TurnExecutorKindContribution {
-  readonly _kind: "turn-executor"
-  readonly executor: TurnExecutorContribution
+export interface ExternalDriverKindContribution {
+  readonly _kind: "external-driver"
+  readonly driver: ExternalDriverContribution
 }
 
 export interface JobContribution {
@@ -131,8 +130,8 @@ export type Contribution =
   | LayerContribution
   | ActorContribution
   | CommandKindContribution
-  | ProviderKindContribution
-  | TurnExecutorKindContribution
+  | ModelDriverKindContribution
+  | ExternalDriverKindContribution
   | JobContribution
   | PermissionRuleContribution
   | PromptSectionContribution
@@ -171,14 +170,14 @@ export const command = (c: CommandContribution): CommandKindContribution => ({
   command: c,
 })
 
-export const provider = (p: ProviderContribution): ProviderKindContribution => ({
-  _kind: "provider",
-  provider: p,
+export const modelDriver = (d: ModelDriverContribution): ModelDriverKindContribution => ({
+  _kind: "model-driver",
+  driver: d,
 })
 
-export const turnExecutor = (e: TurnExecutorContribution): TurnExecutorKindContribution => ({
-  _kind: "turn-executor",
-  executor: e,
+export const externalDriver = (d: ExternalDriverContribution): ExternalDriverKindContribution => ({
+  _kind: "external-driver",
+  driver: d,
 })
 
 export const job = (j: ScheduledJobContribution): JobContribution => ({ _kind: "job", job: j })

@@ -1,8 +1,9 @@
 import { Layer, Redacted } from "effect"
 import {
-  extension,
+  defineExtension,
+  modelDriverContribution,
   AuthMethod,
-  type ProviderContribution,
+  type ModelDriverContribution,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
@@ -23,30 +24,33 @@ const buildConfig = (hints?: ProviderHints) => {
   return config
 }
 
-export const GoogleExtension = extension("@gent/provider-google", ({ ext }) => {
-  const googleProvider: ProviderContribution = {
-    id: "google",
-    name: "Google",
-    resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-      const storedApiKey =
-        authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-      const envApiKey = readEnv("GOOGLE_GENERATIVE_AI_API_KEY")
-      const apiKey = storedApiKey ?? envApiKey
-      const config = buildConfig(hints)
+export const GoogleExtension = defineExtension({
+  id: "@gent/provider-google",
+  contributions: () => {
+    const googleProvider: ModelDriverContribution = {
+      id: "google",
+      name: "Google",
+      resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+        const storedApiKey =
+          authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+        const envApiKey = readEnv("GOOGLE_GENERATIVE_AI_API_KEY")
+        const apiKey = storedApiKey ?? envApiKey
+        const config = buildConfig(hints)
 
-      const clientLayer = OpenAiClient.layer({
-        ...(apiKey !== undefined ? { apiKey: Redacted.make(apiKey) } : {}),
-        apiUrl: GOOGLE_COMPAT_URL,
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(clientLayer),
-      )
-      return { layer: modelLayer }
-    },
-    auth: {
-      methods: [new AuthMethod({ type: "api", label: "Manually enter API key" })],
-    },
-  }
+        const clientLayer = OpenAiClient.layer({
+          ...(apiKey !== undefined ? { apiKey: Redacted.make(apiKey) } : {}),
+          apiUrl: GOOGLE_COMPAT_URL,
+        }).pipe(Layer.provide(FetchHttpClient.layer))
+        const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+          Layer.provide(clientLayer),
+        )
+        return { layer: modelLayer }
+      },
+      auth: {
+        methods: [new AuthMethod({ type: "api", label: "Manually enter API key" })],
+      },
+    }
 
-  return ext.provider(googleProvider)
+    return [modelDriverContribution(googleProvider)]
+  },
 })

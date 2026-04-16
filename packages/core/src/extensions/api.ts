@@ -39,7 +39,6 @@ import {
   type ExtensionInterceptorKey,
   type ExtensionInterceptorMap,
   type AnyExtensionActorDefinition,
-  type ProviderContribution,
   type ScheduledJobContribution,
   type CommandContribution,
   type ExtensionSetupContext,
@@ -51,7 +50,8 @@ import {
   type AnyToolDefinition,
 } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import type { TurnExecutorContribution } from "../domain/turn-executor.js"
+import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
+import type { TurnExecutor } from "../domain/turn-executor.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -81,9 +81,9 @@ export {
   AgentDefinitionBrand,
   AgentName,
   DEFAULT_AGENT_NAME,
-  ModelExecution,
-  ExternalExecution,
-  AgentExecution,
+  DriverRef,
+  ModelDriverRef,
+  ExternalDriverRef,
   AUDITOR_PROMPT,
   LIBRARIAN_PROMPT,
   ARCHITECT_PROMPT,
@@ -103,9 +103,6 @@ export {
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type TurnProjection,
-  type ProviderAuthInfo,
-  type ProviderHints,
-  type ProviderContribution,
   type ScheduledJobContribution,
   type CommandContribution,
   type ExtensionEffect,
@@ -139,12 +136,7 @@ export {
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
-export type {
-  TurnExecutor,
-  TurnExecutorContribution,
-  TurnContext,
-  TurnEvent,
-} from "../domain/turn-executor.js"
+export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/turn-executor.js"
 export {
   TurnError,
   TextDelta,
@@ -155,6 +147,20 @@ export {
   Finished as TurnFinished,
   TurnEventUsage,
 } from "../domain/turn-executor.js"
+export type {
+  AnyDriverContribution,
+  ExternalDriverContribution,
+  ModelDriverContribution,
+  ProviderAuthContribution,
+  ProviderAuthInfo,
+  ProviderAuthorizationResult,
+  ProviderAuthorizeContext,
+  ProviderCallbackContext,
+  ProviderHints,
+  ProviderResolution,
+  PersistAuth,
+} from "../domain/driver.js"
+export { DriverError } from "../domain/driver.js"
 export {
   AgentEvent,
   type Question,
@@ -191,7 +197,6 @@ export {
   type ExtensionPackage,
   type ExtensionInput,
 } from "../domain/extension-package.js"
-export type { ProviderResolution } from "../domain/provider-contribution.js"
 export {
   type Contribution,
   type ContributionKind,
@@ -201,8 +206,8 @@ export {
   type LayerContribution,
   type ActorContribution,
   type CommandKindContribution,
-  type ProviderKindContribution,
-  type TurnExecutorKindContribution,
+  type ModelDriverKindContribution,
+  type ExternalDriverKindContribution,
   type JobContribution,
   type PermissionRuleContribution,
   type PromptSectionContribution,
@@ -218,8 +223,8 @@ export {
   layer as layerContribution,
   actor as actorContribution,
   command as commandContribution,
-  provider as providerContribution,
-  turnExecutor as turnExecutorContribution,
+  modelDriver as modelDriverContribution,
+  externalDriver as externalDriverContribution,
   job as jobContribution,
   permissionRule as permissionRuleContribution,
   promptSection as promptSectionContribution,
@@ -469,11 +474,9 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   permissionRules(
     ...rules: ReadonlyArray<PermissionRule>
   ): Omit<ExtensionBuilder<Provides>, "permissionRules">
-  /** Register a turn executor for external agent dispatch. Multiple calls ok. */
-  turnExecutor(
-    id: string,
-    executor: TurnExecutorContribution["executor"],
-  ): ExtensionBuilder<Provides>
+  /** Register an external driver (turn executor) for external agent dispatch.
+   *  Multiple calls ok. */
+  externalDriver(id: string, executor: TurnExecutor): ExtensionBuilder<Provides>
   /** Register an Effect-native interceptor hook. Multiple calls ok. */
   on<K extends ExtensionInterceptorKey>(
     key: K,
@@ -502,8 +505,8 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   /** Provide a service Layer. Single call — compose with Layer.merge before passing. Widens Provides.
    *  Layers with unsatisfied requirements (R) are accepted — the runtime provides them (e.g. SqlClient). */
   layer<A, R>(layer: Layer.Layer<A, never, R>): Omit<ExtensionBuilder<Provides | A>, "layer">
-  /** Register an AI model provider. Single call. */
-  provider(provider: ProviderContribution): Omit<ExtensionBuilder<Provides>, "provider">
+  /** Register an AI model driver (provider). Single call. */
+  modelDriver(driver: ModelDriverContribution): Omit<ExtensionBuilder<Provides>, "modelDriver">
   /** Register durable host-owned scheduled jobs. Single call. */
   jobs(...jobs: ReadonlyArray<ScheduledJobContribution>): Omit<ExtensionBuilder<Provides>, "jobs">
   /** Subscribe to a bus channel. Effect-only handler. Multiple calls ok. */
@@ -559,8 +562,8 @@ interface LoweredBuckets {
   commands: CommandContribution[]
   promptSections: PromptSectionInput[]
   permissionRules: PermissionRule[]
-  providers: ProviderContribution[]
-  turnExecutors: TurnExecutorContribution[]
+  modelDrivers: ModelDriverContribution[]
+  externalDrivers: ExternalDriverContribution[]
   jobs: ScheduledJobContribution[]
   busSubscriptions: BusSubscriptionEntry[]
   projections: AnyProjectionContribution[]
@@ -579,8 +582,8 @@ const emptyBuckets = (): LoweredBuckets => ({
   commands: [],
   promptSections: [],
   permissionRules: [],
-  providers: [],
-  turnExecutors: [],
+  modelDrivers: [],
+  externalDrivers: [],
   jobs: [],
   busSubscriptions: [],
   projections: [],
@@ -612,11 +615,11 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
     case "permission-rule":
       b.permissionRules.push(c.rule)
       return
-    case "provider":
-      b.providers.push(c.provider)
+    case "model-driver":
+      b.modelDrivers.push(c.driver)
       return
-    case "turn-executor":
-      b.turnExecutors.push(c.executor)
+    case "external-driver":
+      b.externalDrivers.push(c.driver)
       return
     case "job":
       b.jobs.push(c.job)
@@ -706,8 +709,8 @@ const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
     ...(b.promptSections.length > 0 ? { promptSections: b.promptSections } : {}),
     ...(b.interceptors.length > 0 ? { hooks: { interceptors: b.interceptors } } : {}),
     ...(b.layer !== undefined ? { layer: b.layer } : {}),
-    ...(b.providers.length > 0 ? { providers: b.providers } : {}),
-    ...(b.turnExecutors.length > 0 ? { turnExecutors: b.turnExecutors } : {}),
+    ...(b.modelDrivers.length > 0 ? { modelDrivers: b.modelDrivers } : {}),
+    ...(b.externalDrivers.length > 0 ? { externalDrivers: b.externalDrivers } : {}),
     ...(b.jobs.length > 0 ? { jobs: b.jobs } : {}),
     ...(b.busSubscriptions.length > 0 ? { busSubscriptions: b.busSubscriptions } : {}),
     ...(b.projections.length > 0 ? { projections: b.projections } : {}),
@@ -883,8 +886,8 @@ export const extension = <P = never>(
           return builder
         },
 
-        turnExecutor: (id, executor) => {
-          _contributions.push({ _kind: "turn-executor", executor: { id, executor } })
+        externalDriver: (id, executor) => {
+          _contributions.push({ _kind: "external-driver", driver: { id, executor } })
           return builder
         },
 
@@ -950,9 +953,9 @@ export const extension = <P = never>(
           })
           return builder
         },
-        provider: (p) => {
-          guardSingle("provider")
-          _contributions.push({ _kind: "provider", provider: p })
+        modelDriver: (d) => {
+          guardSingle("modelDriver")
+          _contributions.push({ _kind: "model-driver", driver: d })
           return builder
         },
         jobs: (...entries) => {

@@ -334,9 +334,15 @@ export const validateExtensions = (
       ),
       checkScopedCollision(
         extensions,
-        (s) => s.providers,
-        (p) => p.id,
-        "provider",
+        (s) => s.modelDrivers,
+        (d) => d.id,
+        "model driver",
+      ),
+      checkScopedCollision(
+        extensions,
+        (s) => s.externalDrivers,
+        (d) => d.id,
+        "external driver",
       ),
       checkScopedCollision(
         extensions,

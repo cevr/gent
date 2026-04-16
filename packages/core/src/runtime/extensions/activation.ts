@@ -258,9 +258,14 @@ export const collectValidationFailures = (
     "agent",
   )
   collectScopedCollisions(
-    (setup) => setup.providers,
-    (provider) => provider.id,
-    "provider",
+    (setup) => setup.modelDrivers,
+    (driver) => driver.id,
+    "model driver",
+  )
+  collectScopedCollisions(
+    (setup) => setup.externalDrivers,
+    (driver) => driver.id,
+    "external driver",
   )
   collectScopedCollisions(
     (setup) => setup.promptSections,

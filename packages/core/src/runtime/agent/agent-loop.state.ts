@@ -6,7 +6,7 @@ import {
   AgentExecutionOverridesSchema,
   DEFAULT_AGENT_NAME,
   type AgentDefinition as AgentDefinitionType,
-  type AgentExecution,
+  type DriverRef,
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
@@ -198,7 +198,7 @@ export type ResolvedTurn = {
   temperature?: number
   tools?: ReadonlyArray<AnyToolDefinition>
   agent?: AgentDefinitionType
-  execution?: AgentExecution
+  driver?: DriverRef
 }
 
 // ── 3-State Machine ──

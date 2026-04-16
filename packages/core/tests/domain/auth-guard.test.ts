@@ -7,11 +7,13 @@ import { AuthGuard } from "@gent/core/domain/auth-guard"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { Effect, Layer } from "effect"
 
-const testProviders: ProviderContribution[] = [
+const testProviders: ModelDriverContribution[] = [
   { id: "anthropic", name: "Anthropic", resolveModel: () => ({}) },
   { id: "openai", name: "OpenAI", resolveModel: () => ({}) },
   { id: "bedrock", name: "AWS Bedrock", resolveModel: () => ({}) },
@@ -30,35 +32,45 @@ const testAgents = [
   }),
 ]
 
-const testRegistryLayer = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "test-providers" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: { providers: testProviders, agents: testAgents },
-    } satisfies LoadedExtension,
-  ]),
+const testResolved = resolveExtensions([
+  {
+    manifest: { id: "test-providers" },
+    kind: "builtin",
+    sourcePath: "test",
+    setup: { modelDrivers: testProviders, agents: testAgents },
+  } satisfies LoadedExtension,
+])
+const testRegistryLayer = Layer.merge(
+  ExtensionRegistry.fromResolved(testResolved),
+  DriverRegistry.fromResolved({
+    modelDrivers: testResolved.modelDrivers,
+    externalDrivers: testResolved.externalDrivers,
+  }),
 )
 
-const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(
-  resolveExtensions([
-    {
-      manifest: { id: "test-providers" },
-      kind: "builtin",
-      sourcePath: "test",
-      setup: {
-        providers: testProviders,
-        agents: [
-          ...testAgents,
-          new AgentDefinition({
-            name: "helper:google" as never,
-            model: "google/gemini-2.5-flash" as never,
-          }),
-        ],
-      },
-    } satisfies LoadedExtension,
-  ]),
+const helperResolved = resolveExtensions([
+  {
+    manifest: { id: "test-providers" },
+    kind: "builtin",
+    sourcePath: "test",
+    setup: {
+      modelDrivers: testProviders,
+      agents: [
+        ...testAgents,
+        new AgentDefinition({
+          name: "helper:google" as never,
+          model: "google/gemini-2.5-flash" as never,
+        }),
+      ],
+    },
+  } satisfies LoadedExtension,
+])
+const helperAgentRegistryLayer = Layer.merge(
+  ExtensionRegistry.fromResolved(helperResolved),
+  DriverRegistry.fromResolved({
+    modelDrivers: helperResolved.modelDrivers,
+    externalDrivers: helperResolved.externalDrivers,
+  }),
 )
 
 describe("AuthGuard", () => {

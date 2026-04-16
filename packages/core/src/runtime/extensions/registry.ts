@@ -1,15 +1,13 @@
 import { Context, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
+import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ModelId } from "../../domain/model.js"
-import type { TurnExecutor } from "../../domain/turn-executor.js"
 import type {
   CommandContribution,
   ExtensionStatusInfo,
   FailedExtension,
   TurnProjection,
   LoadedExtension,
-  ProviderAuthInfo,
-  ProviderContribution,
   RunContext,
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
@@ -31,8 +29,8 @@ import { SCOPE_PRECEDENCE } from "./disabled.js"
 export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
-  readonly providers: ReadonlyMap<string, ProviderContribution>
-  readonly turnExecutors: ReadonlyMap<string, TurnExecutor>
+  readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
+  readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSectionInput>
   readonly commands: ReadonlyArray<CommandContribution>
   readonly permissionRules: ReadonlyArray<PermissionRule>
@@ -86,22 +84,17 @@ export const resolveExtensions = (
     (s) => s.agents,
     (a) => a.name,
   )
-  const providers = compileContributions(
+  const modelDrivers = compileContributions(
     sorted,
-    (s) => s.providers,
-    (p) => p.id,
+    (s) => s.modelDrivers,
+    (d) => d.id,
   )
 
-  // Turn executors: keyed by id, later scope wins (same as tools/agents/providers)
-  const turnExecutorContribs = compileContributions(
+  const externalDrivers = compileContributions(
     sorted,
-    (s) => s.turnExecutors,
-    (te) => te.id,
+    (s) => s.externalDrivers,
+    (d) => d.id,
   )
-  const turnExecutors = new Map<string, TurnExecutor>()
-  for (const [id, contrib] of turnExecutorContribs) {
-    turnExecutors.set(id, contrib.executor)
-  }
 
   // Prompt sections: last scope wins by section id
   const promptSectionsMap = compileContributions(
@@ -147,8 +140,8 @@ export const resolveExtensions = (
   return {
     tools,
     agents,
-    providers,
-    turnExecutors,
+    modelDrivers,
+    externalDrivers,
     promptSections: promptSectionsMap,
     commands,
     permissionRules,
@@ -259,22 +252,9 @@ export interface ExtensionRegistryService {
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
 
-  // Provider resolution
-  readonly getProvider: (id: string) => Effect.Effect<ProviderContribution | undefined>
-  readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderContribution>>
-  /** Run base catalog through each provider's listModels filter.
-   *  resolveAuth is called per provider to get stored auth info. */
-  readonly filterProviderModels: (
-    baseCatalog: ReadonlyArray<unknown>,
-    resolveAuth?: (providerId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
-  ) => Effect.Effect<ReadonlyArray<unknown>>
-
   /** Resolve primary + reviewer model pair for dual-model workflows.
    *  Tries cowork/deepwork by name, falls back to first two modeled agents, dies if none. */
   readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId]>
-
-  // Turn executors
-  readonly getTurnExecutor: (id: string) => Effect.Effect<TurnExecutor | undefined>
 
   // Permission rules
   readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
@@ -306,28 +286,9 @@ export class ExtensionRegistry extends Context.Service<
           compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
       listCommands: () => Effect.succeed(resolved.commands),
-      getTurnExecutor: (id) => Effect.succeed(resolved.turnExecutors.get(id)),
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
-      getProvider: (id) => Effect.succeed(resolved.providers.get(id)),
-      listProviders: () => Effect.succeed([...resolved.providers.values()]),
-      filterProviderModels: (baseCatalog, resolveAuth) =>
-        Effect.gen(function* () {
-          let catalog = baseCatalog
-          for (const provider of resolved.providers.values()) {
-            if (provider.listModels !== undefined) {
-              const authInfo =
-                resolveAuth !== undefined
-                  ? yield* resolveAuth(provider.id).pipe(
-                      Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
-                    )
-                  : undefined
-              catalog = provider.listModels(catalog, authInfo)
-            }
-          }
-          return catalog
-        }),
       resolveDualModelPair: () =>
         Effect.gen(function* () {
           const agents = [...resolved.agents.values()]

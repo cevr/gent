@@ -34,6 +34,7 @@ import {
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionEventBus } from "./extensions/event-bus.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
+import { DriverRegistry } from "./extensions/driver-registry.js"
 import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
@@ -259,6 +260,10 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    }),
     extensionRuntimeLive,
     ExtensionEventBus.withSubscriptions(busSubscriptions),
   )

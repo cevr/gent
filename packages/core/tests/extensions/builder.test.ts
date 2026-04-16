@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Context } from "effect"
 import { extension } from "@gent/core/extensions/api"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import type { ProviderResolution } from "@gent/core/domain/provider-contribution"
+import type { ProviderResolution } from "@gent/core/domain/driver"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const setup = (ext: ReturnType<typeof extension>) => Effect.runPromise(ext.setup(testSetupCtx()))
@@ -131,14 +131,14 @@ describe("fluent builder", () => {
     await expect(setup(ext)).rejects.toThrow(/actor\(\) can only be called once/)
   })
 
-  test("provider() throws on second call", async () => {
-    const ext = extension("double-provider", ({ ext }) => {
-      const b = ext.provider({ id: "a", name: "A", resolveModel: () => stubResolution })
+  test("modelDriver() throws on second call", async () => {
+    const ext = extension("double-driver", ({ ext }) => {
+      const b = ext.modelDriver({ id: "a", name: "A", resolveModel: () => stubResolution })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(b as any).provider({ id: "b", name: "B", resolveModel: () => stubResolution })
+      ;(b as any).modelDriver({ id: "b", name: "B", resolveModel: () => stubResolution })
       return b
     })
-    await expect(setup(ext)).rejects.toThrow(/provider\(\) can only be called once/)
+    await expect(setup(ext)).rejects.toThrow(/modelDriver\(\) can only be called once/)
   })
 
   // ── Multi-call methods ──
@@ -263,15 +263,15 @@ describe("fluent builder", () => {
     )
   })
 
-  // ── Provider yields providers array ──
+  // ── ModelDriver yields modelDrivers array ──
 
-  test("provider() produces single-element providers array in setup", async () => {
-    const ext = extension("provider-test", ({ ext }) =>
-      ext.provider({ id: "test-provider", name: "Test", resolveModel: () => stubResolution }),
+  test("modelDriver() produces single-element modelDrivers array in setup", async () => {
+    const ext = extension("driver-test", ({ ext }) =>
+      ext.modelDriver({ id: "test-driver", name: "Test", resolveModel: () => stubResolution }),
     )
     const s = await setup(ext)
-    expect(s.providers).toHaveLength(1)
-    expect(s.providers?.[0]?.id).toBe("test-provider")
+    expect(s.modelDrivers).toHaveLength(1)
+    expect(s.modelDrivers?.[0]?.id).toBe("test-driver")
   })
 
   // ── Empty builder produces empty setup ──
@@ -284,7 +284,7 @@ describe("fluent builder", () => {
     expect(s.promptSections).toBeUndefined()
     expect(s.hooks).toBeUndefined()
     expect(s.layer).toBeUndefined()
-    expect(s.providers).toBeUndefined()
+    expect(s.modelDrivers).toBeUndefined()
     expect(s.jobs).toBeUndefined()
     expect(s.actor).toBeUndefined()
   })

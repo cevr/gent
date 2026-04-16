@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
-import type { LoadedExtension, ProviderContribution } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
 import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
 import { LanguageModel } from "effect/unstable/ai"
@@ -45,24 +47,28 @@ const fakeResolution = (): ProviderResolution => ({
   } as LanguageModel.Service),
 })
 
-const makeProvider = (id: string, name?: string): ProviderContribution => ({
+const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   id,
   name: name ?? id,
   resolveModel: () => fakeResolution(),
 })
 
-const makeExt = (extId: string, providers: ProviderContribution[]): LoadedExtension => ({
+const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({
   manifest: { id: extId },
   kind: "builtin",
   sourcePath: "test",
-  setup: { providers },
+  setup: { modelDrivers },
 })
 
 const buildProviderLayer = (extensions: LoadedExtension[]) => {
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
+  const driverRegistryLayer = DriverRegistry.fromResolved({
+    modelDrivers: resolved.modelDrivers,
+    externalDrivers: resolved.externalDrivers,
+  })
   const authLayer = Layer.succeed(AuthStore, testAuthStorage)
-  return Layer.provide(Provider.Live, Layer.merge(authLayer, registryLayer))
+  return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
 }
 
 describe("Provider model resolution", () => {
@@ -105,7 +111,7 @@ describe("Provider model resolution", () => {
   })
 
   test("wraps extension resolveModel errors as ProviderError", async () => {
-    const throwingProvider: ProviderContribution = {
+    const throwingProvider: ModelDriverContribution = {
       id: "broken",
       name: "Broken",
       resolveModel: () => {

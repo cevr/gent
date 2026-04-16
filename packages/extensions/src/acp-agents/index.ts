@@ -1,13 +1,12 @@
 /**
  * ACP Agents Extension — external agents (Claude Code, OpenCode, Gemini CLI)
- * as first-class gent agents via the TurnExecutor primitive.
+ * as first-class gent agents via the ExternalDriver primitive.
  *
  * The "session manager" here is a per-extension subprocess + ACP-session
- * cache, not a state machine with declared effects. It survives this commit
- * unchanged (no `WorkflowContribution` is appropriate); C9 collapses
- * `TurnExecutor` into `ExternalDriverContribution`. What C8d does is the
- * structural lift: `extension(...).agents().turnExecutor().onShutdown()` →
- * `defineExtension({ id, contributions: [...] })`.
+ * cache, not a state machine with declared effects — no `WorkflowContribution`
+ * is appropriate. C9 collapses the old `TurnExecutor` slot into
+ * `ExternalDriverContribution`; agents reference the driver via
+ * `driver: new ExternalDriverRef({ id: "acp-<name>" })`.
  *
  * @module
  */
@@ -15,9 +14,9 @@ import {
   agentContribution,
   defineAgent,
   defineExtension,
-  ExternalExecution,
+  ExternalDriverRef,
+  externalDriverContribution,
   onShutdownContribution,
-  turnExecutorContribution,
 } from "@gent/core/extensions/api"
 import { ACP_AGENTS } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
@@ -35,12 +34,12 @@ export const AcpAgentsExtension = defineExtension({
             name,
             description: `${config.command} via ACP`,
             persistence: "ephemeral",
-            execution: new ExternalExecution({ runnerId: `acp-${name}` }),
+            driver: new ExternalDriverRef({ id: `acp-${name}` }),
           }),
         ),
       ),
       ...Object.entries(ACP_AGENTS).map(([name, config]) =>
-        turnExecutorContribution({
+        externalDriverContribution({
           id: `acp-${name}`,
           executor: makeAcpTurnExecutor(config, manager),
         }),

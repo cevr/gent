@@ -3,6 +3,7 @@ import { AuthStore, AuthType } from "./auth-store"
 import { ProviderId, parseModelProvider } from "./model"
 import { AgentName, resolveAgentModel } from "./agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 
 export const AuthSource = Schema.Literal("stored")
 export type AuthSource = typeof AuthSource.Type
@@ -32,84 +33,86 @@ export interface AuthGuardService {
 export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
   "@gent/core/src/domain/auth-guard/AuthGuard",
 ) {
-  static Live: Layer.Layer<AuthGuard, never, AuthStore | ExtensionRegistry> = Layer.effect(
-    AuthGuard,
-    Effect.gen(function* () {
-      const authStore = yield* AuthStore
-      const extensionRegistry = yield* ExtensionRegistry
+  static Live: Layer.Layer<AuthGuard, never, AuthStore | ExtensionRegistry | DriverRegistry> =
+    Layer.effect(
+      AuthGuard,
+      Effect.gen(function* () {
+        const authStore = yield* AuthStore
+        const extensionRegistry = yield* ExtensionRegistry
+        const driverRegistry = yield* DriverRegistry
 
-      const registeredProviders = yield* extensionRegistry.listProviders()
-      const registeredIds = new Set(registeredProviders.map((p) => p.id))
+        const registeredProviders = yield* driverRegistry.listModels()
+        const registeredIds = new Set(registeredProviders.map((p) => p.id))
 
-      const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
-        query: AuthProviderQuery = {},
-      ) {
-        const modelPairExit = yield* Effect.exit(extensionRegistry.resolveDualModelPair())
-        const providers: ProviderId[] = []
-        const seen = new Set<string>()
-        const modelIds = Exit.isSuccess(modelPairExit) ? [...modelPairExit.value] : []
+        const requiredProviders = Effect.fn("AuthGuard.requiredProviders")(function* (
+          query: AuthProviderQuery = {},
+        ) {
+          const modelPairExit = yield* Effect.exit(extensionRegistry.resolveDualModelPair())
+          const providers: ProviderId[] = []
+          const seen = new Set<string>()
+          const modelIds = Exit.isSuccess(modelPairExit) ? [...modelPairExit.value] : []
 
-        if (query.agentName !== undefined) {
-          const selectedAgent = yield* extensionRegistry.getAgent(query.agentName)
-          if (selectedAgent?.model !== undefined) {
-            modelIds.push(resolveAgentModel(selectedAgent))
+          if (query.agentName !== undefined) {
+            const selectedAgent = yield* extensionRegistry.getAgent(query.agentName)
+            if (selectedAgent?.model !== undefined) {
+              modelIds.push(resolveAgentModel(selectedAgent))
+            }
           }
-        }
 
-        for (const modelId of modelIds) {
-          const provider = parseModelProvider(modelId)
-          if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {
-            providers.push(provider)
-            seen.add(provider)
+          for (const modelId of modelIds) {
+            const provider = parseModelProvider(modelId)
+            if (provider !== undefined && registeredIds.has(provider) && !seen.has(provider)) {
+              providers.push(provider)
+              seen.add(provider)
+            }
           }
-        }
 
-        return providers
-      })
+          return providers
+        })
 
-      const listProvidersWithQuery = Effect.fn("AuthGuard.listProviders")(function* (
-        query: AuthProviderQuery = {},
-      ) {
-        const requiredSet = new Set(yield* requiredProviders(query))
-        const providers: AuthProviderInfo[] = []
+        const listProvidersWithQuery = Effect.fn("AuthGuard.listProviders")(function* (
+          query: AuthProviderQuery = {},
+        ) {
+          const requiredSet = new Set(yield* requiredProviders(query))
+          const providers: AuthProviderInfo[] = []
 
-        for (const provider of registeredProviders) {
-          const storedInfo = yield* authStore
-            .get(provider.id)
-            .pipe(Effect.catchEager(() => Effect.void))
-          const hasStored = storedInfo !== undefined
-          const required = requiredSet.has(ProviderId.of(provider.id))
+          for (const provider of registeredProviders) {
+            const storedInfo = yield* authStore
+              .get(provider.id)
+              .pipe(Effect.catchEager(() => Effect.void))
+            const hasStored = storedInfo !== undefined
+            const required = requiredSet.has(ProviderId.of(provider.id))
 
-          if (hasStored) {
-            providers.push({
-              provider: ProviderId.of(provider.id),
-              hasKey: true,
-              source: "stored" as const,
-              authType: storedInfo?.type as AuthType | undefined,
-              required,
-            })
-            continue
+            if (hasStored) {
+              providers.push({
+                provider: ProviderId.of(provider.id),
+                hasKey: true,
+                source: "stored" as const,
+                authType: storedInfo?.type as AuthType | undefined,
+                required,
+              })
+              continue
+            }
+            providers.push({ provider: ProviderId.of(provider.id), hasKey: false, required })
           }
-          providers.push({ provider: ProviderId.of(provider.id), hasKey: false, required })
-        }
 
-        return providers
-      })
+          return providers
+        })
 
-      const missingRequiredProviders = Effect.fn("AuthGuard.missingRequiredProviders")(function* (
-        query: AuthProviderQuery = {},
-      ) {
-        const providers = yield* listProvidersWithQuery(query)
-        return providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)
-      })
+        const missingRequiredProviders = Effect.fn("AuthGuard.missingRequiredProviders")(function* (
+          query: AuthProviderQuery = {},
+        ) {
+          const providers = yield* listProvidersWithQuery(query)
+          return providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)
+        })
 
-      return AuthGuard.of({
-        requiredProviders,
-        listProviders: listProvidersWithQuery,
-        missingRequiredProviders,
-      })
-    }),
-  )
+        return AuthGuard.of({
+          requiredProviders,
+          listProviders: listProvidersWithQuery,
+          missingRequiredProviders,
+        })
+      }),
+    )
 
   static Test = (providers: readonly AuthProviderInfo[] = []): Layer.Layer<AuthGuard> =>
     Layer.succeed(AuthGuard, {

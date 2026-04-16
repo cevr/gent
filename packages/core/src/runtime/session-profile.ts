@@ -28,6 +28,7 @@ import {
   resolveExtensions,
   ExtensionRegistry,
 } from "./extensions/registry.js"
+import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
 import {
   ExtensionStateRuntime,
   type ExtensionStateRuntimeService,
@@ -44,6 +45,7 @@ export interface SessionProfile {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resolved: ResolvedExtensions
   readonly registryService: ExtensionRegistryService
+  readonly driverRegistryService: DriverRegistryService
   readonly extensionStateRuntime: ExtensionStateRuntimeService
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
@@ -150,6 +152,7 @@ export class SessionProfileCache extends Context.Service<
               Effect.provideService(Scope.Scope, serverScope),
             )
             const registryService = Context.get(combinedCtx, ExtensionRegistry)
+            const driverRegistryService = Context.get(combinedCtx, DriverRegistry)
             const stateRuntime = Context.get(combinedCtx, ExtensionStateRuntime)
 
             // Compile base sections inside the built layer's runtime so any
@@ -169,6 +172,7 @@ export class SessionProfileCache extends Context.Service<
               extensions: resolved.extensions,
               resolved,
               registryService,
+              driverRegistryService,
               extensionStateRuntime: stateRuntime,
               baseSections,
               instructions,
@@ -245,6 +249,17 @@ export class SessionProfileCache extends Context.Service<
                 Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
               ),
               ExtensionRegistry,
+            ),
+            driverRegistryService: Context.get(
+              Effect.runSync(
+                Layer.build(
+                  DriverRegistry.fromResolved({
+                    modelDrivers: resolved.modelDrivers,
+                    externalDrivers: resolved.externalDrivers,
+                  }),
+                ).pipe(Effect.scoped),
+              ),
+              DriverRegistry,
             ),
             extensionStateRuntime: Context.get(
               Effect.runSync(
