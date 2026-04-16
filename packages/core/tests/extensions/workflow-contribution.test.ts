@@ -9,9 +9,11 @@
  *      `mapCommand` (extension command messages), and `afterTransition`
  *      (declared workflow effects) — proving the four primitive surfaces
  *      survive the lowering pass intact.
- *   3. `WorkflowContribution` carries no UI/snapshot/turn — those belong to
- *      `ProjectionContribution`. This is the `composability-not-flags`
- *      structural separation.
+ *   3. `WorkflowContribution` omits UI by default (UI belongs in
+ *      `ProjectionContribution` per `composability-not-flags`). C8 carries a
+ *      transitional `snapshot`/`turn` bridge for workflows whose UI is derived
+ *      purely from machine state today; the bridge is deleted in C12. The
+ *      "no UI" and "bridge round-trips" cases are both pinned below.
  *
  * Until Commit 12 splits the runtime, workflow IS actor-shaped at the
  * runtime level. This test pins the contribution-layer shape so the

@@ -674,9 +674,11 @@ const placeActor = (b: LoweredBuckets, def: AnyExtensionActorDefinition): void =
 
 /**
  * Lower a `WorkflowContribution` into the legacy `ExtensionActorDefinition`
- * shape. Workflows do NOT carry UI/snapshot/turn (those belong to
- * ProjectionContribution per `composability-not-flags`); the actor's optional
- * fields stay undefined.
+ * shape. Workflows omit UI by default (UI belongs in `ProjectionContribution`
+ * per `composability-not-flags`). C8 carries a temporary `snapshot`/`turn`
+ * bridge for workflows whose UI is derived purely from machine state — this
+ * lowering forwards those by reference when present and leaves the actor
+ * fields undefined when absent. C12 deletes the bridge.
  */
 const workflowToActor = (w: AnyWorkflowContribution): AnyExtensionActorDefinition => ({
   machine: w.machine,

@@ -33,7 +33,7 @@ import {
   type PromptSection,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
+import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
 
@@ -146,9 +146,9 @@ const MachineEvent = MEvent({
   IsActive: MEvent.reply({}, Schema.Boolean),
   /** Typed self-read for interceptors: replaces the workflow's loss of
    *  `getUiSnapshot` by exposing the projected snapshot through a typed
-   *  protocol reply. The reply mirrors `AutoSnapshotReply` from
-   *  `auto-protocol.ts`. */
-  GetSnapshot: MEvent.reply({}, Schema.Any),
+   *  protocol reply. The reply schema is `AutoSnapshotReply` end-to-end —
+   *  machine event, protocol envelope, and consumer all share one schema. */
+  GetSnapshot: MEvent.reply({}, AutoSnapshotReply),
 })
 type MachineEvent = typeof MachineEvent.Type
 

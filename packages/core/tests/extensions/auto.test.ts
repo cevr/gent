@@ -220,6 +220,113 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
+  // ── Wrong-state regression locks ──
+  // `mapEvent` unconditionally maps every `auto_checkpoint`/`review` event;
+  // the machine only ignores them via the absence of a handler for
+  // (state, event) pairs. These tests pin that contract so a future machine
+  // edit cannot accidentally accept them in the wrong phase. (Counsel C8c
+  // flagged this gap after the pure-reducer block was deleted.)
+
+  it.live("Inactive ignores all events", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      // Auto starts Inactive — publish a checkpoint, review, and turn
+      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
+        sessionId,
+        branchId,
+      })
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      yield* runtime.publish(turnCompleted(), { sessionId, branchId })
+
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as AutoUiModel
+      expect(ui.active).toBe(false)
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
+  it.live("unrelated tool does not advance the loop", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+
+      // An unrelated tool call must not transition the machine
+      yield* runtime.publish(
+        new ToolCallSucceeded({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.of("tc-unrelated"),
+          toolName: "bash",
+          output: "{}",
+        }),
+        { sessionId, branchId },
+      )
+
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as AutoUiModel
+      expect(ui.phase).toBe("working")
+      expect(ui.iteration).toBe(1)
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
+  it.live("review while Working is ignored (must checkpoint first)", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 3 })
+
+      // Review fired without a preceding checkpoint — must not advance
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as AutoUiModel
+      expect(ui.phase).toBe("working")
+      expect(ui.iteration).toBe(1)
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
+  it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
+    Effect.gen(function* () {
+      const runtime = yield* ExtensionStateRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        sessionId,
+        branchId,
+      })
+
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 3 })
+
+      // First checkpoint moves to AwaitingReview
+      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "first" }), {
+        sessionId,
+        branchId,
+      })
+      expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
+
+      // Second checkpoint without review — must not advance back to Working
+      yield* runtime.publish(checkpointSignal({ status: "continue", summary: "second" }), {
+        sessionId,
+        branchId,
+      })
+      const snap = yield* getSnapshot(runtime)
+      const ui = snap!.model as AutoUiModel
+      expect(ui.phase).toBe("awaiting-review")
+      expect(ui.iteration).toBe(1)
+    }).pipe(Effect.provide(makeLayer())),
+  )
+
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* ExtensionStateRuntime
