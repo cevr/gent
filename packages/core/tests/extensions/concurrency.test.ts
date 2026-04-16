@@ -12,6 +12,7 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { reducerActor } from "./helpers/reducer-actor"
 
 const sessionId = SessionId.of("test-session")
@@ -104,6 +105,7 @@ describe("extension concurrency", () => {
           ),
           EventStore.Memory,
           registryLayer,
+          RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         )
         const layer = Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer))
 

@@ -467,7 +467,9 @@ const buildEphemeralLayer = (params: {
   // Registry (forwarded from parent — read-only resolved data)
   const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
 
-  // Event publisher on ephemeral storage — must include bus so extension subscriptions fire
+  // Event publisher on ephemeral storage — must include bus so extension subscriptions fire.
+  // RuntimePlatform comes from the parent context (forwarded via parentLayer); EventPublisherLive
+  // requires it for projection cwd/home (no ambient process state in core runtime).
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
     Layer.mergeAll(
@@ -475,6 +477,7 @@ const buildEphemeralLayer = (params: {
       extensionStateRuntimeLayer,
       extensionEventBusLayer,
       registryLayer,
+      parentLayer,
     ),
   )
 

@@ -19,6 +19,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const testExtensions = resolveExtensions([
   {
@@ -64,6 +65,7 @@ const makeTestLayer = (logs: {
     ExtensionRegistry.fromResolved(testExtensions),
     ExtensionStateRuntime.Live([]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     ToolRunner.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
   const actorProcessLayer = Layer.provide(

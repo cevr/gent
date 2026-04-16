@@ -7,9 +7,11 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
+const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" })
 
 const makeEvent = (tag: string, sessionId: string, branchId?: string) =>
   ({
@@ -48,7 +50,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -97,7 +99,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -149,7 +151,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -187,7 +189,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {
@@ -238,7 +240,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, busLayer, registryLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, busLayer, registryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {

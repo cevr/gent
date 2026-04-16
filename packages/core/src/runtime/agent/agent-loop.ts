@@ -285,7 +285,7 @@ const resolveTurnContext = (params: {
     // Evaluate ProjectionContribution-based projections — merge into the same
     // TurnProjection list consumed by compileToolPolicy. Actor projections
     // (above) and projection contributions (here) feed the same pipeline.
-    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateAll({
+    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateTurn({
       sessionId: params.sessionId,
       branchId: params.branchId,
       cwd: params.hostCtx.cwd,

@@ -16,7 +16,14 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Agents } from "@gent/extensions/all-agents"
+
+const runtimePlatformLayer = RuntimePlatform.Test({
+  cwd: "/tmp",
+  home: "/tmp",
+  platform: "test",
+})
 
 const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
@@ -37,7 +44,10 @@ describe("SessionCommands → ActorProcess integration", () => {
       never
     >,
   ) => {
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
+      Layer.merge(storageDeps, runtimePlatformLayer),
+    )
     return Layer.provide(LocalActorProcessLive, Layer.merge(storageDeps, eventPublisherLayer))
   }
 
@@ -83,7 +93,10 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
     )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
+      Layer.merge(storageDeps, runtimePlatformLayer),
+    )
     const actorProcessLayer = makeActorProcessLayer(storageDeps)
     const baseWithActorProcess = Layer.mergeAll(
       storageDeps,
@@ -175,7 +188,10 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
     )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
+      Layer.merge(storageDeps, runtimePlatformLayer),
+    )
     const actorProcessLayer = Layer.provide(
       LocalActorProcessLive,
       Layer.merge(storageDeps, eventPublisherLayer),
@@ -237,7 +253,10 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
     )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
+    const eventPublisherLayer = Layer.provide(
+      EventPublisherLive,
+      Layer.merge(storageDeps, runtimePlatformLayer),
+    )
     const layer = Layer.provide(
       LocalActorProcessLive,
       Layer.merge(storageDeps, eventPublisherLayer),

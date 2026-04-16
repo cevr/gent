@@ -1,4 +1,3 @@
-import * as os from "node:os"
 import { Effect, Layer } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { BaseEventStore, getEventBranchId, getEventSessionId } from "../domain/event.js"
@@ -6,8 +5,7 @@ import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
-
-const hostHome = os.homedir()
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
   Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
@@ -22,13 +20,14 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
   never,
-  BaseEventStore | ExtensionStateRuntime | ExtensionRegistry
+  BaseEventStore | ExtensionStateRuntime | ExtensionRegistry | RuntimePlatform
 > = Layer.effect(
   EventPublisher,
   Effect.gen(function* () {
     const baseEventStore = yield* BaseEventStore
     const stateRuntime = yield* ExtensionStateRuntime
     const registry = yield* ExtensionRegistry
+    const platform = yield* RuntimePlatform
     const projections = registry.getResolved().projections
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
@@ -45,10 +44,6 @@ export const EventPublisherLive: Layer.Layer<
           const changed = yield* stateRuntime.publish(event, { sessionId, branchId })
 
           if (branchId !== undefined) {
-            const allSnapshots: Array<{
-              readonly extensionId: string
-              readonly source: "actor" | "projection"
-            }> = []
             if (changed) {
               const actorSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId).pipe(
                 Effect.catchEager((error) =>
@@ -60,7 +55,6 @@ export const EventPublisherLive: Layer.Layer<
                 ),
               )
               for (const snapshot of actorSnapshots) {
-                allSnapshots.push({ extensionId: snapshot.extensionId, source: "actor" })
                 yield* baseEventStore.publish(snapshot).pipe(
                   Effect.catchEager((error) =>
                     logDeliveryFailure("extension.snapshot.append.failed", {
@@ -74,15 +68,15 @@ export const EventPublisherLive: Layer.Layer<
               }
             }
             // Projection snapshots — re-evaluate on every event since projections
-            // derive from on-disk truth. Skip extensions that already have an actor
-            // snapshot to avoid double-emit (one extension owns one snapshot identity).
-            const actorEmitted = new Set(allSnapshots.map((s) => s.extensionId))
+            // derive from on-disk truth. Compile-time UI ownership rule guarantees
+            // an extension cannot own both an actor.snapshot and a projection.ui,
+            // so dedupe vs `actorEmitted` is unnecessary.
             const projEval = yield* projections
-              .evaluateAll({
+              .evaluateUi({
                 sessionId,
                 branchId,
-                cwd: process.cwd(),
-                home: hostHome,
+                cwd: platform.cwd,
+                home: platform.home,
               })
               .pipe(
                 Effect.catchEager((error) =>
@@ -90,11 +84,10 @@ export const EventPublisherLive: Layer.Layer<
                     sessionId,
                     branchId,
                     error: String(error),
-                  }).pipe(Effect.as({ promptSections: [], policyFragments: [], uiSnapshots: [] })),
+                  }).pipe(Effect.as({ uiSnapshots: [] })),
                 ),
               )
             for (const snapshot of projEval.uiSnapshots) {
-              if (actorEmitted.has(snapshot.extensionId)) continue
               yield* baseEventStore.publish(snapshot).pipe(
                 Effect.catchEager((error) =>
                   logDeliveryFailure("extension.projection.snapshot.append.failed", {

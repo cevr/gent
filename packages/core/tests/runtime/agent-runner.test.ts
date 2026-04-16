@@ -56,7 +56,12 @@ const withEventPublisher = (
 ) =>
   Layer.provide(
     EventPublisherLive,
-    Layer.mergeAll(baseEventStoreLayer, stateRuntimeLayer, testRegistryLayer),
+    Layer.mergeAll(
+      baseEventStoreLayer,
+      stateRuntimeLayer,
+      testRegistryLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ),
   )
 
 // Extra services the parent context needs for ephemeral child runtime
@@ -556,6 +561,7 @@ describe("AgentRunner", () => {
         baseEventStoreLayer,
         Layer.succeed(ExtensionStateRuntime, stateRuntime),
         testRegistryLayer,
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ),
     )
     const deps = Layer.mergeAll(

@@ -13,9 +13,10 @@
  *      - `ui`     — UI snapshot model (with optional schema validation)
  *      - `policy` — `ToolPolicyFragment` shaping the active tool set
  *
- *   3. Is evaluated on demand by `ProjectionRegistry.evaluateAll(ctx)` during
- *      prompt assembly / UI snapshot resolution. There is no per-event reducer;
- *      derive-don't-create is the whole point.
+ *   3. Is evaluated on demand by `ProjectionRegistry.evaluateUi(ctx)` (event
+ *      publisher → SSE → TUI) and `ProjectionRegistry.evaluateTurn(ctx)`
+ *      (prompt assembly). There is no per-event reducer; derive-don't-create
+ *      is the whole point.
  *
  * Subtraction-before-addition: projections collapse the
  *   (actor.mapEvent → actor.snapshot.project → actor.turn.project)
@@ -37,30 +38,43 @@ export class ProjectionError extends Data.TaggedError(
   readonly reason: string
 }> {}
 
-/** Context handed to a projection's `query` Effect.
- *
- *  Read-only by design — no mutation/control surfaces here. If a projection
- *  needs `ctx.extension.send`/`ctx.interaction.approve`/etc., it isn't a
- *  projection — it's a workflow or mutation.
- *
- *  `turn` is present during prompt assembly (when the projection feeds prompt
- *  sections / tool policy) and absent during pure UI snapshot evaluation
- *  (event-publisher → SSE → TUI). UI-only projections must not depend on
- *  `turn`. Policy/prompt projections require `turn` and won't be evaluated in
- *  UI-only contexts.
- */
-export interface ProjectionContext {
+/** Base context — fields common to UI and turn evaluation. Read-only by design. */
+interface ProjectionContextBase {
   readonly sessionId: SessionId
-  readonly branchId?: BranchId
   /** Process working directory (host cwd). */
   readonly cwd: string
   /** User home directory. */
   readonly home: string
   /** Session-scoped working directory, if the session was opened in a specific cwd. */
   readonly sessionCwd?: string
-  /** Present during prompt assembly; absent during UI-snapshot-only evaluation. */
-  readonly turn?: ExtensionTurnContext
 }
+
+/** UI-only context — no `turn`. Used by `evaluateUi` for snapshot emission
+ *  (event-publisher → SSE → TUI). Projections that depend on `turn` are skipped
+ *  structurally during UI evaluation. */
+export interface ProjectionUiContext extends ProjectionContextBase {
+  readonly branchId: BranchId
+  readonly turn?: never
+}
+
+/** Turn context — `turn` is required. Used by `evaluateTurn` during prompt
+ *  assembly when prompt sections / tool policy are derived from projections. */
+export interface ProjectionTurnContext extends ProjectionContextBase {
+  readonly branchId?: BranchId
+  readonly turn: ExtensionTurnContext
+}
+
+/** Context handed to a projection's `query` Effect.
+ *
+ *  Read-only by design — no mutation/control surfaces here. If a projection
+ *  needs `ctx.extension.send`/`ctx.interaction.approve`/etc., it isn't a
+ *  projection — it's a workflow or mutation.
+ *
+ *  Discriminated union: `evaluateUi` provides `ProjectionUiContext` (no
+ *  `turn`); `evaluateTurn` provides `ProjectionTurnContext` (`turn` required).
+ *  Projections may inspect `ctx.turn` to opt out of UI-only contexts.
+ */
+export type ProjectionContext = ProjectionUiContext | ProjectionTurnContext
 
 /** UI surface — projected value rendered into an extension UI snapshot. */
 export interface ProjectionUiSurface<A, U = unknown> {

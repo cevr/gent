@@ -15,6 +15,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
@@ -49,6 +50,7 @@ describe("Session Snapshot", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
       emptyRegistryLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(
@@ -95,6 +97,7 @@ describe("Session Tree", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
       emptyRegistryLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(

@@ -1,11 +1,12 @@
 /**
  * ProjectionRegistry — evaluates `ProjectionContribution[]` on demand.
  *
- * Projections are flat; there is no per-event reduction step. `evaluateAll(ctx)`
- * runs every registered projection's `query` Effect, then collects:
- *   - `promptSections`  from `projection.prompt(value)`
- *   - `uiSnapshots`     from `projection.ui.project(value)` (schema-validated)
- *   - `policyFragments` from `projection.policy(value, ctx)`
+ * Projections are flat; there is no per-event reduction step. Two evaluators
+ * partition projections by surface so each path only runs queries that can
+ * contribute to it:
+ *   - `evaluateUi(ctx)`   — runs `ui`-bearing projections, returns `uiSnapshots`
+ *   - `evaluateTurn(ctx)` — runs `prompt`/`policy`-bearing projections, returns
+ *                           `promptSections` + `policyFragments`
  *
  * Failure isolation: a failing projection logs and is skipped. Other projections
  * continue. Mirrors the actor pattern's `runSupervised` resilience but without
@@ -21,7 +22,12 @@ import { Effect, Schema } from "effect"
 import { ExtensionUiSnapshot } from "../../domain/event.js"
 import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import type { AnyProjectionContribution, ProjectionContext } from "../../domain/projection.js"
+import type {
+  AnyProjectionContribution,
+  ProjectionContext,
+  ProjectionTurnContext,
+  ProjectionUiContext,
+} from "../../domain/projection.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
@@ -30,21 +36,33 @@ interface RegisteredProjection {
   readonly projection: AnyProjectionContribution
 }
 
-export interface ProjectionEvaluation {
+/** UI-only evaluation result — only ui snapshots; prompt/policy require a turn. */
+export interface ProjectionUiEvaluation {
+  readonly uiSnapshots: ReadonlyArray<ExtensionUiSnapshot>
+}
+
+/** Turn evaluation result — prompt + policy fragments produced for the active turn. */
+export interface ProjectionTurnEvaluation {
   readonly promptSections: ReadonlyArray<PromptSection>
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
-  readonly uiSnapshots: ReadonlyArray<ExtensionUiSnapshot>
 }
 
 export interface CompiledProjections {
   readonly entries: ReadonlyArray<RegisteredProjection>
-  /** Demoted ui surfaces — extensions that contributed more than one ui-bearing projection. */
+  /** Demoted ui surfaces — extensions that contributed more than one ui-bearing projection,
+   *  or contributed both `actor.snapshot` and a `projection.ui`. */
   readonly uiCollisions: ReadonlyArray<{
     readonly extensionId: string
     readonly projectionId: string
+    readonly reason: "duplicate-projection-ui" | "actor-snapshot-owns-ui"
   }>
-  /** Run every projection and collect projected outputs. */
-  readonly evaluateAll: (ctx: ProjectionContext) => Effect.Effect<ProjectionEvaluation>
+  /** Evaluate UI-bearing projections (no turn). Used by event-publisher to emit
+   *  `ExtensionUiSnapshot`s. Projections without a `ui` surface are skipped. */
+  readonly evaluateUi: (ctx: ProjectionUiContext) => Effect.Effect<ProjectionUiEvaluation>
+  /** Evaluate turn-bearing projections (turn required). Used during prompt assembly
+   *  to derive prompt sections + tool policy fragments. UI surfaces are not
+   *  emitted from this path (event-publisher owns UI). */
+  readonly evaluateTurn: (ctx: ProjectionTurnContext) => Effect.Effect<ProjectionTurnEvaluation>
   /**
    * Run a single projection by `extensionId/projectionId` — returns the raw value.
    * If multiple registrations share the same id (across scopes), the highest-precedence
@@ -66,41 +84,36 @@ const sortedExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-interface CollectionResult {
-  readonly entries: ReadonlyArray<RegisteredProjection>
-  readonly uiCollisions: ReadonlyArray<{
-    readonly extensionId: string
-    readonly projectionId: string
-  }>
+interface CollisionEntry {
+  readonly extensionId: string
+  readonly projectionId: string
+  readonly reason: "duplicate-projection-ui" | "actor-snapshot-owns-ui"
 }
 
-const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): CollectionResult => {
-  const sorted = sortedExtensions(extensions)
-  const entries: RegisteredProjection[] = []
-  const uiCollisions: Array<{ extensionId: string; projectionId: string }> = []
+interface CollectionResult {
+  readonly entries: ReadonlyArray<RegisteredProjection>
+  readonly uiCollisions: ReadonlyArray<CollisionEntry>
+}
 
-  // Snapshot collisions: ExtensionUiSnapshot is keyed only by extensionId today,
-  // so if one extension contributes multiple `ui`-bearing projections (whether
-  // within the same scope or stacked across scopes), later snapshots would
-  // silently overwrite earlier ones in the TUI store. Enforce
-  // one-UI-per-extension-id structurally — keep the highest-scope, first-declared
-  // ui-bearing projection; demote later ones (record them without `ui`).
-  //
-  // Pre-pass: walk in highest-precedence-first order to identify the single
-  // (extensionId, projectionId, registrationIndex) that owns the UI surface.
-  // Using a (extensionId → {projectionId, registrationIndex}) tuple distinguishes
-  // two extensions sharing the same id (e.g. project shadowing builtin).
-  interface UiOwner {
-    readonly projectionId: string
-    /** Index into the to-be-built `entries` array — disambiguates same-id same-projectionId cases. */
-    readonly extensionIndex: number
-    readonly projectionIndex: number
-  }
+interface UiOwner {
+  readonly projectionId: string
+  readonly extensionIndex: number
+  readonly projectionIndex: number
+}
+
+/** Identify the single (extensionIndex, projectionIndex) that owns the UI surface
+ *  per extensionId, walking sorted extensions in highest-precedence-first order.
+ *  Extensions with `actor.snapshot` are excluded — actor.snapshot owns UI for them. */
+const findUiOwners = (
+  sorted: ReadonlyArray<LoadedExtension>,
+  extensionsWithActorSnapshot: ReadonlySet<string>,
+): ReadonlyMap<string, UiOwner> => {
   const uiOwner = new Map<string, UiOwner>()
   for (let i = sorted.length - 1; i >= 0; i--) {
     const ext = sorted[i]
     if (ext === undefined) continue
     if (uiOwner.has(ext.manifest.id)) continue
+    if (extensionsWithActorSnapshot.has(ext.manifest.id)) continue
     const projections = ext.setup.projections ?? []
     for (let pi = 0; pi < projections.length; pi++) {
       const projection = projections[pi]
@@ -114,7 +127,80 @@ const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): Collect
       }
     }
   }
+  return uiOwner
+}
 
+/** Classify a single projection: keep, demote (and record collision), or drop entirely.
+ *  Pure decision: returns the entry to push and the optional collision to record. */
+const classifyProjection = (
+  ext: LoadedExtension,
+  projection: AnyProjectionContribution,
+  ei: number,
+  pi: number,
+  extensionsWithActorSnapshot: ReadonlySet<string>,
+  uiOwner: ReadonlyMap<string, UiOwner>,
+): { entry: RegisteredProjection; collision?: CollisionEntry } => {
+  if (projection.ui === undefined) {
+    return { entry: { extensionId: ext.manifest.id, projection } }
+  }
+  if (extensionsWithActorSnapshot.has(ext.manifest.id)) {
+    return {
+      entry: { extensionId: ext.manifest.id, projection: { ...projection, ui: undefined } },
+      collision: {
+        extensionId: ext.manifest.id,
+        projectionId: projection.id,
+        reason: "actor-snapshot-owns-ui",
+      },
+    }
+  }
+  const owner = uiOwner.get(ext.manifest.id)
+  const isOwner = owner !== undefined && owner.extensionIndex === ei && owner.projectionIndex === pi
+  if (!isOwner) {
+    return {
+      entry: { extensionId: ext.manifest.id, projection: { ...projection, ui: undefined } },
+      collision: {
+        extensionId: ext.manifest.id,
+        projectionId: projection.id,
+        reason: "duplicate-projection-ui",
+      },
+    }
+  }
+  return { entry: { extensionId: ext.manifest.id, projection } }
+}
+
+const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): CollectionResult => {
+  // UI ownership rule (enforced structurally at compile time):
+  //
+  //   "One extensionId owns at most one UI snapshot identity per cycle."
+  //
+  // ExtensionUiSnapshot is keyed only by extensionId. Two sources can produce
+  // a UI snapshot for an extension: (1) `actor.snapshot` (emitted by the actor
+  // runtime on state change), and (2) `projection.ui` (evaluated by the
+  // event-publisher each cycle). If both exist, the snapshot identity flickers
+  // between actor-derived and projection-derived models depending on which
+  // path produced the latest event — strictly worse than a single duplicate.
+  //
+  // Resolution: actor.snapshot wins. If an extension has actor.snapshot AND
+  // any projection.ui, demote the projection.ui (record collision; strip ui).
+  // Reason: actor.snapshot is the older surface with persistence semantics;
+  // ripping it out is the actor's job (Commits 4/5/6/8), not the projection
+  // registry's. Projections that need to coexist with an actor today should
+  // omit `.ui` and surface state through prompt/policy until the actor goes.
+  //
+  // Among multiple projection.ui entries for the same extension (no actor),
+  // the highest-precedence first-declared wins; later ones are demoted.
+
+  const sorted = sortedExtensions(extensions)
+  const extensionsWithActorSnapshot = new Set<string>()
+  for (const ext of sorted) {
+    if (ext.setup.actor?.snapshot !== undefined) {
+      extensionsWithActorSnapshot.add(ext.manifest.id)
+    }
+  }
+  const uiOwner = findUiOwners(sorted, extensionsWithActorSnapshot)
+
+  const entries: RegisteredProjection[] = []
+  const uiCollisions: CollisionEntry[] = []
   for (let ei = 0; ei < sorted.length; ei++) {
     const ext = sorted[ei]
     if (ext === undefined) continue
@@ -122,23 +208,18 @@ const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): Collect
     for (let pi = 0; pi < projections.length; pi++) {
       const projection = projections[pi]
       if (projection === undefined) continue
-      if (projection.ui !== undefined) {
-        const owner = uiOwner.get(ext.manifest.id)
-        const isOwner =
-          owner !== undefined && owner.extensionIndex === ei && owner.projectionIndex === pi
-        if (!isOwner) {
-          uiCollisions.push({ extensionId: ext.manifest.id, projectionId: projection.id })
-          entries.push({
-            extensionId: ext.manifest.id,
-            projection: { ...projection, ui: undefined },
-          })
-          continue
-        }
-      }
-      entries.push({ extensionId: ext.manifest.id, projection })
+      const { entry, collision } = classifyProjection(
+        ext,
+        projection,
+        ei,
+        pi,
+        extensionsWithActorSnapshot,
+        uiOwner,
+      )
+      entries.push(entry)
+      if (collision !== undefined) uiCollisions.push(collision)
     }
   }
-
   return { entries, uiCollisions }
 }
 
@@ -150,9 +231,13 @@ export const compileProjections = (
   // Surface collisions via console at compile time — one structured line per
   // demoted projection. Avoids requiring an Effect at registration boundary.
   for (const collision of uiCollisions) {
+    const reason =
+      collision.reason === "actor-snapshot-owns-ui"
+        ? `extension already declares an actor.snapshot; actor.snapshot owns the UI surface for an extension. Drop the projection.ui or remove the actor.snapshot.`
+        : `extension already has a UI-bearing projection; only one projection.ui per extension is allowed.`
     // eslint-disable-next-line no-console
     console.warn(
-      `[gent] projection ui collision: extension "${collision.extensionId}" already has a UI-bearing projection; demoting projection "${collision.projectionId}" (its ui surface is dropped). Each extension must have at most one ui-bearing projection.`,
+      `[gent] projection ui collision: extension "${collision.extensionId}" — demoting projection "${collision.projectionId}" (ui surface dropped). Reason: ${reason}`,
     )
   }
 
@@ -185,7 +270,7 @@ export const compileProjections = (
       ),
     )
 
-  const evaluateUi = (
+  const projectUi = (
     entry: RegisteredProjection,
     value: unknown,
     sessionId: SessionId,
@@ -230,12 +315,32 @@ export const compileProjections = (
       })
     })
 
-  const evaluateAll: CompiledProjections["evaluateAll"] = (ctx) =>
+  // Pre-partition entries by surface to avoid running queries for projections
+  // that won't contribute to the requested context. UI-only entries (event
+  // path) skip prompt/policy entries; turn-only entries (prompt assembly path)
+  // skip ui-only entries.
+  const uiBearing = entries.filter((e) => e.projection.ui !== undefined)
+  const turnBearing = entries.filter(
+    (e) => e.projection.prompt !== undefined || e.projection.policy !== undefined,
+  )
+
+  const evaluateUi: CompiledProjections["evaluateUi"] = (ctx) =>
+    Effect.gen(function* () {
+      const uiSnapshots: ExtensionUiSnapshot[] = []
+      for (const entry of uiBearing) {
+        const value = yield* runOne(entry, ctx)
+        if (value === undefined) continue
+        const snap = yield* projectUi(entry, value, ctx.sessionId, ctx.branchId)
+        if (snap !== undefined) uiSnapshots.push(snap)
+      }
+      return { uiSnapshots }
+    })
+
+  const evaluateTurn: CompiledProjections["evaluateTurn"] = (ctx) =>
     Effect.gen(function* () {
       const promptSections: PromptSection[] = []
       const policyFragments: ToolPolicyFragment[] = []
-      const uiSnapshots: ExtensionUiSnapshot[] = []
-      for (const entry of entries) {
+      for (const entry of turnBearing) {
         const value = yield* runOne(entry, ctx)
         if (value === undefined) continue
         const promptFn = entry.projection.prompt
@@ -266,12 +371,8 @@ export const compileProjections = (
             )
           }
         }
-        if (ctx.branchId !== undefined) {
-          const ui = yield* evaluateUi(entry, value, ctx.sessionId, ctx.branchId)
-          if (ui !== undefined) uiSnapshots.push(ui)
-        }
       }
-      return { promptSections, policyFragments, uiSnapshots }
+      return { promptSections, policyFragments }
     })
 
   const query: CompiledProjections["query"] = (extensionId, projectionId, ctx) =>
@@ -294,5 +395,5 @@ export const compileProjections = (
       return yield* runOne(entry, ctx)
     })
 
-  return { entries, uiCollisions, evaluateAll, query }
+  return { entries, uiCollisions, evaluateUi, evaluateTurn, query }
 }

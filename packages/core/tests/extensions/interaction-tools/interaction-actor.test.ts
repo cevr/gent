@@ -19,6 +19,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const sessionId = SessionId.of("s-interaction")
@@ -47,7 +48,13 @@ const makeLayer = () => {
   )
   const servicesLayer = Storage.Test()
   const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([interactionExtension]))
-  const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer, registryLayer)
+  const combinedBase = Layer.mergeAll(
+    baseLayer,
+    stateRuntimeLayer,
+    servicesLayer,
+    registryLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
   return Layer.mergeAll(combinedBase, eventPublisherLayer)
 }

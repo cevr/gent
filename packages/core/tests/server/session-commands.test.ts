@@ -15,6 +15,7 @@ import { SessionCommands } from "@gent/core/server/session-commands"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 describe("SessionCommands", () => {
   it.live("deleteSession terminates event delivery workers before removing state", () =>
@@ -33,6 +34,7 @@ describe("SessionCommands", () => {
         Permission.Live([], "allow"),
         ConfigService.Test(),
         ApprovalService.Test(),
+        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       )
 
       // Wrap real EventPublisherLive to record terminateSession calls

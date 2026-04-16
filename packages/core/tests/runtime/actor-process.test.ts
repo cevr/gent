@@ -12,6 +12,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
   ExtensionRegistry.fromResolved(
@@ -48,6 +49,7 @@ describe("ActorProcess", () => {
       eventStoreLayer,
       recorderLayer,
       ToolRunner.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
@@ -189,6 +191,7 @@ describe("ActorProcess", () => {
       eventStoreLayer,
       recorderLayer,
       toolRunnerLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))

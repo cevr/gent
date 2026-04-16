@@ -21,6 +21,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -68,6 +69,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     providerLive,
     extensionRegistryLive,
     extensionRuntimeLive,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),
     ModelRegistry.Test(),

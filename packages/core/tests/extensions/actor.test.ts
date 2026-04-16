@@ -17,6 +17,7 @@ import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runti
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
@@ -611,7 +612,13 @@ describe("event routing", () => {
     )
     const servicesLayer = Storage.Test()
     const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions(extensions))
-    const combinedBase = Layer.mergeAll(baseLayer, stateRuntimeLayer, servicesLayer, registryLayer)
+    const combinedBase = Layer.mergeAll(
+      baseLayer,
+      stateRuntimeLayer,
+      servicesLayer,
+      registryLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, combinedBase)
     const fullLayer = Layer.mergeAll(combinedBase, eventPublisherLayer)
     return { published, fullLayer }

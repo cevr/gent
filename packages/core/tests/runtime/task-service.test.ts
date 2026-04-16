@@ -7,6 +7,7 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const sessionId = SessionId.of("task-test-session")
@@ -20,6 +21,7 @@ const makeLayer = () => {
     EventStore.Memory,
     ExtensionStateRuntime.Test(),
     registryLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const taskExtensionLayer = Layer.provide(

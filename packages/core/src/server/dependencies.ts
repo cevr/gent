@@ -239,7 +239,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const eventPublisherLive = Layer.provide(
     EventPublisherLive,
-    Layer.merge(baseEventStoreLive, extensionRegistryLive),
+    Layer.mergeAll(baseEventStoreLive, extensionRegistryLive, runtimePlatformLive),
   )
 
   const baseServicesLive = Layer.mergeAll(
