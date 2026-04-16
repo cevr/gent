@@ -51,8 +51,7 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
-import { BranchId, MessageId, SessionId } from "../../domain/ids.js"
-import type { ToolCallId } from "../../domain/ids.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
@@ -86,6 +85,7 @@ import {
 } from "../extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
+import type { TurnExecutor, TurnEvent } from "../../domain/turn-executor.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,
@@ -321,6 +321,7 @@ const resolveTurnContext = (params: {
       modelId: params.executionOverrides?.modelId ?? resolveAgentModel(effectiveAgent),
       reasoning: resolveReasoning(effectiveAgent, session?.reasoningLevel),
       temperature: effectiveAgent.temperature,
+      execution: effectiveAgent.execution,
     }
   })
 
@@ -615,8 +616,10 @@ export const resolveTurnPhase = (params: {
       systemPrompt: resolved.systemPrompt,
       modelId: resolved.modelId,
       tools: resolved.tools,
+      agent: resolved.agent,
       ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+      ...(resolved.execution !== undefined ? { execution: resolved.execution } : {}),
     } satisfies ResolvedTurn
   })
 
@@ -641,6 +644,273 @@ const runTurnBeforeHook = (
       hostCtx,
     )
     .pipe(Effect.catchEager(() => Effect.void))
+
+/**
+ * Attempt to dispatch a turn to an external TurnExecutor.
+ * Returns undefined if the agent uses model execution (caller should fall through to streamTurnPhase).
+ * Returns { interrupted, streamFailed } if the external turn was handled.
+ */
+const dispatchExternalTurn = (params: {
+  resolved: ResolvedTurn
+  extensionRegistry: ExtensionRegistryService
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  messageId: MessageId
+  step: number
+  activeStream: ActiveStreamHandle
+  activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
+  turnToolsRef: Ref.Ref<ReadonlyArray<AnyToolDefinition>>
+  storage: StorageService
+  hostCtx: ExtensionHostContext
+  turnMetrics?: Ref.Ref<TurnMetrics>
+}) =>
+  Effect.gen(function* () {
+    const { resolved } = params
+    if (resolved.execution?._tag !== "external" || resolved.agent === undefined) return undefined
+
+    const executor = yield* params.extensionRegistry.getTurnExecutor(resolved.execution.runnerId)
+    if (executor === undefined) {
+      yield* params
+        .publishEvent(
+          new ErrorOccurred({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: `Turn executor "${resolved.execution.runnerId}" not found`,
+          }),
+        )
+        .pipe(Effect.orDie)
+      return { interrupted: false, streamFailed: true }
+    }
+
+    const result = yield* collectExternalTurn({
+      executor,
+      resolved: {
+        ...resolved,
+        agent: resolved.agent,
+        tools: yield* Ref.get(params.turnToolsRef),
+      },
+      publishEvent: params.publishEvent,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      messageId: params.messageId,
+      step: params.step,
+      activeStream: params.activeStream,
+      storage: params.storage,
+      extensionRegistry: params.extensionRegistry,
+      hostCtx: params.hostCtx,
+      turnMetrics: params.turnMetrics,
+    }).pipe(Effect.ensuring(Ref.set(params.activeStreamRef, undefined)))
+
+    return result
+  })
+
+/**
+ * Collect an external turn from a TurnExecutor stream → AssistantDraft.
+ * Tool events (tool-started/completed/failed) are observability only — they do NOT
+ * populate draft.toolCalls, preventing executeToolsPhase from re-executing them.
+ */
+export const collectExternalTurn = (params: {
+  executor: TurnExecutor
+  resolved: ResolvedTurn & { agent: AgentDefinition; tools: ReadonlyArray<AnyToolDefinition> }
+  publishEvent: PublishEvent
+  sessionId: SessionId
+  branchId: BranchId
+  messageId: MessageId
+  step: number
+  activeStream: ActiveStreamHandle
+  storage: StorageService
+  extensionRegistry: ExtensionRegistryService
+  hostCtx: ExtensionHostContext
+  turnMetrics?: Ref.Ref<TurnMetrics>
+}) =>
+  Effect.gen(function* () {
+    const persistAssistantTextLocal = (text: string, reasoning: string, createdAt?: Date) =>
+      persistAssistantText({
+        storage: params.storage,
+        publishEvent: params.publishEvent,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messageId: assistantMessageIdForTurn(params.messageId, params.step),
+        text,
+        reasoning,
+        createdAt,
+      })
+
+    yield* params
+      .publishEvent(new StreamStarted({ sessionId: params.sessionId, branchId: params.branchId }))
+      .pipe(Effect.orDie)
+    yield* Effect.logInfo("external-turn.start").pipe(
+      Effect.annotateLogs({
+        agent: params.resolved.currentTurnAgent,
+        runnerId:
+          params.resolved.execution?._tag === "external"
+            ? params.resolved.execution.runnerId
+            : "unknown",
+      }),
+    )
+
+    const textParts: string[] = []
+    const reasoningParts: string[] = []
+    let usage: AssistantDraft["usage"] | undefined
+
+    const turnStream = params.executor.executeTurn({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      agent: params.resolved.agent,
+      messages: params.resolved.messages,
+      tools: params.resolved.tools,
+      systemPrompt: params.resolved.systemPrompt,
+      cwd: process.cwd(),
+      abortSignal: params.activeStream.abortController.signal,
+      hostCtx: params.hostCtx,
+    })
+
+    const streamFailed = yield* Stream.runForEach(
+      turnStream.pipe(Stream.interruptWhen(Deferred.await(params.activeStream.interruptDeferred))),
+      (event: TurnEvent) =>
+        Effect.gen(function* () {
+          switch (event._tag) {
+            case "text-delta":
+              textParts.push(event.text)
+              yield* params
+                .publishEvent(
+                  new EventStreamChunk({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    chunk: event.text,
+                  }),
+                )
+                .pipe(Effect.orDie)
+              break
+            case "reasoning-delta":
+              reasoningParts.push(event.text)
+              break
+            case "tool-started":
+              yield* params
+                .publishEvent(
+                  new ToolCallStarted({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    toolCallId: ToolCallId.of(event.toolCallId),
+                    toolName: event.toolName,
+                  }),
+                )
+                .pipe(Effect.orDie)
+              break
+            case "tool-completed":
+              yield* params
+                .publishEvent(
+                  new ToolCallSucceeded({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    toolCallId: ToolCallId.of(event.toolCallId),
+                    toolName: "external",
+                  }),
+                )
+                .pipe(Effect.orDie)
+              break
+            case "tool-failed":
+              yield* params
+                .publishEvent(
+                  new ToolCallFailed({
+                    sessionId: params.sessionId,
+                    branchId: params.branchId,
+                    toolCallId: ToolCallId.of(event.toolCallId),
+                    toolName: "external",
+                    output: event.error,
+                  }),
+                )
+                .pipe(Effect.orDie)
+              break
+            case "finished":
+              usage = event.usage
+                ? {
+                    inputTokens: event.usage.inputTokens ?? 0,
+                    outputTokens: event.usage.outputTokens ?? 0,
+                  }
+                : undefined
+              break
+          }
+        }),
+    ).pipe(
+      Effect.as(false),
+      Effect.catchEager((err) =>
+        Effect.gen(function* () {
+          const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+          if (interrupted) return false
+          yield* Effect.logWarning("external-turn stream error, persisting partial output").pipe(
+            Effect.annotateLogs({ error: String(err) }),
+          )
+          yield* persistAssistantTextLocal(textParts.join(""), reasoningParts.join(""))
+          yield* params
+            .publishEvent(
+              new StreamEnded({ sessionId: params.sessionId, branchId: params.branchId }),
+            )
+            .pipe(Effect.orDie)
+          return true
+        }),
+      ),
+    )
+
+    const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
+    const draft: AssistantDraft = {
+      text: textParts.join(""),
+      reasoning: reasoningParts.join(""),
+      toolCalls: [], // External tool events are observability only
+      usage,
+    }
+
+    if (interrupted) {
+      yield* params
+        .publishEvent(
+          new StreamEnded({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            interrupted: true,
+          }),
+        )
+        .pipe(Effect.orDie)
+      yield* persistAssistantTextLocal(draft.text, draft.reasoning)
+      return { draft, interrupted: true, streamFailed: false }
+    }
+
+    if (streamFailed) return { draft, interrupted: false, streamFailed: true }
+
+    yield* params
+      .publishEvent(
+        new StreamEnded({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          ...(draft.usage !== undefined ? { usage: draft.usage } : {}),
+        }),
+      )
+      .pipe(Effect.orDie)
+
+    if (params.turnMetrics !== undefined) {
+      yield* Ref.update(params.turnMetrics, (m) => ({
+        ...m,
+        agent: params.resolved.currentTurnAgent,
+        inputTokens: m.inputTokens + (draft.usage?.inputTokens ?? 0),
+        outputTokens: m.outputTokens + (draft.usage?.outputTokens ?? 0),
+        toolCallCount: m.toolCallCount,
+      }))
+    }
+
+    yield* persistAssistantTurn({
+      storage: params.storage,
+      publishEvent: params.publishEvent,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      messageId: assistantMessageIdForTurn(params.messageId, params.step),
+      draft,
+      agentName: params.resolved.currentTurnAgent,
+      extensionRegistry: params.extensionRegistry,
+      hostCtx: params.hostCtx,
+    })
+
+    return { draft, interrupted: false, streamFailed: false }
+  })
 
 export const streamTurnPhase = (params: {
   messageId: MessageId
@@ -1648,13 +1918,35 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   turnHostCtx,
                 )
 
-                // 2. Stream
+                // 2. Stream (or external turn)
                 const activeStream: ActiveStreamHandle = {
                   abortController: new AbortController(),
                   interruptDeferred: yield* Deferred.make<void>(),
                   interruptedRef: yield* Ref.make(false),
                 }
                 yield* Ref.set(activeStreamRef, activeStream)
+
+                // Dispatch: external executor or model-backed stream
+                const externalResult = yield* dispatchExternalTurn({
+                  resolved,
+                  extensionRegistry: turnExtensionRegistry,
+                  publishEvent: publishEventOrDie,
+                  sessionId,
+                  branchId,
+                  messageId: state.message.id,
+                  step,
+                  activeStream,
+                  activeStreamRef,
+                  turnToolsRef,
+                  storage,
+                  hostCtx: turnHostCtx,
+                  turnMetrics: turnMetricsRef,
+                })
+                if (externalResult !== undefined) {
+                  interrupted = externalResult.interrupted
+                  streamFailed = externalResult.streamFailed
+                  break
+                }
 
                 const collected = yield* streamTurnPhase({
                   messageId: state.message.id,

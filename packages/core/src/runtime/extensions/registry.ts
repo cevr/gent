@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ModelId } from "../../domain/model.js"
+import type { TurnExecutor } from "../../domain/turn-executor.js"
 import type {
   CommandContribution,
   ExtensionStatusInfo,
@@ -28,6 +29,7 @@ export interface ResolvedExtensions {
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly providers: ReadonlyMap<string, ProviderContribution>
+  readonly turnExecutors: ReadonlyMap<string, TurnExecutor>
   readonly promptSections: ReadonlyMap<string, PromptSectionInput>
   readonly commands: ReadonlyArray<CommandContribution>
   readonly permissionRules: ReadonlyArray<PermissionRule>
@@ -84,6 +86,23 @@ export const resolveExtensions = (
     (p) => p.id,
   )
 
+  // Turn executors: keyed by id, later scope wins. Duplicate IDs within same scope are caught.
+  const turnExecutors = new Map<string, TurnExecutor>()
+  for (const ext of sorted) {
+    for (const contrib of ext.setup.turnExecutors ?? []) {
+      if (turnExecutors.has(contrib.id)) {
+        mergedFailures.push({
+          manifest: ext.manifest,
+          kind: ext.kind,
+          sourcePath: ext.sourcePath,
+          phase: "validation",
+          error: `Duplicate turn executor ID "${contrib.id}"`,
+        })
+      }
+      turnExecutors.set(contrib.id, contrib.executor)
+    }
+  }
+
   // Prompt sections: last scope wins by section id
   const promptSectionsMap = compileContributions(
     sorted,
@@ -126,6 +145,7 @@ export const resolveExtensions = (
     tools,
     agents,
     providers,
+    turnExecutors,
     promptSections: promptSectionsMap,
     commands,
     permissionRules,
@@ -247,6 +267,9 @@ export interface ExtensionRegistryService {
    *  Tries cowork/deepwork by name, falls back to first two modeled agents, dies if none. */
   readonly resolveDualModelPair: () => Effect.Effect<[ModelId, ModelId]>
 
+  // Turn executors
+  readonly getTurnExecutor: (id: string) => Effect.Effect<TurnExecutor | undefined>
+
   // Permission rules
   readonly listPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
 
@@ -277,6 +300,7 @@ export class ExtensionRegistry extends Context.Service<
           compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
       listCommands: () => Effect.succeed(resolved.commands),
+      getTurnExecutor: (id) => Effect.succeed(resolved.turnExecutors.get(id)),
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),

@@ -355,6 +355,16 @@ export interface CommandContribution {
   readonly handler: (args: string, ctx: ExtensionAsyncContext) => void | Promise<void>
 }
 
+// Turn Executor Contribution — re-exported from dedicated file
+export type {
+  TurnExecutor,
+  TurnExecutorContribution,
+  TurnContext,
+  TurnEvent,
+  TurnError,
+} from "./turn-executor.js"
+import type { TurnExecutorContribution } from "./turn-executor.js"
+
 // Provider Contribution — re-exported from dedicated file for backwards compatibility
 
 export type {
@@ -398,6 +408,8 @@ export interface ExtensionSetup {
   readonly commands?: ReadonlyArray<CommandContribution>
   /** Provider contributions — register AI provider implementations */
   readonly providers?: ReadonlyArray<ProviderContribution>
+  /** Turn executor contributions — external agent execution strategies */
+  readonly turnExecutors?: ReadonlyArray<TurnExecutorContribution>
   /** Durable host-owned scheduled jobs contributed by the extension. */
   readonly jobs?: ReadonlyArray<ScheduledJobContribution>
   /** Permission deny/allow rules contributed by this extension. */

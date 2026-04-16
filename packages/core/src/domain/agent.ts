@@ -25,6 +25,17 @@ export type AgentPersistence = typeof AgentPersistence.Type
 export const AgentRole = Schema.Literals(["primary", "reviewer"])
 export type AgentRole = typeof AgentRole.Type
 
+// Agent execution strategy — model-backed (default) or external (TurnExecutor dispatch)
+
+export class ModelExecution extends Schema.TaggedClass<ModelExecution>()("model", {}) {}
+
+export class ExternalExecution extends Schema.TaggedClass<ExternalExecution>()("external", {
+  runnerId: Schema.String,
+}) {}
+
+export const AgentExecution = Schema.Union([ModelExecution, ExternalExecution])
+export type AgentExecution = typeof AgentExecution.Type
+
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName
 
@@ -42,6 +53,7 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   reasoningEffort: Schema.optional(ReasoningEffort),
   persistence: Schema.optional(AgentPersistence),
   role: Schema.optional(AgentRole),
+  execution: Schema.optional(AgentExecution),
 }) {}
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]

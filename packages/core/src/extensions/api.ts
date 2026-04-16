@@ -60,6 +60,7 @@ import {
 } from "../domain/tool.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import { toExtensionAsyncContext, type ExtensionContext } from "../domain/extension-context.js"
+import type { TurnExecutorContribution } from "../domain/turn-executor.js"
 import { type AgentDefinition, AgentDefinitionBrand, defineAgent } from "../domain/agent.js"
 import type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
 import type { AgentEvent } from "../domain/event.js"
@@ -91,6 +92,9 @@ export {
   AgentDefinitionBrand,
   AgentName,
   DEFAULT_AGENT_NAME,
+  ModelExecution,
+  ExternalExecution,
+  AgentExecution,
   AUDITOR_PROMPT,
   LIBRARIAN_PROMPT,
   ARCHITECT_PROMPT,
@@ -146,6 +150,22 @@ export {
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
+export type {
+  TurnExecutor,
+  TurnExecutorContribution,
+  TurnContext,
+  TurnEvent,
+  TurnError,
+} from "../domain/turn-executor.js"
+export {
+  TextDelta,
+  ReasoningDelta,
+  ToolStarted,
+  ToolCompleted,
+  ToolFailed,
+  Finished as TurnFinished,
+  TurnEventUsage,
+} from "../domain/turn-executor.js"
 export {
   AgentEvent,
   type Question,
@@ -189,6 +209,7 @@ export {
   type ExtensionInput,
 } from "../domain/extension-package.js"
 export type { ProviderResolution } from "../providers/provider.js"
+export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 
 // ── Simple Parameter Types ──
@@ -353,6 +374,11 @@ export interface ExtensionBuilder<Provides = never> extends ExtensionBuilderResu
   permissionRules(
     ...rules: ReadonlyArray<PermissionRule>
   ): Omit<ExtensionBuilder<Provides>, "permissionRules">
+  /** Register a turn executor for external agent dispatch. Multiple calls ok. */
+  turnExecutor(
+    id: string,
+    executor: TurnExecutorContribution["executor"],
+  ): ExtensionBuilder<Provides>
   /** Register an Effect-native interceptor hook. Multiple calls ok. */
   on<K extends ExtensionInterceptorKey>(
     key: K,
@@ -698,6 +724,7 @@ export const extension = <P = never>(
       let _jobs: ScheduledJobContribution[] | undefined
       let _permissionRules: PermissionRule[] | undefined
       const _busSubscriptions: BusSubscriptionEntry[] = []
+      const _turnExecutors: TurnExecutorContribution[] = []
       let _layer: Layer.Layer<never, never, object> | undefined
       let _actorResult: AnyExtensionActorDefinition | undefined
 
@@ -780,6 +807,11 @@ export const extension = <P = never>(
               _agents.push(convertSimpleAgent(def as SimpleAgentDef))
             }
           }
+          return builder
+        },
+
+        turnExecutor: (id, executor) => {
+          _turnExecutors.push({ id, executor })
           return builder
         },
 
@@ -978,6 +1010,7 @@ export const extension = <P = never>(
         ...(_interceptors.length > 0 ? { hooks: { interceptors: _interceptors } } : {}),
         ...(_layer !== undefined ? { layer: _layer } : {}),
         ...(_provider !== undefined ? { providers: [_provider] } : {}),
+        ...(_turnExecutors.length > 0 ? { turnExecutors: _turnExecutors } : {}),
         ...(_jobs !== undefined && _jobs.length > 0 ? { jobs: _jobs } : {}),
         ...(_busSubscriptions.length > 0 ? { busSubscriptions: _busSubscriptions } : {}),
         ...(_actorResult !== undefined ? { actor: _actorResult } : {}),
