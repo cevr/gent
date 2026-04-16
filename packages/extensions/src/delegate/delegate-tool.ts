@@ -107,10 +107,12 @@ export const DelegateTool = defineTool({
           return
         }
 
+        // Background tasks need durable sessions so users can navigate to them
+        // via the stored childSessionId after the run completes.
         const result = yield* ctx.agent.run({
           agent: resolvedAgent,
           prompt: task.prompt ?? task.subject,
-          runSpec: { parentToolCallId: ctx.toolCallId },
+          runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
         })
 
         // Guard: if task was stopped/failed while running, don't overwrite terminal state
@@ -211,7 +213,7 @@ export const DelegateTool = defineTool({
         const result = yield* ctx.agent.run({
           agent: resolved.agent,
           prompt: taskWithContext,
-          runSpec: { parentToolCallId: ctx.toolCallId },
+          runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
         })
 
         results.push(result)
@@ -260,7 +262,7 @@ export const DelegateTool = defineTool({
             return ctx.agent.run({
               agent: resolved.agent,
               prompt: task.task,
-              runSpec: { parentToolCallId: ctx.toolCallId },
+              runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
             })
           }),
         )
@@ -291,7 +293,7 @@ export const DelegateTool = defineTool({
       const result = yield* ctx.agent.run({
         agent: resolved.agent,
         prompt: params.task ?? "",
-        runSpec: { parentToolCallId: ctx.toolCallId },
+        runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
       })
 
       if (result._tag === "error") {

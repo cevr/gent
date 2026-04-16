@@ -61,13 +61,14 @@ describe("Delegate Tool", () => {
           text: `${params.agent.name}:${params.prompt}`,
           sessionId: "child-session",
           agentName: params.agent.name,
-          persistence: "durable" as const,
+          persistence: "ephemeral" as const,
         }),
     })
 
     return DelegateTool.execute({ agent: "cowork", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
-        expect(result.output).toBe("cowork:hello\n\nFull session: session://child-session")
+        // Delegate is fire-and-forget ephemeral by design — no durable session ref is shown.
+        expect(result.output).toBe("cowork:hello")
       }),
     )
   })
@@ -130,6 +131,90 @@ describe("Delegate Tool", () => {
         expect(result.output).toContain("2/2 succeeded")
         expect(result.output).not.toContain("Full sessions:")
         expect(result.output).not.toContain("session://session-")
+      }),
+    )
+  })
+
+  it.live("foreground single delegates with ephemeral persistence", () => {
+    let capturedRunSpec: { persistence?: string } | undefined
+    const ctx = makeCtx({
+      agentRun: (params) => {
+        capturedRunSpec = params.runSpec
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "ok",
+          sessionId: "s",
+          agentName: params.agent.name,
+          persistence: "ephemeral" as const,
+        })
+      },
+    })
+
+    return DelegateTool.execute({ agent: "explore", task: "go" }, ctx).pipe(
+      Effect.map(() => {
+        expect(capturedRunSpec?.persistence).toBe("ephemeral")
+      }),
+    )
+  })
+
+  it.live("chain mode delegates with ephemeral persistence per step", () => {
+    const captured: Array<{ persistence?: string }> = []
+    const ctx = makeCtx({
+      agentRun: (params) => {
+        captured.push(params.runSpec ?? {})
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "x",
+          sessionId: "s",
+          agentName: params.agent.name,
+          persistence: "ephemeral" as const,
+        })
+      },
+    })
+
+    return DelegateTool.execute(
+      {
+        chain: [
+          { agent: "explore", task: "a" },
+          { agent: "explore", task: "b" },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map(() => {
+        expect(captured.length).toBe(2)
+        expect(captured.every((r) => r.persistence === "ephemeral")).toBe(true)
+      }),
+    )
+  })
+
+  it.live("parallel mode delegates with ephemeral persistence per task", () => {
+    const captured: Array<{ persistence?: string }> = []
+    const ctx = makeCtx({
+      agentRun: (params) => {
+        captured.push(params.runSpec ?? {})
+        return Effect.succeed({
+          _tag: "success" as const,
+          text: "x",
+          sessionId: "s",
+          agentName: params.agent.name,
+          persistence: "ephemeral" as const,
+        })
+      },
+    })
+
+    return DelegateTool.execute(
+      {
+        tasks: [
+          { agent: "explore", task: "a" },
+          { agent: "explore", task: "b" },
+        ],
+      },
+      ctx,
+    ).pipe(
+      Effect.map(() => {
+        expect(captured.length).toBe(2)
+        expect(captured.every((r) => r.persistence === "ephemeral")).toBe(true)
       }),
     )
   })
