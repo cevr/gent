@@ -155,8 +155,13 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
    * When absent, the Resource is a pure layer contribution (the `layer` may
    * provide multiple services via `Layer.merge(...)`), and the lifecycle
    * effects have `A = never` in their R channel.
+   *
+   * Effect v4 `Context.Service<Identity, Service>` produces a tag whose
+   * identity (`A`) and service interface differ; this is why we use the
+   * 2-parameter `Context.Key<I, S>` shape instead of the 1-parameter
+   * `Context.Tag<A>` shape.
    */
-  readonly tag?: Context.Key<A, A>
+  readonly tag?: Context.Key<A, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
   readonly start?: Effect.Effect<void, E, A | R>

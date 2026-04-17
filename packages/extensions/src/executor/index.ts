@@ -7,7 +7,7 @@ import {
   workflowContribution,
   commandContribution,
   defineExtension,
-  layerContribution,
+  defineResource,
   projectionContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
@@ -41,6 +41,9 @@ export const ExecutorExtension = defineExtension({
       handler: (_args, extCtx) =>
         extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
     }),
-    layerContribution(Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live)),
+    defineResource({
+      scope: "process",
+      layer: Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live),
+    }),
   ],
 })

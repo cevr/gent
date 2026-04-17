@@ -31,7 +31,7 @@ import {
   isDynamicPromptSection,
 } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { extractBusSubscriptions, extractLayer } from "../domain/contribution.js"
+import { extractBusSubscriptions } from "../domain/contribution.js"
 import { ExtensionEventBus } from "./extensions/event-bus.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -248,15 +248,9 @@ export const compileBaseSections = (
  * call this same builder so the wiring shape is identical.
  */
 export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
-  // Legacy `layerContribution` path — Resources contribute via
-  // `collectProcessLayers` below until C3.2 migrates `defineLayer` callers.
-  const extensionLayers = resolved.extensions.flatMap((ext) => {
-    const layer = extractLayer(ext.contributions)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    return layer === undefined ? [] : [layer as Layer.Layer<any>]
-  })
-
-  // Resource process-scope layers (C3.1 wiring; empty until C3.2 migrates).
+  // Process-scope Resource layers — the only path for extension-contributed
+  // services after C3.2. cwd / session / branch Resources are routed through
+  // the per-cwd / ephemeral composers (added in later commits).
   const resourceProcessLayers = collectProcessLayers(resolved.extensions)
 
   const busSubscriptions = resolved.extensions.flatMap((ext) =>
@@ -282,7 +276,6 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
-  const allExtensionLayers = [...extensionLayers, ...resourceProcessLayers]
-  if (allExtensionLayers.length === 0) return baseLayers
-  return Layer.mergeAll(baseLayers, ...allExtensionLayers)
+  if (resourceProcessLayers.length === 0) return baseLayers
+  return Layer.mergeAll(baseLayers, ...resourceProcessLayers)
 }

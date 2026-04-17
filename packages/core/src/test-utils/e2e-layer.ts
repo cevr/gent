@@ -24,8 +24,8 @@ import type { LoadedExtension } from "../domain/extension.js"
 import {
   type Contribution,
   agent as agentContribution,
-  extractLayer,
-  layer as layerContribution,
+  defineResource,
+  extractResources,
 } from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
@@ -109,10 +109,24 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         : setupResult.active.map((ext) => {
             const override = config.layerOverrides?.[ext.manifest.id]
             if (override === undefined) return ext
-            // Replace any existing layer contribution with the override (or
-            // append a new layer contribution if none was present).
-            const layerOverride = layerContribution(override())
-            const others = ext.contributions.filter((c) => c._kind !== "layer")
+            // Replace any existing process-scope Resource layer with the
+            // override (or append a new process-scope Resource if none).
+            // Test override layers are heterogeneous; the harness erases R/E
+            // at this boundary the same way the legacy `layerContribution`
+            // did. Production paths flow through `collectProcessLayers`.
+            // Test override layer; harness boundary erases R/E like the
+            // legacy `layerContribution` did. See header comment.
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+            const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>
+            const layerOverride = defineResource({
+              scope: "process",
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              layer: overrideLayer,
+            })
+            const others = ext.contributions.filter(
+              (c) => !(c._kind === "resource" && c.scope === "process"),
+            )
             return {
               ...ext,
               contributions: [...others, layerOverride],
@@ -130,18 +144,17 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
       // Extension layers may require SqlClient, so provide it via storageLayer.
       const storageLayer = Storage.MemoryWithSql()
-      const extensionLayers: Layer.Layer<never>[] = resolved.extensions.flatMap((ext) => {
-        const layer = extractLayer(ext.contributions)
-        return layer === undefined
-          ? []
-          : [
-              Layer.provide(
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                layer as Layer.Layer<never>,
-                storageLayer,
-              ) as Layer.Layer<never>,
-            ]
-      })
+      const extensionLayers: Layer.Layer<never>[] = resolved.extensions.flatMap((ext) =>
+        extractResources(ext.contributions)
+          .filter((r) => r.scope === "process")
+          .map((r) => {
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource layers carry their own R/E; consumers responsible for satisfying.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+            const provided = Layer.provide(r.layer as Layer.Layer<any>, storageLayer)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            return provided as unknown as Layer.Layer<never>
+          }),
+      )
 
       // Subagent runner
       const defaultRunner: AgentRunner = {

@@ -18,7 +18,7 @@
 import { Layer } from "effect"
 import {
   defineExtension,
-  layerContribution,
+  defineResource,
   mutationContribution,
   projectionContribution,
   pulseSubscriptionContribution,
@@ -51,7 +51,10 @@ export const TaskExtension = defineExtension({
     toolContribution(TaskListTool),
     toolContribution(TaskGetTool),
     toolContribution(TaskUpdateTool),
-    layerContribution(Layer.merge(TaskStorage.Live, TaskService.Live)),
+    defineResource({
+      scope: "process",
+      layer: Layer.merge(TaskStorage.Live, TaskService.Live),
+    }),
     projectionContribution(TaskProjection),
     queryContribution(TaskGetQuery),
     queryContribution(TaskListQuery),

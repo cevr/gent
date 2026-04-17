@@ -24,7 +24,7 @@ import { Context, Effect, Layer, Path } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import {
   defineExtension,
-  layerContribution,
+  defineResource,
   promptSectionContribution,
 } from "@gent/core/extensions/api"
 import { ConfigService } from "@gent/core/runtime/config-service"
@@ -68,7 +68,7 @@ const fakeProviderLive = Layer.succeed(FakeProvider, { text: () => "dynamic-from
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
   contributions: () => [
-    layerContribution(fakeProviderLive),
+    defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive }),
     promptSectionContribution({
       id: "rp-dynamic-section",
       priority: 60,

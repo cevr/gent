@@ -13,9 +13,9 @@ import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import {
   defineExtension,
+  defineResource,
   toolContribution,
   agentContribution,
-  layerContribution,
   permissionRuleContribution,
   promptSectionContribution,
   commandContribution,
@@ -32,10 +32,10 @@ import {
   extractCommands,
   extractInterceptors,
   extractJobs,
-  extractLayer,
   extractLifecycle,
   extractPermissionRules,
   extractPromptSections,
+  extractResources,
   extractTools,
   extractWorkflow,
   extractExternalDrivers,
@@ -72,7 +72,7 @@ describe("defineExtension", () => {
       expect(extractTools(contributions)).toEqual([])
       expect(extractAgents(contributions)).toEqual([])
       expect(extractModelDrivers(contributions)).toEqual([])
-      expect(extractLayer(contributions)).toBeUndefined()
+      expect(extractResources(contributions)).toEqual([])
       expect(extractWorkflow(contributions)).toBeUndefined()
       expect(extractCommands(contributions)).toEqual([])
       expect(extractPermissionRules(contributions)).toEqual([])
@@ -114,7 +114,7 @@ describe("defineExtension", () => {
           }),
           busSubscriptionContribution("agent:*", () => Effect.void),
           interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
-          layerContribution(myLayer),
+          defineResource({ scope: "process", layer: myLayer }),
         ],
       })
       const contributions = yield* setupOf(ext)
@@ -126,7 +126,7 @@ describe("defineExtension", () => {
       expect(extractJobs(contributions)[0]?.id).toBe("test-job")
       expect(extractBusSubscriptions(contributions)[0]?.pattern).toBe("agent:*")
       expect(extractInterceptors(contributions)[0]?.key).toBe("prompt.system")
-      expect(extractLayer(contributions)).toBeDefined()
+      expect(extractResources(contributions)).toHaveLength(1)
     }),
   )
 

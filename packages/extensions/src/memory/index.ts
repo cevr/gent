@@ -22,8 +22,8 @@ import {
   agentContribution,
   AgentEvent,
   defineExtension,
+  defineResource,
   jobContribution,
-  layerContribution,
   projectionContribution,
   toolContribution,
   workflowContribution,
@@ -158,7 +158,7 @@ export const MemoryExtension = defineExtension({
     ...MemoryAgents.map(agentContribution),
     workflowContribution(memoryWorkflow),
     projectionContribution(MemoryVaultProjection),
-    layerContribution(MemoryVaultLive()),
+    defineResource({ scope: "process", layer: MemoryVaultLive() }),
     ...MemoryDreamJobs().map(jobContribution),
   ],
 })

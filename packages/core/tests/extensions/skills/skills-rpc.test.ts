@@ -14,7 +14,7 @@ import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
-import { layer as layerContribution } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import { createRpcHarness } from "../helpers/rpc-harness"
 
 const testSkills = [
@@ -41,13 +41,16 @@ const setupSkillsExtension = Effect.provide(
       "/test/cwd",
       "/test/home",
     )
-    const testLayerContribution = layerContribution(
-      Skills.Test(testSkills) as Layer.Layer<never, never, object>,
-    )
+    const testLayerContribution = defineResource({
+      tag: Skills,
+      scope: "process",
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
+    })
     return {
       ...loaded,
       contributions: [
-        ...loaded.contributions.filter((c) => c._kind !== "layer"),
+        ...loaded.contributions.filter((c) => !(c._kind === "resource" && c.scope === "process")),
         testLayerContribution,
       ],
     } satisfies LoadedExtension

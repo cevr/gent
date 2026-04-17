@@ -18,9 +18,9 @@ import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   defineExtension,
   defineInterceptor,
+  defineResource,
   interceptorContribution,
   isRecord,
-  layerContribution,
   projectionContribution,
   toolContribution,
   workflowContribution,
@@ -674,6 +674,10 @@ export const AutoExtension = defineExtension({
     toolContribution(AutoCheckpointTool),
     interceptorContribution(defineInterceptor("tool.result", journalInterceptorImpl)),
     interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
-    layerContribution(AutoJournal.Live({ cwd: ctx.cwd })),
+    defineResource({
+      tag: AutoJournal,
+      scope: "process",
+      layer: AutoJournal.Live({ cwd: ctx.cwd }),
+    }),
   ],
 })

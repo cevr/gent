@@ -25,10 +25,7 @@ import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStarted } from "@gent/core/domain/event"
-import {
-  layer as layerContribution,
-  workflow as workflowContribution,
-} from "@gent/core/domain/contribution"
+import { defineResource, workflow as workflowContribution } from "@gent/core/domain/contribution"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
 // ── Tool test helpers ──
@@ -116,7 +113,10 @@ const makeExecutorExtension = (overrides?: {
     sourcePath: "builtin",
     contributions: [
       workflowContribution(executorActor),
-      layerContribution(Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never>),
+      defineResource({
+        scope: "process",
+        layer: Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never>,
+      }),
     ],
   }
 

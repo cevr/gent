@@ -30,7 +30,7 @@ import type {
 import {
   type Contribution,
   agent as agentContribution,
-  extractLayer,
+  extractResources,
   tool as toolContribution,
 } from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
@@ -289,10 +289,17 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       )
 
       const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
-        (ext) => {
-          const layer = extractLayer(ext.contributions)
-          return layer === undefined ? [] : [Layer.provideMerge(layer, baseLayerAny)]
-        },
+        (ext) =>
+          extractResources(ext.contributions)
+            .filter((r) => r.scope === "process")
+            .map((r) => {
+              // Resource layers carry their own R/E; harness boundary.
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+              const merged = Layer.provideMerge(r.layer as Layer.Layer<any>, baseLayerAny)
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              return merged as Layer.Layer<never, never, object>
+            }),
       )
 
       let extensionLayer: Layer.Layer<never, never, object> | undefined

@@ -10,7 +10,7 @@
  *
  * @module
  */
-import type { Effect, Layer } from "effect"
+import type { Effect } from "effect"
 import type { AgentDefinition } from "./agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type {
@@ -42,11 +42,6 @@ export interface AgentContribution {
 export interface InterceptorContribution {
   readonly _kind: "interceptor"
   readonly descriptor: ExtensionInterceptorDescriptor
-}
-
-export interface LayerContribution {
-  readonly _kind: "layer"
-  readonly layer: Layer.Layer<never, never, object>
 }
 
 export interface CommandKindContribution {
@@ -140,7 +135,6 @@ export type Contribution =
   | ToolContribution
   | AgentContribution
   | InterceptorContribution
-  | LayerContribution
   | CommandKindContribution
   | ModelDriverKindContribution
   | ExternalDriverKindContribution
@@ -167,12 +161,6 @@ export const agent = (a: AgentDefinition): AgentContribution => ({ _kind: "agent
 export const interceptor = (
   descriptor: ExtensionInterceptorDescriptor,
 ): InterceptorContribution => ({ _kind: "interceptor", descriptor })
-
-export const layer = <A, R>(l: Layer.Layer<A, never, R>): LayerContribution => ({
-  _kind: "layer",
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  layer: l as Layer.Layer<never, never, object>,
-})
 
 export const command = (c: CommandContribution): CommandKindContribution => ({
   _kind: "command",
@@ -352,10 +340,6 @@ export const extractWorkflow = (
 export const extractPulseSubscriptions = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<PulseSubscriptionContribution> => filterByKind(cs, "pulse-subscription")
-
-export const extractLayer = (
-  cs: ReadonlyArray<Contribution>,
-): LayerContribution["layer"] | undefined => findByKind(cs, "layer")?.layer
 
 export const extractLifecycle = (
   cs: ReadonlyArray<Contribution>,

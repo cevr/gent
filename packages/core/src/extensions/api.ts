@@ -4,7 +4,7 @@
  * Single entry point: `defineExtension({ id, contributions })`. The factory
  * receives the setup context and returns a flat `Contribution[]` (or an
  * Effect that yields one). Smart constructors (`toolContribution`,
- * `agentContribution`, `layerContribution`, etc.) are re-exported from
+ * `agentContribution`, `defineResource`, etc.) are re-exported from
  * `domain/contribution.js`.
  *
  * Effect-native end-to-end: every contribution returns Effect. There are no
@@ -16,16 +16,16 @@
  * import { Effect } from "effect"
  * import {
  *   defineExtension,
+ *   defineResource,
  *   defineTool,
  *   toolContribution,
- *   layerContribution,
  * } from "@gent/core/extensions/api"
  *
  * export default defineExtension({
  *   id: "my-ext",
  *   contributions: () => [
  *     toolContribution(MyTool),
- *     layerContribution(MyService.Live),
+ *     defineResource({ scope: "process", layer: MyService.Live }),
  *   ],
  * })
  * ```
@@ -173,7 +173,6 @@ export {
   type ToolContribution,
   type AgentContribution,
   type InterceptorContribution as InterceptorKindContribution,
-  type LayerContribution,
   type CommandKindContribution,
   type ModelDriverKindContribution,
   type ExternalDriverKindContribution,
@@ -191,7 +190,6 @@ export {
   tool as toolContribution,
   agent as agentContribution,
   interceptor as interceptorContribution,
-  layer as layerContribution,
   command as commandContribution,
   modelDriver as modelDriverContribution,
   externalDriver as externalDriverContribution,
@@ -360,12 +358,12 @@ export type { ExtensionSetupContext } from "../domain/extension.js"
  *
  * @example
  * ```ts
- * import { defineExtension, toolContribution, layerContribution } from "@gent/core/extensions/api"
+ * import { defineExtension, defineResource, toolContribution } from "@gent/core/extensions/api"
  *
  * export const MyExt = defineExtension({
  *   id: "my-ext",
  *   contributions: ({ ctx }) => [
- *     layerContribution(MyService.Live),
+ *     defineResource({ scope: "process", layer: MyService.Live }),
  *     toolContribution(MyTool),
  *   ],
  * })

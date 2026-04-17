@@ -3,7 +3,7 @@ import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
 import {
   workflowContribution,
   defineExtension,
-  layerContribution,
+  defineResource,
   promptSectionContribution,
   toolContribution,
   type ExtensionActorDefinition,
@@ -100,7 +100,11 @@ const skillsActor: ExtensionActorDefinition<
 export const SkillsExtension = defineExtension({
   id: "@gent/skills",
   contributions: ({ ctx }) => [
-    layerContribution(Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie)),
+    defineResource({
+      tag: Skills,
+      scope: "process",
+      layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie),
+    }),
     toolContribution(SkillsTool),
     toolContribution(SearchSkillsTool),
     workflowContribution(skillsActor),
