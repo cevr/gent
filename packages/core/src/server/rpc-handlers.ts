@@ -17,7 +17,7 @@ import { SessionCommands } from "./session-commands.js"
 import { SessionEvents } from "./session-events.js"
 import { SessionSubscriptions } from "./session-subscriptions.js"
 import { InteractionCommands } from "./interaction-commands.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import {
@@ -58,7 +58,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const extensionStateRuntime = yield* WorkflowRuntime
     const extensionRegistry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
-    const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+    const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined

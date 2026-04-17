@@ -35,7 +35,7 @@ import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { Provider } from "../../providers/provider.js"
-import { ExtensionEventBus } from "../extensions/event-bus.js"
+import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
@@ -467,7 +467,7 @@ const buildEphemeralLayer = (params: {
 
   // EventPublisher reaches into bus + state runtime + registry so extension
   // subscriptions fire on local events. Parent first so locally-built
-  // `WorkflowRuntime`, `ExtensionEventBus`, registry win — otherwise the
+  // `WorkflowRuntime`, `SubscriptionEngine`, registry win — otherwise the
   // child silently uses the parent's state runtime and child events leak
   // into parent reduction.
   const eventPublisherLayer = Layer.provide(
@@ -763,7 +763,7 @@ export const InProcessRunner = (
       const eventPublisher = yield* EventPublisher
       const loop = yield* AgentLoop
       const extensionRegistry = yield* ExtensionRegistry
-      const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+      const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
       // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
       const parentProfile = yield* ServerProfileService
@@ -964,7 +964,7 @@ export const SubprocessRunner = (
       const baseEventStore = yield* BaseEventStore
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
-      const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+      const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
       // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
       const parentProfile = yield* ServerProfileService

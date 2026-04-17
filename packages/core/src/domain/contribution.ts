@@ -10,7 +10,6 @@
  *
  * @module
  */
-import type { Effect } from "effect"
 import type { AgentDefinition } from "./agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { CommandContribution, ExtensionInterceptorDescriptor } from "./extension.js"
@@ -64,17 +63,6 @@ export interface PromptSectionContribution {
   readonly section: PromptSectionInput
 }
 
-export interface BusSubscriptionContribution {
-  readonly _kind: "bus-subscription"
-  readonly pattern: string
-  readonly handler: (envelope: {
-    readonly channel: string
-    readonly payload: unknown
-    readonly sessionId?: string
-    readonly branchId?: string
-  }) => Effect.Effect<void>
-}
-
 export interface ProjectionKindContribution {
   readonly _kind: "projection"
   readonly projection: AnyProjectionContribution
@@ -119,7 +107,6 @@ export type Contribution =
   | ExternalDriverKindContribution
   | PermissionRuleContribution
   | PromptSectionContribution
-  | BusSubscriptionContribution
   | ProjectionKindContribution
   | QueryKindContribution
   | MutationKindContribution
@@ -172,11 +159,6 @@ export const promptSection = <R = never>(
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   section: s as PromptSectionInput,
 })
-
-export const busSubscription = (
-  pattern: string,
-  handler: BusSubscriptionContribution["handler"],
-): BusSubscriptionContribution => ({ _kind: "bus-subscription", pattern, handler })
 
 export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
   _kind: "projection",
@@ -264,13 +246,6 @@ export const extractExternalDrivers = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<ExternalDriverKindContribution["driver"]> =>
   filterByKind(cs, "external-driver").map((c) => c.driver)
-
-export const extractBusSubscriptions = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<{
-  readonly pattern: string
-  readonly handler: BusSubscriptionContribution["handler"]
-}> => filterByKind(cs, "bus-subscription").map((c) => ({ pattern: c.pattern, handler: c.handler }))
 
 export const extractProjections = (
   cs: ReadonlyArray<Contribution>,

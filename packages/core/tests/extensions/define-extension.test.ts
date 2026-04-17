@@ -19,13 +19,11 @@ import {
   permissionRuleContribution,
   promptSectionContribution,
   commandContribution,
-  busSubscriptionContribution,
   interceptorContribution,
   type Contribution,
 } from "@gent/core/extensions/api"
 import {
   extractAgents,
-  extractBusSubscriptions,
   extractCommands,
   extractInterceptors,
   extractPermissionRules,
@@ -73,7 +71,6 @@ describe("defineExtension", () => {
       expect(extractCommands(contributions)).toEqual([])
       expect(extractPermissionRules(contributions)).toEqual([])
       expect(extractPromptSections(contributions)).toEqual([])
-      expect(extractBusSubscriptions(contributions)).toEqual([])
       expect(extractExternalDrivers(contributions)).toEqual([])
       expect(extractInterceptors(contributions)).toEqual([])
     }),
@@ -100,11 +97,11 @@ describe("defineExtension", () => {
             description: "test cmd",
             handler: () => Effect.void,
           }),
-          busSubscriptionContribution("agent:*", () => Effect.void),
           interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
           defineResource({
             scope: "process",
             layer: myLayer,
+            subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
             schedule: [
               {
                 id: "test-job",
@@ -121,11 +118,11 @@ describe("defineExtension", () => {
       expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
       expect(extractPromptSections(contributions)[0]?.id).toBe("rules")
       expect(extractCommands(contributions)[0]?.name).toBe("test")
-      expect(extractBusSubscriptions(contributions)[0]?.pattern).toBe("agent:*")
       expect(extractInterceptors(contributions)[0]?.key).toBe("prompt.system")
       const resources = extractResources(contributions)
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
+      expect(resources[0]!.subscriptions?.[0]?.pattern).toBe("agent:*")
     }),
   )
 
@@ -170,19 +167,27 @@ describe("defineExtension", () => {
       }),
   )
 
-  it.live("multiple bus subscriptions and commands all accumulate", () =>
+  it.live("multiple Resource subscriptions and commands all accumulate", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "multi",
         contributions: () => [
-          busSubscriptionContribution("a:*", () => Effect.void),
-          busSubscriptionContribution("b:*", () => Effect.void),
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            subscriptions: [
+              { pattern: "a:*", handler: () => Effect.void },
+              { pattern: "b:*", handler: () => Effect.void },
+            ],
+          }),
           commandContribution({ name: "cmd1", handler: () => Effect.void }),
           commandContribution({ name: "cmd2", handler: () => Effect.void }),
         ],
       })
       const contributions = yield* setupOf(ext)
-      expect(extractBusSubscriptions(contributions).length).toBe(2)
+      const resources = extractResources(contributions)
+      expect(resources).toHaveLength(1)
+      expect(resources[0]!.subscriptions).toHaveLength(2)
       expect(extractCommands(contributions).length).toBe(2)
     }),
   )

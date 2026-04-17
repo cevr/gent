@@ -14,7 +14,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import {
-  busSubscriptionContribution,
   commandContribution,
   defineExtension,
   defineInterceptor,
@@ -53,9 +52,18 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("busSubscriptionContribution handler MUST return Effect — async handler rejected", () => {
-    // @ts-expect-error — async handler must not be assignable to Effect-returning bus handler
-    busSubscriptionContribution("agent:*", async () => undefined)
+  test("Resource.subscriptions handler MUST return Effect — async handler rejected", () => {
+    defineResource({
+      scope: "process",
+      layer: Layer.empty,
+      subscriptions: [
+        {
+          pattern: "agent:*",
+          // @ts-expect-error — async handler must not be assignable to Effect-returning bus handler
+          handler: async () => undefined,
+        },
+      ],
+    })
     expect(true).toBe(true)
   })
 
@@ -91,13 +99,13 @@ describe("Effect-purity locks (compile-time)", () => {
           }),
         ),
         interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
-        busSubscriptionContribution("agent:*", () => Effect.void),
         commandContribution({ name: "ok", handler: () => Effect.void }),
         defineResource({
           scope: "process",
           layer: Layer.empty,
           start: Effect.void,
           stop: Effect.void,
+          subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
           schedule: [
             {
               id: "j",

@@ -88,7 +88,6 @@ collisions.
 | Permission rule    | `permissionRuleContribution(r)`                                                          | Allow/deny rule for tool patterns                                                                                                                  |
 | Prompt section     | `promptSectionContribution(s)`                                                           | Static or dynamic system prompt fragment                                                                                                           |
 | Command            | `commandContribution(c)`                                                                 | Slash command                                                                                                                                      |
-| Bus subscription   | `busSubscriptionContribution(p, h)`                                                      | Pattern-matched event subscription                                                                                                                 |
 | Model driver       | `modelDriverContribution(d)`                                                             | LLM provider                                                                                                                                       |
 | External driver    | `externalDriverContribution(d)`                                                          | Out-of-process turn executor (e.g. ACP)                                                                                                            |
 
@@ -265,15 +264,23 @@ contributions: () => [
 ]
 ```
 
-### Bus subscription
+### Pub/sub subscription
 
-Pattern-matched event subscriptions. Handler returns Effect.
+Pattern-matched event subscriptions live on a Resource. Handler returns
+Effect. Patterns: exact match (`"ext:foo"`) or `"<prefix>:*"` wildcard
+(`"agent:*"` matches all `"agent:<EventTag>"` channels).
 
 ```ts
 contributions: () => [
-  busSubscriptionContribution("agent:*", (envelope) =>
-    Effect.logInfo(`bus event ${envelope.channel}`),
-  ),
+  defineLifecycleResource({
+    scope: "process",
+    subscriptions: [
+      {
+        pattern: "agent:*",
+        handler: (envelope) => Effect.logInfo(`bus event ${envelope.channel}`),
+      },
+    ],
+  }),
 ]
 ```
 

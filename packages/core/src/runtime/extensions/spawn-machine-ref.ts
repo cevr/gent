@@ -19,7 +19,7 @@ import {
   makePersistCodec,
 } from "./extension-actor-shared.js"
 import { ExtensionTurnControl } from "./turn-control.js"
-import { ExtensionEventBus } from "./event-bus.js"
+import { SubscriptionEngine } from "./resource-host/subscription-engine.js"
 
 export const spawnMachineExtensionRef = <
   State extends { readonly _tag: string },
@@ -38,7 +38,7 @@ export const spawnMachineExtensionRef = <
     Effect.gen(function* () {
       const turnControl = yield* ExtensionTurnControl
       const storage = yield* Effect.serviceOption(Storage)
-      const bus = yield* Effect.serviceOption(ExtensionEventBus)
+      const bus = yield* Effect.serviceOption(SubscriptionEngine)
       const versionRef = yield* Ref.make(0)
       const startedRef = yield* Ref.make(false)
       const protocolError = (

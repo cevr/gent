@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
 import { type AgentEvent, BaseEventStore } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
+import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host/subscription-engine"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
@@ -218,7 +218,7 @@ describe("EventPublisher", () => {
       terminateAll: () => Effect.void,
     })
 
-    const busLayer = Layer.succeed(ExtensionEventBus, {
+    const busLayer = Layer.succeed(SubscriptionEngine, {
       emit: (envelope) =>
         envelope.payload !== undefined &&
         envelope.channel === "agent:OuterEvent" &&

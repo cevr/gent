@@ -294,11 +294,11 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `busSubscriptionContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
+One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
 
 Internally `defineExtension` lowers the contribution array into `ExtensionSetup` for the runtime registry. The `Contribution` union (`packages/core/src/domain/contribution.ts`) is the foundational data structure — adding a new kind triggers a compile error in `placeContribution` until handled.
 
-- Stateless: tools, interceptors, bus subscriptions
+- Stateless: tools, interceptors
 - Stateful: `defineResource({ scope, layer, machine, schedule?, subscriptions?, start?, stop? })` — long-lived state with explicit scope. The `machine` field carries an `effect-machine` machine + declared effects when the extension owns one. `defineLifecycleResource` is the no-service variant for Resources that contribute lifecycle / schedule / subscriptions / machine without a service tag.
 - `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`ui`/`policy` projectors. Replaces the actor-as-mirror pattern; lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
 - `Interceptor` (`interceptorContribution(defineInterceptor(key, handler))`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `turn.before`, `turn.after`, `message.input`, `message.output`). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
@@ -308,15 +308,14 @@ Internally `defineExtension` lowers the contribution array into `ExtensionSetup`
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 
-### Extension Event Bus
+### Extension Pub/Sub
 
-`ExtensionEventBus` — channel-based pub/sub for extension communication (`runtime/extensions/event-bus.ts`).
+`SubscriptionEngine` — channel-based pub/sub for extension communication (`runtime/extensions/resource-host/subscription-engine.ts`).
 
 - Agent events auto-published as `"agent:<EventTag>"` with sessionId/branchId after reduction
-- `busSubscriptionContribution("agent:*", handler)` — wildcard subscription
-- `busSubscriptionContribution("extensionId:channel", handler)` — targeted side-effect handlers
+- Subscriptions live on Resources via `defineResource({ subscriptions: [{ pattern: "agent:*", handler }, ...] })` — wildcard `"<prefix>:*"` and exact-match patterns supported
 - Handlers MUST return `Effect<void>` — Effect-native end-to-end, no Promise edges
-- Bus is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
+- Pub/sub is observation / side-effect plumbing, not actor ownership or RPC-by-stealth
 
 ### Task Service Ownership
 

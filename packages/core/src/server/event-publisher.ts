@@ -7,7 +7,7 @@ import {
   getEventSessionId,
 } from "../domain/event.js"
 import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
-import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { extractPulseSubscriptions } from "../domain/contribution.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
@@ -43,7 +43,7 @@ export const EventPublisherLive: Layer.Layer<
     const baseEventStore = yield* BaseEventStore
     const stateRuntime = yield* WorkflowRuntime
     const registry = yield* ExtensionRegistry
-    const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+    const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
     // Pre-compute event-tag → extensionIds index from PulseSubscription
@@ -115,7 +115,7 @@ export const EventPublisherLive: Layer.Layer<
               .pipe(
                 Effect.provideService(CurrentExtensionSession, extensionSession),
                 Effect.catchEager((error) =>
-                  logDeliveryFailure("extension.bus.emit.failed", {
+                  logDeliveryFailure("extension.subscription.emit.failed", {
                     sessionId,
                     event: event._tag,
                     error: String(error),

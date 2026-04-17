@@ -31,8 +31,6 @@ import {
   isDynamicPromptSection,
 } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { extractBusSubscriptions } from "../domain/contribution.js"
-import { ExtensionEventBus } from "./extensions/event-bus.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
@@ -257,12 +255,10 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   // composers (added in later commits).
   const resourceLayer = buildResourceLayer(resolved.extensions, "process")
 
-  const busSubscriptions = resolved.extensions.flatMap((ext) =>
-    extractBusSubscriptions(ext.contributions),
-  )
-
-  // Resource subscriptions — register on the new `SubscriptionEngine`
-  // (parallel to the legacy `ExtensionEventBus`). C3.6 unifies both.
+  // Resource subscriptions — single pub/sub host. SubscriptionEngine is
+  // both the agent-event fan-out target (`agent:<EventTag>` envelopes
+  // emitted by EventPublisher / agent-runner) and the registration sink
+  // for `Resource.subscriptions`.
   const resourceSubscriptions = collectSubscriptions(resolved.extensions)
 
   const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
@@ -276,7 +272,6 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
       externalDrivers: resolved.externalDrivers,
     }),
     extensionRuntimeLive,
-    ExtensionEventBus.withSubscriptions(busSubscriptions),
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
