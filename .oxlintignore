@@ -1,0 +1,8 @@
+# oxlint reads this via --ignore-path=.oxlintignore (set in package.json scripts).
+# The JSON config's `ignorePatterns` field appears to be a no-op with current
+# oxlint version, so all ignore patterns live here.
+**/dist/
+**/node_modules/
+**/*.d.ts
+**/scripts/
+lint/fixtures/

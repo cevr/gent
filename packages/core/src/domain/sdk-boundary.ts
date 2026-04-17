@@ -33,13 +33,25 @@ import { Effect } from "effect"
 declare const BoundaryBrand: unique symbol
 
 /**
+ * Structural constraint on `SdkBoundary`'s error channel — must carry a `_tag`
+ * discriminator. `Schema.TaggedErrorClass` produces classes that satisfy this
+ * shape (each instance has `_tag: string`); plain `Error` subclasses do not.
+ *
+ * The constraint is structural rather than nominal because `Schema` does not
+ * export a public `TaggedError` interface, only the `TaggedErrorClass` factory.
+ * Pairing this constraint with the `gent/all-errors-are-tagged` lint rule
+ * gives both type-level and source-level enforcement.
+ */
+export type TaggedErrorLike = Error & { readonly _tag: string }
+
+/**
  * An Effect tagged for crossing into untyped JS at a known SDK boundary.
  *
  * `R = never` is structural: closed-over dependencies must be provided before
- * branding. `E` must be a `Schema.TaggedError` subclass so the boundary surfaces
- * a typed failure shape to its Promise consumer.
+ * branding. `E extends TaggedErrorLike` requires the error channel to carry a
+ * `_tag` discriminator — surfacing a typed failure shape to its Promise consumer.
  */
-export type SdkBoundary<A, E> = Effect.Effect<A, E, never> & {
+export type SdkBoundary<A, E extends TaggedErrorLike> = Effect.Effect<A, E, never> & {
   readonly [BoundaryBrand]: true
 }
 
@@ -49,7 +61,7 @@ export type SdkBoundary<A, E> = Effect.Effect<A, E, never> & {
  * The `label` is a human-readable name surfaced in tracing and lint diagnostics.
  * Lint will reject a `runPromise` outside `*-boundary.ts` on a non-branded Effect.
  */
-export const sdkBoundary = <A, E>(
+export const sdkBoundary = <A, E extends TaggedErrorLike>(
   _label: string,
   effect: Effect.Effect<A, E, never>,
 ): SdkBoundary<A, E> =>
@@ -63,5 +75,6 @@ export const sdkBoundary = <A, E>(
  * files. Lint rule `gent/no-runpromise-outside-boundary` enforces the
  * restriction.
  */
-export const runSdkBoundary = <A, E>(boundary: SdkBoundary<A, E>): Promise<A> =>
-  Effect.runPromise(boundary)
+export const runSdkBoundary = <A, E extends TaggedErrorLike>(
+  boundary: SdkBoundary<A, E>,
+): Promise<A> => Effect.runPromise(boundary)

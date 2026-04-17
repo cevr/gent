@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "perf": "off"
+  },
+  "plugins": [],
+  "jsPlugins": ["../no-direct-env.ts"],
+  "rules": {
+    "gent/no-runpromise-outside-boundary": "error",
+    "gent/all-errors-are-tagged": "error",
+    "gent/no-define-extension-throw": "error",
+    "gent/no-r-equals-never-comment": "error",
+    "gent/brand-constructor-callers": "error"
+  }
+}

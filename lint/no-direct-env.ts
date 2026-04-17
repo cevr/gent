@@ -340,7 +340,7 @@ const plugin: Plugin = {
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
         // Allow lint plugin file itself (rule definitions reference the API in messages)
-        if (/\/lint\//.test(filename)) return {}
+        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
 
         // Known SDK boundaries pending migration to *-boundary.ts file naming.
         // Each entry is a documented Effect→Promise edge that currently uses
@@ -415,13 +415,26 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags `throw` statements inside `definePackage(...)` and
-     * `defineExtension(...)` factory bodies. Factories must surface failures
-     * via the Effect channel (`ExtensionLoadError`), never by throwing — a
-     * thrown error becomes an unrecoverable defect at the load site.
+     * Flags `throw` statements inside the body of a function passed as a
+     * `setup` property to `definePackage(...)` / `defineExtension(...)`.
      *
-     * Valid:   definePackage({ ..., setup: () => Effect.fail(new ExtensionLoadError(...)) })
-     * Invalid: definePackage({ ..., setup: () => { throw new Error("bad") } })
+     * The factory's `setup` callback is called by the loader during extension
+     * load; a synchronous `throw` becomes a defect at the load site instead
+     * of a typed `ExtensionLoadError` on the Effect channel. The B7 fix
+     * (wrapping the call in `Effect.try`) routes the defect, but the lint
+     * rule prevents authors from writing the bug in the first place.
+     *
+     * Valid:   definePackage({ id, setup: () => Effect.fail(new ExtensionLoadError(...)) })
+     * Valid:   definePackage({ id, setup: () => Effect.gen(function* () { ... }) })
+     * Invalid: definePackage({ id, setup: () => { throw new Error("missing config") } })
+     *
+     * Detection: walks the first object-literal argument for a `setup` property
+     * whose value is an arrow/function expression, then reports any
+     * `ThrowStatement` directly inside that callback's body (not inside a
+     * further-nested function — those are deferred runtime calls).
+     *
+     * NOTE: C0 ships the rule; C8 introduces `definePackage` whose setup is
+     * Effect-typed, at which point this rule's bite is exact.
      */
     "no-define-extension-throw": {
       create(context) {
@@ -431,34 +444,38 @@ const plugin: Plugin = {
           "FunctionExpression",
           "FunctionDeclaration",
         ])
-        // Walk the args and report throws that are NOT nested inside a function
-        // expression. Throws inside callbacks (e.g. `resolveModel: () => { throw ... }`)
-        // are runtime behavior with their own error semantics; we only flag throws
-        // that execute synchronously during the factory call.
-        const walkSyncThrows = (node: unknown, report: (n: AstNode) => void): void => {
-          if (Array.isArray(node)) {
-            for (const child of node) walkSyncThrows(child, report)
-            return
+        const findThrowsInBody = (fn: AstNode, report: (n: AstNode) => void): void => {
+          const visit = (n: unknown): void => {
+            if (Array.isArray(n)) {
+              for (const c of n) visit(c)
+              return
+            }
+            if (!isAstNode(n)) return
+            // Stop at any nested function — those are deferred callbacks.
+            if (FUNCTION_BOUNDARY_TYPES.has(n.type)) return
+            if (n.type === "ThrowStatement") {
+              report(n)
+              return
+            }
+            for (const key in n) {
+              if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
+              visit(n[key])
+            }
           }
-          if (!isAstNode(node)) return
-          if (FUNCTION_BOUNDARY_TYPES.has(node.type)) return
-          if (node.type === "ThrowStatement") {
-            report(node)
-            return
-          }
-          for (const key in node) {
-            if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-            walkSyncThrows(node[key], report)
-          }
+          // Don't apply the function-boundary stop to the immediate setup body
+          // (it IS the function), only to its descendants.
+          visit(fn.body)
         }
         return {
           CallExpression(node) {
             if (node.callee.type !== "Identifier") return
             if (!FACTORIES.has(node.callee.name)) return
             const factoryName = node.callee.name
-            walkSyncThrows(node.arguments, (n) => {
+            const setupFn = findArrowInFirstArg(node, "setup")
+            if (setupFn === undefined) return
+            findThrowsInBody(setupFn, (n) => {
               context.report({
-                message: `${factoryName} must surface failures via the Effect channel, not throw synchronously during setup. Use \`Effect.fail(new ExtensionLoadError({ ... }))\` so the loader can route the error.`,
+                message: `${factoryName}'s \`setup\` callback must surface failures via the Effect channel, not throw synchronously. Use \`Effect.fail(new ExtensionLoadError({ ... }))\` so the loader can route the error.`,
                 node: n,
               })
             })
@@ -483,7 +500,7 @@ const plugin: Plugin = {
       create(context) {
         const filename = context.filename
         // Allow the lint plugin file itself (rule definition references the matched pattern in messages)
-        if (/\/lint\//.test(filename)) return {}
+        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
         // Allow the SdkBoundary domain module itself (its docstring describes the migration target)
         if (/\/domain\/sdk-boundary\.ts$/.test(filename)) return {}
         // Allow tests
@@ -505,10 +522,15 @@ const plugin: Plugin = {
         if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
         return {
           Program(node) {
+            // Comments live on `sourceCode.getAllComments()` in the oxlint plugin
+            // surface, not on the Program node directly.
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const programNode = node as unknown as AstNode
-            const commentsField = programNode["comments"]
-            const comments = Array.isArray(commentsField) ? commentsField : []
+            const ctx = context as unknown as {
+              sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
+            }
+            const getAll = ctx.sourceCode?.getAllComments
+            if (typeof getAll !== "function") return
+            const comments = getAll.call(ctx.sourceCode)
             for (const c of comments) {
               if (!isAstNode(c)) continue
               const value = getStringField(c, "value")
@@ -520,6 +542,53 @@ const plugin: Plugin = {
                 })
               }
             }
+            // `node` parameter intentionally unused — comments are global to the file.
+            void node
+          },
+        }
+      },
+    },
+
+    /**
+     * Restrict scope-brand constructors (`brandServerScope`, `brandCwdScope`,
+     * `brandEphemeralScope`) to their authorised composition-root files.
+     *
+     * The brand constructors in `runtime/scope-brands.ts` are plain casts —
+     * TypeScript cannot prevent a foreign caller from forging a brand. Lint
+     * fences calls to these functions at the file level: only the documented
+     * composition root for each scope may call its brander.
+     *
+     * Authorised callers:
+     *   - `brandServerScope`     → `packages/core/src/server/dependencies.ts`
+     *   - `brandCwdScope`        → `packages/core/src/runtime/session-profile.ts`
+     *   - `brandEphemeralScope`  → `packages/core/src/runtime/agent/agent-runner.ts`
+     *
+     * The rule also exempts the `scope-brands.ts` module itself (where the
+     * functions are defined) and tests.
+     */
+    "brand-constructor-callers": {
+      create(context) {
+        const filename = context.filename
+        if (/\/runtime\/scope-brands\.ts$/.test(filename)) return {}
+        if (/\/tests\//.test(filename)) return {}
+        if (/\.test\.tsx?$/.test(filename)) return {}
+
+        const ALLOWED: Record<string, RegExp> = {
+          brandServerScope: /\/server\/dependencies\.ts$/,
+          brandCwdScope: /\/runtime\/session-profile\.ts$/,
+          brandEphemeralScope: /\/runtime\/agent\/agent-runner\.ts$/,
+        }
+        return {
+          CallExpression(node) {
+            if (node.callee.type !== "Identifier") return
+            const name = node.callee.name
+            const allowedPattern = ALLOWED[name]
+            if (allowedPattern === undefined) return
+            if (allowedPattern.test(filename)) return
+            context.report({
+              message: `\`${name}\` may only be called from its authorised composition-root file (${allowedPattern.source}). Brand constructors are casts; lint enforces what the type system cannot.`,
+              node,
+            })
           },
         }
       },
