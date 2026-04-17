@@ -13,7 +13,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "build": "turbo run build",
-    "test": "turbo run test && bun test lint/fixtures.test.ts",
+    "test": "turbo run test",
     "test:e2e": "turbo run test:e2e",
     "gate": "concurrently -n type,style,build,test -c blue,yellow,cyan,green \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",

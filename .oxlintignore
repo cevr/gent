@@ -5,4 +5,4 @@
 **/node_modules/
 **/*.d.ts
 **/scripts/
-lint/fixtures/
+packages/tooling/fixtures/

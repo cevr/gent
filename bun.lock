@@ -133,6 +133,10 @@
         "effect": "catalog:",
       },
     },
+    "packages/tooling": {
+      "name": "@gent/tooling",
+      "version": "0.0.0",
+    },
   },
   "overrides": {
     "@effect/ai-anthropic": "4.0.0-beta.47",
@@ -306,6 +310,8 @@
     "@gent/sdk": ["@gent/sdk@workspace:packages/sdk"],
 
     "@gent/server-http": ["@gent/server-http@workspace:apps/server"],
+
+    "@gent/tooling": ["@gent/tooling@workspace:packages/tooling"],
 
     "@gent/tui": ["@gent/tui@workspace:apps/tui"],
 

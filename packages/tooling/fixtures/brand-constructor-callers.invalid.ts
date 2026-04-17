@@ -5,7 +5,7 @@ import {
   brandServerScope,
   brandCwdScope,
   brandEphemeralScope,
-} from "../../packages/core/src/runtime/scope-brands.js"
+} from "../../core/src/runtime/scope-brands.js"
 
 export const a = brandServerScope({} as never)
 export const b = brandCwdScope({} as never)

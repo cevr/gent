@@ -6,7 +6,7 @@
     "perf": "off"
   },
   "plugins": [],
-  "jsPlugins": ["../no-direct-env.ts"],
+  "jsPlugins": ["../../../lint/no-direct-env.ts"],
   "rules": {
     "gent/no-runpromise-outside-boundary": "error",
     "gent/all-errors-are-tagged": "error",
