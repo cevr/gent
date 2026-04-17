@@ -199,6 +199,7 @@ export {
   mutation as mutationContribution,
   workflow as workflowContribution,
   defineResource,
+  defineLifecycleResource,
 } from "../domain/contribution.js"
 export type {
   ResourceContribution,

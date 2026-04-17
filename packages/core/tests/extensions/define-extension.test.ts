@@ -36,7 +36,7 @@ import {
   extractExternalDrivers,
   extractModelDrivers,
 } from "@gent/core/domain/contribution"
-import { collectProcessLayers } from "@gent/core/runtime/extensions/resource-host"
+import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
@@ -130,7 +130,7 @@ describe("defineExtension", () => {
   )
 
   it.live(
-    "Resource.start and Resource.stop run at scope build/teardown when collected via withLifecycle",
+    "Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order",
     () =>
       Effect.gen(function* () {
         const log: string[] = []
@@ -158,22 +158,15 @@ describe("defineExtension", () => {
           sourcePath: "builtin",
           contributions: yield* setupOf(ext),
         }
-        const layers = collectProcessLayers([loaded as never])
-        const merged = layers.reduce(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (acc, l) => Layer.merge(acc, l) as Layer.Layer<any>,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          Layer.empty as Layer.Layer<any>,
-        )
         yield* Effect.scoped(
           Effect.gen(function* () {
-            yield* Layer.build(merged)
+            yield* Layer.build(buildResourceLayer([loaded as never], "process"))
           }),
         )
-        // Both starts ran before any stop; stops run at teardown in reverse
-        // (Effect finalizer convention).
-        expect(log.slice(0, 2).sort()).toEqual(["startup-1", "startup-2"])
-        expect(log.slice(2).sort()).toEqual(["shutdown-1", "shutdown-2"])
+        // Strict ordering — no sorting. Codex C3.4 review flagged that the
+        // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
+        // is now sequenced through one Effect, so this is deterministic.
+        expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
       }),
   )
 

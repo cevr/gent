@@ -38,7 +38,7 @@ import { DriverRegistry } from "./extensions/driver-registry.js"
 import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
-  collectProcessLayers,
+  buildResourceLayer,
   collectSubscriptions,
   SubscriptionEngine,
 } from "./extensions/resource-host/index.js"
@@ -251,10 +251,11 @@ export const compileBaseSections = (
  * call this same builder so the wiring shape is identical.
  */
 export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
-  // Process-scope Resource layers — the only path for extension-contributed
-  // services after C3.2. cwd / session / branch Resources are routed through
-  // the per-cwd / ephemeral composers (added in later commits).
-  const resourceProcessLayers = collectProcessLayers(resolved.extensions)
+  // Process-scope Resource layer — services merged in parallel, lifecycle
+  // (start/stop) threaded sequentially with reverse-order teardown. cwd /
+  // session / branch Resources are routed through the per-cwd / ephemeral
+  // composers (added in later commits).
+  const resourceLayer = buildResourceLayer(resolved.extensions, "process")
 
   const busSubscriptions = resolved.extensions.flatMap((ext) =>
     extractBusSubscriptions(ext.contributions),
@@ -279,6 +280,5 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
-  if (resourceProcessLayers.length === 0) return baseLayers
-  return Layer.mergeAll(baseLayers, ...resourceProcessLayers)
+  return Layer.mergeAll(baseLayers, resourceLayer)
 }

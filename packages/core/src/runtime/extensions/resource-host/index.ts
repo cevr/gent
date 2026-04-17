@@ -23,7 +23,7 @@
  * @module
  */
 
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
 import type {
   AnyResourceContribution,
@@ -74,86 +74,116 @@ export const collectSubscriptions = (
 }
 
 /**
- * Wrap a Resource's `layer` with its `start` / `stop` lifecycle effects.
+ * Build the process-scope Resource layer for a set of loaded extensions.
  *
- * Lifecycle effects can yield the Resource's owned service `A`. To give them
- * access, we compose a `Layer.effectDiscard` that depends on the Resource's
- * layer:
+ * Composition strategy (addresses two correctness invariants):
  *
- *   - `start` runs once when the wrapped layer is built (sequentially in
- *     the surrounding scope), with `A` provided. Start failures are logged
- *     and swallowed so the lifecycle layer carries no failure channel —
- *     this matches the pre-C3.4 `activateLoadedExtensions` behavior of
- *     isolating per-extension startup errors. Resources that need a hard
- *     failure on startup should put the failing logic in their `layer`
- *     (which fails the layer build) rather than in `start`.
- *   - `stop` is registered as a `Scope.addFinalizer` in the same scope, so
- *     it runs at scope teardown with `A` still available. Finalizer
- *     failures are swallowed via `catchCause` per Effect finalizer
- *     contract.
+ * 1. **Service layers in parallel** — every Resource's `layer` is merged
+ *    via `Layer.mergeAll` so consumers can request any Resource's service
+ *    independently. This is the parallel build path Effect uses by default.
  *
- * If the Resource declares neither `start` nor `stop`, returns the layer
- * unchanged.
+ * 2. **Lifecycle in sequence** — `start` and `stop` for each Resource are
+ *    threaded through ONE sequential lifecycle layer (`Layer.effectDiscard`
+ *    over an `Effect.gen` for-loop). This guarantees:
+ *
+ *    - Start order: declaration order across extensions, then within the
+ *      Resource list of each extension.
+ *    - Stop order: reverse of successful-start order, by virtue of
+ *      `Effect.addFinalizer` being LIFO within a single scope.
+ *    - **No `stop` for failed `start`** — if `start` returns a failed Exit,
+ *      the cause is logged, the Resource is skipped, and its `stop` (if
+ *      any) is NOT registered as a finalizer. Avoids `stop` running against
+ *      half-initialized state — the bug pattern codex flagged in the
+ *      pre-fix C3.4 review.
+ *
+ *    Per-Resource failure isolation matches the pre-C3.4
+ *    `activateLoadedExtensions` behavior; failing-start does not bring
+ *    down the host. Surfacing failed-start to extension health is a
+ *    follow-up (memory: project_resource_lifecycle_health_surface).
+ *
+ * The lifecycle layer is provided to the merged service layer via
+ * `Layer.provideMerge`, so lifecycle effects observe the services they own
+ * (their `A` is in the lifecycle layer's requirements channel, satisfied by
+ * the merged service context).
+ *
+ * Today only `scope: "process"` Resources flow through here. cwd / session /
+ * branch Resources route through the per-cwd / ephemeral composers (added
+ * in later commits).
  */
-const withLifecycle = (
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  r: AnyResourceContribution,
+export const buildResourceLayer = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  scope: ResourceScope = "process",
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Layer.Layer<any> => {
-  const { start, stop } = r
-  if (start === undefined && stop === undefined) {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource layers carry their own R/E.
+  const resources = extensions.flatMap((ext) =>
+    extractResources(ext.contributions)
+      .filter((r) => r.scope === scope)
+      .map((r) => ({ extensionId: ext.manifest.id, resource: r })),
+  )
+
+  if (resources.length === 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    return r.layer as Layer.Layer<any>
+    return Layer.empty as Layer.Layer<any>
   }
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — lifecycle weave preserves Resource's R/E.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-  const baseLayer = r.layer as Layer.Layer<any>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous `A`/`E` per Resource; lifecycle effect operates on `unknown` channels and is provided by `baseLayer` below.
+
+  // Service layers — built in parallel via `Layer.merge` reduce. R/E erased
+  // to `any` to absorb heterogeneous Resource shapes; this is the same
+  // convention every contribution-host uses at the merge boundary.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type AnyLayer = Layer.Layer<any>
+  const serviceLayers = resources.reduce<AnyLayer>(
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource service layers; channels merged here for parallel availability.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    (acc, { resource }) => Layer.merge(acc, resource.layer as AnyLayer),
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    Layer.empty as AnyLayer,
+  )
+
+  const hasLifecycle = resources.some(
+    ({ resource }) => resource.start !== undefined || resource.stop !== undefined,
+  )
+  if (!hasLifecycle) return serviceLayers
+
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — lifecycle effect threads heterogeneous Resource A/E channels; service A's are provided by serviceLayers via provideMerge below.
   const lifecycleLayer = Layer.effectDiscard(
     Effect.gen(function* () {
-      if (start !== undefined) {
-        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource start may carry any E; failures are logged + swallowed below.
-        yield* (start as Effect.Effect<void, unknown, unknown>).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("resource.start.failed").pipe(
-              Effect.annotateLogs({ cause: String(cause) }),
-            ),
-          ),
-        )
+      // start in declaration order; track which started so stop registers only on success.
+      const successfullyStarted: Array<{
+        readonly extensionId: string
+        readonly resource: AnyResourceContribution
+      }> = []
+      for (const entry of resources) {
+        const { resource, extensionId } = entry
+        if (resource.start !== undefined) {
+          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource start may carry any E; failure is converted to a log + skip below.
+          const exit = yield* Effect.exit(resource.start as Effect.Effect<void, unknown, unknown>)
+          if (Exit.isFailure(exit)) {
+            yield* Effect.logError("resource.start.failed").pipe(
+              Effect.annotateLogs({ extensionId, cause: String(exit.cause) }),
+            )
+            continue
+          }
+        }
+        successfullyStarted.push(entry)
       }
-      if (stop !== undefined) {
-        yield* Effect.addFinalizer(() =>
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — `A` is heterogeneous across Resources; lifecycle layer is provided by `baseLayer` below.
-          (stop as Effect.Effect<void, never, unknown>).pipe(Effect.catchCause(() => Effect.void)),
-        )
+      // Register finalizers in start order; Scope runs them LIFO at teardown,
+      // yielding reverse-of-successful-start order — the property stateful
+      // teardown needs.
+      for (const { resource } of successfullyStarted) {
+        if (resource.stop !== undefined) {
+          yield* Effect.addFinalizer(() =>
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource stop A is heterogeneous; provided by serviceLayers via provideMerge.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            (resource.stop as Effect.Effect<void, never, unknown>).pipe(
+              Effect.catchCause(() => Effect.void),
+            ),
+          )
+        }
       }
     }),
   )
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — lifecycleLayer's `unknown` requirements are satisfied by `baseLayer` via `provideMerge`.
-  return Layer.provideMerge(lifecycleLayer, baseLayer)
-}
 
-/**
- * Collect every Resource layer declared by every extension, with each
- * layer's `start`/`stop` lifecycle woven in. Used by the server composition
- * root to merge Resource layers into the process-scope Layer.
- *
- * Today only `scope: "process"` Resources contribute to this collection;
- * cwd / session / branch Resources are routed through the per-cwd /
- * ephemeral composers (added in later commits).
- *
- * Returned layers have R/E channels erased to `any` at the boundary —
- * the same convention `buildExtensionLayers` uses for legacy
- * `extractLayer` results. Resources whose layers have unmet requirements
- * fail at Layer.build time (same behaviour as the legacy path).
- */
-export const collectProcessLayers = (
-  extensions: ReadonlyArray<LoadedExtension>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): ReadonlyArray<Layer.Layer<any>> =>
-  extensions.flatMap((ext) =>
-    extractResources(ext.contributions)
-      .filter((r) => r.scope === "process")
-      .map((r) => withLifecycle(r)),
-  )
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — lifecycleLayer's `unknown` requirements are satisfied by serviceLayers via provideMerge.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+  return Layer.provideMerge(lifecycleLayer, serviceLayers) as Layer.Layer<any>
+}

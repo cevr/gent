@@ -213,7 +213,7 @@ export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptio
 // `defineResource` is exported directly from `./resource.ts` — Resources
 // self-discriminate via `_kind: "resource"` on the contribution itself,
 // so there is no contribution-side wrapper smart constructor here.
-export { defineResource } from "./resource.js"
+export { defineResource, defineLifecycleResource } from "./resource.js"
 
 // ── Filters ──
 

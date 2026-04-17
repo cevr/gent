@@ -10,12 +10,11 @@
  *
  * @module
  */
-import { Layer } from "effect"
 import {
   agentContribution,
   defineAgent,
   defineExtension,
-  defineResource,
+  defineLifecycleResource,
   ExternalDriverRef,
   externalDriverContribution,
 } from "@gent/core/extensions/api"
@@ -44,20 +43,12 @@ export const AcpAgentsExtension = defineExtension({
           executor: makeAcpTurnExecutor(config, manager),
         }),
       ),
-      // Per-process Resource that owns the ACP session manager's lifecycle.
-      // No service is contributed (Layer.empty); the manager is closure-
-      // captured by the executors above, and its disposal runs as the
-      // Resource's `stop` finalizer at process scope teardown.
-      //
-      // Explicit `<unknown, "process">` type args widen `A` from `never`
-      // (inferred from `Layer.empty`) so the Resource fits the
-      // `AnyResourceContribution = ResourceContribution<any, ...>` union
-      // member without TypeScript's contravariance check failing on the
-      // `Layer<A, ...>` slot.
-      defineResource<unknown, "process">({
+      // Per-process lifecycle-only Resource that owns the ACP session
+      // manager's disposal. The manager is closure-captured by the
+      // executors above; its `disposeAll()` runs as the Resource's `stop`
+      // finalizer at process-scope teardown. No service is contributed.
+      defineLifecycleResource({
         scope: "process",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        layer: Layer.empty as Layer.Layer<unknown>,
         stop: manager.disposeAll(),
       }),
     ]

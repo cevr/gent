@@ -32,7 +32,8 @@
  * @module
  */
 
-import type { Context, Effect, Layer } from "effect"
+import { Layer } from "effect"
+import type { Context, Effect } from "effect"
 import type { AgentName } from "./agent.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
@@ -215,3 +216,45 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> 
 export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
   spec: ResourceSpec<A, S, R, E>,
 ): ResourceContribution<A, S, R, E> => ({ _kind: "resource", ...spec })
+
+/**
+ * Spec for {@link defineLifecycleResource} — a Resource that contributes no
+ * service, only `start` / `stop` lifecycle hooks. Authors use this when they
+ * have process-scope (or session/branch) cleanup work that doesn't naturally
+ * belong to a service tag (e.g., a closure-captured manager whose disposal
+ * runs at scope teardown).
+ */
+export interface LifecycleResourceSpec<S extends ResourceScope> {
+  readonly scope: S
+  readonly start?: Effect.Effect<void>
+  readonly stop?: Effect.Effect<void>
+  readonly subscriptions?: ReadonlyArray<ResourceSubscription>
+  readonly schedule?: ReadonlyArray<ResourceSchedule>
+}
+
+/**
+ * Smart constructor for the lifecycle-only Resource pattern. Backed by
+ * `Layer.empty` and a synthetic `unknown` service identity, so authors don't
+ * have to write `<unknown, "process">({ layer: Layer.empty as Layer.Layer<unknown> })`
+ * by hand to dodge the `AnyResourceContribution` variance shape.
+ *
+ * Uses {@link defineResource} under the hood; the resulting contribution is
+ * indistinguishable at runtime from a manually-constructed lifecycle-only
+ * Resource.
+ */
+export const defineLifecycleResource = <S extends ResourceScope>(
+  spec: LifecycleResourceSpec<S>,
+): ResourceContribution<unknown, S, never, never> =>
+  defineResource<unknown, S>({
+    scope: spec.scope,
+    // `Layer.empty` is `Layer<never, never, never>`; the explicit cast widens
+    // its `ROut` to `unknown` (Layer is contravariant in `ROut`, so this is
+    // not a soundness issue — it's the same widening `defineResource<unknown>`
+    // requires on its own input).
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    layer: Layer.empty as unknown as Layer.Layer<unknown, never, ScopeOf<S>>,
+    ...(spec.start !== undefined ? { start: spec.start } : {}),
+    ...(spec.stop !== undefined ? { stop: spec.stop } : {}),
+    ...(spec.subscriptions !== undefined ? { subscriptions: spec.subscriptions } : {}),
+    ...(spec.schedule !== undefined ? { schedule: spec.schedule } : {}),
+  })
