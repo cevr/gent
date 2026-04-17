@@ -294,17 +294,17 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `layerContribution`, `permissionRuleContribution`, `commandContribution`, `jobContribution`, `busSubscriptionContribution`, `onStartupContribution`/`onShutdownContribution`, `workflowContribution`, `actorContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
+One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `busSubscriptionContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
 
 Internally `defineExtension` lowers the contribution array into `ExtensionSetup` for the runtime registry. The `Contribution` union (`packages/core/src/domain/contribution.ts`) is the foundational data structure — adding a new kind triggers a compile error in `placeContribution` until handled.
 
-- Stateless: tools, interceptors, jobs, bus subscriptions
-- Stateful: `actorContribution` (legacy) or `workflowContribution` (preferred — `effect-machine` machine + declared effects) + optional `layerContribution`
+- Stateless: tools, interceptors, bus subscriptions
+- Stateful: `defineResource({ scope, layer, machine, schedule?, subscriptions?, start?, stop? })` — long-lived state with explicit scope. The `machine` field carries an `effect-machine` machine + declared effects when the extension owns one. `defineLifecycleResource` is the no-service variant for Resources that contribute lifecycle / schedule / subscriptions / machine without a service tag.
 - `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`ui`/`policy` projectors. Replaces the actor-as-mirror pattern; lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
 - `Interceptor` (`interceptorContribution(defineInterceptor(key, handler))`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `turn.before`, `turn.after`, `message.input`, `message.output`). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
 - `Query` / `Mutation` (`queryContribution(...)` / `mutationContribution(...)`) — typed RPC handlers invoked via `ctx.extension.query(ref, input)` / `ctx.extension.mutate(ref, input)` from tools or other extensions.
 - `ModelDriver` / `ExternalDriver` — LLM providers and out-of-process turn executors (e.g. ACP). See `packages/core/src/domain/driver.ts`.
-- Lifecycle effects (`onStartupContribution`/`onShutdownContribution`) compose in registration order; failures isolate the extension instead of crashing host startup.
+- Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 

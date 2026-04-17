@@ -3,7 +3,8 @@
 ## Overview
 
 Extensions add tools, agents, prompt sections, interceptors, projections,
-queries, mutations, workflows, drivers, jobs, and lifecycle hooks to gent.
+queries, mutations, resources (long-lived state with optional state machines,
+schedules, subscriptions, and lifecycle hooks), and drivers to gent.
 The single authoring API is `defineExtension({ id, contributions })`.
 Contributions are a flat array of typed values built with smart constructors
 (`toolContribution`, `agentContribution`, `interceptorContribution`, …).
@@ -49,7 +50,7 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 ## defineExtension
 
 ```ts
-import { defineExtension, toolContribution, layerContribution } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, toolContribution } from "@gent/core/extensions/api"
 
 export default defineExtension({
   id: "my-ext",
@@ -58,7 +59,7 @@ export default defineExtension({
     // ctx.home — user home directory
     // ctx.fs / ctx.path / ctx.spawner — platform services
     toolContribution(MyTool),
-    layerContribution(MyService.Live),
+    defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
   ],
 })
 ```
@@ -74,25 +75,22 @@ within an extension does not matter for any kind except lifecycle effects
 (which compose in declaration order). Scope precedence handles cross-extension
 collisions.
 
-| Kind             | Smart constructor                                            | Purpose                                             |
-| ---------------- | ------------------------------------------------------------ | --------------------------------------------------- |
-| Tool             | `toolContribution(def)`                                      | Agent-callable tool                                 |
-| Agent            | `agentContribution(def)`                                     | Spawnable subagent                                  |
-| Interceptor      | `interceptorContribution(d)`                                 | Wrap a runtime pipeline (`prompt.system`, etc.)     |
-| Projection       | `projectionContribution(p)`                                  | Read-only view (prompt section / UI / tool policy)  |
-| Query            | `queryContribution(q)`                                       | Typed read-only RPC                                 |
-| Mutation         | `mutationContribution(m)`                                    | Typed write RPC                                     |
-| Workflow         | `workflowContribution(w)`                                    | `effect-machine` state machine + declared effects   |
-| Actor            | `actorContribution(a)`                                       | Legacy stateful actor (use `workflow` for new code) |
-| Layer            | `layerContribution(l)`                                       | Effect service Layer                                |
-| Permission rule  | `permissionRuleContribution(r)`                              | Allow/deny rule for tool patterns                   |
-| Prompt section   | `promptSectionContribution(s)`                               | Static or dynamic system prompt fragment            |
-| Command          | `commandContribution(c)`                                     | Slash command                                       |
-| Job              | `jobContribution(j)`                                         | Cron-scheduled host job                             |
-| Bus subscription | `busSubscriptionContribution(p, h)`                          | Pattern-matched event subscription                  |
-| Lifecycle        | `onStartupContribution(eff)` / `onShutdownContribution(eff)` | Setup-time effects                                  |
-| Model driver     | `modelDriverContribution(d)`                                 | LLM provider                                        |
-| External driver  | `externalDriverContribution(d)`                              | Out-of-process turn executor (e.g. ACP)             |
+| Kind               | Smart constructor                                                                        | Purpose                                                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool               | `toolContribution(def)`                                                                  | Agent-callable tool                                                                                                                                |
+| Agent              | `agentContribution(def)`                                                                 | Spawnable subagent                                                                                                                                 |
+| Interceptor        | `interceptorContribution(d)`                                                             | Wrap a runtime pipeline (`prompt.system`, etc.)                                                                                                    |
+| Projection         | `projectionContribution(p)`                                                              | Read-only view (prompt section / tool policy)                                                                                                      |
+| Query              | `queryContribution(q)`                                                                   | Typed read-only RPC                                                                                                                                |
+| Mutation           | `mutationContribution(m)`                                                                | Typed write RPC                                                                                                                                    |
+| Resource           | `defineResource({ scope, layer, machine?, schedule?, subscriptions?, start?, stop? })`   | Long-lived state with explicit scope. `machine` carries the `effect-machine` state machine when the extension owns one.                            |
+| Lifecycle Resource | `defineLifecycleResource({ scope, machine?, schedule?, subscriptions?, start?, stop? })` | Same as `defineResource` for the no-service case (Resource carries lifecycle / schedule / subscriptions / machine without exposing a service tag). |
+| Permission rule    | `permissionRuleContribution(r)`                                                          | Allow/deny rule for tool patterns                                                                                                                  |
+| Prompt section     | `promptSectionContribution(s)`                                                           | Static or dynamic system prompt fragment                                                                                                           |
+| Command            | `commandContribution(c)`                                                                 | Slash command                                                                                                                                      |
+| Bus subscription   | `busSubscriptionContribution(p, h)`                                                      | Pattern-matched event subscription                                                                                                                 |
+| Model driver       | `modelDriverContribution(d)`                                                             | LLM provider                                                                                                                                       |
+| External driver    | `externalDriverContribution(d)`                                                          | Out-of-process turn executor (e.g. ACP)                                                                                                            |
 
 ### Tool
 
@@ -177,11 +175,11 @@ export default defineExtension({
 ### Prompt section
 
 Static or dynamic. Dynamic sections may require services from the same
-extension's `layerContribution`.
+extension's Resource(s).
 
 ```ts
 contributions: ({ ctx }) => [
-  layerContribution(MyService.Live),
+  defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
   promptSectionContribution({
     id: "rules",
     content: "Be nice.",
@@ -214,12 +212,15 @@ contributions: () => [
 ]
 ```
 
-### Layer
+### Resource
+
+A long-lived service Layer with explicit scope. Multiple Resources from
+one extension merge into one composition root.
 
 ```ts
 contributions: ({ ctx }) => [
-  layerContribution(MyStorage.Live),
-  layerContribution(MyCache.Live), // merges with above at runtime
+  defineResource({ tag: MyStorage, scope: "process", layer: MyStorage.Live }),
+  defineResource({ tag: MyCache, scope: "process", layer: MyCache.Live }),
 ]
 ```
 
@@ -241,18 +242,25 @@ contributions: () => [
 ]
 ```
 
-### Job
+### Schedule
+
+Cron-scheduled host effects live on a Resource as part of `schedule`.
 
 ```ts
 contributions: () => [
-  jobContribution({
-    id: "reflect",
-    schedule: "0 21 * * 1-5",
-    target: {
-      kind: "headless-agent",
-      agent: "memory:reflect",
-      prompt: "Reflect on recent sessions.",
-    },
+  defineLifecycleResource({
+    scope: "process",
+    schedule: [
+      {
+        id: "reflect",
+        cron: "0 21 * * 1-5",
+        target: {
+          kind: "headless-agent",
+          agent: "memory:reflect",
+          prompt: "Reflect on recent sessions.",
+        },
+      },
+    ],
   }),
 ]
 ```
@@ -271,26 +279,53 @@ contributions: () => [
 
 ### Lifecycle
 
-Multiple `onStartup`/`onShutdown` contributions compose in declaration
-order.
+Resource lifecycle hooks. `start` runs at install time; `stop` runs at
+scope teardown via Effect's per-scope LIFO finalizer ordering. Failures
+in `start` log and degrade the Resource (other Resources keep running);
+`stop` may not fail (Effect finalizer contract).
 
 ```ts
 contributions: ({ ctx }) => [
-  onStartupContribution(Effect.logInfo(`init for cwd=${ctx.cwd}`)),
-  onShutdownContribution(Effect.logInfo("shutdown")),
+  defineLifecycleResource({
+    scope: "process",
+    start: Effect.logInfo(`init for cwd=${ctx.cwd}`),
+    stop: Effect.logInfo("shutdown"),
+  }),
 ]
 ```
 
-### Workflow / Actor
+### Resource.machine
 
-Workflows are the new shape — `effect-machine` state machines whose
+Stateful extensions attach a state machine to a Resource via the
+`machine` field. The machine is an `effect-machine` `Machine` whose
 transitions can declare effects (`QueueFollowUp`, `Interject`,
-`BusEmit`, etc.). See `packages/extensions/src/auto.ts` for a complete
-example.
+`BusEmit`, etc.) for the host runtime to dispatch. See
+`packages/extensions/src/auto.ts` for a complete example. When the
+extension owns a service Layer, declare both on one Resource:
 
-`actorContribution` remains for the small set of legacy stateful
-extensions that have not yet migrated; new code should prefer
-`workflowContribution`.
+```ts
+defineResource({
+  tag: MyService,
+  scope: "process",
+  layer: MyService.Live,
+  machine: myMachine,
+})
+```
+
+When the extension has no service Layer, use `defineLifecycleResource`:
+
+```ts
+defineLifecycleResource({
+  scope: "process",
+  machine: myMachine,
+})
+```
+
+Validation: an extension may declare at most one Resource with `machine`
+(otherwise the runtime would silently pick the first by array order).
+Today only `scope: "process"` machines are accepted; session/branch-scope
+machines are rejected at setup time until the per-cwd / ephemeral
+composers wire Resource layers (C3 successor work).
 
 ### Driver / Projection / Query / Mutation
 

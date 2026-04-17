@@ -272,10 +272,12 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 
 /**
  * Spec for {@link defineLifecycleResource} — a Resource that contributes no
- * service, only `start` / `stop` lifecycle hooks. Authors use this when they
- * have process-scope (or session/branch) cleanup work that doesn't naturally
- * belong to a service tag (e.g., a closure-captured manager whose disposal
- * runs at scope teardown).
+ * service tag. Carries any combination of `start` / `stop` lifecycle hooks,
+ * `subscriptions`, `schedule`, and `machine` without exposing a service
+ * identity. Authors use this when they have work that doesn't naturally
+ * belong to a service tag — e.g., a closure-captured manager whose
+ * disposal runs at scope teardown, or a state machine whose host is the
+ * `WorkflowRuntime` and that requires no Layer of its own.
  */
 export interface LifecycleResourceSpec<S extends ResourceScope> {
   readonly scope: S
