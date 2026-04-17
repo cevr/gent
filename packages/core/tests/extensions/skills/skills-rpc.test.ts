@@ -44,7 +44,7 @@ const setupSkillsExtension = Effect.provide(
     return {
       ...loaded,
       contributions: loaded.contributions.map((c) =>
-        c._kind === "resource" && c.scope === "process"
+        c._kind === "resource" && c.tag === Skills
           ? defineResource({
               ...c,
               // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion

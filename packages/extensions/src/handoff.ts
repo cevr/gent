@@ -1,8 +1,8 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
-  defineResource,
+  defineLifecycleResource,
   interceptorContribution,
   defineInterceptor,
   toolContribution,
@@ -137,10 +137,8 @@ export const HandoffExtension = defineExtension({
     toolContribution(HandoffTool),
     interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
     // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
-    defineResource<unknown, "process">({
+    defineLifecycleResource({
       scope: "process",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      layer: Layer.empty as Layer.Layer<unknown>,
       machine: cooldownWorkflow,
     }),
   ],

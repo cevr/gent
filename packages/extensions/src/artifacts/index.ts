@@ -9,13 +9,13 @@
  * Upsert: by sourceTool + branchId (last-writer-wins per source per branch)
  */
 
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import {
   ArtifactId,
   BranchId,
   defineExtension,
-  defineResource,
+  defineLifecycleResource,
   defineTool,
   toolContribution,
   type AnyResourceMachine,
@@ -302,10 +302,8 @@ export const ArtifactsExtension = defineExtension({
   contributions: () => [
     // No-service Resource carrying the machine. WorkflowRuntime supervises
     // the machine; this extension contributes no service tag of its own.
-    defineResource<unknown, "process">({
+    defineLifecycleResource({
       scope: "process",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      layer: Layer.empty as Layer.Layer<unknown>,
       machine: artifactsMachineDef,
     }),
     toolContribution(ArtifactSaveTool),

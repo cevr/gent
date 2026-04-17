@@ -289,6 +289,7 @@ export interface LifecycleResourceSpec<S extends ResourceScope> {
   readonly stop?: Effect.Effect<void>
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
+  readonly machine?: AnyResourceMachine
 }
 
 /**
@@ -316,4 +317,5 @@ export const defineLifecycleResource = <S extends ResourceScope>(
     ...(spec.stop !== undefined ? { stop: spec.stop } : {}),
     ...(spec.subscriptions !== undefined ? { subscriptions: spec.subscriptions } : {}),
     ...(spec.schedule !== undefined ? { schedule: spec.schedule } : {}),
+    ...(spec.machine !== undefined ? { machine: spec.machine } : {}),
   })
