@@ -363,22 +363,6 @@ export type {
   ProviderAuthorizationResult,
 } from "./driver.js"
 
-export interface ScheduledJobHeadlessAgentTarget {
-  readonly kind: "headless-agent"
-  readonly agent: AgentName
-  readonly prompt: string
-  readonly cwd?: string
-}
-
-export type ScheduledJobTarget = ScheduledJobHeadlessAgentTarget
-
-export interface ScheduledJobContribution {
-  /** Extension-local id. Host namespaces with extension id when installing. */
-  readonly id: string
-  readonly schedule: string
-  readonly target: ScheduledJobTarget
-}
-
 // Extension — the core primitive
 
 /** Context provided to extension setup functions. */

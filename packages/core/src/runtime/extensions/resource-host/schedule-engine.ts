@@ -1,19 +1,45 @@
+/**
+ * Schedule engine — host-side cron reconciliation for `Resource.schedule`
+ * entries.
+ *
+ * Replaces the legacy `scheduler.ts` (`extractJobs` + `JobContribution`).
+ * Same wire format and reconciliation semantics:
+ *   - Sources desired jobs from every Resource's `schedule` array
+ *   - Renders a Bun-spawn wrapper script per job
+ *   - Installs/removes via `Bun.cron`
+ *   - Persists managed-job state in `~/.gent/scheduler/managed-jobs.json`
+ *   - Returns failures (per-job) instead of throwing
+ *
+ * Resource-scope routing: today only `scope: "process"` Resources
+ * contribute schedules. Session/branch/cwd schedules are not yet a thing
+ * (no caller has asked for one); when one does, the engine grows a
+ * `scopes` filter parameter the way `collectSubscriptions` did in C3.1.
+ *
+ * @module
+ */
+
 import { Cause, Effect, FileSystem, Path, Schema } from "effect"
-import type {
-  LoadedExtension,
-  ScheduledJobContribution,
-  ScheduledJobFailureInfo,
-} from "../../domain/extension.js"
-import { extractJobs } from "../../domain/contribution.js"
+import type { LoadedExtension } from "../../../domain/extension.js"
+import { extractResources } from "../../../domain/contribution.js"
+import type { ResourceSchedule } from "../../../domain/resource.js"
 
 export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
 
-export interface SchedulerFailure extends ScheduledJobFailureInfo {
+/**
+ * Per-job failure descriptor returned by `reconcileScheduledJobs`.
+ *
+ * Same shape as the legacy `SchedulerFailure`/`ScheduledJobFailureInfo`
+ * pair so the existing extension-health snapshot serializer (in
+ * `server/extension-health.ts`) consumes this without change.
+ */
+export interface SchedulerFailure {
   readonly extensionId: string
+  readonly jobId: string
+  readonly error: string
 }
 
 class SchedulerRuntimeError extends Schema.TaggedErrorClass<SchedulerRuntimeError>()(
-  "@gent/core/runtime/extensions/SchedulerRuntimeError",
+  "@gent/core/runtime/extensions/resource-host/schedule-engine/SchedulerRuntimeError",
   {
     operation: Schema.Literals(["install", "remove"]),
     jobName: Schema.String,
@@ -62,7 +88,7 @@ const jobName = (extensionId: string, jobId: string) =>
 
 const renderCommand = (
   baseCommand: ScheduledJobCommand,
-  job: ScheduledJobContribution,
+  job: ResourceSchedule,
 ): ReadonlyArray<string> => [
   ...baseCommand,
   "--headless",
@@ -155,6 +181,26 @@ const resolveCronRuntime = (): CronRuntime | undefined => {
   }
 }
 
+/**
+ * Collect every `ResourceSchedule` from every Resource matching the
+ * requested scopes. Mirrors `collectSubscriptions` / `collectProcessLayers`
+ * from C3.1: scope filtering at the collector boundary so non-process
+ * schedules cannot accidentally be installed at process scope.
+ *
+ * Returned tuples carry the owning extension id so reconciliation can
+ * namespace + report failures per extension.
+ */
+export const collectSchedules = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<{ readonly extensionId: string; readonly schedule: ResourceSchedule }> =>
+  extensions.flatMap((ext) =>
+    extractResources(ext.contributions)
+      .filter((r) => r.scope === "process")
+      .flatMap((r) =>
+        (r.schedule ?? []).map((s) => ({ extensionId: ext.manifest.id, schedule: s })),
+      ),
+  )
+
 const resolveDesiredJobs = (
   extensions: ReadonlyArray<LoadedExtension>,
   baseCommand: ScheduledJobCommand,
@@ -166,22 +212,25 @@ const resolveDesiredJobs = (
     const jobsDir = path.join(schedulerHome, ...JOBS_DIR)
 
     const desired: DesiredScheduledJob[] = []
-    for (const ext of extensions) {
-      for (const job of extractJobs(ext.contributions)) {
-        const name = jobName(ext.manifest.id, job.id)
-        const scriptPath = path.join(
-          jobsDir,
-          `${sanitize(ext.manifest.id)}--${sanitize(job.id)}.mjs`,
-        )
-        desired.push({
-          extensionId: ext.manifest.id,
-          jobId: job.id,
+    for (const { extensionId, schedule } of collectSchedules(extensions)) {
+      const name = jobName(extensionId, schedule.id)
+      const scriptPath = path.join(
+        jobsDir,
+        `${sanitize(extensionId)}--${sanitize(schedule.id)}.mjs`,
+      )
+      desired.push({
+        extensionId,
+        jobId: schedule.id,
+        name,
+        schedule: schedule.cron,
+        scriptPath,
+        script: renderWrapperScript(
+          renderCommand(baseCommand, schedule),
+          env,
+          schedule.target.cwd,
           name,
-          schedule: job.schedule,
-          scriptPath,
-          script: renderWrapperScript(renderCommand(baseCommand, job), env, job.target.cwd, name),
-        })
-      }
+        ),
+      })
     }
     return desired
   })

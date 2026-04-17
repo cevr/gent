@@ -4,12 +4,11 @@
  *
  * Sequencing per `migrate-callers-then-delete-legacy-apis`:
  *
- *   - C3.1 (here): SubscriptionEngine ships; Resource shape is in the
- *     contribution union; legacy hosts (event-bus, scheduler, activation
- *     lifecycle, workflow-runtime) untouched and authoritative.
- *   - C3.2: layer migration. `collectProcessLayers` becomes the only path
- *     for Resource layers; legacy `extractLayer` deleted.
- *   - C3.3: schedule engine arrives + `Resource.schedule`. Legacy
+ *   - C3.1: SubscriptionEngine shipped; Resource shape in the contribution
+ *     union.
+ *   - C3.2: layer migration. `collectProcessLayers` is the only path for
+ *     Resource layers; legacy `extractLayer` deleted.
+ *   - C3.3 (here): schedule engine arrives + `Resource.schedule`. Legacy
  *     `scheduler.ts` deleted.
  *   - C3.4: lifecycle engine arrives + `Resource.start/stop`. Legacy
  *     activation.ts lifecycle path deleted.
@@ -35,6 +34,13 @@ export {
   type SubscriptionHandler,
   type SubscriptionEngineService,
 } from "./subscription-engine.js"
+
+export {
+  reconcileScheduledJobs,
+  collectSchedules,
+  type ScheduledJobCommand,
+  type SchedulerFailure,
+} from "./schedule-engine.js"
 
 // ── Public host helpers ──
 

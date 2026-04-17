@@ -4,20 +4,27 @@ import { Effect, Layer, Path } from "effect"
 import * as Fs from "node:fs"
 import * as NodePath from "node:path"
 import * as Os from "node:os"
-import type { LoadedExtension, ScheduledJobContribution } from "@gent/core/domain/extension"
-import { reconcileScheduledJobs } from "@gent/core/runtime/extensions/scheduler"
-import { job as jobContribution } from "@gent/core/domain/contribution"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import {
+  reconcileScheduledJobs,
+  collectSchedules,
+} from "@gent/core/runtime/extensions/resource-host/schedule-engine"
+import { defineResource } from "@gent/core/domain/contribution"
+import type { ResourceSchedule } from "@gent/core/domain/resource"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
-const makeLoaded = (
-  id: string,
-  jobs: ReadonlyArray<ScheduledJobContribution>,
-): LoadedExtension => ({
+const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedExtension => ({
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
-  contributions: jobs.map(jobContribution),
+  contributions: [
+    defineResource({
+      scope: "process",
+      layer: Layer.empty,
+      schedule: jobs,
+    }),
+  ],
 })
 
 describe("scheduled jobs", () => {
@@ -42,7 +49,7 @@ describe("scheduled jobs", () => {
         makeLoaded("@gent/memory", [
           {
             id: "reflect",
-            schedule: "0 21 * * 1-5",
+            cron: "0 21 * * 1-5",
             target: {
               kind: "headless-agent",
               agent: "memory:reflect" as never,
@@ -112,7 +119,7 @@ describe("scheduled jobs", () => {
           makeLoaded("@gent/memory", [
             {
               id: "reflect",
-              schedule: "0 21 * * 1-5",
+              cron: "0 21 * * 1-5",
               target: {
                 kind: "headless-agent",
                 agent: "memory:reflect" as never,
@@ -121,7 +128,7 @@ describe("scheduled jobs", () => {
             },
             {
               id: "meditate",
-              schedule: "0 9 * * 0",
+              cron: "0 9 * * 0",
               target: {
                 kind: "headless-agent",
                 agent: "memory:meditate" as never,
@@ -147,5 +154,41 @@ describe("scheduled jobs", () => {
       }
       expect(Object.keys(state.jobs)).toHaveLength(1)
     }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.live("collectSchedules filters by process scope by default", () =>
+    Effect.sync(() => {
+      const sessionExt = makeLoaded("@gent/test-session", [])
+      // Override the default makeLoaded process Resource with a session one
+      const sessionLoaded: LoadedExtension = {
+        ...sessionExt,
+        contributions: [
+          defineResource({
+            scope: "session",
+            layer: Layer.empty,
+            schedule: [
+              {
+                id: "session-only",
+                cron: "* * * * *",
+                target: {
+                  kind: "headless-agent",
+                  agent: "session-agent" as never,
+                  prompt: "session prompt",
+                },
+              },
+            ],
+          }),
+        ],
+      }
+      const processExt = makeLoaded("@gent/test-process", [
+        {
+          id: "process-only",
+          cron: "* * * * *",
+          target: { kind: "headless-agent", agent: "p" as never, prompt: "p" },
+        },
+      ])
+      const collected = collectSchedules([sessionLoaded, processExt])
+      expect(collected.map((c) => c.schedule.id)).toEqual(["process-only"])
+    }),
   )
 })

@@ -19,7 +19,6 @@ import {
   permissionRuleContribution,
   promptSectionContribution,
   commandContribution,
-  jobContribution,
   busSubscriptionContribution,
   interceptorContribution,
   onStartupContribution,
@@ -31,7 +30,6 @@ import {
   extractBusSubscriptions,
   extractCommands,
   extractInterceptors,
-  extractJobs,
   extractLifecycle,
   extractPermissionRules,
   extractPromptSections,
@@ -78,7 +76,6 @@ describe("defineExtension", () => {
       expect(extractPermissionRules(contributions)).toEqual([])
       expect(extractPromptSections(contributions)).toEqual([])
       expect(extractBusSubscriptions(contributions)).toEqual([])
-      expect(extractJobs(contributions)).toEqual([])
       expect(extractExternalDrivers(contributions)).toEqual([])
       expect(extractInterceptors(contributions)).toEqual([])
       expect(extractLifecycle(contributions, "startup")).toEqual([])
@@ -107,14 +104,19 @@ describe("defineExtension", () => {
             description: "test cmd",
             handler: () => Effect.void,
           }),
-          jobContribution({
-            id: "test-job",
-            schedule: "0 0 * * *",
-            target: { kind: "headless-agent", agent: "cowork", prompt: "hi" },
-          }),
           busSubscriptionContribution("agent:*", () => Effect.void),
           interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
-          defineResource({ scope: "process", layer: myLayer }),
+          defineResource({
+            scope: "process",
+            layer: myLayer,
+            schedule: [
+              {
+                id: "test-job",
+                cron: "0 0 * * *",
+                target: { kind: "headless-agent", agent: "cowork" as never, prompt: "hi" },
+              },
+            ],
+          }),
         ],
       })
       const contributions = yield* setupOf(ext)
@@ -123,10 +125,11 @@ describe("defineExtension", () => {
       expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
       expect(extractPromptSections(contributions)[0]?.id).toBe("rules")
       expect(extractCommands(contributions)[0]?.name).toBe("test")
-      expect(extractJobs(contributions)[0]?.id).toBe("test-job")
       expect(extractBusSubscriptions(contributions)[0]?.pattern).toBe("agent:*")
       expect(extractInterceptors(contributions)[0]?.key).toBe("prompt.system")
-      expect(extractResources(contributions)).toHaveLength(1)
+      const resources = extractResources(contributions)
+      expect(resources).toHaveLength(1)
+      expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
     }),
   )
 

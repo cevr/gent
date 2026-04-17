@@ -16,7 +16,7 @@ import {
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
 import {
-  job as jobContribution,
+  defineResource,
   onStartup as onStartupContribution,
   tool as toolContribution,
   type Contribution,
@@ -168,14 +168,20 @@ describe("extension activation isolation", () => {
               params: {} as never,
               execute: () => Effect.void,
             }),
-            jobContribution({
-              id: "reflect",
-              schedule: "0 21 * * 1-5",
-              target: {
-                kind: "headless-agent",
-                agent: "memory:reflect" as never,
-                prompt: "Reflect.",
-              },
+            defineResource({
+              scope: "process",
+              layer: Layer.empty,
+              schedule: [
+                {
+                  id: "reflect",
+                  cron: "0 21 * * 1-5",
+                  target: {
+                    kind: "headless-agent",
+                    agent: "memory:reflect" as never,
+                    prompt: "Reflect.",
+                  },
+                },
+              ],
             }),
           ]),
           makeLoaded("failing-ext", [

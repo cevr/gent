@@ -12,15 +12,15 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import {
   busSubscriptionContribution,
   commandContribution,
   defineExtension,
   defineInterceptor,
+  defineResource,
   defineTool,
   interceptorContribution,
-  jobContribution,
   onShutdownContribution,
   onStartupContribution,
   toolContribution,
@@ -89,10 +89,16 @@ describe("Effect-purity locks (compile-time)", () => {
         onStartupContribution(Effect.void),
         onShutdownContribution(Effect.void),
         commandContribution({ name: "ok", handler: () => Effect.void }),
-        jobContribution({
-          id: "j",
-          schedule: "0 0 * * *",
-          target: { kind: "headless-agent", agent: "cowork", prompt: "hi" },
+        defineResource({
+          scope: "process",
+          layer: Layer.empty,
+          schedule: [
+            {
+              id: "j",
+              cron: "0 0 * * *",
+              target: { kind: "headless-agent", agent: "cowork" as never, prompt: "hi" },
+            },
+          ],
         }),
       ],
     })

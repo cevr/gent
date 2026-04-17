@@ -24,7 +24,7 @@ import {
   reconcileScheduledJobs,
   type ScheduledJobCommand,
   type SchedulerFailure,
-} from "./scheduler.js"
+} from "./resource-host/schedule-engine.js"
 
 export interface ExtensionActivationResult {
   readonly active: ReadonlyArray<LoadedExtension>

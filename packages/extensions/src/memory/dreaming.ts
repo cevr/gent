@@ -1,19 +1,20 @@
-import { type AgentName, type ScheduledJobContribution } from "@gent/core/extensions/api"
+import { type AgentName, type ResourceSchedule } from "@gent/core/extensions/api"
 
 /**
  * Durable host-owned jobs for memory consolidation.
  *
- * The extension declares these jobs. Host startup installs/removes them.
- * No scheduler side effects happen during extension setup or actor startup.
+ * The extension declares these schedules. Host startup installs/removes
+ * them via the schedule engine; nothing happens during extension setup
+ * or workflow startup.
  */
 
 const MEMORY_REFLECT_AGENT = "memory:reflect" as AgentName
 const MEMORY_MEDITATE_AGENT = "memory:meditate" as AgentName
 
-export const MemoryDreamJobs = (): ReadonlyArray<ScheduledJobContribution> => [
+export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
   {
     id: "reflect",
-    schedule: "0 21 * * 1-5",
+    cron: "0 21 * * 1-5",
     target: {
       kind: "headless-agent",
       agent: MEMORY_REFLECT_AGENT,
@@ -23,7 +24,7 @@ export const MemoryDreamJobs = (): ReadonlyArray<ScheduledJobContribution> => [
   },
   {
     id: "meditate",
-    schedule: "0 9 * * 0",
+    cron: "0 9 * * 0",
     target: {
       kind: "headless-agent",
       agent: MEMORY_MEDITATE_AGENT,

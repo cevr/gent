@@ -49,7 +49,10 @@ import {
 } from "./extensions/activation.js"
 import { discoverExtensions } from "./extensions/loader.js"
 import { readDisabledExtensions } from "./extensions/disabled.js"
-import type { ScheduledJobCommand, SchedulerFailure } from "./extensions/scheduler.js"
+import type {
+  ScheduledJobCommand,
+  SchedulerFailure,
+} from "./extensions/resource-host/schedule-engine.js"
 import { buildBasePromptSections } from "../server/system-prompt.js"
 import { ConfigService } from "./config-service.js"
 

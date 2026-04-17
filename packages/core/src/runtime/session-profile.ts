@@ -32,7 +32,7 @@ import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-
 import { WorkflowRuntime, type WorkflowRuntimeService } from "./extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
-import type { ScheduledJobCommand } from "./extensions/scheduler.js"
+import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { buildExtensionLayers, compileBaseSections, resolveRuntimeProfile } from "./profile.js"
 
 // ── SessionProfile ──

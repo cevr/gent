@@ -13,11 +13,7 @@
 import type { Effect } from "effect"
 import type { AgentDefinition } from "./agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type {
-  CommandContribution,
-  ExtensionInterceptorDescriptor,
-  ScheduledJobContribution,
-} from "./extension.js"
+import type { CommandContribution, ExtensionInterceptorDescriptor } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
 import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./prompt.js"
 import type { AnyMutationContribution } from "./mutation.js"
@@ -57,11 +53,6 @@ export interface ModelDriverKindContribution {
 export interface ExternalDriverKindContribution {
   readonly _kind: "external-driver"
   readonly driver: ExternalDriverContribution
-}
-
-export interface JobContribution {
-  readonly _kind: "job"
-  readonly job: ScheduledJobContribution
 }
 
 export interface PermissionRuleContribution {
@@ -138,7 +129,6 @@ export type Contribution =
   | CommandKindContribution
   | ModelDriverKindContribution
   | ExternalDriverKindContribution
-  | JobContribution
   | PermissionRuleContribution
   | PromptSectionContribution
   | BusSubscriptionContribution
@@ -176,8 +166,6 @@ export const externalDriver = (d: ExternalDriverContribution): ExternalDriverKin
   _kind: "external-driver",
   driver: d,
 })
-
-export const job = (j: ScheduledJobContribution): JobContribution => ({ _kind: "job", job: j })
 
 export const permissionRule = (r: PermissionRule): PermissionRuleContribution => ({
   _kind: "permission-rule",
@@ -307,10 +295,6 @@ export const extractExternalDrivers = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<ExternalDriverKindContribution["driver"]> =>
   filterByKind(cs, "external-driver").map((c) => c.driver)
-
-export const extractJobs = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<JobContribution["job"]> => filterByKind(cs, "job").map((c) => c.job)
 
 export const extractBusSubscriptions = (
   cs: ReadonlyArray<Contribution>,

@@ -8,10 +8,11 @@
  * startup/shutdown, and optionally an internal state machine."
  *
  * Sequencing per `migrate-callers-then-delete-legacy-apis`:
- *   - C3.1 (here): scaffolding — Resource shape + 3 engines (lifecycle /
- *     subscription / schedule), legacy kinds untouched.
+ *   - C3.1: scaffolding — Resource shape + SubscriptionEngine; legacy
+ *     hosts untouched.
  *   - C3.2: migrate `layerContribution` callers → defineResource.
- *   - C3.3: migrate `jobContribution` callers → defineResource.schedule.
+ *   - C3.3 (here): schedule engine + `defineResource.schedule`; legacy
+ *     scheduler.ts and JobContribution deleted.
  *   - C3.4: migrate `lifecycle` callers → defineResource.start/stop.
  *   - C3.5: add `Resource.machine` + machine engine; migrate `workflow.machine`.
  *   - C3.6: delete `bus-subscription` (no production users).
@@ -32,6 +33,7 @@
  */
 
 import type { Context, Effect, Layer } from "effect"
+import type { AgentName } from "./agent.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
 
@@ -104,11 +106,13 @@ export interface ResourceSubscription {
  * and registers the script with the OS-level cron daemon.
  */
 export interface ResourceSchedule {
+  /** Extension-local id. Host namespaces with extension id when installing. */
   readonly id: string
+  /** Standard cron expression — consumed by `Bun.cron`. */
   readonly cron: string
   readonly target: {
     readonly kind: "headless-agent"
-    readonly agent: string
+    readonly agent: AgentName
     readonly prompt: string
     readonly cwd?: string
   }
@@ -135,8 +139,8 @@ export interface ResourceSchedule {
  *   may not fail (failures are not propagated through scope teardown).
  * - `subscriptions` — pub/sub handlers registered at install time. Replaces
  *   `BusSubscriptionContribution`.
- * - `schedule` — periodic jobs registered at install time. Replaces
- *   `JobContribution`.
+ * - `schedule` — periodic jobs reconciled at host startup. Replaces the
+ *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
  *
  * The `machine` sub-shape (replacing `WorkflowContribution.machine`) is
  * deferred to C3.5 so the simpler engines can ship + be validated first.

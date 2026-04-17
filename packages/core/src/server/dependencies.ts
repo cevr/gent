@@ -26,7 +26,10 @@ import {
 } from "../runtime/profile.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "../runtime/extensions/registry.js"
 import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
-import { type ScheduledJobCommand, type SchedulerFailure } from "../runtime/extensions/scheduler.js"
+import {
+  type ScheduledJobCommand,
+  type SchedulerFailure,
+} from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage } from "../storage/sqlite-storage.js"
