@@ -190,6 +190,49 @@ const writeCallMethod = (node: AstNode): string | undefined => {
   return methodName
 }
 
+/** Classification for a CallExpression that smells like dynamic loading. */
+type DynamicLoadKind = "require" | "moduleRequire" | "createRequire"
+
+const DYNAMIC_LOAD_MESSAGES: Readonly<Record<DynamicLoadKind, string>> = {
+  require:
+    "`require(...)` is forbidden — use a top-level static `import` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If your use case is a documented architectural exception, add the file to the allow-list in `lint/no-direct-env.ts` with a justification comment.",
+  moduleRequire:
+    "`module.require(...)` is forbidden — use a top-level static `import` statement. Same rationale as bare `require`: it bypasses static analysis. Add the file to the allow-list in `lint/no-direct-env.ts` with a justification if this is an architectural exception.",
+  createRequire:
+    "`createRequire(...)` followed by a require call is forbidden — use a top-level static `import` statement. The createRequire bridge from `node:module` is the canonical way to smuggle CommonJS into ESM and is exactly what this rule is meant to catch. Add the file to the allow-list in `lint/no-direct-env.ts` with a justification if this is an architectural exception.",
+}
+
+/** Return the dynamic-load kind for a CallExpression's callee, or undefined. */
+const classifyDynamicLoadCall = (callee: AstNode | undefined): DynamicLoadKind | undefined => {
+  if (callee === undefined) return undefined
+  // Bare `require(...)`
+  if (callee.type === "Identifier" && getStringField(callee, "name") === "require") {
+    return "require"
+  }
+  // `module.require(...)`
+  if (callee.type === "MemberExpression") {
+    const obj = getNodeField(callee, "object")
+    const prop = getNodeField(callee, "property")
+    if (
+      obj?.type === "Identifier" &&
+      getStringField(obj, "name") === "module" &&
+      prop?.type === "Identifier" &&
+      getStringField(prop, "name") === "require"
+    ) {
+      return "moduleRequire"
+    }
+  }
+  // `createRequire(import.meta.url)("x")` — outer call's callee is a
+  // CallExpression whose callee is `Identifier{name:"createRequire"}`.
+  if (callee.type === "CallExpression") {
+    const inner = getNodeField(callee, "callee")
+    if (inner?.type === "Identifier" && getStringField(inner, "name") === "createRequire") {
+      return "createRequire"
+    }
+  }
+  return undefined
+}
+
 const plugin: Plugin = {
   meta: {
     name: "gent",
@@ -699,14 +742,13 @@ const plugin: Plugin = {
           "packages/extensions/src/librarian/git-reader.ts",
           // Optional native filesystem indexer: same fallback rationale as above.
           "packages/core/src/runtime/file-index/native-adapter.ts",
-          // node:fs `watch` is loaded lazily inside an Effect to keep the
-          // `node:fs` surface area pruned in the compiled binary.
-          "apps/tui/src/workspace/context.tsx",
-          // Lazy import to break a circular dependency: this file lives in
-          // `runtime/` but needs `SessionCommands` from `server/`, and
-          // `server/session-commands.ts` already imports `runtime/`. Static
-          // import would form a cycle. The `Effect.serviceOption` pattern
-          // makes the dependency optional at the layer level.
+          // SHORT-TERM exception: lazy import to break a circular dependency
+          // between `runtime/` and `server/` (this file lives in `runtime/`
+          // but needs `SessionCommands` from `server/`, and
+          // `server/session-commands.ts` already imports `runtime/`).
+          // FOLLOW-UP: extract the deletion contract behind a runtime/domain
+          // service so this can become a static import. Allow-list entry
+          // documents the debt — remove it when the cycle is broken.
           "packages/core/src/runtime/make-extension-host-context.ts",
         ]
         if (DYNAMIC_IMPORT_ALLOWED.some((f) => filename.endsWith(f))) return {}
@@ -719,13 +761,11 @@ const plugin: Plugin = {
             })
           },
           CallExpression(node) {
-            const callee = node.callee
-            if (callee.type === "Identifier" && "name" in callee && callee.name === "require") {
-              context.report({
-                message: `\`require(...)\` is forbidden — use a top-level static \`import\` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If your use case is a documented architectural exception, add the file to the allow-list in \`lint/no-direct-env.ts\` with a justification comment.`,
-                node,
-              })
-            }
+            const callee: unknown = node.callee
+            if (!isAstNode(callee)) return
+            const kind = classifyDynamicLoadCall(callee)
+            if (kind === undefined) return
+            context.report({ message: DYNAMIC_LOAD_MESSAGES[kind], node })
           },
         }
       },

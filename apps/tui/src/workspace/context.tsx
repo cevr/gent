@@ -3,6 +3,11 @@ import type { JSX } from "solid-js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { ChildProcess } from "effect/unstable/process"
 import { Effect, Fiber, Context, Stream } from "effect"
+// Solid `onMount` runs outside an Effect scope; the watcher is fire-and-forget
+// with manual cleanup via `onCleanup`. `FileSystem` from effect would require
+// restructuring the workspace context as an Effect provider.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { watch } from "node:fs"
 
 export interface GitStatus {
   branch: string
@@ -143,7 +148,6 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     let fallbackInterval: ReturnType<typeof setInterval> | null = null
 
     try {
-      const { watch } = require("node:fs")
       const gitDir = `${props.cwd}/.git`
       // Watch .git directory for index/HEAD changes
       const watcher = watch(
