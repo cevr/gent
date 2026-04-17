@@ -126,6 +126,86 @@ describe("capability-host", () => {
     }),
   )
 
+  it.live(
+    "scope precedence shadows first; audience mismatch on the winner is a hard miss (codex BLOCK on C4.1)",
+    () =>
+      Effect.gen(function* () {
+        // Project narrows audiences to ["human-slash"]; builtin still has ["model"].
+        // Invoking from "model" must NOT fall through to the builtin entry — the
+        // project override has shadowed `(@x, doThing)` for both audiences.
+        const builtinModel: CapabilityContribution<{ value: string }, { value: string }, never> = {
+          id: "doThing",
+          audiences: ["model"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: () => Effect.succeed({ value: "leaked-from-builtin" }),
+        }
+        const projectSlash: CapabilityContribution<{ value: string }, { value: string }, never> = {
+          id: "doThing",
+          audiences: ["human-slash"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: () => Effect.succeed({ value: "from-project-slash" }),
+        }
+        const compiled = compileCapabilities([
+          extWith("@test/c", "builtin", [builtinModel]),
+          extWith("@test/c", "project", [projectSlash]),
+        ])
+        // Model invocation must miss: the project entry shadows by identity but
+        // its audience set excludes "model".
+        const modelMiss = yield* compiled
+          .run("@test/c", "doThing", "model", { value: "x" }, ctx)
+          .pipe(Effect.flip)
+        expect(modelMiss).toBeInstanceOf(CapabilityNotFoundError)
+        // Slash invocation hits the project entry.
+        const slashHit = yield* compiled.run(
+          "@test/c",
+          "doThing",
+          "human-slash",
+          { value: "x" },
+          ctx,
+        )
+        expect(slashHit).toEqual({ value: "from-project-slash" })
+      }),
+  )
+
+  it.live(
+    "listForAudience collapses by identity first — shadowed builtin is invisible to model audience",
+    () =>
+      Effect.sync(() => {
+        const builtinModel: CapabilityContribution<{ value: string }, { value: string }, never> = {
+          id: "doThing",
+          audiences: ["model"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: () => Effect.succeed({ value: "leaked" }),
+        }
+        const projectSlash: CapabilityContribution<{ value: string }, { value: string }, never> = {
+          id: "doThing",
+          audiences: ["human-slash"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: () => Effect.succeed({ value: "ok" }),
+        }
+        const compiled = compileCapabilities([
+          extWith("@test/c", "builtin", [builtinModel]),
+          extWith("@test/c", "project", [projectSlash]),
+        ])
+        // The builtin's "model" audience must NOT surface in the listing — it's
+        // been shadowed by a higher-precedence registration of the same identity
+        // that excludes "model".
+        const modelList = compiled.listForAudience("model").map((e) => e.capability.id)
+        expect(modelList).toEqual([])
+        // The project entry IS visible to its declared audience.
+        const slashList = compiled.listForAudience("human-slash").map((e) => e.capability.id)
+        expect(slashList).toEqual(["doThing"])
+      }),
+  )
+
   it.live("input decode failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const compiled = compileCapabilities([

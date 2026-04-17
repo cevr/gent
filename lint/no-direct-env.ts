@@ -40,6 +40,9 @@ const LOG_METHODS = new Set([
 const PROJECTION_FACTORY_NAMES = new Set(["projection", "projectionContribution"])
 /** Query factory names — `QueryContribution.handler` is also enforced read-only by this rule. */
 const QUERY_FACTORY_NAMES = new Set(["query", "queryContribution"])
+/** Capability factory names — `CapabilityContribution.effect` is enforced
+ *  read-only by this rule when `intent: "read"`. */
+const CAPABILITY_FACTORY_NAMES = new Set(["capability", "capabilityContribution"])
 
 const PROJECTION_WRITE_METHODS = new Set([
   "create",
@@ -116,6 +119,47 @@ const queryFactoryName = (node: AstNode): string | undefined => {
   return name !== undefined && QUERY_FACTORY_NAMES.has(name) ? name : undefined
 }
 
+const capabilityFactoryName = (node: AstNode): string | undefined => {
+  const name = calleeName(node)
+  return name !== undefined && CAPABILITY_FACTORY_NAMES.has(name) ? name : undefined
+}
+
+/**
+ * Locate the string-valued `intent` property in an object literal — used to
+ * decide whether a CapabilityContribution should be enforced read-only. Only
+ * `"read"` triggers the read-only fence; `"write"` (or missing/dynamic) opts
+ * out, mirroring the type-level intent semantics.
+ */
+const intentLiteral = (objExpr: AstNode): string | undefined => {
+  if (objExpr.type !== "ObjectExpression") return undefined
+  const properties = objExpr.properties
+  if (!Array.isArray(properties)) return undefined
+  for (const propRaw of properties) {
+    if (!isAstNode(propRaw) || propRaw.type !== "Property") continue
+    const key = getNodeField(propRaw, "key")
+    if (key === undefined) continue
+    const isIntent =
+      (key.type === "Identifier" && getStringField(key, "name") === "intent") ||
+      (key.type === "StringLiteral" && getStringField(key, "value") === "intent")
+    if (!isIntent) continue
+    const value = getNodeField(propRaw, "value")
+    if (value === undefined) continue
+    if (value.type === "StringLiteral" || value.type === "Literal") {
+      return getStringField(value, "value")
+    }
+  }
+  return undefined
+}
+
+/** Returns the intent literal of the first object-literal arg, if any. */
+const intentLiteralInFirstArg = (node: AstNode): string | undefined => {
+  const args = node.arguments
+  if (!Array.isArray(args) || args.length === 0) return undefined
+  const arg = args[0]
+  if (!isAstNode(arg)) return undefined
+  return intentLiteral(arg)
+}
+
 /** Locate a named property's arrow-function value inside an object literal. */
 const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefined => {
   if (objExpr.type !== "ObjectExpression") return undefined
@@ -149,6 +193,7 @@ const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefin
 
 const PROJECTION_TYPE_NAMES = new Set(["ProjectionContribution", "AnyProjectionContribution"])
 const QUERY_TYPE_NAMES = new Set(["QueryContribution", "AnyQueryContribution"])
+const CAPABILITY_TYPE_NAMES = new Set(["CapabilityContribution", "AnyCapabilityContribution"])
 
 /** Detect whether a TypeScript type reference matches one of the given names. */
 const isTypeRefIn = (typeNode: AstNode | undefined, names: ReadonlySet<string>): boolean => {
@@ -172,6 +217,8 @@ const isProjectionTypeRef = (typeNode: AstNode | undefined): boolean =>
   isTypeRefIn(typeNode, PROJECTION_TYPE_NAMES)
 const isQueryTypeRef = (typeNode: AstNode | undefined): boolean =>
   isTypeRefIn(typeNode, QUERY_TYPE_NAMES)
+const isCapabilityTypeRef = (typeNode: AstNode | undefined): boolean =>
+  isTypeRefIn(typeNode, CAPABILITY_TYPE_NAMES)
 
 /** If `node` is `expr.<method>(...)` and method is a known write, return the method name. */
 const writeCallMethod = (node: AstNode): string | undefined => {
@@ -810,15 +857,34 @@ const plugin: Plugin = {
      */
     "no-projection-writes": {
       create(context) {
-        const reportWritesIn = (kind: "Projection" | "Query", fn: AstNode): void => {
+        const reportWritesIn = (kind: "Projection" | "Query" | "Capability", fn: AstNode): void => {
+          const bodyNameByKind: Record<"Projection" | "Query" | "Capability", string> = {
+            Projection: "`query`",
+            Query: "`handler`",
+            Capability: "`effect`",
+          }
+          const remediationByKind: Record<"Projection" | "Query" | "Capability", string> = {
+            Projection: "Use a Mutation or Workflow contribution for state changes.",
+            Query: "Use a Mutation or Workflow contribution for state changes.",
+            Capability: 'Switch `intent` to `"write"` for state changes.',
+          }
           walkAst(fn.body, (inner) => {
             const methodName = writeCallMethod(inner)
             if (methodName === undefined) return
             context.report({
-              message: `${kind} ${kind === "Projection" ? "`query`" : "`handler`"} must be read-only — call to \`.${methodName}(\` looks like a write. Use a Mutation or Workflow contribution for state changes.`,
+              message: `${kind} ${bodyNameByKind[kind]} must be read-only — call to \`.${methodName}(\` looks like a write. ${remediationByKind[kind]}`,
               node: inner,
             })
           })
+        }
+        // Locate the read-only body of an object literal — `query` for
+        // projections, `handler` for queries, `effect` for read capabilities.
+        // Returns undefined when the literal is not a recognized authoring
+        // shape (e.g., a write capability, which is opted out of the fence).
+        const findCapabilityReadEffect = (objExpr: AstNode): AstNode | undefined => {
+          const intent = intentLiteral(objExpr)
+          if (intent !== "read") return undefined
+          return findArrowInObject(objExpr, "effect")
         }
         return {
           // Projection — factory / typed-binding / satisfies forms (property: query)
@@ -832,6 +898,12 @@ const plugin: Plugin = {
             if (queryFactoryName(node) !== undefined) {
               const handlerFn = findArrowInFirstArg(node, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
+              return
+            }
+            if (capabilityFactoryName(node) !== undefined) {
+              if (intentLiteralInFirstArg(node) !== "read") return
+              const effectFn = findArrowInFirstArg(node, "effect")
+              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
             }
           },
           VariableDeclarator(node) {
@@ -849,6 +921,11 @@ const plugin: Plugin = {
             if (isQueryTypeRef(typeAnn)) {
               const handlerFn = findArrowInObject(init, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
+              return
+            }
+            if (isCapabilityTypeRef(typeAnn)) {
+              const effectFn = findCapabilityReadEffect(init)
+              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
             }
           },
           TSSatisfiesExpression(node) {
@@ -864,6 +941,11 @@ const plugin: Plugin = {
             if (isQueryTypeRef(typeAnn)) {
               const handlerFn = findArrowInObject(expr, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
+              return
+            }
+            if (isCapabilityTypeRef(typeAnn)) {
+              const effectFn = findCapabilityReadEffect(expr)
+              if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
             }
           },
         }

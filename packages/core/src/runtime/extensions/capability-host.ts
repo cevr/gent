@@ -86,19 +86,26 @@ export const compileCapabilities = (
     }
   }
 
-  const findEntry = (
+  /**
+   * Resolve `(extensionId, capabilityId)` by **scope precedence first**, then
+   * authorize on audience. A higher-scope registration shadows lower-scope
+   * registrations of the same identity even when the higher entry does not
+   * include the requested audience — otherwise a project override could
+   * narrow audiences but the lower-scope contribution would still leak
+   * through (codex BLOCK on C4.1: "scope precedence should apply to the
+   * capability identity first, then audience should authorize that selected
+   * contribution").
+   */
+  const resolveByIdentity = (
     extensionId: string,
     capabilityId: string,
-    audience: Audience,
   ): RegisteredCapability | undefined => {
-    // Iterate in reverse so the highest-precedence registration wins.
     for (let i = entries.length - 1; i >= 0; i--) {
       const candidate = entries[i]
       if (
         candidate !== undefined &&
         candidate.extensionId === extensionId &&
-        candidate.capability.id === capabilityId &&
-        candidate.capability.audiences.includes(audience)
+        candidate.capability.id === capabilityId
       ) {
         return candidate
       }
@@ -106,8 +113,33 @@ export const compileCapabilities = (
     return undefined
   }
 
-  const listForAudience = (audience: Audience): ReadonlyArray<RegisteredCapability> =>
-    entries.filter((e) => e.capability.audiences.includes(audience))
+  /** Identity-resolve, then check audience authorization on the winner. */
+  const findEntry = (
+    extensionId: string,
+    capabilityId: string,
+    audience: Audience,
+  ): RegisteredCapability | undefined => {
+    const winner = resolveByIdentity(extensionId, capabilityId)
+    if (winner === undefined) return undefined
+    return winner.capability.audiences.includes(audience) ? winner : undefined
+  }
+
+  /**
+   * Listing also collapses by identity first (last-scope-wins) so a project
+   * override that narrows audiences correctly hides the shadowed builtin.
+   * Walks forward and overwrites prior entries for the same identity so the
+   * highest-precedence registration wins while preserving the registration
+   * order of distinct identities (the shape callers expect for tool-list
+   * rendering).
+   */
+  const listForAudience = (audience: Audience): ReadonlyArray<RegisteredCapability> => {
+    const winners = new Map<string, RegisteredCapability>()
+    for (const e of entries) {
+      const key = `${e.extensionId}\u0000${e.capability.id}`
+      winners.set(key, e)
+    }
+    return Array.from(winners.values()).filter((e) => e.capability.audiences.includes(audience))
+  }
 
   const run: CompiledCapabilities["run"] = (extensionId, capabilityId, audience, input, ctx) =>
     Effect.gen(function* () {

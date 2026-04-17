@@ -203,6 +203,8 @@ export type {
   CapabilityContribution,
   AnyCapabilityContribution,
   CapabilityContext,
+  CapabilityCoreContext,
+  ModelCapabilityContext,
   CapabilityRef,
   Audience,
   Intent,
