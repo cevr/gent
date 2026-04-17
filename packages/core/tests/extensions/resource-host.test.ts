@@ -28,6 +28,8 @@ import {
   extractMachine,
   workflow as workflowContribution,
 } from "@gent/core/domain/contribution"
+import { defineExtension } from "@gent/core/extensions/api"
+import { testSetupCtx } from "@gent/core/test-utils"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { Contribution } from "@gent/core/domain/contribution"
 
@@ -285,6 +287,61 @@ describe("defineResource", () => {
     ])
     const found = extractMachine(ext.contributions)
     expect(found).toBe(legacyMachine)
+  })
+})
+
+// ── defineExtension validation locks (codex C3.5a BLOCKs 1 + 3) ──
+
+describe("defineExtension validation: Resource.machine constraints", () => {
+  // Both fixtures use a stub machine — defineExtension validates structure
+  // (counts, scopes), not Machine.Machine internals.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+  const stubMachine = { machine: { _stub: true } as any }
+
+  test("rejects extension with 2+ Resources declaring `machine` (codex BLOCK 1)", async () => {
+    const ext = defineExtension({
+      id: "@test/two-resource-machines",
+      contributions: () => [
+        defineResource({ scope: "process", layer: layerA, machine: stubMachine }),
+        defineResource({ scope: "process", layer: layerB, machine: stubMachine }),
+      ],
+    })
+    const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const message = String(exit.cause)
+      expect(message).toContain("at most one Resource with `machine`")
+    }
+  })
+
+  test("rejects Resource.machine on session/branch scope until composers are wired (codex BLOCK 3)", async () => {
+    const ext = defineExtension({
+      id: "@test/session-scope-machine",
+      contributions: () => [
+        defineResource({ scope: "session", layer: layerA, machine: stubMachine }),
+      ],
+    })
+    const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const message = String(exit.cause)
+      expect(message).toContain('Resource.machine on scope "session"')
+      expect(message).toContain("not yet supported")
+    }
+  })
+
+  test("accepts Resource.machine + legacy workflowContribution side-by-side (migration window)", async () => {
+    const ext = defineExtension({
+      id: "@test/migration-coexist",
+      contributions: () => [
+        defineResource({ scope: "process", layer: layerA, machine: stubMachine }),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        workflowContribution(stubMachine as never),
+      ],
+    })
+    const contribs = await Effect.runPromise(ext.setup(testSetupCtx()))
+    // Resource takes precedence in extractMachine.
+    expect(extractMachine(contribs)).toBe(stubMachine)
   })
 })
 

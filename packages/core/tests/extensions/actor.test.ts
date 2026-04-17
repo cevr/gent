@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Schema } from "effect"
 import { ExtensionMessage, ExtensionProtocolError } from "@gent/core/domain/extension-protocol"
 import { SessionStarted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -7,7 +7,8 @@ import type { LoadedExtension } from "@gent/core/domain/extension"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { workflow as workflowContribution } from "@gent/core/domain/contribution"
+import { defineResource, workflow as workflowContribution } from "@gent/core/domain/contribution"
+import type { AnyResourceMachine } from "@gent/core/extensions/api"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -258,4 +259,107 @@ describe("WorkflowRuntime", () => {
       }
     }).pipe(Effect.provide(layer))
   })
+})
+
+// ============================================================================
+// Resource.machine — end-to-end via WorkflowRuntime (C3.5a integration test)
+//
+// Codex C3.5a BLOCK 2 — the Resource.machine path needs an integration test
+// that drives a real `effect-machine` machine through the runtime, not just
+// a stub round-trip. Mirror of "ask returns replies through the runtime"
+// above, but with the machine declared via `defineResource({ machine })`
+// instead of `workflowContribution(...)`.
+// ============================================================================
+
+describe("Resource.machine end-to-end", () => {
+  const Increment = ExtensionMessage.reply(
+    "resource-counter",
+    "Increment",
+    { delta: Schema.Number },
+    Schema.Struct({ count: Schema.Number }),
+  )
+
+  const counterMachine: AnyResourceMachine = {
+    ...reducerActor<{ count: number }, never, ReturnType<typeof Increment>>({
+      id: "resource-counter",
+      initial: { count: 0 },
+      stateSchema: Schema.Struct({ count: Schema.Number }),
+      reduce: (state) => ({ state }),
+      request: (state, message) =>
+        Effect.succeed({
+          state: { count: state.count + message.delta },
+          reply: { count: state.count + message.delta },
+        }),
+    }),
+    protocols: { Increment },
+  }
+
+  it.live("ask routes through a Resource.machine and returns the reply", () => {
+    const layer = makeRuntimeLayer([
+      {
+        manifest: { id: "resource-counter" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        contributions: [
+          // No-service Resource carrying just the machine. WorkflowRuntime
+          // supervises the machine; the empty layer keeps the Resource shape
+          // valid without contributing any service tags. The explicit
+          // `<unknown, "process">` widening dodges `Layer<never,...>` →
+          // `AnyResourceContribution` variance traps.
+          defineResource<unknown, "process">({
+            scope: "process",
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            layer: Layer.empty as Layer.Layer<unknown>,
+            machine: counterMachine,
+          }),
+        ],
+      } as LoadedExtension,
+    ])
+
+    return Effect.gen(function* () {
+      const runtime = yield* WorkflowRuntime
+      const reply = yield* runtime.ask(sessionId, Increment({ delta: 3 }), branchId)
+      expect(reply).toEqual({ count: 3 })
+
+      const replyAgain = yield* runtime.ask(sessionId, Increment({ delta: 2 }), branchId)
+      expect(replyAgain).toEqual({ count: 5 })
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live(
+    "publish on a session with a Resource.machine reports the extensionId when state transitions",
+    () => {
+      // Counter that actually transitions on SessionStarted (matches the
+      // long-running counter pattern at the top of the file). If the
+      // Resource.machine path is broken, the actor won't spawn or won't
+      // be in the changed list.
+      const sessionCounter: AnyResourceMachine = {
+        ...makeCounterActor("session-counter"),
+      }
+      const layer = makeRuntimeLayer([
+        {
+          manifest: { id: "session-counter" },
+          kind: "builtin",
+          sourcePath: "builtin",
+          contributions: [
+            defineResource<unknown, "process">({
+              scope: "process",
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: sessionCounter,
+            }),
+          ],
+        } as LoadedExtension,
+      ])
+
+      return Effect.gen(function* () {
+        const runtime = yield* WorkflowRuntime
+        const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+        expect(changed).toContain("session-counter")
+      }).pipe(Effect.provide(layer))
+    },
+  )
 })

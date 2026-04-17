@@ -209,6 +209,10 @@ export type {
   ResourceBusEnvelope,
   ResourceSubscription,
   ResourceSchedule,
+  ResourceMachine,
+  AnyResourceMachine,
+  ResourceMachineEffect,
+  ResourceMachineInitContext,
 } from "../domain/resource.js"
 export type {
   ProjectionContribution,
@@ -388,10 +392,40 @@ export const defineExtension = (params: {
       })
       const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
       const workflows = filterByKind(contribs, "workflow")
+      const resourcesWithMachine = filterByKind(contribs, "resource").filter(
+        (r) => r.machine !== undefined,
+      )
+      // At most one machine per extension. Counting both Resource.machine and
+      // legacy `workflow` together: an extension migrating from legacy to
+      // Resource is allowed to keep both during the transition (Resource takes
+      // precedence per `extractMachine`), but cannot declare 2+ Resources with
+      // `machine`. Codex BLOCK 1 on C3.5a — without this check, the runtime
+      // silently picks the first Resource by array order and drops the second
+      // machine's protocols / mappers / effects on the floor.
       if (workflows.length > 1) {
         return yield* new ExtensionLoadError({
           extensionId: params.id,
           message: "extension may declare at most one workflow",
+        })
+      }
+      if (resourcesWithMachine.length > 1) {
+        return yield* new ExtensionLoadError({
+          extensionId: params.id,
+          message: "extension may declare at most one Resource with `machine`",
+        })
+      }
+      // Codex BLOCK 3 on C3.5a: today only process-scope Resource layers flow
+      // into the layer composition root (`profile.ts > buildExtensionLayers`).
+      // A `Resource.machine` on a session/branch-scope Resource would have its
+      // services unavailable to the machine at spawn time. The plan's eventual
+      // resting place is session/branch scope, but until the per-cwd /
+      // ephemeral composers are wired (C3 successor work), constrain to
+      // process scope so the failure is at setup time, not at first transition.
+      const sessionScopedMachine = resourcesWithMachine.find((r) => r.scope !== "process")
+      if (sessionScopedMachine !== undefined) {
+        return yield* new ExtensionLoadError({
+          extensionId: params.id,
+          message: `Resource.machine on scope "${sessionScopedMachine.scope}" is not yet supported (only "process" until per-cwd / ephemeral composers wire Resource layers). Move the machine to a process-scope Resource, or wait for the C3 successor work.`,
         })
       }
       return contribs

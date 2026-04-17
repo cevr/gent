@@ -328,7 +328,24 @@ export const extractMachine = (cs: ReadonlyArray<Contribution>): AnyResourceMach
   // `WorkflowContribution` is structurally a `ResourceMachine` (same field
   // names, same effect-machine `Machine.Machine` shape) — the C3.5 design
   // intent is "Resource.machine IS the workflow contribution, just hosted
-  // by Resource." Cast preserves runtime identity.
+  // by Resource." The cast preserves runtime identity. Drift is gated by
+  // the compile-time check below.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return legacy as AnyResourceMachine | undefined
 }
+
+// Codex C3.5a ADVISORY 1 — drift guard. `WorkflowContribution` and
+// `ResourceMachine` are intentionally structurally identical during the
+// C3.5a→c migration window. If a future edit adds an asymmetric field to
+// either type, the cast in `extractMachine` would silently lose it. These
+// type-level checks force the symmetry: a non-empty diff between the two
+// shapes (in either direction) becomes a TypeScript error.
+//
+// After C3.5c deletes WorkflowContribution, this guard goes with it.
+type _WorkflowIsResourceMachine = AnyWorkflowContribution extends AnyResourceMachine ? true : false
+type _ResourceMachineIsWorkflow = AnyResourceMachine extends AnyWorkflowContribution ? true : false
+const _workflowIsResourceMachine: _WorkflowIsResourceMachine = true
+const _resourceMachineIsWorkflow: _ResourceMachineIsWorkflow = true
+// Reference the constants so they're not flagged as unused by the linter.
+void _workflowIsResourceMachine
+void _resourceMachineIsWorkflow

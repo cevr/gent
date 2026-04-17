@@ -92,7 +92,7 @@ export const setupBuiltinExtensions = (params: {
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
             kind: "builtin",
-            hasWorkflow: extractMachine(exit.value.contributions) !== undefined,
+            hasMachine: extractMachine(exit.value.contributions) !== undefined,
             tools: extractTools(exit.value.contributions).length,
           }),
         )
@@ -150,7 +150,7 @@ export const setupDiscoveredExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             kind: discovered.kind,
-            hasWorkflow: extractMachine(exit.value.contributions) !== undefined,
+            hasMachine: extractMachine(exit.value.contributions) !== undefined,
             tools: extractTools(exit.value.contributions).length,
           }),
         )
@@ -340,16 +340,16 @@ export const reconcileLoadedExtensions = (params: {
       groupScheduledJobFailures(scheduledJobFailures),
     )
 
-    const workflowCount = activated.active.filter(
+    const machineCount = activated.active.filter(
       (ext) => extractMachine(ext.contributions) !== undefined,
     ).length
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
       Effect.annotateLogs({
         active: activated.active.length,
         failed: allFailed.length,
-        withWorkflows: workflowCount,
+        withMachines: machineCount,
         activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
-        workflowIds: activated.active
+        machineIds: activated.active
           .filter((ext) => extractMachine(ext.contributions) !== undefined)
           .map((ext) => ext.manifest.id)
           .join(", "),
