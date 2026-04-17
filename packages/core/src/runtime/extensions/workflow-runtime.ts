@@ -33,7 +33,7 @@ import {
 import { CurrentExtensionSession, CurrentMailboxSession } from "./extension-actor-shared.js"
 import { spawnMachineExtensionRef } from "./spawn-machine-ref.js"
 import { ExtensionTurnControl } from "./turn-control.js"
-import { extractWorkflow } from "../../domain/contribution.js"
+import { extractMachine } from "../../domain/contribution.js"
 
 interface ExtensionProtocolRegistry {
   readonly get: (extensionId: string, tag: string) => AnyExtensionMessageDefinition | undefined
@@ -123,11 +123,14 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
           const spawnByExtension = new Map<string, ActorSpawnSpec>()
           const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
           for (const ext of extensions) {
-            // `WorkflowContribution` is structurally an `ExtensionActorDefinition`
-            // — see workflow.ts and extensions/api.ts. Cast to the runtime
-            // shape so existing actor-named code paths stay intact.
+            // `WorkflowContribution` and `Resource.machine` are structurally
+            // identical to `ExtensionActorDefinition` — see workflow.ts /
+            // resource.ts. `extractMachine` returns whichever shape the
+            // extension declared, preferring `Resource.machine` when both
+            // are present. Cast to the runtime shape so existing actor-
+            // named code paths stay intact.
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const actor = extractWorkflow(ext.contributions) as
+            const actor = extractMachine(ext.contributions) as
               | AnyExtensionActorDefinition
               | undefined
             if (actor !== undefined) {
@@ -155,7 +158,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
               extensionsWithActors: spawnSpecs.length,
               actorIds: spawnSpecs.map((s) => s.extensionId).join(", "),
               extensionsWithoutActors: extensions
-                .filter((ext) => extractWorkflow(ext.contributions) === undefined)
+                .filter((ext) => extractMachine(ext.contributions) === undefined)
                 .map((ext) => ext.manifest.id)
                 .join(", "),
             }),

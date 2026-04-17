@@ -33,8 +33,15 @@
  */
 
 import { Layer } from "effect"
-import type { Context, Effect } from "effect"
+import type { Context, Effect, Schema } from "effect"
+import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentName } from "./agent.js"
+import type { AgentEvent } from "./event.js"
+import type { ExtensionEffect } from "./extension.js"
+import type {
+  AnyExtensionCommandMessage,
+  AnyExtensionRequestMessage,
+} from "./extension-protocol.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
 
@@ -119,13 +126,62 @@ export interface ResourceSchedule {
   }
 }
 
+// ── The Resource machine sub-shape (C3.5) ──
+
+/** Effects a Resource machine may declare in `afterTransition`. Same shape
+ *  as `ExtensionEffect` so the host runtime can dispatch them unchanged. */
+export type ResourceMachineEffect = ExtensionEffect
+
+/** Lifecycle context handed to `onInit`. Same surface today's
+ *  `WorkflowInitContext` exposes — Resource.machine is the renamed seat
+ *  for what was previously `WorkflowContribution`. */
+export interface ResourceMachineInitContext<State, Event, SD extends SlotsDef> {
+  readonly sessionId: SessionId
+  readonly snapshot: Effect.Effect<State>
+  readonly send: (event: Event) => Effect.Effect<boolean>
+  readonly sessionCwd?: string
+  readonly parentSessionId?: SessionId
+  readonly getSessionAncestors: () => Effect.Effect<ReadonlyArray<{ readonly id: string }>>
+  readonly slots?: SlotCalls<SD>
+}
+
+/**
+ * Declarative state machine attached to a Resource. Holds the machine
+ * definition plus mappers from agent events / extension messages into
+ * machine events, plus declared effects that fire after every transition.
+ *
+ * Type parameters mirror `effect-machine`'s machine: State, Event, optional
+ * slot-providing services, optional slot definitions.
+ *
+ * Structurally identical to the legacy `WorkflowContribution` — the runtime
+ * lowering is a no-op cast. C3.5b migrates extensions over; C3.5c deletes
+ * `WorkflowContribution`.
+ */
+export interface ResourceMachine<
+  State extends { readonly _tag: string } = { readonly _tag: string },
+  Event extends { readonly _tag: string } = { readonly _tag: string },
+  SlotsR = never,
+  SD extends SlotsDef = Record<string, never>,
+> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly machine: Machine.Machine<State, Event, never, any, any, SD>
+  readonly slots?: (ctx: {
+    readonly sessionId: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<ProvideSlots<SD>, never, SlotsR>
+  readonly mapEvent?: (event: AgentEvent) => Event | undefined
+  readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
+  readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
+  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ResourceMachineEffect>
+  readonly stateSchema?: Schema.Schema<State>
+  readonly protocols?: Readonly<Record<string, unknown>>
+  readonly onInit?: (ctx: ResourceMachineInitContext<State, Event, SD>) => Effect.Effect<void>
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyResourceMachine = ResourceMachine<any, any, any, any>
+
 // ── The Resource contribution ──
-//
-// NOTE: the `machine` sub-shape is intentionally absent from C3.1.
-// `WorkflowContribution.machine` migrates to `Resource.machine` in a later
-// commit alongside the actor-supervision engine port. C3.1 establishes the
-// Resource shape + 3 engines (lifecycle / subscription / schedule); C3.5
-// adds the machine engine and `Resource.machine`.
 
 /**
  * One Resource carries:
@@ -142,9 +198,10 @@ export interface ResourceSchedule {
  *   `BusSubscriptionContribution`.
  * - `schedule` — periodic jobs reconciled at host startup. Replaces the
  *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
- *
- * The `machine` sub-shape (replacing `WorkflowContribution.machine`) is
- * deferred to C3.5 so the simpler engines can ship + be validated first.
+ * - `machine` — optional state machine + mappers + declared effects. The
+ *   host (today: `WorkflowRuntime`, soon: a Resource-machine engine inside
+ *   `resource-host/`) supervises one actor per session per Resource that
+ *   declares `machine`. Replaces `WorkflowContribution`.
  *
  * Authors typically create a Resource through the smart constructor
  * `defineResource(...)`. The `tag` is the canonical entry into the service
@@ -173,6 +230,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
   readonly stop?: Effect.Effect<void, never, A>
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
+  readonly machine?: AnyResourceMachine
 }
 
 /**
@@ -199,6 +257,7 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> 
   readonly stop?: Effect.Effect<void, never, NoInfer<A>>
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
+  readonly machine?: AnyResourceMachine
 }
 
 /**

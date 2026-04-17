@@ -19,7 +19,7 @@ import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
-import type { AnyResourceContribution } from "./resource.js"
+import type { AnyResourceContribution, AnyResourceMachine } from "./resource.js"
 import type { AnyToolDefinition } from "./tool.js"
 import type { AnyWorkflowContribution } from "./workflow.js"
 
@@ -309,3 +309,26 @@ export const extractPulseSubscriptions = (
 export const extractResources = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<AnyResourceContribution> => filterByKind(cs, "resource")
+
+/**
+ * Returns the machine declared by an extension's contributions, looking at
+ * both legacy `WorkflowContribution` and `Resource.machine` (C3.5).
+ *
+ * Until C3.5b migrates all extensions, both shapes coexist; the runtime
+ * should prefer `Resource.machine` when both are present (lets a single
+ * extension migrate one at a time during C3.5b).
+ *
+ * After C3.5c deletes `WorkflowContribution`, this collapses to "look up
+ * the first Resource that declares `machine`".
+ */
+export const extractMachine = (cs: ReadonlyArray<Contribution>): AnyResourceMachine | undefined => {
+  const fromResource = extractResources(cs).find((r) => r.machine !== undefined)?.machine
+  if (fromResource !== undefined) return fromResource
+  const legacy = extractWorkflow(cs)
+  // `WorkflowContribution` is structurally a `ResourceMachine` (same field
+  // names, same effect-machine `Machine.Machine` shape) — the C3.5 design
+  // intent is "Resource.machine IS the workflow contribution, just hosted
+  // by Resource." Cast preserves runtime identity.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  return legacy as AnyResourceMachine | undefined
+}

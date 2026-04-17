@@ -13,7 +13,7 @@ import {
   extractModelDrivers,
   extractPromptSections,
   extractTools,
-  extractWorkflow,
+  extractMachine,
 } from "../../domain/contribution.js"
 import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
@@ -92,7 +92,7 @@ export const setupBuiltinExtensions = (params: {
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
             kind: "builtin",
-            hasWorkflow: extractWorkflow(exit.value.contributions) !== undefined,
+            hasWorkflow: extractMachine(exit.value.contributions) !== undefined,
             tools: extractTools(exit.value.contributions).length,
           }),
         )
@@ -150,7 +150,7 @@ export const setupDiscoveredExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             kind: discovered.kind,
-            hasWorkflow: extractWorkflow(exit.value.contributions) !== undefined,
+            hasWorkflow: extractMachine(exit.value.contributions) !== undefined,
             tools: extractTools(exit.value.contributions).length,
           }),
         )
@@ -341,7 +341,7 @@ export const reconcileLoadedExtensions = (params: {
     )
 
     const workflowCount = activated.active.filter(
-      (ext) => extractWorkflow(ext.contributions) !== undefined,
+      (ext) => extractMachine(ext.contributions) !== undefined,
     ).length
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
       Effect.annotateLogs({
@@ -350,7 +350,7 @@ export const reconcileLoadedExtensions = (params: {
         withWorkflows: workflowCount,
         activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
         workflowIds: activated.active
-          .filter((ext) => extractWorkflow(ext.contributions) !== undefined)
+          .filter((ext) => extractMachine(ext.contributions) !== undefined)
           .map((ext) => ext.manifest.id)
           .join(", "),
         ...(allFailed.length > 0

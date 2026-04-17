@@ -23,7 +23,11 @@ import {
   buildResourceLayer,
 } from "@gent/core/runtime/extensions/resource-host"
 import type { ResourceBusEnvelope } from "@gent/core/domain/resource"
-import { defineResource } from "@gent/core/domain/contribution"
+import {
+  defineResource,
+  extractMachine,
+  workflow as workflowContribution,
+} from "@gent/core/domain/contribution"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { Contribution } from "@gent/core/domain/contribution"
 
@@ -223,6 +227,64 @@ describe("defineResource", () => {
     expect(r.schedule).toHaveLength(1)
     expect(r.schedule![0]!.id).toBe("tick")
     expect(r.schedule![0]!.cron).toBe("0 * * * *")
+  })
+
+  test("machine field round-trips and surfaces via extractMachine", () => {
+    // Minimal `ResourceMachine` shape — the runtime cares about field
+    // presence + structural identity to `effect-machine`'s Machine.
+    // We only need to assert the field round-trips through defineResource +
+    // extractMachine; the actual supervision is tested by workflow-runtime
+    // tests that drive a real machine end-to-end.
+    const stubMachine = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      machine: { _stub: true } as any,
+    }
+    const r = defineResource({
+      scope: "process",
+      layer: layerA,
+      machine: stubMachine,
+    })
+    expect(r.machine).toBe(stubMachine)
+    const ext = makeStubExtension("ext-with-machine", [r])
+    const found = extractMachine(ext.contributions)
+    expect(found).toBe(stubMachine)
+  })
+
+  test("extractMachine prefers Resource.machine when both Resource.machine and legacy workflow are declared", () => {
+    const resourceMachine = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      machine: { _from: "resource" } as any,
+    }
+    const legacyMachine = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      machine: { _from: "workflow" } as any,
+    }
+    const ext = makeStubExtension("ext-both", [
+      defineResource({
+        scope: "process",
+        layer: layerA,
+        machine: resourceMachine,
+      }),
+      // Legacy WorkflowContribution path (kept until C3.5c).
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      workflowContribution(legacyMachine as never),
+    ])
+    const found = extractMachine(ext.contributions)
+    expect(found).toBe(resourceMachine)
+  })
+
+  test("extractMachine falls back to legacy WorkflowContribution when no Resource.machine present", () => {
+    const legacyMachine = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      machine: { _from: "workflow" } as any,
+    }
+    const ext = makeStubExtension("ext-legacy-only", [
+      defineResource({ scope: "process", layer: layerA }),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      workflowContribution(legacyMachine as never),
+    ])
+    const found = extractMachine(ext.contributions)
+    expect(found).toBe(legacyMachine)
   })
 })
 
