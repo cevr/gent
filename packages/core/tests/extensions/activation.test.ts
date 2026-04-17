@@ -17,7 +17,6 @@ import {
 } from "@gent/core/runtime/extensions/activation"
 import {
   defineResource,
-  onStartup as onStartupContribution,
   tool as toolContribution,
   type Contribution,
 } from "@gent/core/domain/contribution"
@@ -184,19 +183,6 @@ describe("extension activation isolation", () => {
               ],
             }),
           ]),
-          makeLoaded("failing-ext", [
-            toolContribution({
-              name: "failing_tool",
-              description: "failing",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-            onStartupContribution(
-              Effect.sync(() => {
-                throw new Error("startup boom")
-              }),
-            ),
-          ]),
         ],
         failedExtensions: [
           {
@@ -229,13 +215,6 @@ describe("extension activation isolation", () => {
           phase: "setup",
           error: "setup boom",
         },
-        {
-          manifest: { id: "failing-ext" },
-          kind: "builtin",
-          sourcePath: "builtin",
-          phase: "startup",
-          error: "startup boom",
-        },
       ])
       expect(result.scheduledJobFailures).toHaveLength(1)
       expect(result.scheduledJobFailures[0]).toMatchObject({
@@ -257,14 +236,6 @@ describe("extension activation isolation", () => {
           sourcePath: "/tmp/broken.ts",
           phase: "setup",
           error: "setup boom",
-          status: "failed",
-        },
-        {
-          manifest: { id: "failing-ext" },
-          kind: "builtin",
-          sourcePath: "builtin",
-          phase: "startup",
-          error: "startup boom",
           status: "failed",
         },
       ])

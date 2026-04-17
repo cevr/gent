@@ -10,7 +10,6 @@ import {
   type Contribution,
   extractAgents,
   extractExternalDrivers,
-  extractLifecycle,
   extractModelDrivers,
   extractPromptSections,
   extractTools,
@@ -284,37 +283,20 @@ export const validateLoadedExtensions = (
     return { active, failed }
   })
 
+/**
+ * Pass-through after C3.4: lifecycle is no longer a separate phase.
+ * `Resource.start` / `Resource.stop` are woven into each Resource's layer
+ * by `withLifecycle` in `resource-host/index.ts`; failures surface at
+ * layer-build time inside the surrounding scope.
+ *
+ * Kept as a thin pass-through so downstream call sites (and the
+ * `ExtensionActivationResult` shape) don't need to change in the same
+ * commit. Will be inlined or deleted in C10 (final subtraction).
+ */
 export const activateLoadedExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<ExtensionActivationResult, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const active: LoadedExtension[] = []
-    const failed: FailedExtension[] = []
-
-    for (const ext of extensions) {
-      const startupEffects = extractLifecycle(ext.contributions, "startup")
-      const shutdownEffects = extractLifecycle(ext.contributions, "shutdown")
-      let startupFailed = false
-      for (const effect of startupEffects) {
-        const exit = yield* effect.pipe(Effect.exit)
-        if (exit._tag === "Failure") {
-          const error = formatFailure(Cause.squash(exit.cause))
-          failed.push(toFailedExtension(ext, "startup", error))
-          startupFailed = true
-          break
-        }
-      }
-      if (startupFailed) continue
-
-      for (const shutdown of shutdownEffects) {
-        yield* Effect.addFinalizer(() => shutdown.pipe(Effect.catchCause(() => Effect.void)))
-      }
-
-      active.push(ext)
-    }
-
-    return { active, failed }
-  })
+): Effect.Effect<ExtensionActivationResult> =>
+  Effect.succeed({ active: [...extensions], failed: [] })
 
 const groupScheduledJobFailures = (
   failures: ReadonlyArray<SchedulerFailure>,

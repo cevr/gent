@@ -21,8 +21,6 @@ import {
   defineResource,
   defineTool,
   interceptorContribution,
-  onShutdownContribution,
-  onStartupContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
 
@@ -61,11 +59,19 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("onStartup/onShutdown contributions MUST be Effects — Promise rejected", () => {
-    // @ts-expect-error — Promise must not be assignable to Effect lifecycle contribution
-    onStartupContribution(Promise.resolve())
-    // @ts-expect-error — Promise must not be assignable to Effect lifecycle contribution
-    onShutdownContribution(Promise.resolve())
+  test("Resource.start / Resource.stop MUST be Effects — Promise rejected", () => {
+    defineResource({
+      scope: "process",
+      layer: Layer.empty,
+      // @ts-expect-error — Promise must not be assignable to Effect Resource.start
+      start: Promise.resolve(),
+    })
+    defineResource({
+      scope: "process",
+      layer: Layer.empty,
+      // @ts-expect-error — Promise must not be assignable to Effect Resource.stop
+      stop: Promise.resolve(),
+    })
     expect(true).toBe(true)
   })
 
@@ -86,12 +92,12 @@ describe("Effect-purity locks (compile-time)", () => {
         ),
         interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
         busSubscriptionContribution("agent:*", () => Effect.void),
-        onStartupContribution(Effect.void),
-        onShutdownContribution(Effect.void),
         commandContribution({ name: "ok", handler: () => Effect.void }),
         defineResource({
           scope: "process",
           layer: Layer.empty,
+          start: Effect.void,
+          stop: Effect.void,
           schedule: [
             {
               id: "j",

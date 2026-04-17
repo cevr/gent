@@ -21,8 +21,6 @@ import {
   commandContribution,
   busSubscriptionContribution,
   interceptorContribution,
-  onStartupContribution,
-  onShutdownContribution,
   type Contribution,
 } from "@gent/core/extensions/api"
 import {
@@ -30,7 +28,6 @@ import {
   extractBusSubscriptions,
   extractCommands,
   extractInterceptors,
-  extractLifecycle,
   extractPermissionRules,
   extractPromptSections,
   extractResources,
@@ -39,6 +36,7 @@ import {
   extractExternalDrivers,
   extractModelDrivers,
 } from "@gent/core/domain/contribution"
+import { collectProcessLayers } from "@gent/core/runtime/extensions/resource-host"
 import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
@@ -78,8 +76,6 @@ describe("defineExtension", () => {
       expect(extractBusSubscriptions(contributions)).toEqual([])
       expect(extractExternalDrivers(contributions)).toEqual([])
       expect(extractInterceptors(contributions)).toEqual([])
-      expect(extractLifecycle(contributions, "startup")).toEqual([])
-      expect(extractLifecycle(contributions, "shutdown")).toEqual([])
     }),
   )
 
@@ -133,28 +129,52 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("multiple lifecycle effects compose in registration order", () =>
-    Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
-      const ext = defineExtension({
-        id: "lifecycle",
-        contributions: () => [
-          onStartupContribution(append("startup-1")),
-          onStartupContribution(append("startup-2")),
-          onShutdownContribution(append("shutdown-1")),
-          onShutdownContribution(append("shutdown-2")),
-        ],
-      })
-      const contributions = yield* setupOf(ext)
-      for (const eff of extractLifecycle(contributions, "startup")) {
-        yield* eff
-      }
-      for (const eff of extractLifecycle(contributions, "shutdown")) {
-        yield* eff
-      }
-      expect(log).toEqual(["startup-1", "startup-2", "shutdown-1", "shutdown-2"])
-    }),
+  it.live(
+    "Resource.start and Resource.stop run at scope build/teardown when collected via withLifecycle",
+    () =>
+      Effect.gen(function* () {
+        const log: string[] = []
+        const append = (s: string) => Effect.sync(() => log.push(s))
+        const ext = defineExtension({
+          id: "lifecycle",
+          contributions: () => [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty,
+              start: append("startup-1"),
+              stop: append("shutdown-1"),
+            }),
+            defineResource({
+              scope: "process",
+              layer: Layer.empty,
+              start: append("startup-2"),
+              stop: append("shutdown-2"),
+            }),
+          ],
+        })
+        const loaded = {
+          manifest: { id: ext.manifest.id },
+          kind: "builtin" as const,
+          sourcePath: "builtin",
+          contributions: yield* setupOf(ext),
+        }
+        const layers = collectProcessLayers([loaded as never])
+        const merged = layers.reduce(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (acc, l) => Layer.merge(acc, l) as Layer.Layer<any>,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          Layer.empty as Layer.Layer<any>,
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Layer.build(merged)
+          }),
+        )
+        // Both starts ran before any stop; stops run at teardown in reverse
+        // (Effect finalizer convention).
+        expect(log.slice(0, 2).sort()).toEqual(["startup-1", "startup-2"])
+        expect(log.slice(2).sort()).toEqual(["shutdown-1", "shutdown-2"])
+      }),
   )
 
   it.live("multiple bus subscriptions and commands all accumulate", () =>

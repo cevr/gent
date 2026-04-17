@@ -76,12 +76,6 @@ export interface BusSubscriptionContribution {
   }) => Effect.Effect<void>
 }
 
-export interface LifecycleContribution {
-  readonly _kind: "lifecycle"
-  readonly phase: "startup" | "shutdown"
-  readonly effect: Effect.Effect<void>
-}
-
 export interface ProjectionKindContribution {
   readonly _kind: "projection"
   readonly projection: AnyProjectionContribution
@@ -132,7 +126,6 @@ export type Contribution =
   | PermissionRuleContribution
   | PromptSectionContribution
   | BusSubscriptionContribution
-  | LifecycleContribution
   | ProjectionKindContribution
   | QueryKindContribution
   | MutationKindContribution
@@ -191,18 +184,6 @@ export const busSubscription = (
   pattern: string,
   handler: BusSubscriptionContribution["handler"],
 ): BusSubscriptionContribution => ({ _kind: "bus-subscription", pattern, handler })
-
-export const onStartup = (effect: Effect.Effect<void>): LifecycleContribution => ({
-  _kind: "lifecycle",
-  phase: "startup",
-  effect,
-})
-
-export const onShutdown = (effect: Effect.Effect<void>): LifecycleContribution => ({
-  _kind: "lifecycle",
-  phase: "shutdown",
-  effect,
-})
 
 export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
   _kind: "projection",
@@ -324,14 +305,6 @@ export const extractWorkflow = (
 export const extractPulseSubscriptions = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<PulseSubscriptionContribution> => filterByKind(cs, "pulse-subscription")
-
-export const extractLifecycle = (
-  cs: ReadonlyArray<Contribution>,
-  phase: "startup" | "shutdown",
-): ReadonlyArray<LifecycleContribution["effect"]> =>
-  filterByKind(cs, "lifecycle")
-    .filter((c) => c.phase === phase)
-    .map((c) => c.effect)
 
 export const extractResources = (
   cs: ReadonlyArray<Contribution>,
