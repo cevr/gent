@@ -110,12 +110,12 @@ It is the composition boundary. Not the domain boundary.
 
 ### RuntimeProfileResolver
 
-`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently (and drift, e.g. dropping bus subscriptions on the per-cwd path); now both go through the resolver paired with `buildExtensionLayers`:
+`packages/core/src/runtime/profile.ts` is the single discover → setup → reconcile → sections pipeline. Two paths used to do this independently (and drift, e.g. dropping pub/sub subscriptions on the per-cwd path); now both go through the resolver paired with `buildExtensionLayers`:
 
 - **Server startup** (`server/dependencies.ts`) — resolves once at boot, builds the registry/state/event-bus layer via `buildExtensionLayers`, publishes the profile as a tag so `agentRuntimeLive` reuses the same prompt sections instead of recomputing.
 - **Per-cwd profile cache** (`runtime/session-profile.ts`) — resolves lazily per unique cwd, builds the same layer shape via `buildExtensionLayers` inside the captured server scope.
 
-Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call the resolver — they forward an already-resolved `ExtensionRegistry` from the parent and only rebuild the per-run mutable bits (storage, event bus, state runtime) for isolation. That divergence is structural, not duplication.
+Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call the resolver — they forward an already-resolved `ExtensionRegistry` from the parent and only rebuild the per-run mutable bits (storage, pub/sub engine, state runtime) for isolation. That divergence is structural, not duplication.
 
 `compileBaseSections(profile)` resolves dynamic prompt sections inside the extension-services runtime so contributions like `Skills`'s prompt section can read services from their own `setup.layer`.
 

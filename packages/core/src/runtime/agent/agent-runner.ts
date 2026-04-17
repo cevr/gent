@@ -517,8 +517,8 @@ const buildEphemeralLayer = (params: {
       ownService(AgentLoop, loopLayer),
     )
     // Extension-side wiring fans out into many service identifiers
-    // (registry, workflow runtime, event bus, driver registry, plus each
-    // extension's setup.layer). The whole bundle merges as one — parent's
+    // (registry, workflow runtime, subscription engine, driver registry,
+    // plus each extension's setup.layer). The whole bundle merges as one — parent's
     // versions of any of these would be the wrong runtime, but they're
     // overwritten by extensionLayers' merge order.
     .merge(extensionLayers)

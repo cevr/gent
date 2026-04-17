@@ -137,8 +137,8 @@ export class SessionProfileCache extends Context.Service<
             }
 
             // 2. Build extension layers via the shared helper — same shape as
-            //    server startup. Includes registry, state runtime, event bus
-            //    (with extension subscriptions), and extension `setup.layer`s.
+            //    server startup. Includes registry, state runtime, subscription
+            //    engine (with extension subscriptions), and extension `setup.layer`s.
             //    `buildExtensionLayers` requires `ExtensionTurnControl`; provide
             //    it locally then build inside the captured server scope.
             const combinedLayer = buildExtensionLayers(resolved).pipe(

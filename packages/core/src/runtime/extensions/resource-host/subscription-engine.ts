@@ -1,8 +1,7 @@
 /**
  * Subscription engine — channel-based pub/sub for Resource subscriptions.
  *
- * Replaces the legacy `ExtensionEventBus` service (`event-bus.ts`). Same
- * dispatch semantics: exact-match channels and `"<prefix>:*"` wildcards;
+ * Dispatch semantics: exact-match channels and `"<prefix>:*"` wildcards;
  * per-handler error isolation via `catchEager` + `catchDefect`. The engine
  * holds the registry and the `emit` entry point; install collects the
  * subscriptions array from each Resource and registers them at install
@@ -14,7 +13,7 @@
 import { Effect, Context, Layer } from "effect"
 import type { ResourceBusEnvelope, ResourceSubscription } from "../../../domain/resource.js"
 
-// ── Public service (replaces ExtensionEventBus) ──
+// ── Public service ──
 
 /**
  * A handler stored in the engine. `R` is erased at the boundary — handlers
@@ -42,9 +41,8 @@ export class SubscriptionEngine extends Context.Service<
    *
    * Subscriptions' `R` channels are erased at registration; the caller is
    * responsible for ensuring their requirements are satisfied by the
-   * surrounding Layer composition. Same contract as the legacy
-   * `ExtensionEventBus.withSubscriptions` — handlers with unmet requirements
-   * fail at emit time.
+   * surrounding Layer composition. Handlers with unmet requirements fail
+   * at emit time.
    */
   static withSubscriptions = (
     subscriptions: ReadonlyArray<ResourceSubscription>,

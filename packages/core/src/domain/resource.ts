@@ -188,8 +188,8 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  *   `LifecycleContribution` `phase: "startup" | "shutdown"` discriminator.
  *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
  *   may not fail (failures are not propagated through scope teardown).
- * - `subscriptions` — pub/sub handlers registered at install time. Replaces
- *   `BusSubscriptionContribution`.
+ * - `subscriptions` — pub/sub handlers registered at install time on the
+ *   `SubscriptionEngine` (channel-based exact / `<prefix>:*` wildcard).
  * - `schedule` — periodic jobs reconciled at host startup. Replaces the
  *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
  * - `machine` — optional state machine + mappers + declared effects. The

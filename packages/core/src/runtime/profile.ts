@@ -2,8 +2,8 @@
  * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
  * every composition root that needs to *discover* extensions.
  *
- * Three callers build the same `{ registry, state-runtime, event-bus }` shape
- * via the same `buildExtensionLayers` substrate:
+ * Three callers build the same `{ registry, state-runtime, subscription-engine }`
+ * shape via the same `buildExtensionLayers` substrate:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
  *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
@@ -13,9 +13,9 @@
  *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
  *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
- * All three end up with the same registry/state-runtime/event-bus shape —
- * no more drift like the per-cwd path silently dropping bus subscriptions
- * and no more drift between ephemeral and server runtimes.
+ * All three end up with the same registry / state-runtime / subscription-engine
+ * shape — no more drift like the per-cwd path silently dropping pub/sub
+ * subscriptions and no more drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
  * construction paths into a single substrate; downstream code becomes obvious.
@@ -240,8 +240,8 @@ export const compileBaseSections = (
   }) as Effect.Effect<ReadonlyArray<PromptSection>, never, never>
 
 /**
- * Build the extension-side layers (registry, state runtime, event bus,
- * extension-contributed services) from a resolved profile.
+ * Build the extension-side layers (registry, state runtime, pub/sub
+ * subscription engine, extension-contributed services) from a resolved profile.
  *
  * Used by the server composition root, the per-cwd cache, and the ephemeral
  * child-run path. Ephemeral runs forward the parent's already-resolved

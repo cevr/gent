@@ -13,7 +13,7 @@
  *      C7 was specifically designed to handle.
  *   4. Server-style and per-cwd-style assemblies produce equivalent observable
  *      output (same registry contents, same merged sections). If the per-cwd
- *      path drops bus subscriptions or skips an extension layer, this fails.
+ *      path drops Resource subscriptions or skips an extension layer, this fails.
  *
  * If this regresses, the activation paths can drift again — e.g., an
  * extension's prompt section appears at server startup but not in a per-cwd

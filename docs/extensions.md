@@ -277,7 +277,7 @@ contributions: () => [
     subscriptions: [
       {
         pattern: "agent:*",
-        handler: (envelope) => Effect.logInfo(`bus event ${envelope.channel}`),
+        handler: (envelope) => Effect.logInfo(`pub/sub event ${envelope.channel}`),
       },
     ],
   }),
