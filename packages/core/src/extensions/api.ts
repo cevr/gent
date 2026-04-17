@@ -206,7 +206,17 @@ export {
   query as queryContribution,
   mutation as mutationContribution,
   workflow as workflowContribution,
+  defineResource,
 } from "../domain/contribution.js"
+export type {
+  ResourceContribution,
+  AnyResourceContribution,
+  ResourceScope,
+  ScopeOf,
+  ResourceBusEnvelope,
+  ResourceSubscription,
+  ResourceSchedule,
+} from "../domain/resource.js"
 export type {
   ProjectionContribution,
   ProjectionContext,

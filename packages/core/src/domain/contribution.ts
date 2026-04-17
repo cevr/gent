@@ -23,6 +23,7 @@ import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
+import type { AnyResourceContribution } from "./resource.js"
 import type { AnyToolDefinition } from "./tool.js"
 import type { AnyWorkflowContribution } from "./workflow.js"
 
@@ -153,6 +154,7 @@ export type Contribution =
   | MutationKindContribution
   | WorkflowKindContribution
   | PulseSubscriptionContribution
+  | AnyResourceContribution
 
 export type ContributionKind = Contribution["_kind"]
 
@@ -250,6 +252,11 @@ export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptio
   _kind: "pulse-subscription",
   tags,
 })
+
+// `defineResource` is exported directly from `./resource.ts` — Resources
+// self-discriminate via `_kind: "resource"` on the contribution itself,
+// so there is no contribution-side wrapper smart constructor here.
+export { defineResource } from "./resource.js"
 
 // ── Filters ──
 
@@ -357,3 +364,7 @@ export const extractLifecycle = (
   filterByKind(cs, "lifecycle")
     .filter((c) => c.phase === phase)
     .map((c) => c.effect)
+
+export const extractResources = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<AnyResourceContribution> => filterByKind(cs, "resource")

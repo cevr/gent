@@ -38,6 +38,11 @@ import { DriverRegistry } from "./extensions/driver-registry.js"
 import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
+  collectProcessLayers,
+  collectSubscriptions,
+  SubscriptionEngine,
+} from "./extensions/resource-host/index.js"
+import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
@@ -243,15 +248,24 @@ export const compileBaseSections = (
  * call this same builder so the wiring shape is identical.
  */
 export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
+  // Legacy `layerContribution` path — Resources contribute via
+  // `collectProcessLayers` below until C3.2 migrates `defineLayer` callers.
   const extensionLayers = resolved.extensions.flatMap((ext) => {
     const layer = extractLayer(ext.contributions)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
     return layer === undefined ? [] : [layer as Layer.Layer<any>]
   })
 
+  // Resource process-scope layers (C3.1 wiring; empty until C3.2 migrates).
+  const resourceProcessLayers = collectProcessLayers(resolved.extensions)
+
   const busSubscriptions = resolved.extensions.flatMap((ext) =>
     extractBusSubscriptions(ext.contributions),
   )
+
+  // Resource subscriptions — register on the new `SubscriptionEngine`
+  // (parallel to the legacy `ExtensionEventBus`). C3.6 unifies both.
+  const resourceSubscriptions = collectSubscriptions(resolved.extensions)
 
   const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
@@ -265,8 +279,10 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
     }),
     extensionRuntimeLive,
     ExtensionEventBus.withSubscriptions(busSubscriptions),
+    SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 
-  if (extensionLayers.length === 0) return baseLayers
-  return Layer.mergeAll(baseLayers, ...extensionLayers)
+  const allExtensionLayers = [...extensionLayers, ...resourceProcessLayers]
+  if (allExtensionLayers.length === 0) return baseLayers
+  return Layer.mergeAll(baseLayers, ...allExtensionLayers)
 }
