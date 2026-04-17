@@ -38,7 +38,7 @@ const RememberParams = Schema.Struct({
 
 export const MemoryRememberTool = defineTool({
   name: "memory_remember",
-  concurrency: "serial",
+  resources: ["memory_remember"],
   description:
     "Store a memory for future reference. Use 'session' for this conversation only, 'project' for this codebase, 'global' for cross-session knowledge.",
   promptGuidelines: [
@@ -103,7 +103,6 @@ const RecallParams = Schema.Struct({
 
 export const MemoryRecallTool = defineTool({
   name: "memory_recall",
-  concurrency: "parallel",
   idempotent: true,
   description:
     "Search or list stored memories. Without a query, returns the memory index (titles + summaries). With a query, searches memory content.",
@@ -165,7 +164,7 @@ const ForgetParams = Schema.Struct({
 
 export const MemoryForgetTool = defineTool({
   name: "memory_forget",
-  concurrency: "serial",
+  resources: ["memory_forget"],
   description: "Remove a stored memory by title and scope.",
   params: ForgetParams,
   execute: Effect.fn("MemoryForgetTool.execute")(function* (params, ctx) {

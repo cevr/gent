@@ -16,6 +16,7 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
+import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
 import {
   buildExtensionLayers,
@@ -262,6 +263,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     approvalServiceLive,
     toolRunnerLive,
     promptPresenterLive,
+    ResourceManagerLive,
   )
 
   // Recover pending interaction requests from storage.

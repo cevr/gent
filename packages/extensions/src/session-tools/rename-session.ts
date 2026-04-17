@@ -9,7 +9,7 @@ export const RenameSessionParams = Schema.Struct({
 
 export const RenameSessionTool = defineTool({
   name: "rename_session",
-  concurrency: "serial",
+  resources: ["rename_session"],
   idempotent: true,
   description:
     "Rename the current session. Call once you understand the task, and again if the topic shifts significantly.",

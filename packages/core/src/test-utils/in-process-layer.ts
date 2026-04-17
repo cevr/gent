@@ -24,6 +24,7 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
+import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
@@ -79,6 +80,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     authGuardLive,
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
+    ResourceManagerLive,
     ...(config.extraLayers ?? []),
   )
 

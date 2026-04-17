@@ -21,7 +21,6 @@ export const SearchSkillsParams = Schema.Struct({
 
 export const SearchSkillsTool = defineTool({
   name: "search_skills",
-  concurrency: "parallel",
   idempotent: true,
   description:
     "Search loaded skills by name or description. Optionally include the full skill content.",

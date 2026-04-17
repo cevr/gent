@@ -101,7 +101,7 @@ function killGracefully(proc: { pid: number; kill: (signal?: number) => void }):
 
 export const BashTool = defineTool({
   name: "bash",
-  concurrency: "serial",
+  resources: ["bash"],
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",
   promptSnippet: "Execute shell commands",

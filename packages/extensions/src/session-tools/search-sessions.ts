@@ -64,7 +64,6 @@ export function parseRelativeDate(s: string): number | undefined {
 
 export const SearchSessionsTool = defineTool({
   name: "search_sessions",
-  concurrency: "parallel",
   idempotent: true,
   description:
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",

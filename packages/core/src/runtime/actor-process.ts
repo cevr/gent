@@ -1,4 +1,4 @@
-import { Cause, Context, DateTime, Effect, Layer, Schema, Semaphore } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { RunSpecSchema, AgentName, AgentRunnerService } from "../domain/agent.js"
 import { QueueSnapshot } from "../domain/queue.js"
 import {
@@ -27,6 +27,7 @@ import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
 import { SessionProfileCache } from "./session-profile.js"
+import { ResourceManager } from "./resource-manager.js"
 
 export class ActorProcessError extends Schema.TaggedErrorClass<ActorProcessError>()(
   "ActorProcessError",
@@ -162,7 +163,7 @@ const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
 export const LocalActorProcessLive: Layer.Layer<
   ActorProcess,
   never,
-  AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry
+  AgentLoop | Storage | EventPublisher | ToolRunner | ExtensionRegistry | ResourceManager
 > = Layer.effect(
   ActorProcess,
   Effect.gen(function* () {
@@ -171,7 +172,7 @@ export const LocalActorProcessLive: Layer.Layer<
     const eventPublisher = yield* EventPublisher
     const toolRunner = yield* ToolRunner
     const extensionRegistry = yield* ExtensionRegistry
-    const bashSemaphore = yield* Semaphore.make(1)
+    const resourceManager = yield* ResourceManager
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
@@ -370,7 +371,7 @@ export const LocalActorProcessLive: Layer.Layer<
             toolRunner,
             extensionRegistry: invokeRegistry,
             hostCtx: invokeHostCtx,
-            bashSemaphore,
+            resourceManager,
             storage,
           })
 

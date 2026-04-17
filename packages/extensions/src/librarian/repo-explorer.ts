@@ -180,7 +180,7 @@ const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string
 
 export const RepoTool = defineTool({
   name: "repo",
-  concurrency: "serial",
+  resources: ["repo"],
   idempotent: true,
   description:
     "Explore external repositories. Fetch GitHub repos, npm/pypi/crates packages. Search code, list files, read content.",

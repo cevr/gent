@@ -16,7 +16,6 @@ export const SkillsParams = Schema.Struct({
 
 export const SkillsTool = defineTool({
   name: "skills",
-  concurrency: "parallel",
   idempotent: true,
   description:
     "Load skill content by name. Skills provide domain-specific patterns and guidelines.",

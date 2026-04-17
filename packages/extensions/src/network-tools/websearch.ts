@@ -81,7 +81,6 @@ function extractResult(data: McpResponse): string | undefined {
 
 export const WebSearchTool = defineTool({
   name: "websearch",
-  concurrency: "parallel",
   idempotent: true,
   get description() {
     const year = new Date().getFullYear()

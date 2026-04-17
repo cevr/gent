@@ -15,7 +15,15 @@ export interface ToolDefinition<
 > {
   readonly name: Name
   readonly description: string
-  readonly concurrency?: "serial" | "parallel"
+  /**
+   * Named resources this tool needs exclusive access to while running. Two
+   * tools requesting the same resource name run serially against each other;
+   * tools with disjoint resource sets run in parallel. Empty/undefined =
+   * fully parallel. Replaces the pre-Phase-6 `concurrency: "serial" | "parallel"`
+   * boolean flag (which couldn't distinguish "serial against the global bash
+   * lock" from "serial against my own writes").
+   */
+  readonly resources?: ReadonlyArray<string>
   /** Whether this tool is safe to replay after restart (read-only tools = true) */
   readonly idempotent?: boolean
   /** One-liner for system prompt tool list (distinct from description which goes to LLM tool schema) */

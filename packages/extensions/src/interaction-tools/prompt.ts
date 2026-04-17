@@ -58,7 +58,7 @@ export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewRe
 
 export const PromptTool = defineTool({
   name: "prompt",
-  concurrency: "serial",
+  resources: ["prompt"],
   description:
     "Present content to the user for review, confirmation, or informational display. " +
     "Use mode=present for informational content (no response needed), " +

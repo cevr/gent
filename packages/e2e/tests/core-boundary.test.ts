@@ -11,6 +11,7 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
@@ -92,6 +93,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       testExtensionRegistryLayer,
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
@@ -187,6 +189,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       testExtensionRegistryLayer,
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
@@ -252,6 +255,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       testExtensionRegistryLayer,
       ToolRunner.Test(),
       ExtensionStateRuntime.Test(),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,

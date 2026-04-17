@@ -9,7 +9,7 @@ import { defineTool } from "@gent/core/extensions/api"
  */
 export const AutoCheckpointTool = defineTool({
   name: "auto_checkpoint",
-  concurrency: "serial",
+  resources: ["auto_checkpoint"],
   description:
     "Report your iteration results. Call with status 'continue' to proceed to the next iteration, " +
     "'complete' when the goal is met, or 'abandon' to stop. You MUST call this tool at the end of each iteration.",

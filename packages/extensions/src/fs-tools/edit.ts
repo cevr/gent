@@ -137,7 +137,7 @@ export function findMatch(content: string, oldString: string): MatchResult | und
 
 export const EditTool = defineTool({
   name: "edit",
-  concurrency: "serial",
+  resources: ["edit"],
   description:
     "Edit file by replacing exact string matches. Fails if oldString not found or not unique (unless replaceAll).",
   promptSnippet: "Apply targeted edits to existing files",

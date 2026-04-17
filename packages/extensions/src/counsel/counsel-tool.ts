@@ -43,7 +43,6 @@ const buildCounselPrompt = (prompt: string, context?: string) =>
 
 export const CounselTool = defineTool({
   name: "counsel",
-  concurrency: "parallel" as const,
   description:
     "Get a cross-vendor second opinion. Deep mode for thorough analysis with exploration tools. Standard mode for quick focused opinions.",
   promptSnippet: "Cross-vendor second opinion",

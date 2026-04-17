@@ -181,7 +181,7 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
 
 export const PlanTool = defineTool({
   name: "plan",
-  concurrency: "serial" as const,
+  resources: ["plan"],
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",
   params: PlanParams,

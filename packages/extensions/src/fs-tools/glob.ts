@@ -39,7 +39,6 @@ export const GlobResult = Schema.Struct({
 
 export const GlobTool = defineTool({
   name: "glob",
-  concurrency: "parallel",
   idempotent: true,
   description: "Find files matching glob pattern. Returns paths sorted by mtime.",
   promptSnippet: "Find files by glob pattern",

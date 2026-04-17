@@ -5,6 +5,7 @@ import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensi
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
@@ -49,6 +50,7 @@ describe("ActorProcess", () => {
       recorderLayer,
       ToolRunner.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     return Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
@@ -185,6 +187,7 @@ describe("ActorProcess", () => {
       recorderLayer,
       toolRunnerLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))

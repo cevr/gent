@@ -26,7 +26,7 @@ export const HandoffParams = Schema.Struct({
 
 export const HandoffTool = defineTool({
   name: "handoff",
-  concurrency: "serial",
+  resources: ["handoff"],
   description:
     "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",
   promptSnippet: "Transfer context to a new session",

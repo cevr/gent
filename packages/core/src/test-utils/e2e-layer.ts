@@ -38,6 +38,7 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
+import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { AppServicesLive } from "../server/index.js"
@@ -184,6 +185,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         authGuardLive,
         providerAuthLive,
         Layer.provide(FallbackFileIndexLive, BunServices.layer),
+        ResourceManagerLive,
         ...extensionLayers,
         ...(config.extraLayers ?? []),
       )

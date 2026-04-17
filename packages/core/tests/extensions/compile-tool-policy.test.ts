@@ -9,7 +9,6 @@ describe("compileToolPolicy", () => {
   const makeTool = (name: string) =>
     defineTool({
       name,
-      concurrency: "parallel",
       description: name,
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
@@ -133,7 +132,6 @@ describe("compileToolPolicy", () => {
     const interactiveTool = defineTool({
       name: "ask_user",
       interactive: true,
-      concurrency: "parallel",
       description: "ask_user",
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
@@ -150,7 +148,6 @@ describe("compileToolPolicy", () => {
     const interactiveTool = defineTool({
       name: "ask_user",
       interactive: true,
-      concurrency: "parallel",
       description: "ask_user",
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),

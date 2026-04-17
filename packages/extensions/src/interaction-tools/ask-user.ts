@@ -67,7 +67,7 @@ const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
 
 export const AskUserTool = defineTool({
   name: "ask_user",
-  concurrency: "serial",
+  resources: ["ask_user"],
   interactive: true,
   description:
     "Ask user questions with optional predefined options. Supports single or multi-select. Use for gathering preferences, clarifying requirements, or validating assumptions.",

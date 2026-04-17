@@ -55,6 +55,7 @@ import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
+import { ResourceManagerLive } from "../resource-manager.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -521,6 +522,7 @@ const buildEphemeralLayer = (params: {
     extensionEventBusLayer,
     approvalLayer,
     promptPresenterLayer,
+    ResourceManagerLive,
   )
 
   // ToolRunner rebuilt locally — parent first so local coreDeps (ApprovalService, Storage, etc.) win

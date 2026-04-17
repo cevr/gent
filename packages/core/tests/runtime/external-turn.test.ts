@@ -23,6 +23,7 @@ import type { AgentEvent } from "@gent/core/domain/event"
 import { BaseEventStore, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { Agents } from "@gent/extensions/all-agents"
 
 // ── Helpers ──
@@ -127,6 +128,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunServices.layer,
+    ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -310,6 +312,7 @@ describe("external turn execution", () => {
       ToolRunner.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       BunServices.layer,
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(

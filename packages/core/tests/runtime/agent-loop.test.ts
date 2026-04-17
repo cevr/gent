@@ -5,6 +5,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
@@ -96,6 +97,7 @@ const makeLayer = (providerLayer: Layer.Layer<Provider>, tools: AnyToolDefinitio
     EventStore.Test(),
     ToolRunner.Test(),
     BunServices.layer,
+    ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -116,6 +118,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ToolRunner.Test(),
     BunServices.layer,
+    ResourceManagerLive,
     recorderLayer,
     eventStoreLayer,
   )
@@ -142,6 +145,7 @@ const makeLiveToolLayer = (
     ApprovalService.Test(),
     Permission.Live([], "allow"),
     BunServices.layer,
+    ResourceManagerLive,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
@@ -186,6 +190,7 @@ const makeLayerWithEvents = (
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
     BunServices.layer,
+    ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -314,6 +319,7 @@ describe("streaming", () => {
       EventStore.Test(),
       ToolRunner.Test(),
       BunServices.layer,
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -721,6 +727,7 @@ describe("streaming", () => {
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       BunServices.layer,
+      ResourceManagerLive,
       recorderLayer,
       eventStoreLayer,
       toolDeps,
@@ -788,7 +795,9 @@ describe("concurrency", () => {
     const makeSerialTool = (name: string) =>
       defineTool({
         name,
-        concurrency: "serial",
+        // All instances of "serial tool" share one resource lock — same
+        // behavior as the old `concurrency: "serial"` flag for one tool.
+        resources: ["test-serial"],
         description: `Serial tool ${name}`,
         params: Schema.Struct({}),
         execute: () =>
@@ -1149,7 +1158,7 @@ describe("interaction", () => {
     defineTool({
       name: "interaction-tool",
       description: "Tool that triggers an interaction",
-      concurrency: "serial",
+      resources: ["interaction-tool"],
       params: Schema.Struct({ value: Schema.String }),
       execute: (params: { value: string }, ctx: ToolContext) =>
         Effect.gen(function* () {
@@ -1211,6 +1220,7 @@ describe("interaction", () => {
       ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
+      ResourceManagerLive,
       recorderLayer,
       eventStoreLayer,
     )
@@ -1327,6 +1337,7 @@ describe("interaction", () => {
       EventStore.Test(),
       ToolRunner.Test(),
       BunServices.layer,
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const loopLayer = Layer.provideMerge(
@@ -1428,7 +1439,6 @@ describe("recovery", () => {
   const idempotentTestTool = defineTool({
     name: "test-idempotent",
     description: "Test idempotent tool",
-    concurrency: "parallel",
     idempotent: true,
     params: Schema.Unknown,
     execute: () => Effect.succeed({ ok: true }),
@@ -1528,6 +1538,7 @@ describe("recovery", () => {
       providerLayer,
       toolRunnerLayer,
       ApprovalService.Test(),
+      ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, base)
 

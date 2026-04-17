@@ -245,7 +245,6 @@ const artifactsActor: ExtensionActorDefinition<
 
 const ArtifactSaveTool = defineTool({
   name: "artifact_save",
-  concurrency: "parallel" as const,
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
   params: Schema.Struct({
@@ -273,7 +272,6 @@ const ArtifactSaveTool = defineTool({
 
 const ArtifactReadTool = defineTool({
   name: "artifact_read",
-  concurrency: "parallel" as const,
   description: "Read the full content of an artifact by label/source or ID.",
   params: Schema.Struct({
     id: Schema.optional(Schema.String.annotate({ description: "Artifact ID (if known)" })),
@@ -294,7 +292,7 @@ const ArtifactReadTool = defineTool({
 
 const ArtifactUpdateTool = defineTool({
   name: "artifact_update",
-  concurrency: "serial" as const,
+  resources: ["artifact_update"],
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
   params: Schema.Struct({
@@ -336,7 +334,6 @@ const ArtifactUpdateTool = defineTool({
 
 const ArtifactClearTool = defineTool({
   name: "artifact_clear",
-  concurrency: "parallel" as const,
   description: "Remove an artifact by ID.",
   params: Schema.Struct({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),

@@ -105,7 +105,6 @@ export function renderSessionTree(
 
 export const ReadSessionTool = defineTool({
   name: "read_session",
-  concurrency: "parallel",
   idempotent: true,
   description:
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",

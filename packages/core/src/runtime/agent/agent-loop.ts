@@ -90,6 +90,7 @@ import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import type { TurnExecutor, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
+import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,
   buildLoopCheckpointRecord,
@@ -527,7 +528,7 @@ const executeToolCalls = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime?: ExtensionStateRuntimeService
-  bashSemaphore: Semaphore.Semaphore
+  resourceManager: ResourceManagerService
 }) =>
   Effect.forEach(
     params.draft.toolCalls,
@@ -569,9 +570,7 @@ const executeToolCalls = (params: {
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
-        const result = yield* tool?.concurrency === "serial"
-          ? Effect.withSpan("AgentLoop.bashSemaphore")(params.bashSemaphore.withPermits(1)(run))
-          : run
+        const result = yield* params.resourceManager.withResources(tool?.resources ?? [], run)
 
         const outputSummary = summarizeToolOutput(result)
         const isError = result.output.type === "error-json"
@@ -1125,7 +1124,7 @@ export const executeToolsPhase = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime?: ExtensionStateRuntimeService
-  bashSemaphore: Semaphore.Semaphore
+  resourceManager: ResourceManagerService
   storage: StorageService
 }) =>
   Effect.gen(function* () {
@@ -1170,7 +1169,7 @@ export const invokeToolPhase = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   hostCtx: ExtensionHostContext
-  bashSemaphore: Semaphore.Semaphore
+  resourceManager: ResourceManagerService
   storage: StorageService
 }) =>
   Effect.gen(function* () {
@@ -1210,7 +1209,7 @@ export const invokeToolPhase = (params: {
       currentTurnAgent: params.currentTurnAgent,
       toolRunner: params.toolRunner,
       extensionRegistry: params.extensionRegistry,
-      bashSemaphore: params.bashSemaphore,
+      resourceManager: params.resourceManager,
     })
 
     yield* params.storage.createMessageIfAbsent(
@@ -1393,13 +1392,11 @@ const applyAgentOverrides = (
   })
 }
 
-type SemaphoreType = Semaphore.Semaphore
-
 type LoopHandle = {
   actor: LoopActor
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   pendingQueueRef: Ref.Ref<LoopState["queue"]>
-  bashSemaphore: SemaphoreType
+  resourceManager: ResourceManagerService
   scope: Scope.Closeable
 }
 
@@ -1647,6 +1644,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
+    | ResourceManager
   > =>
     Layer.effect(
       AgentLoop,
@@ -1660,6 +1658,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const extensionTurnControl = yield* ExtensionTurnControl
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
+        const resourceManager = yield* ResourceManager
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const pendingQueuesRef = yield* Ref.make<Map<string, LoopState["queue"]>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
@@ -1788,7 +1787,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             })
 
             const loopScope = yield* Scope.make()
-            const bashSemaphore = yield* Semaphore.make(1)
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)
             const pendingQueueRef = yield* Ref.make(emptyLoopQueueState())
             const turnToolsRef = yield* Ref.make<ReadonlyArray<AnyToolDefinition>>([])
@@ -1877,7 +1875,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       toolRunner,
                       extensionRegistry: turnExtensionRegistry,
                       extensionStateRuntime: turnExtensionStateRuntime,
-                      bashSemaphore,
+                      resourceManager,
                       storage,
                     }).pipe(
                       Effect.as(undefined as ToolInteractionPending | undefined),
@@ -2034,7 +2032,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   toolRunner,
                   extensionRegistry: turnExtensionRegistry,
                   extensionStateRuntime: turnExtensionStateRuntime,
-                  bashSemaphore,
+                  resourceManager,
                   storage,
                 }).pipe(
                   Effect.as(undefined as ToolInteractionPending | undefined),
@@ -2285,7 +2283,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               actor: loopActor,
               activeStreamRef,
               pendingQueueRef,
-              bashSemaphore,
+              resourceManager,
               scope: loopScope,
             }
           })

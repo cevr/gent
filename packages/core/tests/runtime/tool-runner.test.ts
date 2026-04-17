@@ -12,7 +12,6 @@ describe("ToolRunner", () => {
   test("returns error result when tool fails", async () => {
     const FailTool = defineTool({
       name: "fail",
-      concurrency: "parallel",
       description: "Fails on purpose",
       params: Schema.Struct({}),
       execute: () => Effect.fail(new Error("boom")),
@@ -55,7 +54,6 @@ describe("ToolRunner", () => {
   test("returns structured error on invalid input", async () => {
     const StrictTool = defineTool({
       name: "strict",
-      concurrency: "parallel",
       description: "Requires specific params",
       params: Schema.Struct({ path: Schema.String }),
       execute: () => Effect.succeed({ ok: true }),
@@ -99,7 +97,6 @@ describe("ToolRunner", () => {
   test("returns 'Permission denied' error when tool is denied by permission rules", async () => {
     const SafeTool = defineTool({
       name: "safe",
-      concurrency: "parallel",
       description: "A safe tool",
       params: Schema.Struct({}),
       execute: () => Effect.succeed({ ok: true }),

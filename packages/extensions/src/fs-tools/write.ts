@@ -31,7 +31,7 @@ export const WriteResult = Schema.Struct({
 
 export const WriteTool = defineTool({
   name: "write",
-  concurrency: "serial",
+  resources: ["write"],
   description: "Write content to file. Creates directories if needed.",
   promptSnippet: "Create or overwrite files",
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],

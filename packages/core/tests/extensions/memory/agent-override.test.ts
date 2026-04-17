@@ -11,6 +11,7 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import type { SteerCommand } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -66,6 +67,7 @@ const makeTestLayer = (logs: {
     ExtensionStateRuntime.Live([]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
   const actorProcessLayer = Layer.provide(
