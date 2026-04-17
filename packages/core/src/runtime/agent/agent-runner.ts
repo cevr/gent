@@ -685,14 +685,15 @@ const runEphemeralAgent = (params: {
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
-    // `Layer.fresh` forces a fresh memo map for the child build so layers like
-    // `EventPublisherLive` are constructed against the child's local
-    // dependencies instead of being reused from the parent's memo map (the
-    // parent's layer object identity is the same as the child's).
+    // `RuntimeComposer.build()` already wraps the merged layer in
+    // `Layer.fresh` and strips `Layer.CurrentMemoMap` from the forwarded
+    // parent context, so layers like `EventPublisherLive` are constructed
+    // against the child's local dependencies instead of being reused from
+    // the parent's memo map.
     const result = yield* childRun.pipe(
       // @effect-diagnostics-next-line strictEffectProvide:off — ephemeral runtime composition root
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      Effect.provide(Layer.fresh(ephemeralLayer as Layer.Layer<any>)),
+      Effect.provide(ephemeralLayer as Layer.Layer<any>),
       Effect.scoped,
     )
 

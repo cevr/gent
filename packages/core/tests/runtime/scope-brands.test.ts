@@ -89,4 +89,43 @@ describe("scope brand type fences", () => {
     void _typed
     expect(composed.profile.cwd).toBe("/tmp")
   })
+
+  test("provide(layer) leaves a missing-service requirement in `R` for unprovided consumers", () => {
+    // This is the type-level guarantee the composer claims: a consumer that
+    // requires a service NOT in `Provides` has its `R` channel left
+    // unsatisfied. Effect's `provide` subtracts only the layer's `Success`
+    // channel from the consumer's `R`.
+    const parentServices = Context.empty() as Context.Context<never>
+    const serverParent = {
+      cwd: "/tmp",
+      resolved: { kinds: {} } as never,
+      __brand: undefined as never,
+    } as ServerProfile
+
+    const fakeLayer = Layer.succeed(FakeService, { value: 42 })
+    const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
+      .own(ownService(FakeService, fakeLayer))
+      .build()
+
+    class OtherService extends Context.Service<OtherService, { readonly other: string }>()(
+      "@gent/core/tests/scope-brands/OtherService",
+    ) {}
+
+    // Consumer requires OtherService, which the composer's layer does NOT
+    // provide. After `Effect.provide(composed.layer)`, R must still contain
+    // OtherService.
+    const consumer = Effect.gen(function* () {
+      const o = yield* OtherService
+      return o.other
+    })
+    const provided = consumer.pipe(Effect.provide(composed.layer))
+
+    // Type-only: the resulting effect must still require OtherService.
+    const _typed: Effect.Effect<string, never, OtherService> = provided
+    void _typed
+
+    // @ts-expect-error — pretending the requirement is gone fails to compile
+    const _bad: Effect.Effect<string, never, never> = provided
+    void _bad
+  })
 })

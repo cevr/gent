@@ -94,6 +94,11 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "brand-constructor-callers.invalid.ts",
     valid: "brand-constructor-callers.valid.ts",
   },
+  {
+    rule: "gent/no-scope-brand-cast",
+    invalid: "no-scope-brand-cast.invalid.ts",
+    valid: "no-scope-brand-cast.valid.ts",
+  },
 ]
 
 const assertOxlintProcessed = (run: OxlintRun, fixtureFile: string): void => {

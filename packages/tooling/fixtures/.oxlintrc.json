@@ -12,6 +12,7 @@
     "gent/all-errors-are-tagged": "error",
     "gent/no-define-extension-throw": "error",
     "gent/no-r-equals-never-comment": "error",
-    "gent/brand-constructor-callers": "error"
+    "gent/brand-constructor-callers": "error",
+    "gent/no-scope-brand-cast": "error"
   }
 }

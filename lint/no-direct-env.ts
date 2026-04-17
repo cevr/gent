@@ -597,6 +597,66 @@ const plugin: Plugin = {
     },
 
     /**
+     * Sibling fence to `brand-constructor-callers`: catches the
+     * `as ServerProfile|CwdProfile|EphemeralProfile` escape hatch.
+     *
+     * The brand types are nominal *casts*, so a caller can bypass the
+     * brand-constructor lint by writing `someObj as ServerProfile`. The
+     * brand-constructor rule only fences direct identifier calls; this rule
+     * fences the type-assertion form. Together they close the loop.
+     *
+     * Same allow-list as the constructor rule, plus the scope-brands module
+     * itself (it owns the type definitions).
+     */
+    "no-scope-brand-cast": {
+      create(context) {
+        const filename = context.filename
+        if (/\/runtime\/scope-brands\.ts$/.test(filename)) return {}
+        if (/\/tests\//.test(filename)) return {}
+        if (/\.test\.tsx?$/.test(filename)) return {}
+
+        const ALLOWED: Record<string, RegExp> = {
+          ServerProfile: /\/server\/dependencies\.ts$/,
+          CwdProfile: /\/runtime\/session-profile\.ts$/,
+          EphemeralProfile: /\/runtime\/composer\.ts$/,
+        }
+        const SCOPE_TYPES = new Set([
+          "ServerProfile",
+          "CwdProfile",
+          "EphemeralProfile",
+          "ServerScope",
+          "CwdScope",
+          "EphemeralScope",
+        ])
+
+        const checkTypeAnnotation = (typeAnnNode: AstNode | undefined, reportNode: AstNode) => {
+          if (typeAnnNode === undefined) return
+          // Walk down: `TSAsExpression.typeAnnotation` is a TSType node like TSTypeReference
+          if (typeAnnNode.type !== "TSTypeReference") return
+          const name = getNodeField(typeAnnNode, "typeName")
+          if (name === undefined || name.type !== "Identifier") return
+          const typeName = getStringField(name, "name")
+          if (typeName === undefined || !SCOPE_TYPES.has(typeName)) return
+          const allowedPattern = ALLOWED[typeName]
+          if (allowedPattern !== undefined && allowedPattern.test(filename)) return
+          context.report({
+            message: `Cast to scope-brand type \`${typeName}\` is forbidden — call the authorised brand constructor instead. The brand types are nominal proofs-of-origin; bypassing the constructor defeats the type-system fence \`gent/brand-constructor-callers\` enforces at the function-call level.`,
+            node: reportNode,
+          })
+        }
+
+        return {
+          TSAsExpression(node) {
+            checkTypeAnnotation(getNodeField(node, "typeAnnotation"), node)
+          },
+          TSTypeAssertion(node) {
+            checkTypeAnnotation(getNodeField(node, "typeAnnotation"), node)
+          },
+        }
+      },
+    },
+
+    /**
      * Type-aware fence on `ProjectionContribution`'s `R` channel for
      * write-tagged services. Sharpened replacement for the AST-string-match
      * `no-projection-writes` rule.

@@ -31,6 +31,8 @@
     "gent/no-projection-write-services": "error",
     // Custom — scope-brand constructors only callable from authorised files
     "gent/brand-constructor-callers": "error",
+    // Custom — `as ServerProfile|CwdProfile|EphemeralProfile` casts forbidden
+    "gent/no-scope-brand-cast": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
