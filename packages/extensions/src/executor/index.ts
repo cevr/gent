@@ -4,7 +4,6 @@
 
 import { Effect, Layer } from "effect"
 import {
-  workflowContribution,
   commandContribution,
   defineExtension,
   defineResource,
@@ -25,7 +24,6 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   contributions: ({ ctx }) => [
-    workflowContribution(executorActor),
     projectionContribution(ExecutorProjection),
     toolContribution(ExecuteTool),
     toolContribution(ResumeTool),
@@ -41,9 +39,12 @@ export const ExecutorExtension = defineExtension({
       handler: (_args, extCtx) =>
         extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
     }),
+    // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
+    // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.
     defineResource({
       scope: "process",
       layer: Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live),
+      machine: executorActor,
     }),
   ],
 })

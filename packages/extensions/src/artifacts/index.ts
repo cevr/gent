@@ -9,16 +9,16 @@
  * Upsert: by sourceTool + branchId (last-writer-wins per source per branch)
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import {
-  workflowContribution,
   ArtifactId,
   BranchId,
   defineExtension,
+  defineResource,
   defineTool,
   toolContribution,
-  type ExtensionActorDefinition,
+  type AnyResourceMachine,
   type ToolContext,
 } from "@gent/core/extensions/api"
 import {
@@ -178,10 +178,7 @@ const artifactsMachine = Machine.make({
 // projection over machine state (not yet wired) or a typed workflow-state
 // reader. Per-turn prompt section temporarily dropped.
 
-const artifactsActor: ExtensionActorDefinition<
-  typeof ArtifactsMachineState.Type,
-  typeof ArtifactsMachineEvent.Type
-> = {
+const artifactsMachineDef: AnyResourceMachine = {
   machine: artifactsMachine,
   mapRequest: (message) => {
     if (ArtifactProtocol.Save.is(message)) return ArtifactsMachineEvent.Save(message)
@@ -303,7 +300,14 @@ const ArtifactClearTool = defineTool({
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
   contributions: () => [
-    workflowContribution(artifactsActor),
+    // No-service Resource carrying the machine. WorkflowRuntime supervises
+    // the machine; this extension contributes no service tag of its own.
+    defineResource<unknown, "process">({
+      scope: "process",
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      layer: Layer.empty as Layer.Layer<unknown>,
+      machine: artifactsMachineDef,
+    }),
     toolContribution(ArtifactSaveTool),
     toolContribution(ArtifactReadTool),
     toolContribution(ArtifactUpdateTool),

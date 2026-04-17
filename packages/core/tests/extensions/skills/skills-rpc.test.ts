@@ -41,18 +41,17 @@ const setupSkillsExtension = Effect.provide(
       "/test/cwd",
       "/test/home",
     )
-    const testLayerContribution = defineResource({
-      tag: Skills,
-      scope: "process",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
-    })
     return {
       ...loaded,
-      contributions: [
-        ...loaded.contributions.filter((c) => !(c._kind === "resource" && c.scope === "process")),
-        testLayerContribution,
-      ],
+      contributions: loaded.contributions.map((c) =>
+        c._kind === "resource" && c.scope === "process"
+          ? defineResource({
+              ...c,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
+            })
+          : c,
+      ),
     } satisfies LoadedExtension
   }),
   BunServices.layer,

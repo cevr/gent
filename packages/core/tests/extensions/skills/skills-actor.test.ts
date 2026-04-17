@@ -46,20 +46,20 @@ const setupSkillsExtension = Effect.provide(
       "/test/cwd",
       "/test/home",
     )
-    // Override the live Skills layer with test data — replace any layer
-    // contribution from the extension with our test variant.
-    const testLayerContribution = defineResource({
-      tag: Skills,
-      scope: "process",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
-    })
+    // Override the live Skills layer with test data — swap the `layer` field
+    // on the existing Resource so the machine (and any other Resource fields)
+    // are preserved.
     return {
       ...loaded,
-      contributions: [
-        ...loaded.contributions.filter((c) => !(c._kind === "resource" && c.scope === "process")),
-        testLayerContribution,
-      ],
+      contributions: loaded.contributions.map((c) =>
+        c._kind === "resource" && c.scope === "process"
+          ? defineResource({
+              ...c,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
+            })
+          : c,
+      ),
     } satisfies LoadedExtension
   }),
   BunServices.layer,

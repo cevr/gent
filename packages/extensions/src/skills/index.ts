@@ -1,12 +1,11 @@
 import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
 import {
-  workflowContribution,
   defineExtension,
   defineResource,
   promptSectionContribution,
   toolContribution,
-  type ExtensionActorDefinition,
+  type ResourceMachine,
 } from "@gent/core/extensions/api"
 import { Skills, formatSkillsForPrompt } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
@@ -48,7 +47,7 @@ const skillsMachine = Machine.make({
     }),
   )
 
-const skillsActor: ExtensionActorDefinition<
+const skillsActor: ResourceMachine<
   typeof SkillsMachineState.Type,
   typeof SkillsMachineEvent.Type,
   Skills,
@@ -100,14 +99,16 @@ const skillsActor: ExtensionActorDefinition<
 export const SkillsExtension = defineExtension({
   id: "@gent/skills",
   contributions: ({ ctx }) => [
+    // Single Resource carries the Skills service layer AND the skills
+    // machine. Per the C3.5 "Resource = layer + machine" merge.
     defineResource({
       tag: Skills,
       scope: "process",
       layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie),
+      machine: skillsActor,
     }),
     toolContribution(SkillsTool),
     toolContribution(SearchSkillsTool),
-    workflowContribution(skillsActor),
     promptSectionContribution({
       id: "skills",
       priority: 80,

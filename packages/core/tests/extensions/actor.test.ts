@@ -7,7 +7,7 @@ import type { LoadedExtension } from "@gent/core/domain/extension"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { defineResource, workflow as workflowContribution } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import type { AnyResourceMachine } from "@gent/core/extensions/api"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
@@ -191,7 +191,13 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "flaky-request" },
         kind: "builtin",
         sourcePath: "builtin",
-        contributions: [workflowContribution({ ...flaky, protocols: { Ping } })],
+        contributions: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty as Layer.Layer<unknown>,
+            machine: { ...flaky, protocols: { Ping } },
+          }),
+        ],
       },
     ])
 
@@ -227,19 +233,23 @@ describe("WorkflowRuntime", () => {
         kind: "builtin",
         sourcePath: "builtin",
         contributions: [
-          workflowContribution({
-            ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
-              id: "counter",
-              initial: { count: 0 },
-              stateSchema: Schema.Struct({ count: Schema.Number }),
-              reduce: (state) => ({ state }),
-              request: (state) =>
-                Effect.succeed({
-                  state,
-                  reply: { count: "not-a-number" } as unknown,
-                }),
-            }),
-            protocols: { GetCount },
+          defineResource({
+            scope: "process",
+            layer: Layer.empty as Layer.Layer<unknown>,
+            machine: {
+              ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
+                id: "counter",
+                initial: { count: 0 },
+                stateSchema: Schema.Struct({ count: Schema.Number }),
+                reduce: (state) => ({ state }),
+                request: (state) =>
+                  Effect.succeed({
+                    state,
+                    reply: { count: "not-a-number" } as unknown,
+                  }),
+              }),
+              protocols: { GetCount },
+            },
           }),
         ],
       },
@@ -267,8 +277,7 @@ describe("WorkflowRuntime", () => {
 // Codex C3.5a BLOCK 2 — the Resource.machine path needs an integration test
 // that drives a real `effect-machine` machine through the runtime, not just
 // a stub round-trip. Mirror of "ask returns replies through the runtime"
-// above, but with the machine declared via `defineResource({ machine })`
-// instead of `workflowContribution(...)`.
+// above, with the machine declared via `defineResource({ machine })`.
 // ============================================================================
 
 describe("Resource.machine end-to-end", () => {

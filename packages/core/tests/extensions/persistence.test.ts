@@ -1,13 +1,20 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { workflow as workflowContribution } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
+
+const machineResource = (machine: Parameters<typeof defineResource>[0]["machine"]) =>
+  defineResource({
+    scope: "process",
+    layer: Layer.empty as Layer.Layer<unknown>,
+    machine,
+  })
 
 const sessionId = SessionId.of("persist-session")
 const branchId = BranchId.of("persist-branch")
@@ -36,7 +43,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
     manifest: { id },
     kind: "builtin",
     sourcePath: "builtin",
-    contributions: [workflowContribution(actor)],
+    contributions: [machineResource(actor)],
   }
 }
 
@@ -119,7 +126,7 @@ describe("Extension state persistence", () => {
       manifest: { id: "ephemeral" },
       kind: "builtin",
       sourcePath: "builtin",
-      contributions: [workflowContribution(actor)],
+      contributions: [machineResource(actor)],
     }
 
     const layer = makeLayer([nonPersistent])
@@ -220,7 +227,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "corrupt-test" },
       kind: "builtin",
       sourcePath: "builtin",
-      contributions: [workflowContribution(actor)],
+      contributions: [machineResource(actor)],
     }
 
     const layer = makeLayer([ext])
@@ -271,7 +278,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "resilient" },
       kind: "builtin",
       sourcePath: "builtin",
-      contributions: [workflowContribution(actor)],
+      contributions: [machineResource(actor)],
     }
 
     const layer = makeLayer([ext])

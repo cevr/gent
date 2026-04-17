@@ -1,15 +1,15 @@
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
+  defineResource,
   interceptorContribution,
   defineInterceptor,
   toolContribution,
-  workflowContribution,
   type ExtensionHostContext,
   type Message,
+  type ResourceMachine,
   type TurnAfterInput,
-  type WorkflowContribution,
 } from "@gent/core/extensions/api"
 import { HandoffTool } from "./handoff-tool.js"
 import { HANDOFF_EXTENSION_ID, HandoffProtocol } from "./handoff-protocol.js"
@@ -49,18 +49,17 @@ const cooldownMachine = Machine.make({
     Machine.reply(state, state.cooldown),
   )
 
-const cooldownWorkflow: WorkflowContribution<typeof CooldownState.Type, typeof CooldownEvent.Type> =
-  {
-    machine: cooldownMachine,
-    mapEvent: (event) => (event._tag === "TurnCompleted" ? CooldownEvent.TurnCompleted : undefined),
-    mapCommand: (message) =>
-      HandoffProtocol.Suppress.is(message)
-        ? CooldownEvent.Suppress({ count: message.count })
-        : undefined,
-    mapRequest: (message) =>
-      HandoffProtocol.GetCooldown.is(message) ? CooldownEvent.GetCooldown : undefined,
-    protocols: HandoffProtocol,
-  }
+const cooldownWorkflow: ResourceMachine<typeof CooldownState.Type, typeof CooldownEvent.Type> = {
+  machine: cooldownMachine,
+  mapEvent: (event) => (event._tag === "TurnCompleted" ? CooldownEvent.TurnCompleted : undefined),
+  mapCommand: (message) =>
+    HandoffProtocol.Suppress.is(message)
+      ? CooldownEvent.Suppress({ count: message.count })
+      : undefined,
+  mapRequest: (message) =>
+    HandoffProtocol.GetCooldown.is(message) ? CooldownEvent.GetCooldown : undefined,
+  protocols: HandoffProtocol,
+}
 
 // ── Interceptor: turn.after — auto-handoff at context-fill threshold ──
 
@@ -137,6 +136,12 @@ export const HandoffExtension = defineExtension({
   contributions: () => [
     toolContribution(HandoffTool),
     interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
-    workflowContribution(cooldownWorkflow),
+    // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
+    defineResource<unknown, "process">({
+      scope: "process",
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      layer: Layer.empty as Layer.Layer<unknown>,
+      machine: cooldownWorkflow,
+    }),
   ],
 })

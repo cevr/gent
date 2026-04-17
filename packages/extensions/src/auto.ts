@@ -23,8 +23,7 @@ import {
   isRecord,
   projectionContribution,
   toolContribution,
-  workflowContribution,
-  type WorkflowContribution,
+  type ResourceMachine,
   type ExtensionEffect,
   type ToolResultInput,
   type TurnAfterInput,
@@ -440,13 +439,15 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 
 // ── Workflow (effect-machine based) ──
 //
-// The auto extension is a genuine state machine with declared effects, so it
-// uses `WorkflowContribution`. UI / turn projections moved out of the
-// workflow itself; the TUI widget reads state via `AutoProtocol.GetSnapshot`
-// (typed `ctx.ask`), and per-turn prompt comes from a separate
-// `ProjectionContribution` (auto-projection.ts).
+// The auto extension is a genuine state machine with declared effects. The
+// machine is hosted on the AutoJournal Resource (one Resource per extension
+// owns the long-lived state — service layer + machine — per the C3.5
+// "Resource = layer + lifecycle + machine" merge). UI / turn projections
+// moved out of the machine; the TUI widget reads state via
+// `AutoProtocol.GetSnapshot` (typed `ctx.ask`), and per-turn prompt comes
+// from a separate `ProjectionContribution` (auto-projection.ts).
 
-const autoWorkflow: WorkflowContribution<
+const autoWorkflow: ResourceMachine<
   MachineState,
   MachineEvent,
   AutoJournal,
@@ -669,15 +670,19 @@ const autoHandoffImpl = (
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   contributions: ({ ctx }) => [
-    workflowContribution(autoWorkflow),
     projectionContribution(AutoProjection),
     toolContribution(AutoCheckpointTool),
     interceptorContribution(defineInterceptor("tool.result", journalInterceptorImpl)),
     interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
+    // Single Resource carries the AutoJournal service layer AND the auto
+    // workflow machine. The machine declares `AutoJournal` in its `slots`
+    // requirements; the `layer` here provides it. C3.5b merge per the
+    // "Resource = layer + lifecycle + machine" design intent.
     defineResource({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
+      machine: autoWorkflow,
     }),
   ],
 })

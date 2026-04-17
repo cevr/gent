@@ -8,11 +8,11 @@
  * died between requests.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import type { LoadedExtension, ReduceResult, RequestResult } from "@gent/core/domain/extension"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
-import { workflow as workflowContribution } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { createRpcHarness } from "./helpers/rpc-harness"
 
@@ -66,7 +66,13 @@ const counterExtension: LoadedExtension = {
   manifest: { id: EXTENSION_ID },
   kind: "builtin",
   sourcePath: "builtin",
-  contributions: [workflowContribution(counterActorWithProtocol)],
+  contributions: [
+    defineResource({
+      scope: "process",
+      layer: Layer.empty as Layer.Layer<unknown>,
+      machine: counterActorWithProtocol,
+    }),
+  ],
 }
 
 // ============================================================================

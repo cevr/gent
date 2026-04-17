@@ -13,7 +13,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { workflow as workflowContribution } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 
 const sessionId = SessionId.of("test-session")
@@ -42,7 +42,13 @@ describe("extension concurrency", () => {
       const extensions = [
         {
           manifest: { id: "counter", version: "1.0.0" },
-          contributions: [workflowContribution(wrappedActor)],
+          contributions: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: wrappedActor,
+            }),
+          ],
         },
       ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 
@@ -82,8 +88,10 @@ describe("extension concurrency", () => {
             kind: "builtin" as const,
             sourcePath: "builtin",
             contributions: [
-              workflowContribution(
-                reducerActor({
+              defineResource({
+                scope: "process",
+                layer: Layer.empty as Layer.Layer<unknown>,
+                machine: reducerActor({
                   id: "ordered-restart",
                   initial: { delivered: [] as string[] },
                   reduce: (state, event) => {
@@ -98,7 +106,7 @@ describe("extension concurrency", () => {
                     return { state: { delivered } }
                   },
                 }),
-              ),
+              }),
             ],
           },
         ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]

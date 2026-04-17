@@ -25,10 +25,9 @@ import {
   defineResource,
   projectionContribution,
   toolContribution,
-  workflowContribution,
   type AnyToolDefinition,
   type ReduceResult,
-  type WorkflowContribution,
+  type ResourceMachine,
 } from "@gent/core/extensions/api"
 import {
   type MemoryState,
@@ -130,7 +129,7 @@ const memoryMachine = Machine.make({
     return nextMemory === state.memory ? state : MemoryMachineState.Active({ memory: nextMemory })
   })
 
-const memoryWorkflow: WorkflowContribution<
+const memoryWorkflow: ResourceMachine<
   typeof MemoryMachineState.Type,
   typeof MemoryMachineEvent.Type,
   never,
@@ -155,12 +154,15 @@ export const MemoryExtension = defineExtension({
   contributions: () => [
     ...(MemoryTools as ReadonlyArray<AnyToolDefinition>).map(toolContribution),
     ...MemoryAgents.map(agentContribution),
-    workflowContribution(memoryWorkflow),
     projectionContribution(MemoryVaultProjection),
+    // Single Resource carries the MemoryVault layer, the dream-promotion
+    // schedule, AND the session-memory machine. Per the C3.5 "Resource =
+    // layer + lifecycle + machine" merge.
     defineResource({
       scope: "process",
       layer: MemoryVaultLive(),
       schedule: MemoryDreamJobs(),
+      machine: memoryWorkflow,
     }),
   ],
 })
