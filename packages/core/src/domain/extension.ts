@@ -358,9 +358,8 @@ export interface CommandContribution {
   readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
 }
 
-// Turn executor types — still defined in turn-executor.ts (the executor shape
-// is model-independent and used by external drivers).
-export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./turn-executor.js"
+// Turn executor types — owned by the driver primitive (external drivers wrap them).
+export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"
 
 // Driver auth + hint shared types — re-exported from dedicated file
 //

@@ -88,7 +88,7 @@ import {
 } from "../extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
-import type { TurnExecutor, TurnEvent } from "../../domain/turn-executor.js"
+import type { TurnExecutor, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,

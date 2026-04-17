@@ -9,12 +9,7 @@ import { Effect, Stream } from "effect"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import type {
-  TurnError,
-  TurnExecutor,
-  TurnEvent,
-  TurnContext,
-} from "@gent/core/domain/turn-executor"
+import type { TurnError, TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,

@@ -123,7 +123,7 @@ export {
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
 export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
-export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/turn-executor.js"
+export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
 export {
   TurnError,
   TextDelta,
@@ -133,7 +133,7 @@ export {
   ToolFailed,
   Finished as TurnFinished,
   TurnEventUsage,
-} from "../domain/turn-executor.js"
+} from "../domain/driver.js"
 export type {
   AnyDriverContribution,
   ExternalDriverContribution,

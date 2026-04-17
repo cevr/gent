@@ -12,8 +12,13 @@ import { Effect, Layer, Stream } from "effect"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import type { ModelDriverContribution, ProviderResolution } from "@gent/core/domain/driver"
-import type { TurnError, TurnEvent, TurnExecutor } from "@gent/core/domain/turn-executor"
+import type {
+  ModelDriverContribution,
+  ProviderResolution,
+  TurnError,
+  TurnEvent,
+  TurnExecutor,
+} from "@gent/core/domain/driver"
 
 const stubResolution = (): ProviderResolution => ({ layer: Layer.empty as never })
 

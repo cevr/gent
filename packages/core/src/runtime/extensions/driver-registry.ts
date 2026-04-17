@@ -22,9 +22,9 @@ import type {
   ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthInfo,
+  TurnExecutor,
 } from "../../domain/driver.js"
 import { DriverError } from "../../domain/driver.js"
-import type { TurnExecutor } from "../../domain/turn-executor.js"
 
 // ── Resolved driver state (one map per kind, lookup by id) ──
 

@@ -28,10 +28,17 @@
  *
  * @module
  */
-import { Schema, type Effect, type Layer } from "effect"
+import { Schema, type Effect, type Layer, type Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
+import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
-import type { TurnExecutor } from "./turn-executor.js"
+import type { ExtensionHostContext } from "./extension-host-context.js"
+import type { BranchId, SessionId } from "./ids.js"
+import type { Message } from "./message.js"
+import type { AnyToolDefinition } from "./tool.js"
+
+// Note: TurnExecutor is defined below alongside the driver primitives — no
+// external import of `TurnExecutor` is needed.
 
 // ── Driver reference re-export ──
 //
@@ -153,6 +160,84 @@ export interface ModelDriverContribution {
   ) => ReadonlyArray<unknown>
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
+}
+
+// ── External-driver shapes ──
+//
+// What an external driver streams back per turn (TurnEvent), the per-turn
+// context it receives (TurnContext), the failure type it can raise (TurnError),
+// and the executor interface itself (TurnExecutor) live here as part of the
+// driver primitive. Pre-C9 they were a parallel `domain/turn-executor.ts`
+// primitive — collapsed into the driver module to remove the parallel API.
+
+export class TextDelta extends Schema.TaggedClass<TextDelta>()("text-delta", {
+  text: Schema.String,
+}) {}
+
+export class ReasoningDelta extends Schema.TaggedClass<ReasoningDelta>()("reasoning-delta", {
+  text: Schema.String,
+}) {}
+
+export class ToolStarted extends Schema.TaggedClass<ToolStarted>()("tool-started", {
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  input: Schema.optional(Schema.Unknown),
+}) {}
+
+export class ToolCompleted extends Schema.TaggedClass<ToolCompleted>()("tool-completed", {
+  toolCallId: Schema.String,
+  output: Schema.optional(Schema.Unknown),
+}) {}
+
+export class ToolFailed extends Schema.TaggedClass<ToolFailed>()("tool-failed", {
+  toolCallId: Schema.String,
+  error: Schema.String,
+}) {}
+
+export const TurnEventUsage = Schema.Struct({
+  inputTokens: Schema.optional(Schema.Number),
+  outputTokens: Schema.optional(Schema.Number),
+})
+export type TurnEventUsage = typeof TurnEventUsage.Type
+
+export class Finished extends Schema.TaggedClass<Finished>()("finished", {
+  stopReason: Schema.String,
+  usage: Schema.optional(TurnEventUsage),
+}) {}
+
+export const TurnEvent = Schema.Union([
+  TextDelta,
+  ReasoningDelta,
+  ToolStarted,
+  ToolCompleted,
+  ToolFailed,
+  Finished,
+])
+export type TurnEvent = typeof TurnEvent.Type
+
+/** Failure raised by an external driver while streaming a turn. */
+export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
+
+/** What an external driver receives per turn. */
+export interface TurnContext {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agent: AgentDefinition
+  readonly messages: ReadonlyArray<Message>
+  readonly tools: ReadonlyArray<AnyToolDefinition>
+  readonly systemPrompt: string
+  readonly cwd: string
+  readonly abortSignal: AbortSignal
+  readonly hostCtx: ExtensionHostContext
+}
+
+/** Executor interface implemented by external drivers (ACP agents, etc.). */
+export interface TurnExecutor {
+  readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
+  readonly cancel?: (sessionId: string) => Effect.Effect<void>
 }
 
 // ── ExternalDriverContribution — turn-executor-shaped driver ──
