@@ -6,7 +6,9 @@
 // with scope precedence (project > user > builtin).
 //
 // The `ClientContribution` union is the foundational data structure here —
-// adding a new kind triggers a compile error in the resolver until handled.
+// adding a new kind requires registering it in the resolver's HANDLED_KINDS set
+// (apps/tui/src/extensions/resolve.ts) and adding a per-kind resolver, otherwise
+// the resolver throws at the entry guard for any unknown _kind.
 // Per-kind conflict rules are preserved by the resolver:
 //   - renderers: last (highest scope) wins by tool name
 //   - widgets:   last (highest scope) wins by widget id; sorted by priority
@@ -184,7 +186,14 @@ export const overlayContribution = <TComponent>(opts: {
   readonly component: TComponent
 }): OverlayContribution<TComponent> => ({ _kind: "overlay", ...opts })
 
-export const interactionRendererContribution = <TComponent>(
+/**
+ * Build an interaction renderer contribution. The component must be a function
+ * accepting `InteractionRendererProps` — core owns this prop shape (it's what
+ * the TUI shell calls renderers with), so we type the factory tightly.
+ */
+export const interactionRendererContribution = <
+  TComponent extends (props: InteractionRendererProps) => unknown,
+>(
   component: TComponent,
   metadataType?: string,
 ): InteractionRendererContribution<TComponent> => ({
@@ -196,7 +205,13 @@ export const interactionRendererContribution = <TComponent>(
 /** Backwards-compatible alias for the old `defineInteractionRenderer` factory. */
 export const defineInteractionRenderer = interactionRendererContribution
 
-export const composerSurfaceContribution = <TComponent>(
+/**
+ * Build a composer-surface contribution. The component must be a function
+ * accepting `ComposerSurfaceProps` — core owns this prop shape.
+ */
+export const composerSurfaceContribution = <
+  TComponent extends (props: ComposerSurfaceProps) => unknown,
+>(
   component: TComponent,
 ): ComposerSurfaceContribution<TComponent> => ({ _kind: "composer-surface", component })
 

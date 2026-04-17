@@ -229,4 +229,13 @@ describe("resolveTuiExtensions — per-slot conflict rules", () => {
     // Scope-ordered: builtin → user → project
     expect(r.autocompleteItems.map((c) => c.prefix)).toEqual(["$", "/", "@"])
   })
+
+  test("unknown contribution _kind throws (exhaustiveness gate)", () => {
+    // Forge a contribution with a kind the resolver doesn't know about — the
+    // entry guard must reject it rather than silently dropping it on the floor.
+    const bogus = { _kind: "bogus-kind", payload: "ignored" } as unknown as ClientContribution
+    expect(() => resolveTuiExtensions([make("a", "user", [bogus])])).toThrow(
+      /Unknown TUI client contribution kind/,
+    )
+  })
 })

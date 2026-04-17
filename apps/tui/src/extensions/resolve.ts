@@ -10,6 +10,7 @@
 import type {
   AutocompleteContribution,
   ClientContribution,
+  ClientContributionKind,
 } from "@gent/core/domain/extension-client.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
@@ -272,8 +273,28 @@ const resolveAutocomplete = (
 }
 
 /**
+ * Every kind the resolver knows how to dispatch on. If a new `_kind` is added
+ * to `ClientContribution` without a corresponding case here, the type assertion
+ * below fails at compile time AND the runtime check below throws — preventing
+ * silent drop-on-the-floor handling of new contribution kinds.
+ */
+const HANDLED_KINDS: ReadonlySet<ClientContributionKind> = new Set<ClientContributionKind>([
+  "renderer",
+  "widget",
+  "command",
+  "overlay",
+  "interaction-renderer",
+  "composer-surface",
+  "border-label",
+  "autocomplete",
+])
+
+/**
  * Resolve all TUI extension contributions with scope precedence.
  * Higher scope wins for same key. Same-scope collisions throw.
+ *
+ * Adding a new `ClientContribution` kind: register it in HANDLED_KINDS AND add
+ * a per-kind resolver below — otherwise this function throws at the entry guard.
  */
 export const resolveTuiExtensions = (
   extensions: ReadonlyArray<LoadedTuiExtension>,
@@ -286,6 +307,16 @@ export const resolveTuiExtensions = (
   })
 
   const flat = flatten(sorted)
+
+  // Exhaustiveness gate — fail loud if a contribution carries an unknown _kind.
+  for (const { ext, contribution } of flat) {
+    if (!HANDLED_KINDS.has(contribution._kind)) {
+      throw new Error(
+        `Unknown TUI client contribution kind "${contribution._kind}" from "${ext.id}" (${ext.filePath}). ` +
+          `Add it to HANDLED_KINDS and register a per-kind resolver in apps/tui/src/extensions/resolve.ts.`,
+      )
+    }
+  }
 
   return {
     renderers: resolveRenderers(flat),
