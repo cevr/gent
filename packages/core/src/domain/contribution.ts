@@ -11,6 +11,7 @@
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
+import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { CommandContribution, ExtensionInterceptorDescriptor } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
@@ -79,6 +80,19 @@ export interface MutationKindContribution {
 }
 
 /**
+ * Capability — typed callable endpoint shared by tool/query/mutation/command
+ * (collapsed under one ontology in C4). Smart constructors for the legacy
+ * names continue to exist (`tool`, `query`, `mutation`, `command`); they will
+ * progressively emit `CapabilityKindContribution` underneath as C4.2/3/4 land.
+ *
+ * Self-discrimination via `audiences` (who may invoke) + `intent` (read/write).
+ */
+export interface CapabilityKindContribution {
+  readonly _kind: "capability"
+  readonly capability: AnyCapabilityContribution
+}
+
+/**
  * Declares that the contributing extension's externally-observable state
  * changes when any of these `AgentEvent._tag`s is published. The
  * EventPublisher emits an `ExtensionStateChanged` pulse for this extension
@@ -110,6 +124,7 @@ export type Contribution =
   | ProjectionKindContribution
   | QueryKindContribution
   | MutationKindContribution
+  | CapabilityKindContribution
   | PulseSubscriptionContribution
   | AnyResourceContribution
 
@@ -173,6 +188,19 @@ export const query = (q: AnyQueryContribution): QueryKindContribution => ({
 export const mutation = (m: AnyMutationContribution): MutationKindContribution => ({
   _kind: "mutation",
   mutation: m,
+})
+
+/**
+ * Smart constructor for the new collapsed Capability primitive. During the
+ * C4.2/3/4 migration this is exposed alongside the legacy `tool`/`query`/
+ * `mutation`/`command` constructors; once those wrappers are deleted in C4.5
+ * this becomes the only direct-use entry (extension authors continue to call
+ * the domain-named smart constructors which lower to `capability(...)` under
+ * the hood).
+ */
+export const capability = (c: AnyCapabilityContribution): CapabilityKindContribution => ({
+  _kind: "capability",
+  capability: c,
 })
 
 export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptionContribution => ({
@@ -260,6 +288,11 @@ export const extractMutations = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<MutationKindContribution["mutation"]> =>
   filterByKind(cs, "mutation").map((c) => c.mutation)
+
+export const extractCapabilities = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<CapabilityKindContribution["capability"]> =>
+  filterByKind(cs, "capability").map((c) => c.capability)
 
 export const extractPulseSubscriptions = (
   cs: ReadonlyArray<Contribution>,

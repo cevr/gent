@@ -180,6 +180,7 @@ export {
   type ProjectionKindContribution,
   type QueryKindContribution,
   type MutationKindContribution,
+  type CapabilityKindContribution,
   filterByKind,
   // smart constructors
   tool as toolContribution,
@@ -194,9 +195,20 @@ export {
   pulseSubscription as pulseSubscriptionContribution,
   query as queryContribution,
   mutation as mutationContribution,
+  capability as capabilityContribution,
   defineResource,
   defineLifecycleResource,
 } from "../domain/contribution.js"
+export type {
+  CapabilityContribution,
+  AnyCapabilityContribution,
+  CapabilityContext,
+  CapabilityRef,
+  Audience,
+  Intent,
+  ModelAudienceFields,
+} from "../domain/capability.js"
+export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,
