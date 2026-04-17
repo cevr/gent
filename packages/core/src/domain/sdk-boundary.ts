@@ -16,9 +16,12 @@
  *     ONLY inside files whose path matches `*-boundary.ts`, OR
  *   - on a value of type `SdkBoundary<A, E>`.
  *
- * The `E` parameter must extend `Schema.TaggedError` (enforced via
- * `gent/all-errors-are-tagged`); the `R` channel must be `never` (closed-over
- * dependencies — the boundary is not a way to launder ambient services).
+ * The `E` parameter is structurally constrained as `TaggedErrorLike` (carries
+ * a `_tag` discriminator and extends `Error`) — the structural shape that
+ * every `Schema.TaggedErrorClass` instance satisfies. Pairing this constraint
+ * with `gent/all-errors-are-tagged` gives both type-level and source-level
+ * enforcement. The `R` channel must be `never` (closed-over dependencies —
+ * the boundary is not a way to launder ambient services).
  *
  * NOTE: this module is **type-only** scaffolding. C0 introduces the brand and
  * factories; downstream batches migrate the five known boundaries

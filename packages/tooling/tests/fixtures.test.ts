@@ -23,24 +23,32 @@ interface Diagnostic {
 
 interface OxlintReport {
   readonly diagnostics: ReadonlyArray<Diagnostic>
+  readonly number_of_files: number
+}
+
+interface OxlintRun {
+  readonly report: OxlintReport
+  readonly exitCode: number | null
+  readonly stderr: string
 }
 
 const FIXTURES_DIR = pathResolve(import.meta.dir, "..", "fixtures")
 const FIXTURES_CONFIG = pathResolve(FIXTURES_DIR, ".oxlintrc.json")
 
-const runOxlint = async (fixtureFile: string): Promise<OxlintReport> => {
+const runOxlint = async (fixtureFile: string): Promise<OxlintRun> => {
   const proc = Bun.spawn(["bunx", "oxlint", "-c", FIXTURES_CONFIG, "--format=json", fixtureFile], {
     cwd: FIXTURES_DIR,
     stdout: "pipe",
     stderr: "pipe",
   })
-  const [stdout, _stderr] = await Promise.all([
+  const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ])
-  await proc.exited
+  const exitCode = await proc.exited
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  return JSON.parse(stdout) as OxlintReport
+  const report = JSON.parse(stdout) as OxlintReport
+  return { report, exitCode, stderr }
 }
 
 const countViolations = (report: OxlintReport, ruleId: string): number => {
@@ -88,17 +96,31 @@ const CASES: ReadonlyArray<RuleCase> = [
   },
 ]
 
+const assertOxlintProcessed = (run: OxlintRun, fixtureFile: string): void => {
+  // Sanity: oxlint must have actually loaded the file. A stderr containing
+  // "Failed to parse" or `number_of_files: 0` indicates a config error or
+  // ignore-pattern oversight, not a passing test.
+  if (run.report.number_of_files === 0) {
+    throw new Error(`oxlint did not process fixture "${fixtureFile}". stderr:\n${run.stderr}`)
+  }
+}
+
 describe("custom lint rules", () => {
   for (const c of CASES) {
     test(`${c.rule} fires on invalid fixture`, async () => {
-      const report = await runOxlint(c.invalid)
-      const violations = countViolations(report, c.rule)
+      const run = await runOxlint(c.invalid)
+      assertOxlintProcessed(run, c.invalid)
+      // oxlint exits non-zero when violations are found
+      expect(run.exitCode).not.toBe(0)
+      const violations = countViolations(run.report, c.rule)
       expect(violations).toBeGreaterThan(0)
     }, 30_000)
 
     test(`${c.rule} does not fire on valid fixture`, async () => {
-      const report = await runOxlint(c.valid)
-      const violations = countViolations(report, c.rule)
+      const run = await runOxlint(c.valid)
+      assertOxlintProcessed(run, c.valid)
+      expect(run.exitCode).toBe(0)
+      const violations = countViolations(run.report, c.rule)
       expect(violations).toBe(0)
     }, 30_000)
   }
