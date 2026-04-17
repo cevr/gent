@@ -2,7 +2,7 @@
  * Shell execution utility with truncation and output saving
  */
 
-import { DateTime, FileSystem, Effect } from "effect"
+import { DateTime, FileSystem, Effect, Schema } from "effect"
 import { homedir } from "os"
 import { joinPath } from "../platform/path-runtime"
 
@@ -15,9 +15,11 @@ export interface ShellResult {
   savedPath?: string
 }
 
-export class ShellCommandError extends Error {
-  readonly _tag = "ShellCommandError"
-}
+export class ShellCommandError extends Schema.TaggedErrorClass<ShellCommandError>(
+  "ShellCommandError",
+)("ShellCommandError", {
+  message: Schema.String,
+}) {}
 
 /**
  * Execute shell command with truncation
@@ -70,7 +72,7 @@ const runCommand = (
       await proc.exited
       return { stdout, stderr }
     },
-    catch: (e) => new ShellCommandError(e instanceof Error ? e.message : String(e)),
+    catch: (e) => new ShellCommandError({ message: e instanceof Error ? e.message : String(e) }),
   }).pipe(Effect.orDie)
 
 const saveFullOutput = (output: string, command: string) =>

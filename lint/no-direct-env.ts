@@ -8,6 +8,19 @@
  *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
  * - no-projection-writes: enforces ProjectionContribution.query AND
  *                          QueryContribution.handler are read-only
+ *
+ * Six-primitive substrate rules (C0 scaffolds, sharpened in later batches):
+ * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
+ *   in *-boundary.ts files OR when consuming an SdkBoundary value via runSdkBoundary
+ * - all-errors-are-tagged: classes named *Error/*Failure must extend
+ *   Schema.TaggedErrorClass (replaces plain `class X extends Error`)
+ * - no-define-extension-throw: definePackage/defineExtension factories may not
+ *   throw — must return Effect with typed error channel
+ * - no-r-equals-never-comment: flag inline R-channel annotation comments
+ *   at provider/SDK edges; require SdkBoundary<E> brand instead
+ * - no-projection-write-services: type-aware fence on Projection's R channel
+ *   for write-tagged services (sharpened replacement for no-projection-writes
+ *   string-match — installed alongside, supersedes in C5)
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -294,6 +307,238 @@ const plugin: Plugin = {
             })
           },
         }
+      },
+    },
+
+    /**
+     * Flags `Effect.runPromise(...)` and `Effect.runPromiseWith(...)` outside
+     * sanctioned SDK-boundary files.
+     *
+     * Sanctioned call sites:
+     *   - File path matches `*-boundary.ts`
+     *   - File path is in {@link KNOWN_BOUNDARY_FILES} (legacy boundaries
+     *     pending migration to `*-boundary.ts`; tracked per-batch in the
+     *     v2 redesign plan)
+     *   - File path under `tests/**`, `**\/*.test.ts`, `**\/*.test.tsx`
+     *   - File is the `SdkBoundary` consumer module itself
+     *
+     * Anywhere else: error. SDK edges must be explicit.
+     *
+     * Migration plan: each entry in `KNOWN_BOUNDARY_FILES` is removed in the
+     * batch that renames the file to `*-boundary.ts` (anthropic/openai in
+     * driver work, acp in C3, sdk in transport batches, TUI hook in C9).
+     */
+    "no-runpromise-outside-boundary": {
+      create(context) {
+        const filename = context.filename
+
+        // Allow inside any *-boundary.ts file (the convention for SDK edges)
+        if (/-boundary\.ts$/.test(filename)) return {}
+        // Allow inside the SdkBoundary consumer itself
+        if (/\/domain\/sdk-boundary\.ts$/.test(filename)) return {}
+        // Allow tests
+        if (/\/tests\//.test(filename)) return {}
+        if (/\.test\.tsx?$/.test(filename)) return {}
+        // Allow lint plugin file itself (rule definitions reference the API in messages)
+        if (/\/lint\//.test(filename)) return {}
+
+        // Known SDK boundaries pending migration to *-boundary.ts file naming.
+        // Each entry is a documented Effect→Promise edge that currently uses
+        // `Effect.runPromise` with a closed-over `R = never` Effect. Migration
+        // tracked in the v2 redesign plan; remove from this list when the file
+        // is renamed or split into a `*-boundary.ts`.
+        const KNOWN_BOUNDARY_FILES = [
+          // Anthropic SDK fetcher + credential loader (driver flavor=model)
+          "packages/extensions/src/anthropic/index.ts",
+          "packages/extensions/src/anthropic/oauth.ts",
+          // OpenAI SDK token-refresh callback (driver flavor=model)
+          "packages/extensions/src/openai/index.ts",
+          // ACP codemode JS sandbox tool runner (driver flavor=external)
+          "packages/extensions/src/acp-agents/executor.ts",
+          // SDK client and supervisor — Promise-returning public API
+          "packages/sdk/src/client.ts",
+          "packages/sdk/src/local-supervisor.ts",
+          "packages/sdk/src/supervisor.ts",
+          // TUI session-feed hook — fire-and-forget message refetch (C9 migrates)
+          "apps/tui/src/hooks/use-session-feed.ts",
+        ]
+        if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
+
+        return {
+          CallExpression(node) {
+            if (node.callee.type !== "MemberExpression") return
+            const obj = node.callee.object
+            const prop = node.callee.property
+            if (obj.type !== "Identifier" || obj.name !== "Effect") return
+            if (prop.type !== "Identifier") return
+            if (prop.name !== "runPromise" && prop.name !== "runPromiseWith") return
+            context.report({
+              message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Wrap the Effect with \`sdkBoundary("label", effect)\` and call it from a boundary module.`,
+              node,
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags plain `class X extends Error` declarations whose name ends in
+     * `Error` or `Failure`. The substrate requires every error to extend
+     * `Schema.TaggedErrorClass` so it carries a discriminator and a Schema.
+     *
+     * Valid:   class FooError extends Schema.TaggedErrorClass<FooError>(...)(...)
+     * Invalid: class FooError extends Error
+     *
+     * NOTE: AST-only check; cannot follow re-exports or aliased base classes.
+     */
+    "all-errors-are-tagged": {
+      create(context) {
+        return {
+          ClassDeclaration(node) {
+            const id = node.id
+            if (id === null || id === undefined || id.type !== "Identifier") return
+            const name = id.name
+            if (typeof name !== "string") return
+            if (!/(?:Error|Failure)$/.test(name)) return
+            const sup = node.superClass
+            if (sup === null || sup === undefined) return
+            // Plain Error
+            if (sup.type === "Identifier" && sup.name === "Error") {
+              context.report({
+                message: `\`${name}\` must extend \`Schema.TaggedErrorClass\`, not the plain \`Error\` class. Tagged errors carry a discriminator and a Schema; plain Error subclasses cause Effect's typed error channel to lose information.`,
+                node,
+              })
+            }
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags `throw` statements inside `definePackage(...)` and
+     * `defineExtension(...)` factory bodies. Factories must surface failures
+     * via the Effect channel (`ExtensionLoadError`), never by throwing — a
+     * thrown error becomes an unrecoverable defect at the load site.
+     *
+     * Valid:   definePackage({ ..., setup: () => Effect.fail(new ExtensionLoadError(...)) })
+     * Invalid: definePackage({ ..., setup: () => { throw new Error("bad") } })
+     */
+    "no-define-extension-throw": {
+      create(context) {
+        const FACTORIES = new Set(["definePackage", "defineExtension"])
+        const FUNCTION_BOUNDARY_TYPES = new Set([
+          "ArrowFunctionExpression",
+          "FunctionExpression",
+          "FunctionDeclaration",
+        ])
+        // Walk the args and report throws that are NOT nested inside a function
+        // expression. Throws inside callbacks (e.g. `resolveModel: () => { throw ... }`)
+        // are runtime behavior with their own error semantics; we only flag throws
+        // that execute synchronously during the factory call.
+        const walkSyncThrows = (node: unknown, report: (n: AstNode) => void): void => {
+          if (Array.isArray(node)) {
+            for (const child of node) walkSyncThrows(child, report)
+            return
+          }
+          if (!isAstNode(node)) return
+          if (FUNCTION_BOUNDARY_TYPES.has(node.type)) return
+          if (node.type === "ThrowStatement") {
+            report(node)
+            return
+          }
+          for (const key in node) {
+            if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
+            walkSyncThrows(node[key], report)
+          }
+        }
+        return {
+          CallExpression(node) {
+            if (node.callee.type !== "Identifier") return
+            if (!FACTORIES.has(node.callee.name)) return
+            const factoryName = node.callee.name
+            walkSyncThrows(node.arguments, (n) => {
+              context.report({
+                message: `${factoryName} must surface failures via the Effect channel, not throw synchronously during setup. Use \`Effect.fail(new ExtensionLoadError({ ... }))\` so the loader can route the error.`,
+                node: n,
+              })
+            })
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags `// R = never` and `// R: never` comments at provider/SDK edges.
+     * The presence of such a comment is a smell that the file is crossing into
+     * Promise-land without using the typed `SdkBoundary<E>` brand.
+     *
+     * Migration: wrap the Effect with `sdkBoundary("label", effect)` and call
+     * `runSdkBoundary(boundary)` (or move the call site into `*-boundary.ts`).
+     *
+     * NOTE: AST-only inspection of leading comments on the program. Comments
+     * deep in function bodies are caught by walking the program's `comments`
+     * array if the parser surfaces it.
+     */
+    "no-r-equals-never-comment": {
+      create(context) {
+        const filename = context.filename
+        // Allow the lint plugin file itself (rule definition references the matched pattern in messages)
+        if (/\/lint\//.test(filename)) return {}
+        // Allow the SdkBoundary domain module itself (its docstring describes the migration target)
+        if (/\/domain\/sdk-boundary\.ts$/.test(filename)) return {}
+        // Allow tests
+        if (/\/tests\//.test(filename)) return {}
+        if (/\.test\.tsx?$/.test(filename)) return {}
+        // Known SDK boundaries pending migration to *-boundary.ts file naming —
+        // same allow-list as no-runpromise-outside-boundary. Each entry is removed
+        // as the file migrates to the *-boundary.ts pattern.
+        const KNOWN_BOUNDARY_FILES = [
+          "packages/extensions/src/anthropic/index.ts",
+          "packages/extensions/src/anthropic/oauth.ts",
+          "packages/extensions/src/openai/index.ts",
+          "packages/extensions/src/acp-agents/executor.ts",
+          "packages/sdk/src/client.ts",
+          "packages/sdk/src/local-supervisor.ts",
+          "packages/sdk/src/supervisor.ts",
+          "apps/tui/src/hooks/use-session-feed.ts",
+        ]
+        if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
+        return {
+          Program(node) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            const programNode = node as unknown as AstNode
+            const commentsField = programNode["comments"]
+            const comments = Array.isArray(commentsField) ? commentsField : []
+            for (const c of comments) {
+              if (!isAstNode(c)) continue
+              const value = getStringField(c, "value")
+              if (typeof value !== "string") continue
+              if (/\bR\s*[:=]\s*never\b/.test(value)) {
+                context.report({
+                  message: `Drop the inline R-channel annotation comment at SDK edges. Wrap the Effect with \`sdkBoundary("label", effect)\` and consume via \`runSdkBoundary(boundary)\` so the boundary is structurally enforced.`,
+                  node: c,
+                })
+              }
+            }
+          },
+        }
+      },
+    },
+
+    /**
+     * Type-aware fence on `ProjectionContribution`'s `R` channel for
+     * write-tagged services. Sharpened replacement for the AST-string-match
+     * `no-projection-writes` rule.
+     *
+     * NOTE: C0 stub. The full check requires the `ReadOnly` brand on service
+     * tags (introduced in C5). Until then the rule reports nothing — the
+     * existing `no-projection-writes` rule covers the runtime invariant via
+     * write-method name matching.
+     */
+    "no-projection-write-services": {
+      create() {
+        // Stub — sharpened in C5 once the `ReadOnly` brand exists on service tags.
+        return {}
       },
     },
 

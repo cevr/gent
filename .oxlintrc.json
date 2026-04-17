@@ -19,6 +19,16 @@
     "gent/no-extension-internal-imports": "error",
     // Custom — projection.query Effects must be read-only
     "gent/no-projection-writes": "error",
+    // Custom — Effect.runPromise only in *-boundary.ts files or via runSdkBoundary
+    "gent/no-runpromise-outside-boundary": "error",
+    // Custom — error classes must extend Schema.TaggedErrorClass
+    "gent/all-errors-are-tagged": "error",
+    // Custom — definePackage/defineExtension factories must not throw
+    "gent/no-define-extension-throw": "error",
+    // Custom — `// R = never` comments at SDK edges; require SdkBoundary brand
+    "gent/no-r-equals-never-comment": "error",
+    // Custom — type-aware fence on Projection's R channel (C0 stub, sharpened in C5)
+    "gent/no-projection-write-services": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
