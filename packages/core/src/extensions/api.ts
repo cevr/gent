@@ -202,6 +202,7 @@ export {
   onStartup as onStartupContribution,
   onShutdown as onShutdownContribution,
   projection as projectionContribution,
+  pulseSubscription as pulseSubscriptionContribution,
   query as queryContribution,
   mutation as mutationContribution,
   workflow as workflowContribution,

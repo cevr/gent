@@ -16,8 +16,7 @@ import { RunSpecSchema } from "@gent/core/domain/agent"
 // ── Tests ──
 
 describe("runSpec through RPC", () => {
-  it.skip("parentToolCallId reaches ExtensionTurnContext via message.send", // the previous WorkflowContribution.turn / derive surface is gone in C2. // TODO(c2): rewrite to capture ExtensionTurnContext via a different hook —
-  () => {})
+  it.skip("parentToolCallId reaches ExtensionTurnContext via message.send", () => {}) // the previous WorkflowContribution.turn / derive surface is gone in C2. // TODO(c2): rewrite to capture ExtensionTurnContext via a different hook —
 })
 
 describe("RunSpec CLI serialization", () => {

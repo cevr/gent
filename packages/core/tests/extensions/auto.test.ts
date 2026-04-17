@@ -9,6 +9,7 @@ import {
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { AUTO_EXTENSION_ID, AutoExtension, type AutoState } from "@gent/extensions/auto"
+import { AutoProjection } from "@gent/extensions/auto-projection"
 import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
@@ -395,11 +396,37 @@ describe("Auto runtime integration", () => {
     }).pipe(Effect.provide(makeLayer())),
   )
 
-  // TODO(c2): "derive injects learnings into prompt sections" — removed.
-  // Rewrite via projection contribution lookup once exposed.
-  // The old `runtime.deriveAll()` is gone in C2.
-  it.live("derive injects learnings into prompt sections — REMOVED in C2", () =>
-    Effect.void.pipe(Effect.provide(makeLayer())),
+  it.live("AutoProjection injects learnings + nextIdea into prompt sections", () =>
+    Effect.gen(function* () {
+      const runtime = yield* WorkflowRuntime
+      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "research caching strategies" })
+      yield* runtime.publish(
+        checkpointSignal({
+          status: "continue",
+          summary: "first pass",
+          learnings: "tried memoization",
+          nextIdea: "test LRU eviction",
+        }),
+        { sessionId, branchId },
+      )
+      // After AutoSignal{continue} the loop is in AwaitingReview. ReviewSignal
+      // pushes it back to Working with the learnings + nextIdea preserved —
+      // exactly the state where the projection should inject them into the
+      // system prompt.
+      yield* runtime.publish(reviewSignal(), { sessionId, branchId })
+      const reply = (yield* runtime.ask(
+        sessionId,
+        AutoProtocol.GetSnapshot(),
+        branchId,
+      )) as AutoSnapshotReply
+      // The projection's prompt fn is a pure function of the reply.
+      const sections = AutoProjection.prompt!(reply)
+      expect(sections.length).toBe(1)
+      const content = sections[0]!.content
+      expect(content).toContain("tried memoization")
+      expect(content).toContain("test LRU eviction")
+    }).pipe(Effect.provide(makeLayer())),
   )
 })
 

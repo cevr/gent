@@ -115,6 +115,24 @@ export interface WorkflowKindContribution {
   readonly workflow: AnyWorkflowContribution
 }
 
+/**
+ * Declares that the contributing extension's externally-observable state
+ * changes when any of these `AgentEvent._tag`s is published. The
+ * EventPublisher emits an `ExtensionStateChanged` pulse for this extension
+ * whenever a matching event lands. This is the bridge for query-backed /
+ * projection-only extensions whose state is event-driven but not held in a
+ * workflow actor (the workflow path emits pulses on actor transitions
+ * directly — see `WorkflowRuntime.publish`).
+ *
+ * Keep `tags` minimal — every tag in the list translates to one pulse per
+ * matching event for this extension. The honest set is "events whose
+ * occurrence invalidates the extension's snapshot."
+ */
+export interface PulseSubscriptionContribution {
+  readonly _kind: "pulse-subscription"
+  readonly tags: ReadonlyArray<string>
+}
+
 // ── Union ──
 
 export type Contribution =
@@ -134,6 +152,7 @@ export type Contribution =
   | QueryKindContribution
   | MutationKindContribution
   | WorkflowKindContribution
+  | PulseSubscriptionContribution
 
 export type ContributionKind = Contribution["_kind"]
 
@@ -227,6 +246,11 @@ export const workflow = (w: AnyWorkflowContribution): WorkflowKindContribution =
   workflow: w,
 })
 
+export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptionContribution => ({
+  _kind: "pulse-subscription",
+  tags,
+})
+
 // ── Filters ──
 
 type ContributionByKind<K extends ContributionKind> = Extract<Contribution, { readonly _kind: K }>
@@ -317,6 +341,10 @@ export const extractMutations = (
 export const extractWorkflow = (
   cs: ReadonlyArray<Contribution>,
 ): WorkflowKindContribution["workflow"] | undefined => findByKind(cs, "workflow")?.workflow
+
+export const extractPulseSubscriptions = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<PulseSubscriptionContribution> => filterByKind(cs, "pulse-subscription")
 
 export const extractLayer = (
   cs: ReadonlyArray<Contribution>,

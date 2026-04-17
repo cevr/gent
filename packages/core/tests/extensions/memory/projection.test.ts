@@ -4,7 +4,11 @@ import * as Fs from "node:fs"
 import * as Path from "node:path"
 import * as Os from "node:os"
 import { MemoryVaultProjection } from "@gent/extensions/memory/projection"
-import { Test as MemoryVaultTest, type MemoryFrontmatter } from "@gent/extensions/memory/vault"
+import {
+  Test as MemoryVaultTest,
+  projectKey,
+  type MemoryFrontmatter,
+} from "@gent/extensions/memory/vault"
 import type { ProjectionTurnContext } from "@gent/core/domain/projection"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 
@@ -88,8 +92,7 @@ describe("MemoryVaultProjection", () => {
   test("project entries appear under project heading when cwd resolves to a project key", async () => {
     // projectKey("/test-repo") yields "test-repo-<hash>"
     // Compute the expected key + write a file under that path
-    const { projectKey: pk } = await import("@gent/extensions/memory/vault")
-    const key = pk("/test-repo")
+    const key = projectKey("/test-repo")
     writeFile(`project/${key}/gotcha.md`, "# SQLite Gotcha\n\nWatch out.", "project")
 
     const result = await Effect.runPromise(
@@ -126,9 +129,8 @@ describe("MemoryVaultProjection — read-only and scoped", () => {
   })
 
   test("project list is scoped to active project — unrelated projects do not leak in", async () => {
-    const { projectKey: pk } = await import("@gent/extensions/memory/vault")
-    const activeKey = pk("/active-repo")
-    const otherKey = pk("/other-repo")
+    const activeKey = projectKey("/active-repo")
+    const otherKey = projectKey("/other-repo")
     writeFile(`project/${activeKey}/active.md`, "# Active\n\nMine.", "project")
     writeFile(`project/${otherKey}/other.md`, "# Other\n\nNot mine.", "project")
     writeFile("global/g.md", "# G\n\nGlobal entry.")

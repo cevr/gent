@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { unlink } from "node:fs/promises"
 import { resolveEditor, makeTmpPath, parseEditorCommand } from "../src/utils/external-editor"
 
 // ── Editor resolution ─────────────────────────────────────────────────
@@ -80,7 +81,6 @@ describe("content roundtrip", () => {
 
   afterEach(async () => {
     try {
-      const { unlink } = await import("node:fs/promises")
       await unlink(tmpPath)
     } catch {
       // Already cleaned up

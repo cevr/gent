@@ -8,6 +8,8 @@ import {
 } from "../domain/event.js"
 import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { extractPulseSubscriptions } from "../domain/contribution.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
 
 const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
@@ -16,11 +18,16 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 /**
  * EventPublisher routes agent events to storage + extension state runtime.
  *
- * Pulse policy: `ExtensionStateChanged` is emitted ONLY for extensions whose
- * workflow machine actually transitioned in response to the published event.
- * No projection fan-out — projections are derivations the agent loop
- * recomputes on its natural cadence; clients that need fresh state subscribe
- * to the typed events they actually care about, or query on demand.
+ * Pulse policy: `ExtensionStateChanged` is emitted for two distinct sources,
+ * combined and deduped per (sessionId, branchId, extensionId):
+ *   1. Workflow transitions — extensions whose machine actually transitioned
+ *      in response to the published event (per `WorkflowRuntime.publish`).
+ *   2. PulseSubscription contributions — query-backed / projection-only
+ *      extensions that declared which event tags invalidate their snapshot
+ *      via `pulseSubscriptionContribution([...])`. These never have an actor
+ *      so without explicit declaration they would silently stale.
+ *
+ * No blanket per-event-per-observable fan-out. Pulses are surgical.
  *
  * NOTE: Currently uses the server-wide WorkflowRuntime. In multi-cwd
  * shared mode (future), this would need profile-aware routing via SessionProfileCache.
@@ -29,14 +36,33 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
   never,
-  BaseEventStore | WorkflowRuntime
+  BaseEventStore | WorkflowRuntime | ExtensionRegistry
 > = Layer.effect(
   EventPublisher,
   Effect.gen(function* () {
     const baseEventStore = yield* BaseEventStore
     const stateRuntime = yield* WorkflowRuntime
+    const registry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
+
+    // Pre-compute event-tag → extensionIds index from PulseSubscription
+    // contributions. Built once at startup; the loaded extension set is fixed
+    // for the runtime lifetime.
+    const pulseByTag = new Map<string, Set<string>>()
+    {
+      const resolved = registry.getResolved()
+      for (const ext of resolved.extensions) {
+        const subs = extractPulseSubscriptions(ext.contributions)
+        for (const sub of subs) {
+          for (const tag of sub.tags) {
+            const set = pulseByTag.get(tag) ?? new Set<string>()
+            set.add(ext.manifest.id)
+            pulseByTag.set(tag, set)
+          }
+        }
+      }
+    }
 
     return EventPublisher.of({
       publish: (event) =>
@@ -54,7 +80,12 @@ export const EventPublisherLive: Layer.Layer<
 
           // Defense in depth: never fan out pulses for the pulse itself.
           if (branchId !== undefined && event._tag !== "ExtensionStateChanged") {
-            for (const extensionId of transitioned) {
+            const subscribers = pulseByTag.get(event._tag)
+            const pulseTargets = new Set<string>(transitioned)
+            if (subscribers !== undefined) {
+              for (const id of subscribers) pulseTargets.add(id)
+            }
+            for (const extensionId of pulseTargets) {
               const pulse = new ExtensionStateChanged({
                 sessionId,
                 branchId,

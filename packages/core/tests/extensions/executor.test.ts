@@ -1,11 +1,12 @@
 import { describe, test, expect } from "bun:test"
-import { ExecutorActorConfig, ExecutorState } from "@gent/extensions/executor/actor"
+import { ExecutorActorConfig } from "@gent/extensions/executor/actor"
 import {
   resolveSettings,
   ExecutorSettingsDefaults,
   type ExecutorSettings,
 } from "@gent/extensions/executor/domain"
 import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/mcp-bridge"
+import { ExecutorProjection } from "@gent/extensions/executor/projection"
 
 // ── Helpers ──
 
@@ -81,12 +82,52 @@ describe("Executor state machine", () => {
   })
 })
 
-// ── Turn projection ──
-// TODO(c2): rewrite via the executor projection contribution once exposed
-// (was previously testing ExecutorActorConfig.derive, which is gone).
-describe.skip("Executor turn projection (removed in C2)", () => {
-  test("placeholder", () => {
-    expect(ExecutorState.Idle).toBeDefined()
+// ── Turn projection (new C2 path) ──
+//
+// `ExecutorActorConfig.derive` is gone. Prompt/policy come from
+// `ExecutorProjection.prompt(snapshot)` / `.policy(snapshot)` — pure
+// functions of the typed reply schema. We test those directly.
+
+describe("ExecutorProjection prompt + policy", () => {
+  test("Idle: excludes execute + resume, no prompt section", () => {
+    const policy = ExecutorProjection.policy!({ status: "idle" }, undefined as never)
+    expect(policy).toEqual({ exclude: ["execute", "resume"] })
+    const sections = ExecutorProjection.prompt!({ status: "idle" })
+    expect(sections).toEqual([])
+  })
+
+  test("Connecting: excludes execute + resume", () => {
+    const policy = ExecutorProjection.policy!({ status: "connecting" }, undefined as never)
+    expect(policy).toEqual({ exclude: ["execute", "resume"] })
+  })
+
+  test("Error: excludes execute + resume", () => {
+    const policy = ExecutorProjection.policy!(
+      { status: "error", errorMessage: "boom" },
+      undefined as never,
+    )
+    expect(policy).toEqual({ exclude: ["execute", "resume"] })
+  })
+
+  test("Ready without instructions: no prompt section, no policy exclusions", () => {
+    const policy = ExecutorProjection.policy!(
+      { status: "ready", baseUrl: "http://x" },
+      undefined as never,
+    )
+    expect(policy).toEqual({})
+    const sections = ExecutorProjection.prompt!({ status: "ready", baseUrl: "http://x" })
+    expect(sections).toEqual([])
+  })
+
+  test("Ready with instructions: prompt section includes guidance", () => {
+    const sections = ExecutorProjection.prompt!({
+      status: "ready",
+      baseUrl: "http://x",
+      executorPrompt: "use frobnicator API",
+    })
+    expect(sections.length).toBe(1)
+    expect(sections[0]!.id).toBe("executor-guidance")
+    expect(sections[0]!.content).toContain("use frobnicator API")
   })
 })
 

@@ -83,6 +83,13 @@ export function defineExtensionPackage(
   }
   const snapshotRequest = "snapshotRequest" in pkg ? pkg.snapshotRequest : undefined
   const snapshotQuery = "snapshotQuery" in pkg ? pkg.snapshotQuery : undefined
+  if (snapshotRequest !== undefined && snapshotQuery !== undefined) {
+    // The TUI provider can only consume one source per extension; allowing
+    // both would silently pick one and stale the other. Loud failure.
+    throw new Error(
+      `ExtensionPackage "${pkg.id}" declared both \`snapshotRequest\` and \`snapshotQuery\`; pick one.`,
+    )
+  }
 
   const result: ExtensionPackage<unknown> = {
     id: pkg.id,

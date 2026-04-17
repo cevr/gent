@@ -21,6 +21,7 @@ import {
   layerContribution,
   mutationContribution,
   projectionContribution,
+  pulseSubscriptionContribution,
   queryContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
@@ -60,5 +61,16 @@ export const TaskExtension = defineExtension({
     mutationContribution(TaskDeleteMutation),
     mutationContribution(TaskAddDepMutation),
     mutationContribution(TaskRemoveDepMutation),
+    // Query-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
+    // for `@gent/task-tools` whenever any of these tags is published, so the
+    // TUI widget refetches `TaskListRef` on every relevant mutation.
+    pulseSubscriptionContribution([
+      "TaskCreated",
+      "TaskUpdated",
+      "TaskCompleted",
+      "TaskDeleted",
+      "TaskDependencyAdded",
+      "TaskDependencyRemoved",
+    ]),
   ],
 })

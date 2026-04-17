@@ -5,9 +5,11 @@
  * codemode proxy dispatch/rejection behavior.
  */
 import { describe, test, expect } from "bun:test"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
+import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
+import { defineTool } from "@gent/core/domain/tool"
 
 // ── ACP → TurnEvent mapping ──
 
@@ -147,10 +149,6 @@ const mcpHeaders = {
 
 describe("codemode proxy", () => {
   test("dispatches known tool to runTool", async () => {
-    const { startCodemodeServer } = await import("@gent/extensions/acp-agents/mcp-codemode")
-    const { Effect, Schema } = await import("effect")
-    const { defineTool } = await import("@gent/core/domain/tool")
-
     const calls: Array<{ toolName: string; args: unknown }> = []
 
     const mockTool = defineTool({
@@ -197,9 +195,6 @@ describe("codemode proxy", () => {
   })
 
   test("rejects unknown tool in proxy", async () => {
-    const { startCodemodeServer } = await import("@gent/extensions/acp-agents/mcp-codemode")
-    const { Effect } = await import("effect")
-
     const server = await Effect.runPromise(
       startCodemodeServer({
         tools: [],

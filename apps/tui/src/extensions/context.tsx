@@ -5,7 +5,16 @@
  * Provides resolved contributions to descendants.
  */
 
-import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
+import {
+  createContext,
+  useContext,
+  createSignal,
+  createEffect,
+  createMemo,
+  onMount,
+  type Accessor,
+  type JSX,
+} from "solid-js"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
@@ -110,15 +119,26 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     ReadonlyArray<AutocompleteContribution>
   >([])
   const [loading, setLoading] = createSignal(true)
-  // Per-extension snapshot cache, keyed by extensionId.
-  // Populated by `refetchExtensionSnapshot` on every `ExtensionStateChanged`
-  // pulse for an extension whose package declared a snapshot source.
-  // Reads happen through `ctx.getSnapshotRaw()` (per-extension binding below).
+  // Snapshot cache, keyed by `sessionId|branchId|extensionId`. Cache slots
+  // are scoped to the (session, branch) the snapshot was fetched in — so a
+  // session/branch switch does NOT serve a stale value from the previous
+  // session. Cleared on every session/branch change (see createEffect below).
   const [snapshotCache, setSnapshotCache] = createSignal<ReadonlyMap<string, unknown>>(new Map())
   // Ordered registry of snapshot sources for loaded extensions. Filled at
   // setup time before contributions run, so the first widget read sees the
   // cache as soon as the first pulse arrives.
   const snapshotSources = new Map<string, SnapshotSource>()
+
+  const cacheKey = (sessionId: string, branchId: string, extensionId: string): string =>
+    `${sessionId}|${branchId}|${extensionId}`
+
+  // Reactive memo of the current session key. Recomputes whenever session
+  // identity changes — drives both cache eviction and session-entry refetch.
+  const activeSessionKey = createMemo(() => {
+    const session = clientCtx.session()
+    if (session === null) return undefined
+    return `${session.sessionId}|${session.branchId}`
+  })
 
   // Overlay dispatch — wired by session controller after mount
   const [overlayDispatch, setOverlayDispatchSignal] = createSignal<{
@@ -146,12 +166,24 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   }
 
   // Refetch a single extension's snapshot via the package's declared source.
-  // Called once per `ExtensionStateChanged` pulse for that extension.
-  const refetchExtensionSnapshot = async (extensionId: string): Promise<void> => {
+  // Called once per `ExtensionStateChanged` pulse for that extension and on
+  // every session-entry. The fetched value is stored under a session-scoped
+  // cache key so a subsequent session switch cannot serve it as if it
+  // belonged to the new session.
+  //
+  // `isInitial` distinguishes "first read after session entry" (warn on
+  // failure — user-visible widgets stay empty) from "incremental refresh on
+  // pulse" (debug-only — last value remains in cache).
+  const refetchExtensionSnapshot = async (
+    extensionId: string,
+    isInitial: boolean,
+  ): Promise<void> => {
     const source = snapshotSources.get(extensionId)
     if (source === undefined) return
     const session = clientCtx.session()
     if (session === null) return
+    const fetchSessionId = session.sessionId
+    const fetchBranchId = session.branchId
     try {
       let value: unknown
       if (source._tag === "request") {
@@ -159,9 +191,9 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         const reply = await clientCtx.runtime.run(
           clientCtx.client.extension
             .ask({
-              sessionId: session.sessionId,
+              sessionId: fetchSessionId,
               message,
-              branchId: session.branchId,
+              branchId: fetchBranchId,
             })
             .pipe(Effect.flatMap((raw) => decodeExtensionAskReply(message, raw))),
         )
@@ -170,33 +202,77 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         const ref = source.query
         const out = await clientCtx.runtime.run(
           clientCtx.client.extension.query({
-            sessionId: session.sessionId,
+            sessionId: fetchSessionId,
             extensionId,
             queryId: ref.queryId,
             input: {},
-            branchId: session.branchId,
+            branchId: fetchBranchId,
           }),
         )
         value = out
       }
+      // Drop the result if the session has switched out from under us
+      // mid-fetch — otherwise a slow refetch from the prior session would
+      // poison the cache for the new session.
+      const currentSession = clientCtx.session()
+      if (
+        currentSession === null ||
+        currentSession.sessionId !== fetchSessionId ||
+        currentSession.branchId !== fetchBranchId
+      ) {
+        return
+      }
       setSnapshotCache((prev) => {
         const next = new Map(prev)
-        next.set(extensionId, value)
+        next.set(cacheKey(fetchSessionId, fetchBranchId, extensionId), value)
         return next
       })
     } catch (err) {
-      clientCtx.log.debug("extension.snapshot.refetch.failed", {
+      const log = isInitial ? clientCtx.log.warn : clientCtx.log.debug
+      log("extension.snapshot.refetch.failed", {
         extensionId,
+        sessionId: fetchSessionId,
+        branchId: fetchBranchId,
+        isInitial,
         error: err instanceof Error ? err.message : String(err),
       })
     }
   }
 
+  // Session/branch change: evict any cache slots that don't belong to the
+  // new (session, branch), then trigger a session-entry refetch for every
+  // registered snapshot source.
+  createEffect(() => {
+    const key = activeSessionKey()
+    setSnapshotCache((prev) => {
+      if (key === undefined) {
+        return prev.size === 0 ? prev : new Map()
+      }
+      let changed = false
+      const next = new Map<string, unknown>()
+      for (const [k, v] of prev) {
+        if (k.startsWith(`${key}|`)) {
+          next.set(k, v)
+          continue
+        }
+        changed = true
+      }
+      return changed ? next : prev
+    })
+    if (key !== undefined) {
+      // Session-entry refetch — pulses fire only on machine transitions /
+      // owned events, but widgets need their first read at session entry.
+      for (const id of snapshotSources.keys()) {
+        void refetchExtensionSnapshot(id, true)
+      }
+    }
+  })
+
   // Wire extension state-change pulses from the client event stream.
   // Each pulse triggers a refetch for that extension only — no fan-out, no
   // schema travelling through the channel (see EventPublisher pulse policy).
   clientCtx.onExtensionStateChanged(({ extensionId }) => {
-    void refetchExtensionSnapshot(extensionId)
+    void refetchExtensionSnapshot(extensionId, false)
   })
 
   onMount(async () => {
@@ -282,7 +358,11 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
             throw err
           }
         },
-        getSnapshotRaw: () => snapshotCache().get(extensionId),
+        getSnapshotRaw: () => {
+          const session = clientCtx.session()
+          if (session === null) return undefined
+          return snapshotCache().get(cacheKey(session.sessionId, session.branchId, extensionId))
+        },
         sendMessage: (content) => clientCtx.sendMessage(content),
         composerState: () => {
           const provider = composerStateProvider()
@@ -312,12 +392,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       )
       setResolved(result)
 
-      // Initial fetch for any active session — pulses only fire on machine
-      // transitions, but widgets need their first read at session entry.
-      const session = clientCtx.session()
-      if (session !== null) {
+      // Initial fetch for any active session at mount time. The session-key
+      // `createEffect` above also handles entries; this catches the case
+      // where a session is already active before extensions finish loading.
+      if (activeSessionKey() !== undefined) {
         for (const id of snapshotSources.keys()) {
-          void refetchExtensionSnapshot(id)
+          void refetchExtensionSnapshot(id, true)
         }
       }
 
