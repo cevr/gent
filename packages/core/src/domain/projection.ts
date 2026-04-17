@@ -25,18 +25,16 @@
  *
  * @module
  */
-import { Data, type Effect, type Schema } from "effect"
+import { Schema, type Effect } from "effect"
 import type { ExtensionTurnContext, ToolPolicyFragment } from "./extension.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { PromptSection } from "./prompt.js"
 
 /** Failure raised by a projection query. Carries projection id + cause for diagnostics. */
-export class ProjectionError extends Data.TaggedError(
-  "@gent/core/src/domain/projection/ProjectionError",
-)<{
-  readonly projectionId: string
-  readonly reason: string
-}> {}
+export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()("ProjectionError", {
+  projectionId: Schema.String,
+  reason: Schema.String,
+}) {}
 
 /** Base context — fields common to UI and turn evaluation. Read-only by design. */
 interface ProjectionContextBase {

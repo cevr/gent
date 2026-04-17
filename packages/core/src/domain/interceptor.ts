@@ -19,7 +19,7 @@
  *
  * @module
  */
-import { Data } from "effect"
+import { Schema } from "effect"
 import type {
   ExtensionInterceptorDescriptor as Descriptor,
   ExtensionInterceptorKey as Key,
@@ -36,12 +36,13 @@ export type InterceptorMap = Map
 export type InterceptorContribution<K extends InterceptorKey = InterceptorKey> = Descriptor<K>
 
 /** Typed failure for interceptor authoring. Carries key + reason for diagnostics. */
-export class InterceptorError extends Data.TaggedError(
-  "@gent/core/src/domain/interceptor/InterceptorError",
-)<{
-  readonly key: InterceptorKey
-  readonly reason: string
-}> {}
+export class InterceptorError extends Schema.TaggedErrorClass<InterceptorError>()(
+  "InterceptorError",
+  {
+    key: Schema.String,
+    reason: Schema.String,
+  },
+) {}
 
 export type {
   Descriptor as ExtensionInterceptorDescriptor,

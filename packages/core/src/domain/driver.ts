@@ -28,7 +28,7 @@
  *
  * @module
  */
-import { Data, type Effect, type Layer } from "effect"
+import { Schema, type Effect, type Layer } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
 import type { TurnExecutor } from "./turn-executor.js"
@@ -43,11 +43,11 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 // ── Failure type ──
 
 /** Failure raised when a driver lookup or dispatch fails. */
-export class DriverError extends Data.TaggedError("@gent/core/src/domain/driver/DriverError")<{
-  readonly kind: "model" | "external"
-  readonly id: string
-  readonly reason: string
-}> {}
+export class DriverError extends Schema.TaggedErrorClass<DriverError>()("DriverError", {
+  kind: Schema.Literals(["model", "external"]),
+  id: Schema.String,
+  reason: Schema.String,
+}) {}
 
 // ── Shared types lifted from provider-contribution.ts ──
 

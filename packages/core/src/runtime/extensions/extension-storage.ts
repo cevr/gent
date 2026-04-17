@@ -10,14 +10,15 @@
  * inside the Effect via `Effect.die` (programmer errors, not recoverable).
  */
 
-import { Data, Effect, type FileSystem, type Path } from "effect"
+import { Effect, Schema, type FileSystem, type Path } from "effect"
 
-export class ExtensionStorageError extends Data.TaggedError(
-  "@gent/core/src/runtime/extensions/extension-storage/ExtensionStorageError",
-)<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
+export class ExtensionStorageError extends Schema.TaggedErrorClass<ExtensionStorageError>()(
+  "ExtensionStorageError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
 
 export interface ExtensionStorage {
   get(key: string): Effect.Effect<unknown | undefined, ExtensionStorageError>
