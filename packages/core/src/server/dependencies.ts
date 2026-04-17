@@ -25,6 +25,7 @@ import {
   type RuntimeProfile,
 } from "../runtime/profile.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "../runtime/extensions/registry.js"
+import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
 import { type ScheduledJobCommand, type SchedulerFailure } from "../runtime/extensions/scheduler.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -166,7 +167,15 @@ export const createDependencies = (config: DependenciesConfig) => {
       yield* logProfileFailures(profile.resolved, profile.scheduledJobFailures)
       const extensionLayer = buildExtensionLayers(profile.resolved)
       const profileTagLayer = Layer.succeed(RuntimeProfileTag, profile)
-      return Layer.mergeAll(extensionLayer, profileTagLayer)
+      // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
+      // can construct an EphemeralProfile via RuntimeComposer without forging
+      // the brand themselves. Only this composition root may call
+      // brandServerScope (lint-fenced).
+      const serverProfileLayer = Layer.succeed(
+        ServerProfileService,
+        brandServerScope({ cwd: profile.cwd, resolved: profile.resolved }),
+      )
+      return Layer.mergeAll(extensionLayer, profileTagLayer, serverProfileLayer)
     }),
   )
   // Extension registry needs storageLive for SqlClient (extension task layers use it)

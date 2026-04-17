@@ -1,15 +1,5 @@
-import {
-  Cause,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Fiber,
-  FileSystem,
-  Layer,
-  Schema,
-  Stream,
-} from "effect"
+import { Cause, DateTime, Duration, Effect, Fiber, FileSystem, Layer, Schema, Stream } from "effect"
+import type { Context } from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -46,15 +36,14 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { ToolRunner } from "./tool-runner.js"
 import type { Provider } from "../../providers/provider.js"
 import { ExtensionEventBus } from "../extensions/event-bus.js"
-import { WorkflowRuntime } from "../extensions/workflow-runtime.js"
-import { ExtensionTurnControl } from "../extensions/turn-control.js"
-import { DriverRegistry } from "../extensions/driver-registry.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
 import { ResourceManager, ResourceManagerLive } from "../resource-manager.js"
 import { buildExtensionLayers } from "../profile.js"
+import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
+import { RuntimeComposer, ownService } from "../composer.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -446,35 +435,41 @@ const makeSharedRunnerHelpers = (
 }
 
 /**
- * Build the layer for an ephemeral child run.
+ * Build the layer for an ephemeral child run via {@link RuntimeComposer}.
  *
  * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
  * registry/state-runtime/event-bus shape stays identical — extensions don't
  * "see" a different runtime when invoked from a child agent. Local-only
  * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
- * services) are merged on top in last-wins precedence.
+ * services) are declared via `.own(...)` so the composer derives the
+ * parent-omit set from the same list — no hand-maintained `Context.omit`
+ * drift bug.
  */
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
   parentServices: Context.Context<never>
+  parentProfile: ServerProfile
   extensionRegistry: ExtensionRegistryService
 }) => {
-  const parentLayer = Layer.succeedContext(params.parentServices)
   const resolved = params.extensionRegistry.getResolved()
-
-  // Same extension-side wiring as server / per-cwd resolver path.
   const extensionLayers = buildExtensionLayers(resolved)
 
-  // Ephemeral local-only services.
+  // Pre-resolve each owned service's layer so the composer can compose
+  // them without surfacing extra requirements. Parent services those
+  // layers depend on come from the parent context; the composer's omit-set
+  // keeps the parent's *instance* of the OWNED service from bleeding
+  // through.
+  const parentLayer = Layer.succeedContext(params.parentServices)
+
   const storageLayer = Storage.MemoryWithSql()
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const approvalLayer = ApprovalService.LiveAutoResolve
 
   // EventPublisher reaches into bus + state runtime + registry so extension
-  // subscriptions fire on local events. RuntimePlatform comes from parent.
-  // Order matters: parent first so locally-built `WorkflowRuntime`,
-  // `ExtensionEventBus`, registry win — otherwise the child silently uses
-  // the parent's state runtime and child events leak into parent reduction.
+  // subscriptions fire on local events. Parent first so locally-built
+  // `WorkflowRuntime`, `ExtensionEventBus`, registry win — otherwise the
+  // child silently uses the parent's state runtime and child events leak
+  // into parent reduction.
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
     Layer.mergeAll(parentLayer, eventStoreLayer, extensionLayers),
@@ -496,13 +491,40 @@ const buildEphemeralLayer = (params: {
   )
 
   const toolRunnerLayer = Layer.provide(ToolRunner.Live, Layer.merge(parentLayer, coreDeps))
-  const allDeps = Layer.mergeAll(coreDeps, toolRunnerLayer)
   const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
-    Layer.provide(Layer.merge(parentLayer, allDeps)),
+    Layer.provide(Layer.merge(parentLayer, Layer.merge(coreDeps, toolRunnerLayer))),
   )
 
-  // Parent first — local overrides (storage, events, approval, loop) take precedence.
-  return Layer.mergeAll(parentLayer, allDeps, loopLayer)
+  // Composer:
+  //   - .own(...) services drive the parent-omit set AND override parent on conflict
+  //   - .merge(...) layers contribute services without claiming a parent-omit slot
+  //
+  // The omit-list is now derived from this single declaration; adding a new
+  // ephemeral-local service requires only one update site.
+  const composed = RuntimeComposer.ephemeral({
+    parent: params.parentProfile,
+    parentServices: params.parentServices,
+  })
+    .own(
+      ownService(Storage, storageLayer),
+      ownService(BaseEventStore, eventStoreLayer),
+      ownService(EventStore, eventStoreLayer),
+      ownService(EventPublisher, eventPublisherLayer),
+      ownService(ApprovalService, approvalLayer),
+      ownService(PromptPresenter, promptPresenterLayer),
+      ownService(ResourceManager, ResourceManagerLive),
+      ownService(ToolRunner, toolRunnerLayer),
+      ownService(AgentLoop, loopLayer),
+    )
+    // Extension-side wiring fans out into many service identifiers
+    // (registry, workflow runtime, event bus, driver registry, plus each
+    // extension's setup.layer). The whole bundle merges as one — parent's
+    // versions of any of these would be the wrong runtime, but they're
+    // overwritten by extensionLayers' merge order.
+    .merge(extensionLayers)
+    .build()
+
+  return composed.layer
 }
 
 const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
@@ -523,6 +545,7 @@ const runEphemeralAgent = (params: {
   shared: ReturnType<typeof makeSharedRunnerHelpers>
   extensionRegistry: ExtensionRegistryService
   parentServices: Context.Context<never>
+  parentProfile: ServerProfile
   parentSessionId: SessionId
   parentBranchId: BranchId
   toolCallId?: ToolCallId
@@ -537,35 +560,13 @@ const runEphemeralAgent = (params: {
   const sessionId = SessionId.of(Bun.randomUUIDv7())
   const branchId = BranchId.of(Bun.randomUUIDv7())
   const normalizedRunSpec = params.runSpec
-  // Filter the parent's services so the child layer cannot inherit pre-built
-  // instances of services it owns locally. Forwarding the resolved
-  // `EventPublisher`/`Storage`/etc. caused the child's `yield* EventPublisher`
-  // to return the parent's instance — the local layer would never override
-  // because (1) `Layer.succeedContext` re-exposes parent values directly and
-  // (2) `EventPublisherLive` is the same `Layer` object in parent and child,
-  // so the parent's `MemoMap` (also forwarded) returned the memoized result.
-  // We strip both the resolved services and the memo map. `Layer.fresh` at the
-  // `Effect.provide` site below is a defense-in-depth for memo isolation.
-  const parentServicesForEphemeral = Context.omit(
-    Storage,
-    BaseEventStore,
-    EventStore,
-    EventPublisher,
-    AgentLoop,
-    ToolRunner,
-    ApprovalService,
-    PromptPresenter,
-    ResourceManager,
-    ExtensionRegistry,
-    WorkflowRuntime,
-    ExtensionEventBus,
-    ExtensionTurnControl,
-    DriverRegistry,
-    Layer.CurrentMemoMap,
-  )(params.parentServices)
+  // The composer derives the parent-omit set from its `.own(...)`
+  // declarations — the 14-item hand-maintained list is gone; adding a new
+  // owned service requires editing only one place (`buildEphemeralLayer`).
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
-    parentServices: parentServicesForEphemeral,
+    parentServices: params.parentServices,
+    parentProfile: params.parentProfile,
     extensionRegistry: params.extensionRegistry,
   })
 
@@ -744,7 +745,14 @@ export const InProcessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | BaseEventStore | EventStore | EventPublisher | AgentLoop | ExtensionRegistry | Provider
+  | Storage
+  | BaseEventStore
+  | EventStore
+  | EventPublisher
+  | AgentLoop
+  | ExtensionRegistry
+  | Provider
+  | ServerProfileService
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -755,6 +763,9 @@ export const InProcessRunner = (
       const loop = yield* AgentLoop
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+      // Server-scoped parent profile — type-level proof of origin for the
+      // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
+      const parentProfile = yield* ServerProfileService
 
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
@@ -828,6 +839,7 @@ export const InProcessRunner = (
               shared,
               extensionRegistry,
               parentServices,
+              parentProfile,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               toolCallId,
@@ -936,7 +948,13 @@ export const SubprocessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  Storage | BaseEventStore | EventStore | EventPublisher | ExtensionRegistry | Provider
+  | Storage
+  | BaseEventStore
+  | EventStore
+  | EventPublisher
+  | ExtensionRegistry
+  | Provider
+  | ServerProfileService
 > =>
   Layer.effect(
     AgentRunnerService,
@@ -946,6 +964,9 @@ export const SubprocessRunner = (
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(ExtensionEventBus)
+      // Server-scoped parent profile — type-level proof of origin for the
+      // composer's `RuntimeComposer.ephemeral({ parent, ... })` call below.
+      const parentProfile = yield* ServerProfileService
 
       // Capture full parent context — no manual enumeration needed
       const parentServices = yield* Effect.context()
@@ -979,6 +1000,7 @@ export const SubprocessRunner = (
               shared,
               extensionRegistry,
               parentServices,
+              parentProfile,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               toolCallId,

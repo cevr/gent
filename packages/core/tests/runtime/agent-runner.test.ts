@@ -33,6 +33,7 @@ import {
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ServerProfileService } from "@gent/core/runtime/scope-brands"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 
@@ -76,6 +77,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   BunServices.layer,
   Permission.Live([], "allow"),
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+  ServerProfileService.Test(),
 )
 
 describe("RunSpec", () => {

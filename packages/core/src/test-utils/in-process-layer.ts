@@ -24,6 +24,7 @@ import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
+import { ServerProfileService } from "../runtime/scope-brands.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -82,6 +83,10 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     providerAuthLive,
     Layer.provide(FallbackFileIndexLive, BunServices.layer),
     ResourceManagerLive,
+    // Server-scoped profile brand for `RuntimeComposer.ephemeral(...)` —
+    // tests don't construct a real server composition root, so the test
+    // layer fakes the brand with an empty extension set.
+    ServerProfileService.Test(),
     ...(config.extraLayers ?? []),
   )
 

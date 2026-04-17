@@ -24,21 +24,27 @@
  * @module
  */
 
-import type { Scope } from "effect"
-import type { ResolvedExtensions } from "./extensions/registry.js"
+import { Context, Layer } from "effect"
+import { resolveExtensions, type ResolvedExtensions } from "./extensions/registry.js"
 
 declare const ServerBrand: unique symbol
 declare const CwdBrand: unique symbol
 declare const EphemeralBrand: unique symbol
 
-/** A `Scope.Scope` that survives for the server process. */
-export type ServerScope = Scope.Scope & { readonly [ServerBrand]: true }
+/**
+ * Marker type stamping a profile as "owned by the server composition root."
+ *
+ * The brand is purely type-level — it carries no runtime payload. The live
+ * `Scope.Scope` instance lives separately inside the Effect runtime; the
+ * brand only exists so cross-scope composition fails to type-check.
+ */
+export type ServerScope = { readonly [ServerBrand]: true }
 
-/** A `Scope.Scope` owned by the per-cwd profile cache; survives as long as the cache entry. */
-export type CwdScope = Scope.Scope & { readonly [CwdBrand]: true }
+/** Marker type stamping a profile as "owned by the per-cwd profile cache." */
+export type CwdScope = { readonly [CwdBrand]: true }
 
-/** A `Scope.Scope` that survives for one ephemeral child run. */
-export type EphemeralScope = Scope.Scope & { readonly [EphemeralBrand]: true }
+/** Marker type stamping a profile as "ephemeral child-run." */
+export type EphemeralScope = { readonly [EphemeralBrand]: true }
 
 /**
  * A profile resolved against a `cwd`, parameterised by the scope-brand it owns.
@@ -46,11 +52,15 @@ export type EphemeralScope = Scope.Scope & { readonly [EphemeralBrand]: true }
  * Three concrete instantiations: {@link ServerProfile}, {@link CwdProfile},
  * {@link EphemeralProfile}. The `S` parameter prevents a `CwdProfile` from
  * being passed where an `EphemeralProfile` is required and vice-versa.
+ *
+ * The brand lives on the `__brand` slot (zero-cost phantom field). The live
+ * `Scope.Scope` instance is acquired separately at composition-root setup
+ * time; this profile is a pure data carrier.
  */
-export interface Profile<S extends Scope.Scope> {
+export interface Profile<S> {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
-  readonly scope: S
+  readonly __brand: S
 }
 
 export type ServerProfile = Profile<ServerScope>
@@ -58,29 +68,65 @@ export type CwdProfile = Profile<CwdScope>
 export type EphemeralProfile = Profile<EphemeralScope>
 
 /**
- * Brand a raw `Scope.Scope` as a {@link ServerScope}.
+ * Brand a `{ cwd, resolved }` payload as a {@link ServerProfile}.
  *
  * **Restricted**: only the server composition root (`packages/core/src/server/dependencies.ts`)
- * may call this. Other call sites must receive a `ServerScope` from above.
+ * may call this. Lint rule `gent/brand-constructor-callers` enforces.
  */
-export const brandServerScope = (scope: Scope.Scope): ServerScope =>
+export const brandServerScope = (profile: {
+  cwd: string
+  resolved: ResolvedExtensions
+}): ServerProfile =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  scope as ServerScope
+  ({ ...profile, __brand: undefined as unknown as ServerScope }) as ServerProfile
 
 /**
- * Brand a raw `Scope.Scope` as a {@link CwdScope}.
+ * Brand a `{ cwd, resolved }` payload as a {@link CwdProfile}.
  *
  * **Restricted**: only `session-profile.ts` (the per-cwd profile cache) may call this.
  */
-export const brandCwdScope = (scope: Scope.Scope): CwdScope =>
+export const brandCwdScope = (profile: { cwd: string; resolved: ResolvedExtensions }): CwdProfile =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  scope as CwdScope
+  ({ ...profile, __brand: undefined as unknown as CwdScope }) as CwdProfile
 
 /**
- * Brand a raw `Scope.Scope` as an {@link EphemeralScope}.
+ * Brand a `{ cwd, resolved }` payload as an {@link EphemeralProfile}.
  *
- * **Restricted**: only `agent-runner.ts` (the ephemeral child-run path) may call this.
+ * **Restricted**: only `agent-runner.ts` (and the `RuntimeComposer.ephemeral`
+ * builder it consumes) may call this.
  */
-export const brandEphemeralScope = (scope: Scope.Scope): EphemeralScope =>
+export const brandEphemeralScope = (profile: {
+  cwd: string
+  resolved: ResolvedExtensions
+}): EphemeralProfile =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  scope as EphemeralScope
+  ({ ...profile, __brand: undefined as unknown as EphemeralScope }) as EphemeralProfile
+
+/**
+ * Service tag carrying the {@link ServerProfile} for the running server
+ * composition root. Published by `server/dependencies.ts` at startup; read by
+ * the agent-runner (and other consumers that need a typed proof-of-origin
+ * when calling `RuntimeComposer.ephemeral(...)`).
+ *
+ * Why a service tag instead of a function-arg: the consumer (agent-runner)
+ * lives downstream of the composition root and shouldn't have to thread the
+ * profile through every constructor. Effect services are exactly the
+ * mechanism for "constructed once, read where needed."
+ */
+export class ServerProfileService extends Context.Service<ServerProfileService, ServerProfile>()(
+  "@gent/core/src/runtime/scope-brands/ServerProfileService",
+) {
+  /**
+   * Test layer providing a minimal {@link ServerProfile} (empty extensions,
+   * caller-supplied cwd) for unit/integration tests that exercise the
+   * agent-runner without spinning up a full server composition root.
+   */
+  static Test = (cwd = "/tmp"): Layer.Layer<ServerProfileService> =>
+    Layer.succeed(
+      ServerProfileService,
+      brandServerScope({
+        cwd,
+        resolved: resolveExtensions([]),
+      }),
+    )
+}

@@ -561,7 +561,9 @@ const plugin: Plugin = {
      * Authorised callers:
      *   - `brandServerScope`     → `packages/core/src/server/dependencies.ts`
      *   - `brandCwdScope`        → `packages/core/src/runtime/session-profile.ts`
-     *   - `brandEphemeralScope`  → `packages/core/src/runtime/agent/agent-runner.ts`
+     *   - `brandEphemeralScope`  → `packages/core/src/runtime/composer.ts`
+     *     (the only sanctioned ephemeral-profile factory; `agent-runner.ts`
+     *     calls it via `RuntimeComposer.ephemeral(...).build()`)
      *
      * The rule also exempts the `scope-brands.ts` module itself (where the
      * functions are defined) and tests.
@@ -576,7 +578,7 @@ const plugin: Plugin = {
         const ALLOWED: Record<string, RegExp> = {
           brandServerScope: /\/server\/dependencies\.ts$/,
           brandCwdScope: /\/runtime\/session-profile\.ts$/,
-          brandEphemeralScope: /\/runtime\/agent\/agent-runner\.ts$/,
+          brandEphemeralScope: /\/runtime\/composer\.ts$/,
         }
         return {
           CallExpression(node) {
