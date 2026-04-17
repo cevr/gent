@@ -2,21 +2,20 @@
  * RuntimeProfileResolver — single discover/setup/reconcile pipeline used by
  * every composition root that needs to *discover* extensions.
  *
- * Two callers historically built the same `{ resolved extensions, prompt sections,
- * scheduled jobs }` shape independently and are now unified here:
+ * Three callers build the same `{ registry, state-runtime, event-bus }` shape
+ * via the same `buildExtensionLayers` substrate:
  *
  *   1. Server startup (`packages/core/src/server/dependencies.ts`)
+ *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
  *   2. Per-cwd profile cache (`packages/core/src/runtime/session-profile.ts`)
+ *      → calls `resolveRuntimeProfile` + `buildExtensionLayers`
+ *   3. Ephemeral child runs (`packages/core/src/runtime/agent/agent-runner.ts`)
+ *      → forwards parent's already-resolved `ExtensionRegistry` (same cwd, no
+ *        rediscovery needed) + calls `buildExtensionLayers(registry.getResolved())`
  *
- * Both pair `resolveRuntimeProfile` with `buildExtensionLayers` so they end up
- * with the same registry/state-runtime/event-bus shape — no more drift like
- * the per-cwd path silently dropping bus subscriptions.
- *
- * Ephemeral child runs (`packages/core/src/runtime/agent/agent-runner.ts`)
- * intentionally do NOT call this resolver: they forward an already-resolved
- * `ExtensionRegistry` from the parent and only re-build event bus / state
- * runtime locally to isolate per-run mutable state. That divergence is
- * structural, not duplication, and is documented at the call site.
+ * All three end up with the same registry/state-runtime/event-bus shape —
+ * no more drift like the per-cwd path silently dropping bus subscriptions
+ * and no more drift between ephemeral and server runtimes.
  *
  * Per `subtract-before-you-add` and `foundational-thinking`: collapse parallel
  * construction paths into a single substrate; downstream code becomes obvious.
@@ -96,7 +95,8 @@ export interface RuntimeProfile {
  *   - per-cwd cache: invoke per unique cwd, cache by canonical path.
  *
  * Ephemeral runs do not call this — they forward `ExtensionRegistry` from
- * the parent. See module doc.
+ * the parent (same cwd, no rediscovery needed) and call `buildExtensionLayers`
+ * directly on the forwarded `ResolvedExtensions`.
  *
  * Requires `Scope.Scope` because `reconcileLoadedExtensions` registers
  * scope-tied finalizers (extension `onShutdown` and scheduled jobs).
@@ -236,10 +236,10 @@ export const compileBaseSections = (
  * Build the extension-side layers (registry, state runtime, event bus,
  * extension-contributed services) from a resolved profile.
  *
- * Used by the server composition root. Ephemeral runs in
- * `runtime/agent/agent-runner.ts` build a similar shape but forward the
- * registry from the parent (read-only) rather than rebuilding it; that
- * intentional divergence is documented at the call site.
+ * Used by the server composition root, the per-cwd cache, and the ephemeral
+ * child-run path. Ephemeral runs forward the parent's already-resolved
+ * `ResolvedExtensions` (same cwd) instead of re-discovering, but they then
+ * call this same builder so the wiring shape is identical.
  */
 export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   const extensionLayers = resolved.extensions

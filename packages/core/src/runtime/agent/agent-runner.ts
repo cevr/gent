@@ -1,17 +1,15 @@
 import {
   Cause,
+  Context,
   DateTime,
   Duration,
   Effect,
-  Exit,
   Fiber,
   FileSystem,
   Layer,
-  ManagedRuntime,
   Schema,
   Stream,
 } from "effect"
-import type { Context } from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -45,17 +43,18 @@ import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { DriverRegistry } from "../extensions/driver-registry.js"
 import { ToolRunner } from "./tool-runner.js"
 import type { Provider } from "../../providers/provider.js"
-import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { ExtensionEventBus } from "../extensions/event-bus.js"
+import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
+import { DriverRegistry } from "../extensions/driver-registry.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
-import { ResourceManagerLive } from "../resource-manager.js"
+import { ResourceManager, ResourceManagerLive } from "../resource-manager.js"
+import { buildExtensionLayers } from "../profile.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -446,101 +445,64 @@ const makeSharedRunnerHelpers = (
   }
 }
 
+/**
+ * Build the layer for an ephemeral child run.
+ *
+ * Reuses `buildExtensionLayers` (the same builder used by server / per-cwd) so
+ * registry/state-runtime/event-bus shape stays identical — extensions don't
+ * "see" a different runtime when invoked from a child agent. Local-only
+ * concerns (in-memory storage, auto-resolve approval, prompt presenter, loop
+ * services) are merged on top in last-wins precedence.
+ */
 const buildEphemeralLayer = (params: {
   config: AgentRunnerConfig
   parentServices: Context.Context<never>
   extensionRegistry: ExtensionRegistryService
 }) => {
   const parentLayer = Layer.succeedContext(params.parentServices)
-
   const resolved = params.extensionRegistry.getResolved()
 
-  // Ephemeral storage (in-memory SQLite — discarded after run)
+  // Same extension-side wiring as server / per-cwd resolver path.
+  const extensionLayers = buildExtensionLayers(resolved)
+
+  // Ephemeral local-only services.
   const storageLayer = Storage.MemoryWithSql()
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
-
-  // Extension runtime — rebuilt locally to avoid cross-wiring parent's TurnControl
-  const extensionTurnControlLayer = ExtensionTurnControl.Live
-  const extensionStateRuntimeLayer = ExtensionStateRuntime.Live(resolved.extensions).pipe(
-    Layer.provide(extensionTurnControlLayer),
-  )
-
-  // Bus subscriptions for local extension actor routing
-  const busSubscriptions = resolved.extensions.flatMap((ext) =>
-    (ext.setup.busSubscriptions ?? []).map((sub) => ({
-      pattern: sub.pattern,
-      handler: sub.handler,
-    })),
-  )
-  const extensionEventBusLayer = ExtensionEventBus.withSubscriptions(busSubscriptions)
-
-  // Non-interactive approval (auto-approve all, cancel ask-user)
   const approvalLayer = ApprovalService.LiveAutoResolve
 
-  // Registry (forwarded from parent — read-only resolved data)
-  const registryLayer = Layer.succeed(ExtensionRegistry, params.extensionRegistry)
-  const driverRegistryLayer = DriverRegistry.fromResolved({
-    modelDrivers: resolved.modelDrivers,
-    externalDrivers: resolved.externalDrivers,
-  })
-
-  // Event publisher on ephemeral storage — must include bus so extension subscriptions fire.
-  // RuntimePlatform comes from the parent context (forwarded via parentLayer); EventPublisherLive
-  // requires it for projection cwd/home (no ambient process state in core runtime).
+  // EventPublisher reaches into bus + state runtime + registry so extension
+  // subscriptions fire on local events. RuntimePlatform comes from parent.
+  // Order matters: parent first so locally-built `ExtensionStateRuntime`,
+  // `ExtensionEventBus`, registry win — otherwise the child silently uses
+  // the parent's state runtime and child events leak into parent reduction.
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
-    Layer.mergeAll(
-      eventStoreLayer,
-      extensionStateRuntimeLayer,
-      extensionEventBusLayer,
-      registryLayer,
-      parentLayer,
-    ),
+    Layer.mergeAll(parentLayer, eventStoreLayer, extensionLayers),
   )
 
-  // PromptPresenter built on auto-resolve ApprovalService — parent first so local approval wins
   const promptPresenterLayer = Layer.provide(
     PromptPresenter.Live,
     Layer.mergeAll(parentLayer, approvalLayer),
   )
 
-  // Extension-contributed layers (forwarded from parent — these are startup-built, typically read-only)
-  const extensionLayers = resolved.extensions
-    .filter((ext) => ext.setup.layer !== undefined)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    .map((ext) => ext.setup.layer as Layer.Layer<any>)
-
-  // Core deps for AgentLoop + ToolRunner
   const coreDeps = Layer.mergeAll(
     storageLayer,
     eventStoreLayer,
     eventPublisherLayer,
-    registryLayer,
-    driverRegistryLayer,
-    extensionStateRuntimeLayer,
-    extensionTurnControlLayer,
-    extensionEventBusLayer,
+    extensionLayers,
     approvalLayer,
     promptPresenterLayer,
     ResourceManagerLive,
   )
 
-  // ToolRunner rebuilt locally — parent first so local coreDeps (ApprovalService, Storage, etc.) win
   const toolRunnerLayer = Layer.provide(ToolRunner.Live, Layer.merge(parentLayer, coreDeps))
-
   const allDeps = Layer.mergeAll(coreDeps, toolRunnerLayer)
   const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
     Layer.provide(Layer.merge(parentLayer, allDeps)),
   )
 
-  // Parent first — local overrides (storage, events, approval, loop) take precedence
-  const base = Layer.mergeAll(parentLayer, allDeps, loopLayer)
-  if (extensionLayers.length === 0) return base
-  let result = base
-  for (const extLayer of extensionLayers) {
-    result = Layer.provideMerge(extLayer, result)
-  }
-  return result
+  // Parent first — local overrides (storage, events, approval, loop) take precedence.
+  return Layer.mergeAll(parentLayer, allDeps, loopLayer)
 }
 
 const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
@@ -575,13 +537,37 @@ const runEphemeralAgent = (params: {
   const sessionId = SessionId.of(Bun.randomUUIDv7())
   const branchId = BranchId.of(Bun.randomUUIDv7())
   const normalizedRunSpec = params.runSpec
+  // Filter the parent's services so the child layer cannot inherit pre-built
+  // instances of services it owns locally. Forwarding the resolved
+  // `EventPublisher`/`Storage`/etc. caused the child's `yield* EventPublisher`
+  // to return the parent's instance — the local layer would never override
+  // because (1) `Layer.succeedContext` re-exposes parent values directly and
+  // (2) `EventPublisherLive` is the same `Layer` object in parent and child,
+  // so the parent's `MemoMap` (also forwarded) returned the memoized result.
+  // We strip both the resolved services and the memo map. `Layer.fresh` at the
+  // `Effect.provide` site below is a defense-in-depth for memo isolation.
+  const parentServicesForEphemeral = Context.omit(
+    Storage,
+    BaseEventStore,
+    EventStore,
+    EventPublisher,
+    AgentLoop,
+    ToolRunner,
+    ApprovalService,
+    PromptPresenter,
+    ResourceManager,
+    ExtensionRegistry,
+    ExtensionStateRuntime,
+    ExtensionEventBus,
+    ExtensionTurnControl,
+    DriverRegistry,
+    Layer.CurrentMemoMap,
+  )(params.parentServices)
   const ephemeralLayer = buildEphemeralLayer({
     config: params.runnerConfig,
-    parentServices: params.parentServices,
+    parentServices: parentServicesForEphemeral,
     extensionRegistry: params.extensionRegistry,
   })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-  const ephemeralRuntime = ManagedRuntime.make(ephemeralLayer as Layer.Layer<any>)
 
   const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
     params.runnerConfig.timeoutMs === undefined
@@ -608,6 +594,78 @@ const runEphemeralAgent = (params: {
     })
   }
 
+  const childRun = Effect.gen(function* () {
+    const localStorage = yield* Storage
+    const localEventStore = yield* EventStore
+    const localEventPublisher = yield* EventPublisher
+    const localLoop = yield* AgentLoop
+    const now = yield* DateTime.nowAsDate
+
+    yield* localStorage.createSession(
+      new Session({
+        id: sessionId,
+        name: `${params.agentName}: ${params.prompt.slice(0, 60)}`,
+        cwd: params.cwd,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    yield* localStorage.createBranch(
+      new Branch({
+        id: branchId,
+        sessionId,
+        createdAt: now,
+      }),
+    )
+
+    const mirrorFiber = yield* Effect.forkChild(
+      localEventStore.subscribe({ sessionId }).pipe(
+        Stream.runForEach((envelope) =>
+          shouldMirrorEphemeralChildEvent(envelope.event)
+            ? params.parentBaseEventStore.publish(envelope.event).pipe(
+                Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)),
+                Effect.catchEager(() => Effect.void),
+              )
+            : Effect.void,
+        ),
+        Effect.catchEager(() => Effect.void),
+      ),
+    )
+    yield* localEventPublisher.publish(
+      new AgentSwitched({
+        sessionId,
+        branchId,
+        fromAgent: DEFAULT_AGENT_NAME,
+        toAgent: params.agentName,
+      }),
+    )
+
+    return yield* Effect.gen(function* () {
+      const runSpec: RunSpec | undefined =
+        params.toolCallId !== undefined
+          ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
+          : normalizedRunSpec
+      yield* runWithTimeout(
+        localLoop.runOnce({
+          sessionId,
+          branchId,
+          agentName: params.agentName,
+          prompt: params.prompt,
+          interactive: false,
+          ...(runSpec !== undefined ? { runSpec } : {}),
+        }),
+      )
+
+      return yield* loadAgentRunSuccessData({
+        storage: localStorage,
+        branchId,
+        sessionId,
+        agentName: params.agentName,
+        persistence: params.persistence,
+      })
+    }).pipe(Effect.ensuring(Fiber.interrupt(mirrorFiber)))
+  })
+
   const run = Effect.gen(function* () {
     yield* WideEvent.set({ childSessionId: sessionId })
 
@@ -621,89 +679,20 @@ const runEphemeralAgent = (params: {
       prompt: params.prompt,
     })
 
-    const result = yield* Effect.acquireUseRelease(
-      Effect.succeed(ephemeralRuntime),
-      (runtime) =>
-        Effect.promise(() =>
-          runtime.runPromiseExit(
-            Effect.gen(function* () {
-              const localStorage = yield* Storage
-              const localEventStore = yield* EventStore
-              const localEventPublisher = yield* EventPublisher
-              const localLoop = yield* AgentLoop
-              const now = yield* DateTime.nowAsDate
-
-              yield* localStorage.createSession(
-                new Session({
-                  id: sessionId,
-                  name: `${params.agentName}: ${params.prompt.slice(0, 60)}`,
-                  cwd: params.cwd,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              )
-              yield* localStorage.createBranch(
-                new Branch({
-                  id: branchId,
-                  sessionId,
-                  createdAt: now,
-                }),
-              )
-
-              const mirrorFiber = yield* Effect.forkChild(
-                localEventStore.subscribe({ sessionId }).pipe(
-                  Stream.runForEach((envelope) =>
-                    shouldMirrorEphemeralChildEvent(envelope.event)
-                      ? params.parentBaseEventStore.publish(envelope.event).pipe(
-                          Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)),
-                          Effect.catchEager(() => Effect.void),
-                        )
-                      : Effect.void,
-                  ),
-                  Effect.catchEager(() => Effect.void),
-                ),
-              )
-              yield* localEventPublisher.publish(
-                new AgentSwitched({
-                  sessionId,
-                  branchId,
-                  fromAgent: DEFAULT_AGENT_NAME,
-                  toAgent: params.agentName,
-                }),
-              )
-
-              return yield* Effect.gen(function* () {
-                const runSpec: RunSpec | undefined =
-                  params.toolCallId !== undefined
-                    ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
-                    : normalizedRunSpec
-                yield* runWithTimeout(
-                  localLoop.runOnce({
-                    sessionId,
-                    branchId,
-                    agentName: params.agentName,
-                    prompt: params.prompt,
-                    interactive: false,
-                    ...(runSpec !== undefined ? { runSpec } : {}),
-                  }),
-                )
-
-                return yield* loadAgentRunSuccessData({
-                  storage: localStorage,
-                  branchId,
-                  sessionId,
-                  agentName: params.agentName,
-                  persistence: params.persistence,
-                })
-              }).pipe(Effect.ensuring(Fiber.interrupt(mirrorFiber)))
-            }),
-          ),
-        ).pipe(
-          Effect.flatMap((exit) =>
-            Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.succeed(exit.value),
-          ),
-        ),
-      (runtime) => Effect.promise(() => runtime.dispose()).pipe(Effect.orDie),
+    // Ephemeral child run is its own composition root — provide the per-run
+    // layer (in-memory storage, auto-resolve approval, fresh AgentLoop) and
+    // wrap in `Effect.scoped` so the layer's resources release deterministically
+    // when the child finishes/interrupts.
+    //
+    // `Layer.fresh` forces a fresh memo map for the child build so layers like
+    // `EventPublisherLive` are constructed against the child's local
+    // dependencies instead of being reused from the parent's memo map (the
+    // parent's layer object identity is the same as the child's).
+    const result = yield* childRun.pipe(
+      // @effect-diagnostics-next-line strictEffectProvide:off — ephemeral runtime composition root
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      Effect.provide(Layer.fresh(ephemeralLayer as Layer.Layer<any>)),
+      Effect.scoped,
     )
 
     // Save full output to disk (runs in parent context where FileSystem is available)
