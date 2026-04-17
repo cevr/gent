@@ -14,12 +14,7 @@ import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 class ActorDefectError extends Schema.TaggedErrorClass<ActorDefectError>()("ActorDefectError", {
   message: Schema.String,
 }) {}
-import {
-  type ExtensionActorDefinition,
-  type ExtensionTurnContext,
-  type TurnProjection,
-  type PromptSection,
-} from "@gent/core/extensions/api"
+import { type ExtensionActorDefinition } from "@gent/core/extensions/api"
 import {
   ExecutorEndpoint,
   ExecutorMcpInspection,
@@ -29,7 +24,7 @@ import {
 } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
-import { ExecutorProtocol } from "./protocol.js"
+import { ExecutorProtocol, ExecutorSnapshotReply } from "./protocol.js"
 
 // ── States ──
 
@@ -61,6 +56,9 @@ const MachineEvent = MEvent({
   },
   ConnectionFailed: { message: Schema.String },
   Disconnect: {},
+  /** Pure read for the projection. Reply carries enough to drive both prompt
+   *  injection (executorPrompt) and tool gating (status). */
+  GetSnapshot: MEvent.reply({}, ExecutorSnapshotReply),
 })
 type MachineEvent = typeof MachineEvent.Type
 
@@ -113,6 +111,26 @@ const executorMachine = Machine.make({
   )
   // Ready + Disconnect → Idle
   .on(MachineState.Ready, MachineEvent.Disconnect, () => MachineState.Idle)
+  // GetSnapshot — pure read per state
+  .on(MachineState.Idle, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, { status: "idle" } satisfies ExecutorSnapshotReply),
+  )
+  .on(MachineState.Connecting, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, { status: "connecting" } satisfies ExecutorSnapshotReply),
+  )
+  .on(MachineState.Ready, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, {
+      status: "ready",
+      baseUrl: state.baseUrl,
+      executorPrompt: state.executorPrompt,
+    } satisfies ExecutorSnapshotReply),
+  )
+  .on(MachineState.Error, MachineEvent.GetSnapshot, ({ state }) =>
+    Machine.reply(state, {
+      status: "error",
+      errorMessage: state.message,
+    } satisfies ExecutorSnapshotReply),
+  )
   // ── Spawn: connection work on Connecting entry ──
   .spawn(MachineState.Connecting, ({ self, slots, state }) =>
     Effect.gen(function* () {
@@ -144,59 +162,15 @@ const executorMachine = Machine.make({
     ),
   )
 
-// ── Prompt builder ──
-
-const buildExecutorPrompt = (instructions: string): string =>
-  [
-    "## Executor Runtime",
-    "",
-    "You have access to the `execute` tool which runs TypeScript in a sandboxed runtime with configured API tools.",
-    "",
-    "### Executor Instructions",
-    instructions,
-    "",
-    "### Usage Tips",
-    "- Use `tools.search({ query })` inside execute to discover available API tools.",
-    "- Use `tools.describe.tool({ path })` to get TypeScript shapes before calling.",
-    "- If execution pauses for approval, use the `resume` tool with the returned executionId.",
-  ].join("\n")
-
-// ── Projections ──
-
-export const projectSnapshot = (state: MachineState): ExecutorUiModel => {
-  switch (state._tag) {
-    case "Idle":
-      return { status: "idle" }
-    case "Connecting":
-      return { status: "connecting" }
-    case "Ready":
-      return { status: "ready", mode: state.mode, baseUrl: state.baseUrl }
-    case "Error":
-      return { status: "error", errorMessage: state.message }
-  }
-}
-
-const projectTurn = (state: MachineState, _ctx: ExtensionTurnContext): TurnProjection => {
-  if (state._tag !== "Ready") {
-    return { toolPolicy: { exclude: ["execute", "resume"] } }
-  }
-  const sections: PromptSection[] = []
-  if (state.executorPrompt) {
-    sections.push({
-      id: "executor-guidance",
-      content: buildExecutorPrompt(state.executorPrompt),
-      priority: 85,
-    })
-  }
-  return { promptSections: sections }
-}
+// Prompt section building lives in `executor/projection.ts` — the projection
+// reads the workflow's typed snapshot and produces the executor-guidance
+// prompt section (only when `status === "ready"`).
 
 // ── Actor config (exported for pure reducer tests) ──
 
 export const ExecutorActorConfig = {
   id: EXECUTOR_EXTENSION_ID,
   initial: MachineState.Idle,
-  derive: (state: MachineState, ctx?: ExtensionTurnContext) => (ctx ? projectTurn(state, ctx) : {}),
   reduce: (state: MachineState, event: MachineEvent): { state: MachineState } => {
     if (state._tag === "Idle" && event._tag === "Connect") {
       return { state: MachineState.Connecting({ cwd: event.cwd }) }
@@ -255,12 +229,10 @@ export const executorActor: ExtensionActorDefinition<
         return undefined
     }
   },
-  snapshot: {
-    schema: ExecutorUiModel,
-    project: projectSnapshot,
-  },
-  turn: {
-    project: projectTurn,
+  mapRequest: (message) => {
+    if (message.extensionId !== EXECUTOR_EXTENSION_ID) return undefined
+    if (message._tag === "GetSnapshot") return MachineEvent.GetSnapshot
+    return undefined
   },
   stateSchema: MachineState.schema,
   protocols: ExecutorProtocol,

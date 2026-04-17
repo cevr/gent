@@ -246,18 +246,6 @@ export interface TurnProjection {
   readonly promptSections?: ReadonlyArray<PromptSection>
 }
 
-export interface ExtensionActorSnapshotConfig<State = unknown> {
-  /** Optional runtime validation for the public snapshot payload. */
-  readonly schema?: Schema.Schema<unknown>
-  /** If omitted, runtime uses actor state as the public snapshot. */
-  readonly project?: (state: State) => unknown
-}
-
-export interface ExtensionActorTurnConfig<State = unknown> {
-  /** Derive turn directives from actor state. Pure projection only. */
-  readonly project: (state: State, ctx: ExtensionTurnContext) => TurnProjection
-}
-
 // Extension Actor — OTP-inspired unified state model
 
 /** Typed effect union interpreted by the framework after actor transitions */
@@ -328,8 +316,6 @@ export interface ExtensionActorDefinition<
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
   readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
   readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
-  readonly snapshot?: ExtensionActorSnapshotConfig<State>
-  readonly turn?: ExtensionActorTurnConfig<State>
   /** State schema enables persistence — if set, the actor's state is persisted
    *  via effect-machine's Recovery + Durability lifecycle. */
   readonly stateSchema?: Schema.Schema<State>

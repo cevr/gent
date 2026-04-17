@@ -18,7 +18,6 @@ import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domai
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
-import { AUTO_EXTENSION_ID } from "@gent/extensions/auto"
 import { AutoProtocol } from "@gent/extensions/auto-protocol"
 
 const sessionId = SessionId.of("auto-e2e-session")
@@ -96,10 +95,12 @@ describe("Auto extension E2E", () => {
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-          const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
-          if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
-          expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
+          const model = (yield* stateRuntime.ask(
+            sessionId,
+            AutoProtocol.GetSnapshot(),
+            branchId,
+          )) as { active: boolean }
+          expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(3)
           yield* controls.assertDone()
         }),
@@ -143,10 +144,12 @@ describe("Auto extension E2E", () => {
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-          const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
-          if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
-          expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
+          const model = (yield* stateRuntime.ask(
+            sessionId,
+            AutoProtocol.GetSnapshot(),
+            branchId,
+          )) as { active: boolean }
+          expect(model.active).toBe(false)
           expect(yield* controls.callCount).toBe(7)
           yield* controls.assertDone()
         }),
@@ -245,10 +248,12 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage(`follow-up ${i + 1}`))
         }
 
-        const snapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const autoSnapshot = snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
-        if (autoSnapshot === undefined) throw new Error("auto snapshot not found")
-        expect((autoSnapshot.model as { active: boolean }).active).toBe(false)
+        const model = (yield* stateRuntime.ask(
+          sessionId,
+          AutoProtocol.GetSnapshot(),
+          branchId,
+        )) as { active: boolean }
+        expect(model.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
@@ -288,10 +293,11 @@ describe("Auto extension E2E", () => {
         yield* controls.waitForCall(1)
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
-        const midSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const midAuto = midSnapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
-        if (midAuto === undefined) throw new Error("mid-sequence auto snapshot not found")
-        const midModel = midAuto.model as { active: boolean; phase?: string }
+        const midModel = (yield* stateRuntime.ask(
+          sessionId,
+          AutoProtocol.GetSnapshot(),
+          branchId,
+        )) as { active: boolean; phase?: string }
         expect(midModel.active).toBe(true)
         expect(midModel.phase).toBe("working")
 
@@ -302,10 +308,12 @@ describe("Auto extension E2E", () => {
         yield* Fiber.join(runFiber)
 
         // Final state: auto is inactive
-        const finalSnapshots = yield* stateRuntime.getUiSnapshots(sessionId, branchId)
-        const finalAuto = finalSnapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
-        if (finalAuto === undefined) throw new Error("final auto snapshot not found")
-        expect((finalAuto.model as { active: boolean }).active).toBe(false)
+        const finalModel = (yield* stateRuntime.ask(
+          sessionId,
+          AutoProtocol.GetSnapshot(),
+          branchId,
+        )) as { active: boolean }
+        expect(finalModel.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),
   )

@@ -103,15 +103,6 @@ describe("TaskProjection", () => {
       expect(all.tasks.map((t) => t.id).sort()).toEqual(["on-b1", "on-b2"])
     }))
 
-  test("ui projection passes value through unchanged (matches TaskUiModel shape)", () =>
-    Effect.gen(function* () {
-      const { taskStorage } = yield* setup
-      yield* taskStorage.createTask(makeTask("t1", branchId, "completed"))
-      const value = yield* TaskProjection.query(ctx(branchId))
-      const projected = TaskProjection.ui!.project(value)
-      expect(projected).toEqual(value)
-    }))
-
   test("projection id is stable for collision detection", () =>
     Effect.sync(() => {
       expect(TaskProjection.id).toBe("task-list")

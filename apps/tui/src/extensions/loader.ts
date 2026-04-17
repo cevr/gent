@@ -50,6 +50,10 @@ const importExtension = async (
  * @param opts.builtins — pre-imported builtin modules (static imports for bundler reachability)
  * @param opts.disabled — extension ids to skip (applies to builtins and discovered alike).
  *   Discovered extensions are imported to read their id, but setup() is skipped when disabled.
+ *
+ * `makeCtx(id)` returns a fresh `ExtensionClientContext` whose `getSnapshotRaw`
+ * reads the cache slot for that specific extension id (so paired packages
+ * narrow correctly to their own snapshot shape).
  */
 export const loadTuiExtensions = async (
   opts: {
@@ -57,17 +61,27 @@ export const loadTuiExtensions = async (
     readonly userDir: string
     readonly projectDir: string
     readonly disabled?: ReadonlyArray<string>
+    /** Called once per discovered module (builtin or external) before setup runs.
+     *  Lets the caller register snapshot sources, etc., before contributions execute. */
+    readonly onModuleLoaded?: (module: ExtensionClientModule) => void
   },
-  ctx: ExtensionClientContext,
+  makeCtx: (extensionId: string) => ExtensionClientContext,
+  fs: ExtensionClientContext["fs"],
+  path: ExtensionClientContext["path"],
 ): Promise<ResolvedTuiExtensions> => {
   const disabledSet = new Set(opts.disabled ?? [])
-  const discovered = await discoverTuiExtensions(opts, ctx.fs, ctx.path)
+  const discovered = await discoverTuiExtensions(opts, fs, path)
 
   // Import user/project modules, then filter by disabled before calling setup()
   const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))
   const enabled = imported
     .filter((r): r is ImportedExtension => r !== undefined)
     .filter((r) => !disabledSet.has(r.module.id))
+
+  // Notify caller of every enabled discovered module before setup runs.
+  for (const r of enabled) {
+    opts.onModuleLoaded?.(r.module)
+  }
 
   // Builtins: pre-imported, just filter disabled and call setup()
   const builtinLoaded: LoadedTuiExtension[] = (opts.builtins ?? [])
@@ -76,14 +90,14 @@ export const loadTuiExtensions = async (
       id: ext.id,
       kind: "builtin" as const,
       filePath: `builtin:${ext.id}`,
-      contributions: ext.setup(ctx),
+      contributions: ext.setup(makeCtx(ext.id)),
     }))
 
   const externalLoaded: LoadedTuiExtension[] = enabled.map((ext) => ({
     id: ext.module.id,
     kind: ext.kind,
     filePath: ext.filePath,
-    contributions: ext.module.setup(ctx),
+    contributions: ext.module.setup(makeCtx(ext.module.id)),
   }))
 
   const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])

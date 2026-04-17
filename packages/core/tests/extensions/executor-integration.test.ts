@@ -47,9 +47,9 @@ const makeToolCtx = (snapshot: ExecutorUiModel | undefined) =>
   testToolContext({
     extension: {
       send: () => Effect.void,
-      ask: () => Effect.die("not wired"),
-      getUiSnapshots: () => Effect.succeed([]),
-      getUiSnapshot: <T>(_id: string) => Effect.succeed(snapshot as T | undefined),
+      ask: () => Effect.succeed(snapshot as never),
+      query: () => Effect.die("not wired"),
+      mutate: () => Effect.die("not wired"),
     },
   })
 
@@ -128,16 +128,13 @@ const waitForExecutorStatus = (
   status: ExecutorUiModel["status"],
 ) =>
   waitFor(
-    runtime.getUiSnapshots(sessionId, branchId),
-    (snaps) => {
-      const model = snaps.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)?.model as
-        | ExecutorUiModel
-        | undefined
-      return model?.status === status
-    },
+    runtime
+      .ask(sessionId, ExecutorProtocol.GetSnapshot(), branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined as ExecutorUiModel | undefined))),
+    (snap) => (snap as ExecutorUiModel | undefined)?.status === status,
     3_000,
     `executor status = ${status}`,
-  ).pipe(Effect.catchEager(() => Effect.succeed([] as never)))
+  ).pipe(Effect.catchEager(() => Effect.succeed(undefined as never)))
 
 // ── Tool tests ──
 
@@ -283,12 +280,12 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-        expect(executor).toBeDefined()
-        const model = executor!.model as ExecutorUiModel
+        const model = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(model.status).toBe("ready")
-        expect(model.mode).toBe("local")
         expect(model.baseUrl).toBe("http://127.0.0.1:4788")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
     },
@@ -310,10 +307,11 @@ describe("Executor actor lifecycle", () => {
         // autoStart=false means no Connect is sent — actor stays Idle.
         yield* waitForExecutorStatus(runtime, "idle")
 
-        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-        expect(executor).toBeDefined()
-        const model = executor!.model as ExecutorUiModel
+        const model = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(model.status).toBe("idle")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
     },
@@ -339,10 +337,11 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "error")
 
-        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-        expect(executor).toBeDefined()
-        const model = executor!.model as ExecutorUiModel
+        const model = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(model.status).toBe("error")
         expect(model.errorMessage).toBeDefined()
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
@@ -365,9 +364,11 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "idle")
 
         // Verify idle
-        const before = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const beforeModel = before.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const beforeModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(beforeModel.status).toBe("idle")
 
         // Send Connect command
@@ -375,9 +376,11 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const after = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const afterModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
     },
@@ -399,9 +402,11 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "ready")
 
         // Verify ready
-        const before = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const beforeModel = before.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const beforeModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(beforeModel.status).toBe("ready")
 
         // Send disconnect
@@ -409,9 +414,11 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "idle")
 
-        const after = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const afterModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(afterModel.status).toBe("idle")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
     },
@@ -444,9 +451,11 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "error")
 
-        const mid = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const midModel = mid.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const midModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(midModel.status).toBe("error")
 
         // Retry via command — second call succeeds
@@ -454,9 +463,11 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const after = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const afterModel = after.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-          ?.model as ExecutorUiModel
+        const afterModel = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
       }).pipe(Effect.provide(makeActorRuntimeLayer({ extensions: [extension] })))
     },
@@ -479,14 +490,12 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "ready")
 
         // Actor should be Ready (onInit → Connect → .spawn → Connected)
-        const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
-        const executor = snapshots.find((s) => s.extensionId === EXECUTOR_EXTENSION_ID)
-        expect(executor).toBeDefined()
-        expect((executor!.model as ExecutorUiModel).status).toBe("ready")
-
-        // Epoch should reflect ALL transitions: Connect (1) + Connected (2)
-        // (both persisted by durability.save, including Connected from .spawn)
-        expect(executor!.epoch).toBeGreaterThanOrEqual(2)
+        const model = (yield* runtime.ask(
+          sessionId,
+          ExecutorProtocol.GetSnapshot(),
+          branchId,
+        )) as ExecutorUiModel
+        expect(model.status).toBe("ready")
 
         // Storage should have the Ready state persisted
         const loaded = yield* storage.loadExtensionState({

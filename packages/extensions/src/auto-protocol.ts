@@ -3,15 +3,26 @@ import { ExtensionMessage } from "@gent/core/extensions/api"
 
 export const AUTO_EXTENSION_ID = "@gent/auto"
 
-/** Snapshot reply schema mirrored from `AutoUiModel` so `GetSnapshot` consumers
- *  do not depend on the workflow module. The fields are the read surface
- *  interceptors care about: active + iteration + maxIterations + goal. */
+const AutoSnapshotLearning = Schema.Struct({
+  iteration: Schema.Number,
+  content: Schema.String,
+})
+
+/** Snapshot reply schema. Carries enough state for both:
+ *   - interceptors (active + iteration + maxIterations + goal)
+ *   - the prompt projection (learnings, lastSummary, nextIdea) — replaces the
+ *     workflow's previous `derive().promptSections` path that was lost when
+ *     `WorkflowContribution.turn` was deleted in C2.
+ *  The TUI widget consumes only the interceptor-shaped fields. */
 export const AutoSnapshotReply = Schema.Struct({
   active: Schema.Boolean,
   phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),
   iteration: Schema.optional(Schema.Number),
   maxIterations: Schema.optional(Schema.Number),
   goal: Schema.optional(Schema.String),
+  learnings: Schema.optional(Schema.Array(AutoSnapshotLearning)),
+  lastSummary: Schema.optional(Schema.String),
+  nextIdea: Schema.optional(Schema.String),
 })
 export type AutoSnapshotReply = typeof AutoSnapshotReply.Type
 

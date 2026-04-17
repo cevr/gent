@@ -62,7 +62,9 @@ describe("extension concurrency", () => {
         )
 
         expect(spawnCount).toBe(1)
-        expect(r1 || r2).toBe(true)
+        // publish() now returns the IDs of extensions whose machines transitioned.
+        // At least one of the concurrent publishes should have caused a transition.
+        expect(r1.length + r2.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(layer))
     })
   })

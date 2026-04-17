@@ -20,11 +20,7 @@
 import type { Effect, Schema } from "effect"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentEvent } from "./event.js"
-import type {
-  ExtensionActorSnapshotConfig,
-  ExtensionActorTurnConfig,
-  ExtensionEffect,
-} from "./extension.js"
+import type { ExtensionEffect } from "./extension.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -95,25 +91,6 @@ export interface WorkflowContribution<
 
   /** Lifecycle hook fired once per session after the machine is spawned. */
   readonly onInit?: (ctx: WorkflowInitContext<State, Event, SD>) => Effect.Effect<void>
-
-  /**
-   * **Transitional lowering bridge — to be deleted in C12.**
-   *
-   * Workflows do not own UI per `composability-not-flags` — derived views
-   * belong in `ProjectionContribution`. But the C8 lowering hosts workflows in
-   * the legacy `setup.actor` slot, which today emits the per-extension UI
-   * snapshot and per-turn prompt/policy. Until `state-runtime.ts` is split
-   * into `workflow-runtime.ts` (no UI surface) plus the existing
-   * `projection-registry.ts` (the new UI/turn surface), workflows whose UI is
-   * derived from machine state (not from on-disk services) must declare these
-   * here. C12 deletes both fields once `auto.ts` and friends move their UI
-   * derivations into proper projections.
-   *
-   * Tests that assert "workflow does not carry UI" continue to pass when
-   * callers omit both fields.
-   */
-  readonly snapshot?: ExtensionActorSnapshotConfig<State>
-  readonly turn?: ExtensionActorTurnConfig<State>
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -192,7 +192,6 @@ export const LocalActorProcessLive: Layer.Layer<
       extensionStateRuntime: opt(yield* Effect.serviceOption(WorkflowRuntime), {
         send: die("WorkflowRuntime"),
         ask: die("WorkflowRuntime"),
-        getUiSnapshots: die("WorkflowRuntime"),
       }),
       approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
         present: die("ApprovalService"),

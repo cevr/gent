@@ -277,15 +277,9 @@ const resolveTurnContext = (params: {
       agentName: currentAgent,
       parentToolCallId: params.runSpec?.parentToolCallId,
     }
-    const extensionResults = yield* params.extensionStateRuntime.deriveAll(
-      params.sessionId,
-      turnCtx,
-    )
-    const actorProjections = extensionResults.map((r) => r.projection)
-
-    // Evaluate ProjectionContribution-based projections — merge into the same
-    // TurnProjection list consumed by compileToolPolicy. Actor projections
-    // (above) and projection contributions (here) feed the same pipeline.
+    // Evaluate `ProjectionContribution`-based projections — workflows no
+    // longer carry a `turn.project` bridge field; per-turn prompt/policy is
+    // exclusively the projection registry's responsibility now.
     const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateTurn({
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -294,7 +288,6 @@ const resolveTurnContext = (params: {
       turn: turnCtx,
     })
     const extensionProjections = [
-      ...actorProjections,
       ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
       ...(projEval.promptSections.length > 0 ? [{ promptSections: projEval.promptSections }] : []),
     ]

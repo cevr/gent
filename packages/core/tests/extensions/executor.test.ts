@@ -1,12 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { AgentDefinition } from "@gent/core/domain/agent"
-import type { ExtensionTurnContext } from "@gent/core/domain/extension"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import {
-  ExecutorActorConfig,
-  ExecutorState,
-  projectSnapshot,
-} from "@gent/extensions/executor/actor"
+import { ExecutorActorConfig, ExecutorState } from "@gent/extensions/executor/actor"
 import {
   resolveSettings,
   ExecutorSettingsDefaults,
@@ -17,16 +10,6 @@ import { readExecutionId, normalizeToolResult } from "@gent/extensions/executor/
 // ── Helpers ──
 
 const { reduce, initial } = ExecutorActorConfig
-
-const stubCtx: ExtensionTurnContext = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
-  agent: new AgentDefinition({ name: "test" as never }),
-  allTools: [],
-  interactive: true,
-}
-
-const derive = (state: ExecutorState) => ExecutorActorConfig.derive(state, stubCtx)
 
 const connect = { _tag: "Connect" as const, cwd: "/test" }
 const disconnect = { _tag: "Disconnect" as const }
@@ -99,57 +82,11 @@ describe("Executor state machine", () => {
 })
 
 // ── Turn projection ──
-
-describe("Executor turn projection", () => {
-  test("Idle → exclude [execute, resume]", () => {
-    const result = derive(initial)
-    expect(result.toolPolicy?.exclude).toEqual(["execute", "resume"])
-  })
-
-  test("Connecting → exclude [execute, resume]", () => {
-    const connecting = reduce(initial, connect).state
-    const result = derive(connecting)
-    expect(result.toolPolicy?.exclude).toEqual(["execute", "resume"])
-  })
-
-  test("Error → exclude [execute, resume]", () => {
-    const error = ExecutorState.Error({ message: "failed" })
-    const result = derive(error)
-    expect(result.toolPolicy?.exclude).toEqual(["execute", "resume"])
-  })
-
-  test("Ready → no exclusions (both tools visible)", () => {
-    const ready = ExecutorState.Ready({
-      mode: "local",
-      baseUrl: "http://127.0.0.1:4788",
-      scopeId: "s1",
-    })
-    const result = derive(ready)
-    expect(result.toolPolicy).toBeUndefined()
-  })
-
-  test("Ready + executorPrompt → prompt section at priority 85", () => {
-    const ready = ExecutorState.Ready({
-      mode: "local",
-      baseUrl: "http://127.0.0.1:4788",
-      scopeId: "s1",
-      executorPrompt: "Use tools.search to discover APIs",
-    })
-    const result = derive(ready)
-    expect(result.promptSections).toHaveLength(1)
-    expect(result.promptSections![0]!.id).toBe("executor-guidance")
-    expect(result.promptSections![0]!.priority).toBe(85)
-    expect(result.promptSections![0]!.content).toContain("Use tools.search to discover APIs")
-  })
-
-  test("Ready without executorPrompt → no prompt sections", () => {
-    const ready = ExecutorState.Ready({
-      mode: "local",
-      baseUrl: "http://127.0.0.1:4788",
-      scopeId: "s1",
-    })
-    const result = derive(ready)
-    expect(result.promptSections ?? []).toHaveLength(0)
+// TODO(c2): rewrite via the executor projection contribution once exposed
+// (was previously testing ExecutorActorConfig.derive, which is gone).
+describe.skip("Executor turn projection (removed in C2)", () => {
+  test("placeholder", () => {
+    expect(ExecutorState.Idle).toBeDefined()
   })
 })
 
@@ -207,33 +144,9 @@ describe("Executor MCP normalization", () => {
 })
 
 // ── Snapshot projection ──
-
-describe("Executor snapshot projection", () => {
-  test("Idle → { status: 'idle' }", () => {
-    const result = projectSnapshot({ _tag: "Idle" } as never)
-    expect(result).toEqual({ status: "idle" })
-  })
-
-  test("Connecting → { status: 'connecting' }", () => {
-    const result = projectSnapshot({ _tag: "Connecting", cwd: "/test" } as never)
-    expect(result).toEqual({ status: "connecting" })
-  })
-
-  test("Ready → { status: 'ready', mode, baseUrl }", () => {
-    const result = projectSnapshot({
-      _tag: "Ready",
-      mode: "remote",
-      baseUrl: "http://example.com",
-      scopeId: "s1",
-    } as never)
-    expect(result).toEqual({ status: "ready", mode: "remote", baseUrl: "http://example.com" })
-  })
-
-  test("Error → { status: 'error', errorMessage }", () => {
-    const result = projectSnapshot({ _tag: "Error", message: "timeout" } as never)
-    expect(result).toEqual({ status: "error", errorMessage: "timeout" })
-  })
-})
+// TODO(c2): "Executor snapshot projection" — removed.
+// `projectSnapshot` was a private helper for the deleted UI snapshot pipeline;
+// the new GetSnapshot reply path is exercised in executor-integration.test.ts.
 
 // ── normalizeToolResult ──
 

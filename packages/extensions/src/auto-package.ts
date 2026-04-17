@@ -1,8 +1,9 @@
 import { defineExtensionPackage } from "@gent/core/extensions/api"
-import { AutoExtension, AutoUiModel } from "./auto.js"
+import { AutoExtension } from "./auto.js"
+import { AutoProtocol } from "./auto-protocol.js"
 
 export const AutoPackage = defineExtensionPackage({
   id: "@gent/auto",
   server: AutoExtension,
-  snapshot: AutoUiModel,
+  snapshotRequest: () => AutoProtocol.GetSnapshot(),
 })

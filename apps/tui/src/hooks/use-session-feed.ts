@@ -325,43 +325,22 @@ export function useSessionFeed(
                   sessionId: session,
                   branchId: branch,
                 })
-                // Hydrate pending interaction from @gent/interaction-tools projection snapshot
-                const interactionSnap = snapshot.extensionSnapshots?.find(
-                  (s) => s.extensionId === "@gent/interaction-tools",
-                )
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                const interactionModel = interactionSnap?.model as
-                  | { requestId?: string; text?: string; metadata?: unknown }
-                  | undefined
-                const hasPendingInteraction = interactionModel?.requestId !== undefined
+                // Pending-interaction hydration on session entry now comes from
+                // event-stream replay via the `after` cursor below — there is no
+                // more privileged extension-snapshot side-channel. If the
+                // interaction extension wants explicit hydration, it should
+                // expose a typed query the client polls on session entry.
 
                 client.log.info("feed.snapshot.hydrated", {
                   key,
                   messageCount: snapshot.messages.length,
                   lastEventId: snapshot.lastEventId,
-                  hasInteraction: hasPendingInteraction,
                 })
 
                 yield* Effect.sync(() => {
                   if (currentKey !== key) return
                   client.setConnectionIssue(null)
                   setStore("messages", buildMessages(snapshot.messages))
-                  if (
-                    hasPendingInteraction &&
-                    interactionModel !== undefined &&
-                    interactionModel.requestId !== undefined
-                  ) {
-                    callbacks.onInteraction({
-                      _tag: "InteractionPresented",
-                      sessionId: snapshot.sessionId,
-                      branchId: snapshot.branchId,
-                      requestId: interactionModel.requestId,
-                      text: interactionModel.text ?? "",
-                      ...(interactionModel.metadata !== undefined
-                        ? { metadata: interactionModel.metadata }
-                        : {}),
-                    } as ActiveInteraction)
-                  }
                 })
 
                 const eventStream = client.client.session.events({

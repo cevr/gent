@@ -12,11 +12,12 @@ import { TaskToolsPackage } from "@gent/extensions/task-tools-package.js"
 import { useScopedKeyboard } from "../../keyboard/context"
 
 export default TaskToolsPackage.tui((ctx) => {
-  /** Read task list from extension snapshot (populated by server-side task-tools actor). */
+  /** Read task list from extension snapshot (populated by per-pulse refetch
+   *  of `TaskListRef` declared on `TaskToolsPackage.snapshotQuery`). */
   function useTasksFromSnapshot(): () => readonly TaskEntry[] {
     return createMemo(() => {
-      const model = ctx.getSnapshot()
-      return model?.tasks ?? []
+      const tasks = ctx.getSnapshot()
+      return tasks ?? []
     })
   }
 

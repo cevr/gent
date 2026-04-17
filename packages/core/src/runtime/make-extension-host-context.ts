@@ -147,18 +147,6 @@ export const makeExtensionHostContext = (
         MutationError | MutationNotFoundError
       >
     },
-    getUiSnapshots: (branchId) =>
-      deps.extensionStateRuntime.getUiSnapshots(runInfo.sessionId, branchId ?? runInfo.branchId),
-    getUiSnapshot: <T>(extensionId: string, branchId?: BranchId) =>
-      deps.extensionStateRuntime
-        .getUiSnapshots(runInfo.sessionId, branchId ?? runInfo.branchId)
-        .pipe(
-          Effect.map((snapshots) => {
-            const match = snapshots.find((s) => s.extensionId === extensionId)
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            return match?.model as T | undefined
-          }),
-        ),
   },
 
   agent: {

@@ -42,7 +42,7 @@ import {
 } from "./state.js"
 import { MemoryTools } from "./tools.js"
 import { MemoryIntent } from "./intents.js"
-import { MemoryVaultProjection, projectSessionMemoryTurn } from "./projection.js"
+import { MemoryVaultProjection } from "./projection.js"
 import { MemoryAgents } from "./agents.js"
 import { Live as MemoryVaultLive } from "./vault.js"
 import { MemoryDreamJobs } from "./dreaming.js"
@@ -141,14 +141,12 @@ const memoryWorkflow: WorkflowContribution<
   mapEvent: (event) => MemoryMachineEvent.Published({ event }),
   mapCommand: (message) =>
     Schema.is(MemoryIntent)(message) ? MemoryMachineEvent.Intent({ message }) : undefined,
-  // No `snapshot` — UI surface is owned by `MemoryVaultProjection` (compile-time
-  // structural conflict rule in projection-registry forbids both at once for the
-  // same extensionId; vault entries are the user-visible memory state).
-  // `turn` is the residual workflow-owned per-turn surface; future migration
-  // moves it into a `ProjectionContribution.turn` derivation.
-  turn: {
-    project: (state) => projectSessionMemoryTurn(state.memory),
-  },
+  // Session-memory prompt is no longer surfaced — `workflow.turn` is gone
+  // and projections cannot read workflow machine state. Session memories
+  // remain queryable via the memory_recall tool; they just don't auto-inject
+  // into the system prompt anymore. If we want them back we add a typed
+  // workflow-state read on the host context and a Projection that consumes
+  // it. For now the vault-derived prompt section is the only memory surface.
 }
 
 // ── Extension ──

@@ -152,15 +152,12 @@ export interface ClientContextValue {
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
 
-  // Extension state snapshot callback (wired by ExtensionUIProvider)
-  onExtensionSnapshot: (
-    cb: (snapshot: {
-      sessionId: SessionId
-      branchId: BranchId
-      extensionId: string
-      epoch: number
-      model: unknown
-    }) => void,
+  // Extension state-change pulse callback (wired by ExtensionUIProvider).
+  // Fires once per `ExtensionStateChanged` event seen on the active session.
+  // The pulse carries no payload — consumers refetch via the extension's
+  // typed `client.extension.query(...)`.
+  onExtensionStateChanged: (
+    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => void
 }
 
@@ -200,15 +197,12 @@ export function ClientProvider(props: ClientProviderProps) {
     runtime.cast(effect)
   }
 
-  // Extension state snapshot callback — wired by ExtensionUIProvider
-  let extensionSnapshotCb:
-    | ((s: {
-        sessionId: SessionId
-        branchId: BranchId
-        extensionId: string
-        epoch: number
-        model: unknown
-      }) => void)
+  // Extension state-change pulse callback — wired by ExtensionUIProvider.
+  // Fires once per `ExtensionStateChanged` event seen on the active session.
+  // The pulse carries no payload — consumers refetch via the extension's
+  // typed `client.extension.query(...)`.
+  let extensionStateChangedCb:
+    | ((s: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void)
     | undefined
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
@@ -356,14 +350,12 @@ export function ClientProvider(props: ClientProviderProps) {
       let cancelled = false
       const isActiveSession = () => !cancelled && sessionKey() === key
 
-      const forwardExtensionSnapshot = (event: EventEnvelope["event"]): void => {
-        if (event._tag === "ExtensionUiSnapshot" && extensionSnapshotCb !== undefined) {
-          extensionSnapshotCb({
+      const forwardExtensionStateChanged = (event: EventEnvelope["event"]): void => {
+        if (event._tag === "ExtensionStateChanged" && extensionStateChangedCb !== undefined) {
+          extensionStateChangedCb({
             sessionId: event.sessionId,
             branchId: event.branchId,
             extensionId: event.extensionId,
-            epoch: event.epoch,
-            model: event.model,
           })
         }
       }
@@ -420,8 +412,8 @@ export function ClientProvider(props: ClientProviderProps) {
           }
         }
 
-        // Forward extension snapshots to registered callback
-        forwardExtensionSnapshot(event)
+        // Forward extension state-change pulses to registered callback
+        forwardExtensionStateChanged(event)
 
         switch (event._tag) {
           case "SessionNameUpdated":
@@ -479,18 +471,9 @@ export function ClientProvider(props: ClientProviderProps) {
                   const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
                   setAgentStore({ agent: rt.agent, status })
 
-                  if (
-                    snapshot.extensionSnapshots !== undefined &&
-                    extensionSnapshotCb !== undefined
-                  ) {
-                    for (const ext of snapshot.extensionSnapshots) {
-                      extensionSnapshotCb({
-                        sessionId,
-                        branchId,
-                        ...ext,
-                      })
-                    }
-                  }
+                  // No initial-snapshot fan-out: the UI snapshot channel is gone.
+                  // Widgets fetch initial state via `client.extension.query(...)`
+                  // and refetch on `ExtensionStateChanged` pulses.
                 },
                 openEvents: (after) =>
                   client.session.events({
@@ -745,8 +728,8 @@ export function ClientProvider(props: ClientProviderProps) {
       cast(client.steer.command({ command: fullCommand }))
     },
 
-    onExtensionSnapshot: (cb) => {
-      extensionSnapshotCb = cb
+    onExtensionStateChanged: (cb) => {
+      extensionStateChangedCb = cb
     },
 
     switchBranch: (branchId, summarize) => {

@@ -20,13 +20,14 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import type { Effect, FileSystem, Path, Schema } from "effect"
+import type { Effect, FileSystem, Path } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
 } from "./extension-protocol.js"
+import type { QueryRef } from "./query.js"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -257,8 +258,12 @@ export interface ExtensionClientContext {
   readonly ask: <M extends AnyExtensionRequestMessage>(
     message: M,
   ) => Promise<ExtractExtensionReply<M>>
-  /** Read and decode a server-projected snapshot for an extension. Returns undefined if missing or decode fails. */
-  readonly getSnapshot: <A>(extensionId: string, schema: Schema.Decoder<A>) => A | undefined
+  /** Sync read of the latest cached snapshot for this extension, if the
+   *  package declared a `snapshotRequest` or `snapshotQuery`. The cache is
+   *  populated by the TUI provider on every `ExtensionStateChanged` pulse.
+   *  Returns `undefined` if the package did not declare a snapshot source or
+   *  no pulse has been received yet. */
+  readonly getSnapshotRaw: () => unknown
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
   /** Reactive composer state */
@@ -274,4 +279,13 @@ export interface ExtensionClientContext {
 export interface ExtensionClientModule<TComponent = unknown> {
   readonly id: string
   readonly setup: (ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>
+  /** Optional snapshot source published by the paired `defineExtensionPackage`.
+   *  The TUI provider uses this to refetch on `ExtensionStateChanged` pulses
+   *  and populate the cache that backs `ctx.getSnapshotRaw()`.
+   *  Exactly one of `request` / `query` is set when present. */
+  readonly snapshotSource?: SnapshotSource
 }
+
+export type SnapshotSource =
+  | { readonly _tag: "request"; readonly request: () => AnyExtensionRequestMessage }
+  | { readonly _tag: "query"; readonly query: QueryRef }

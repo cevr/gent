@@ -9,25 +9,24 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
-import {
-  type ExecutorMcpToolResult,
-  type ResumeAction,
-  ExecutorMcpError,
-  EXECUTOR_EXTENSION_ID,
-} from "./domain.js"
+import { defineTool, type ToolContext } from "@gent/core/extensions/api"
+import { type ExecutorMcpToolResult, type ResumeAction, ExecutorMcpError } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
-import type { ExecutorUiModel } from "./actor.js"
+import { ExecutorProtocol } from "./protocol.js"
 
 // ── Helpers ──
 
-const requireReadyBaseUrl = (
-  ctx: { extension: { getUiSnapshot: <T>(id: string) => Effect.Effect<T | undefined> } },
-  phase: "execute" | "resume",
-) =>
+const requireReadyBaseUrl = (ctx: ToolContext, phase: "execute" | "resume") =>
   Effect.gen(function* () {
-    const snapshot = yield* ctx.extension.getUiSnapshot<ExecutorUiModel>(EXECUTOR_EXTENSION_ID)
-    if (!snapshot || snapshot.status !== "ready" || !snapshot.baseUrl) {
+    const snapshot = yield* ctx.extension
+      .ask(ExecutorProtocol.GetSnapshot(), ctx.branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+    if (
+      snapshot === undefined ||
+      snapshot.status !== "ready" ||
+      snapshot.baseUrl === undefined ||
+      snapshot.baseUrl.length === 0
+    ) {
       return yield* new ExecutorMcpError({ phase, message: "Executor not ready" })
     }
     return snapshot.baseUrl

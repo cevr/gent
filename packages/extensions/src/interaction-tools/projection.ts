@@ -2,23 +2,10 @@
  * InteractionProjection — derives the active pending-interaction snapshot
  * from `InteractionPendingReader` (a read-only seam over `InteractionStorage`).
  *
- * Replaces the actor-as-mirror that mapped `InteractionPresented`/
- * `InteractionResolved` events into a `Pending` state. The actor's only
- * job was the snapshot; the actual interaction workflow is owned by
- * `AgentLoop.WaitingForInteraction` + `ApprovalService`. The actor was
- * pure projection mislabeled (`derive-do-not-create-states`).
- *
- * Boundary: the extension does NOT see `InteractionStorage` (which has
- * `persist`/`resolve`/`deletePending`). It sees `InteractionPendingReader`
- * — a read-only view that decodes params at the seam and exposes only
- * `listPending(scope?)`. This is `boundary-discipline`: the contract a
- * projection can hold is structurally read-only, not enforced by lint
- * method-name allowlists alone.
- *
- * Surfaces:
- *   - `ui` — `{ requestId?, text?, metadata? }`. Empty object when no
- *     pending interaction exists for this session+branch. Shape matches
- *     the TUI snapshot reader's destructure (`use-session-feed.ts:333`).
+ * The projection itself contributes no agent-loop surface. It registers the
+ * extension as having observable state, so the event publisher emits
+ * `ExtensionStateChanged` pulses for refetch signals; clients query the
+ * actual pending interaction via the typed transport surface.
  *
  * @module
  */
@@ -48,9 +35,6 @@ export const InteractionProjection: ProjectionContribution<
   id: "interaction-pending",
   query: (ctx) =>
     Effect.gen(function* () {
-      // The projection has no branchId in some contexts — when absent,
-      // we cannot scope, so return an empty model. Production always has
-      // both for UI evaluation (event-publisher passes the real branch).
       if (ctx.branchId === undefined) return { model: {} }
       const reader = yield* InteractionPendingReader
       const pending = yield* reader
@@ -75,8 +59,4 @@ export const InteractionProjection: ProjectionContribution<
         },
       }
     }),
-  ui: {
-    schema: InteractionUiModel,
-    project: (value) => value.model,
-  },
 }

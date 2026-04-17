@@ -209,12 +209,15 @@ export {
 export type {
   ProjectionContribution,
   ProjectionContext,
-  ProjectionUiContext,
   ProjectionTurnContext,
-  ProjectionUiSurface,
   AnyProjectionContribution,
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
+// `WorkflowRuntime` is exposed so projections (and other read-only consumers)
+// can `ask` workflow-bearing extensions through their typed protocol.
+// Projections may not call `send` on the runtime — enforced by lint rules
+// gating writes inside `R extends ReadOnly` projection requirements.
+export { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 export type {
   QueryContribution,
   QueryContext,

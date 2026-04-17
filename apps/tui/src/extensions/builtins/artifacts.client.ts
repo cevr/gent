@@ -6,12 +6,11 @@ export default ArtifactsPackage.tui((ctx) => [
     position: "bottom-right",
     priority: 50,
     produce: () => {
-      const model = ctx.getSnapshot()
-      if (!model?.items?.length) return []
+      const items = ctx.getSnapshot()
+      if (!items || items.length === 0) return []
       const currentBranch = ctx.branchId
-      const active = model.items.filter(
-        (a: { status: string; branchId?: string }) =>
-          a.status === "active" && (a.branchId === undefined || a.branchId === currentBranch),
+      const active = items.filter(
+        (a) => a.status === "active" && (a.branchId === undefined || a.branchId === currentBranch),
       ).length
       if (active === 0) return []
       return [

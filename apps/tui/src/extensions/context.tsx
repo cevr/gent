@@ -5,16 +5,7 @@
  * Provides resolved contributions to descendants.
  */
 
-import {
-  createContext,
-  useContext,
-  createSignal,
-  createEffect,
-  createMemo,
-  onMount,
-  type Accessor,
-  type JSX,
-} from "solid-js"
+import { createContext, useContext, createSignal, onMount, type Accessor, type JSX } from "solid-js"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
@@ -30,7 +21,12 @@ import { getExtensionReplyDecoder } from "@gent/core/domain/extension-protocol.j
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
-import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
+import type {
+  AutocompleteContribution,
+  ExtensionClientContext,
+  ExtensionClientModule,
+  SnapshotSource,
+} from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
@@ -51,33 +47,6 @@ const { _fsInstance, _pathInstance } = Effect.runSync(
   ),
 )
 const _asyncFs = makeAsyncFs(_fsInstance, (effect) => platformRuntime.runPromise(effect))
-
-/** Server-projected UI snapshot from extension state machines */
-export interface ExtensionSnapshot {
-  readonly sessionId: string
-  readonly branchId: string
-  readonly extensionId: string
-  readonly epoch: number
-  readonly model: unknown
-}
-
-export const applyExtensionSnapshot = (
-  prev: ReadonlyMap<string, ExtensionSnapshot>,
-  snapshot: ExtensionSnapshot,
-): ReadonlyMap<string, ExtensionSnapshot> => {
-  const current = prev.get(snapshot.extensionId)
-  if (
-    current !== undefined &&
-    current.sessionId === snapshot.sessionId &&
-    current.branchId === snapshot.branchId &&
-    current.epoch > snapshot.epoch
-  ) {
-    return prev
-  }
-  const next = new Map(prev)
-  next.set(snapshot.extensionId, snapshot)
-  return next
-}
 
 export const decodeExtensionAskReply = <M extends AnyExtensionRequestMessage>(
   message: M,
@@ -113,10 +82,6 @@ export interface ExtensionUIContextValue {
       autocompleteOpen: boolean
     },
   ) => void
-  /** Server-projected extension state snapshots, keyed by extensionId */
-  readonly snapshots: Accessor<ReadonlyMap<string, ExtensionSnapshot>>
-  /** Update a server-projected snapshot (called from event stream) */
-  readonly updateSnapshot: (snapshot: ExtensionSnapshot) => void
   /** Current session ID (undefined before session is active) */
   readonly sessionId: Accessor<string | undefined>
   /** Current branch ID (undefined before session is active) */
@@ -145,47 +110,15 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     ReadonlyArray<AutocompleteContribution>
   >([])
   const [loading, setLoading] = createSignal(true)
-  const [snapshots, setSnapshots] = createSignal<ReadonlyMap<string, ExtensionSnapshot>>(new Map())
-
-  const activeSessionKey = createMemo(() => {
-    const session = clientCtx.session()
-    if (session === null) return undefined
-    return `${session.sessionId}:${session.branchId}`
-  })
-
-  const updateSnapshot = (snapshot: ExtensionSnapshot) => {
-    const session = clientCtx.session()
-    if (
-      session === null ||
-      session.sessionId !== snapshot.sessionId ||
-      session.branchId !== snapshot.branchId
-    ) {
-      return
-    }
-    setSnapshots((prev) => applyExtensionSnapshot(prev, snapshot))
-  }
-
-  createEffect(() => {
-    const key = activeSessionKey()
-    setSnapshots((prev) => {
-      if (key === undefined) {
-        return prev.size === 0 ? prev : new Map()
-      }
-      const sep = key.indexOf(":")
-      const sessionId = key.slice(0, sep)
-      const branchId = key.slice(sep + 1)
-      let changed = false
-      const next = new Map<string, ExtensionSnapshot>()
-      for (const [extensionId, snapshot] of prev) {
-        if (snapshot.sessionId === sessionId && snapshot.branchId === branchId) {
-          next.set(extensionId, snapshot)
-          continue
-        }
-        changed = true
-      }
-      return changed ? next : prev
-    })
-  })
+  // Per-extension snapshot cache, keyed by extensionId.
+  // Populated by `refetchExtensionSnapshot` on every `ExtensionStateChanged`
+  // pulse for an extension whose package declared a snapshot source.
+  // Reads happen through `ctx.getSnapshotRaw()` (per-extension binding below).
+  const [snapshotCache, setSnapshotCache] = createSignal<ReadonlyMap<string, unknown>>(new Map())
+  // Ordered registry of snapshot sources for loaded extensions. Filled at
+  // setup time before contributions run, so the first widget read sees the
+  // cache as soon as the first pulse arrives.
+  const snapshotSources = new Map<string, SnapshotSource>()
 
   // Overlay dispatch — wired by session controller after mount
   const [overlayDispatch, setOverlayDispatchSignal] = createSignal<{
@@ -212,8 +145,59 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     setComposerStateProviderSignal(() => provider)
   }
 
-  // Wire extension snapshot events from client event stream
-  clientCtx.onExtensionSnapshot(updateSnapshot)
+  // Refetch a single extension's snapshot via the package's declared source.
+  // Called once per `ExtensionStateChanged` pulse for that extension.
+  const refetchExtensionSnapshot = async (extensionId: string): Promise<void> => {
+    const source = snapshotSources.get(extensionId)
+    if (source === undefined) return
+    const session = clientCtx.session()
+    if (session === null) return
+    try {
+      let value: unknown
+      if (source._tag === "request") {
+        const message = source.request()
+        const reply = await clientCtx.runtime.run(
+          clientCtx.client.extension
+            .ask({
+              sessionId: session.sessionId,
+              message,
+              branchId: session.branchId,
+            })
+            .pipe(Effect.flatMap((raw) => decodeExtensionAskReply(message, raw))),
+        )
+        value = reply
+      } else {
+        const ref = source.query
+        const out = await clientCtx.runtime.run(
+          clientCtx.client.extension.query({
+            sessionId: session.sessionId,
+            extensionId,
+            queryId: ref.queryId,
+            input: {},
+            branchId: session.branchId,
+          }),
+        )
+        value = out
+      }
+      setSnapshotCache((prev) => {
+        const next = new Map(prev)
+        next.set(extensionId, value)
+        return next
+      })
+    } catch (err) {
+      clientCtx.log.debug("extension.snapshot.refetch.failed", {
+        extensionId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  // Wire extension state-change pulses from the client event stream.
+  // Each pulse triggers a refetch for that extension only — no fan-out, no
+  // schema travelling through the channel (see EventPublisher pulse policy).
+  clientCtx.onExtensionStateChanged(({ extensionId }) => {
+    void refetchExtensionSnapshot(extensionId)
+  })
 
   onMount(async () => {
     try {
@@ -224,99 +208,118 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         readDisabledExtensions({ home, cwd: workspace.cwd }),
       )
 
+      // Pre-register each builtin's snapshot source so refetch knows where to look.
+      // Discovered (user/project) extensions register the same way inside the
+      // loader's import phase via `registerExtensionModule` below.
+      for (const m of builtinClientModules ?? []) {
+        if (m.snapshotSource !== undefined) snapshotSources.set(m.id, m.snapshotSource)
+      }
+
+      const registerExtensionModule = (m: ExtensionClientModule) => {
+        if (m.snapshotSource !== undefined) snapshotSources.set(m.id, m.snapshotSource)
+      }
+
+      // Build a per-extension context: each extension's `getSnapshotRaw`
+      // reads its own slot in the cache, so paired packages narrow correctly.
+      const makeCtx = (extensionId: string): ExtensionClientContext => ({
+        cwd: workspace.cwd,
+        home,
+        fs: _asyncFs,
+        path: _pathInstance,
+        openOverlay: (id) => overlayDispatch().open(id),
+        closeOverlay: () => overlayDispatch().close(),
+        get sessionId() {
+          return clientCtx.session()?.sessionId
+        },
+        get branchId() {
+          return clientCtx.session()?.branchId
+        },
+        send: (message) => {
+          const sid = clientCtx.session()?.sessionId
+          const bid = clientCtx.session()?.branchId
+          if (sid === undefined) return
+          clientCtx.runtime.cast(
+            clientCtx.client.extension.send({
+              sessionId: sid,
+              message,
+              branchId: bid,
+            }),
+          )
+        },
+        ask: async <M extends AnyExtensionRequestMessage>(message: M) => {
+          const sid = clientCtx.session()?.sessionId
+          const bid = clientCtx.session()?.branchId
+          if (sid === undefined) {
+            throw new Error("Cannot ask extension without an active session")
+          }
+          clientCtx.log.debug("extension.ask.sending", {
+            extensionId: message.extensionId,
+            tag: message._tag,
+            sessionId: sid,
+            branchId: bid,
+          })
+          try {
+            const result = await clientCtx.runtime.run(
+              clientCtx.client.extension
+                .ask({
+                  sessionId: sid,
+                  message,
+                  branchId: bid,
+                })
+                .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
+            )
+            clientCtx.log.debug("extension.ask.received", {
+              extensionId: message.extensionId,
+              tag: message._tag,
+            })
+            return result
+          } catch (err) {
+            clientCtx.log.error("extension.ask.failed", {
+              extensionId: message.extensionId,
+              tag: message._tag,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            throw err
+          }
+        },
+        getSnapshotRaw: () => snapshotCache().get(extensionId),
+        sendMessage: (content) => clientCtx.sendMessage(content),
+        composerState: () => {
+          const provider = composerStateProvider()
+          if (provider === undefined) {
+            return {
+              draft: "",
+              mode: "editing" as const,
+              inputFocused: false,
+              autocompleteOpen: false,
+            }
+          }
+          return provider()
+        },
+      })
+
       const result = await loadTuiExtensions(
         {
           builtins: builtinClientModules,
           userDir: `${home}/.gent/extensions`,
           projectDir: `${workspace.cwd}/.gent/extensions`,
           disabled: [...disabledSet],
+          onModuleLoaded: registerExtensionModule,
         },
-        {
-          cwd: workspace.cwd,
-          home,
-          fs: _asyncFs,
-          path: _pathInstance,
-          openOverlay: (id) => overlayDispatch().open(id),
-          closeOverlay: () => overlayDispatch().close(),
-          get sessionId() {
-            return clientCtx.session()?.sessionId
-          },
-          get branchId() {
-            return clientCtx.session()?.branchId
-          },
-          send: (message) => {
-            const sid = clientCtx.session()?.sessionId
-            const bid = clientCtx.session()?.branchId
-            if (sid === undefined) return
-            clientCtx.runtime.cast(
-              clientCtx.client.extension.send({
-                sessionId: sid,
-                message,
-                branchId: bid,
-              }),
-            )
-          },
-          ask: async <M extends AnyExtensionRequestMessage>(message: M) => {
-            const sid = clientCtx.session()?.sessionId
-            const bid = clientCtx.session()?.branchId
-            if (sid === undefined) {
-              throw new Error("Cannot ask extension without an active session")
-            }
-            clientCtx.log.debug("extension.ask.sending", {
-              extensionId: message.extensionId,
-              tag: message._tag,
-              sessionId: sid,
-              branchId: bid,
-            })
-            try {
-              const result = await clientCtx.runtime.run(
-                clientCtx.client.extension
-                  .ask({
-                    sessionId: sid,
-                    message,
-                    branchId: bid,
-                  })
-                  .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
-              )
-              clientCtx.log.debug("extension.ask.received", {
-                extensionId: message.extensionId,
-                tag: message._tag,
-              })
-              return result
-            } catch (err) {
-              clientCtx.log.error("extension.ask.failed", {
-                extensionId: message.extensionId,
-                tag: message._tag,
-                error: err instanceof Error ? err.message : String(err),
-              })
-              throw err
-            }
-          },
-          getSnapshot: (extensionId, schema) => {
-            const snap = snapshots().get(extensionId)
-            if (snap === undefined) return undefined
-            try {
-              return Schema.decodeUnknownSync(schema)(snap.model)
-            } catch {
-              return undefined
-            }
-          },
-          sendMessage: (content) => clientCtx.sendMessage(content),
-          composerState: () => {
-            const provider = composerStateProvider()
-            if (provider === undefined) {
-              return {
-                draft: "",
-                mode: "editing" as const,
-                inputFocused: false,
-                autocompleteOpen: false,
-              }
-            }
-            return provider()
-          },
-        },
+        makeCtx,
+        _asyncFs,
+        _pathInstance,
       )
       setResolved(result)
+
+      // Initial fetch for any active session — pulses only fire on machine
+      // transitions, but widgets need their first read at session entry.
+      const session = clientCtx.session()
+      if (session !== null) {
+        for (const id of snapshotSources.keys()) {
+          void refetchExtensionSnapshot(id)
+        }
+      }
 
       // Fetch server-side extension commands
       clientCtx.runtime.cast(
@@ -380,8 +383,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setDynamicAutocomplete,
         setOverlayDispatch,
         setComposerStateProvider,
-        snapshots,
-        updateSnapshot,
         sessionId: () => clientCtx.session()?.sessionId,
         branchId: () => clientCtx.session()?.branchId,
       }}

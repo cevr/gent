@@ -5,9 +5,6 @@ import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
-import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
@@ -51,9 +48,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
     Effect.gen(function* () {
       const storage = yield* Storage
       const actorProcess = yield* ActorProcess
-      const extensionStateRuntime = yield* WorkflowRuntime
-      const extensionRegistry = yield* ExtensionRegistry
-      const platform = yield* RuntimePlatform
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
         const sessions = yield* storage.listSessions()
@@ -158,43 +152,10 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
             Effect.catchEager(() => Effect.succeed(idleRuntime)),
           )
 
-        // Extension UI snapshots for cold-start hydration. Two sources:
-        //  - actors  → `WorkflowRuntime.getUiSnapshots` (in-memory state)
-        //  - projections → `projections.evaluateUi` (re-derived from disk)
-        // Compile-time UI ownership rule (projection-registry) guarantees an
-        // extensionId cannot own both an actor.snapshot and a projection.ui,
-        // so concatenation is safe — no dedupe needed.
-        const actorSnapshots = yield* extensionStateRuntime
-          .getUiSnapshots(input.sessionId, input.branchId)
-          .pipe(
-            Effect.map((snapshots) =>
-              snapshots.map((s) => ({
-                extensionId: s.extensionId,
-                epoch: s.epoch,
-                model: s.model,
-              })),
-            ),
-            Effect.catchEager(() => Effect.succeed([] as const)),
-          )
-        const projectionSnapshots = yield* extensionRegistry
-          .getResolved()
-          .projections.evaluateUi({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            cwd: platform.cwd,
-            home: platform.home,
-          })
-          .pipe(
-            Effect.map((evalResult) =>
-              evalResult.uiSnapshots.map((s) => ({
-                extensionId: s.extensionId,
-                epoch: s.epoch,
-                model: s.model,
-              })),
-            ),
-            Effect.catchEager(() => Effect.succeed([] as const)),
-          )
-        const extensionSnapshots = [...actorSnapshots, ...projectionSnapshots]
+        // Extension state is no longer hydrated through the session snapshot —
+        // clients call the extension's typed `client.extension.query(...)` on
+        // mount and subscribe to `ExtensionStateChanged` events for refetch
+        // signals. The privileged out-of-band UI snapshot channel is gone.
 
         return {
           sessionId: input.sessionId,
@@ -205,7 +166,6 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,
-          extensionSnapshots: extensionSnapshots.length > 0 ? [...extensionSnapshots] : undefined,
         }
       })
 

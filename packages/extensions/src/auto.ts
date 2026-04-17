@@ -21,21 +21,20 @@ import {
   interceptorContribution,
   isRecord,
   layerContribution,
+  projectionContribution,
   toolContribution,
   workflowContribution,
   type WorkflowContribution,
-  type ExtensionTurnContext,
   type ExtensionEffect,
   type ToolResultInput,
   type TurnAfterInput,
-  type TurnProjection,
   type AgentEvent,
-  type PromptSection,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
 import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
+import { AutoProjection } from "./auto-projection.js"
 
 const parseCheckpointParams = (
   input: Record<string, unknown>,
@@ -169,18 +168,6 @@ export const ToggleAutoIntent = Schema.TaggedStruct("ToggleAuto", {
 export const AutoIntent = Schema.Union([StartAutoIntent, CancelAutoIntent, ToggleAutoIntent])
 export type AutoIntent = typeof AutoIntent.Type
 
-// ── UI Model ──
-
-export const AutoUiModel = Schema.Struct({
-  active: Schema.Boolean,
-  phase: Schema.optional(Schema.Literals(["working", "awaiting-review"])),
-  iteration: Schema.optional(Schema.Number),
-  maxIterations: Schema.optional(Schema.Number),
-  goal: Schema.optional(Schema.String),
-  learningsCount: Schema.Number,
-})
-export type AutoUiModel = typeof AutoUiModel.Type
-
 const ReplayCheckpoint = Schema.Struct({
   type: Schema.Literal("checkpoint"),
   iteration: Schema.Number,
@@ -207,59 +194,8 @@ const AutoMachineSlots = Slot.define({
   loadReplaySeed: Slot.fn({}, Schema.NullOr(ReplaySeedWithOrigin)),
 })
 
-// ── Prompt sections ──
-
-const workingPromptSection = (state: Extract<MachineState, { _tag: "Working" }>): PromptSection => {
-  const parts: string[] = [
-    `## Auto Loop — Iteration ${state.iteration}/${state.maxIterations}`,
-    "",
-    `**Goal**: ${state.goal}`,
-  ]
-
-  if (state.learnings.length > 0) {
-    parts.push("", "### Accumulated Learnings:")
-    for (const l of state.learnings) {
-      parts.push(`- [Iteration ${l.iteration}] ${l.content}`)
-    }
-  }
-
-  if (state.lastSummary !== undefined) {
-    parts.push("", `### Last iteration summary:`, state.lastSummary)
-  }
-
-  if (state.nextIdea !== undefined) {
-    parts.push("", `### Suggested next step:`, state.nextIdea)
-  }
-
-  parts.push(
-    "",
-    "Maintain a findings doc at `.gent/auto/findings.md` — update it with wins, dead ends, and open questions.",
-    "",
-    "When you have completed this iteration's work, call `auto_checkpoint` with your results.",
-    `This is iteration ${state.iteration} of ${state.maxIterations}.`,
-  )
-
-  return {
-    id: "auto-loop-context",
-    content: parts.join("\n"),
-    priority: 91,
-  }
-}
-
-const reviewPromptSection = (
-  state: Extract<MachineState, { _tag: "AwaitingReview" }>,
-): PromptSection => ({
-  id: "auto-loop-context",
-  content: [
-    `## Auto Loop — Peer Review Required`,
-    "",
-    `Iteration ${state.iteration}/${state.maxIterations} is complete.`,
-    "",
-    "You MUST call the `review` tool to run an adversarial review of this iteration before continuing.",
-    "The loop cannot proceed until the review is done.",
-  ].join("\n"),
-  priority: 91,
-})
+// Prompt sections live in `auto-projection.ts` now — the projection reads
+// the workflow's typed snapshot and produces the system-prompt section.
 
 // ── Machine definition ──
 
@@ -370,52 +306,34 @@ const autoMachine = Machine.make({
     Machine.reply(state, projectSnapshot(state)),
   )
 
-// ── Derive ──
+// ── Snapshot projection (reply for AutoProtocol.GetSnapshot) ──
 
-const derive = (state: MachineState, _ctx?: ExtensionTurnContext) => {
+const projectSnapshot = (state: MachineState): AutoSnapshotReply => {
   if (state._tag === "Inactive") {
-    const uiModel: AutoUiModel = { active: false, learningsCount: 0 }
-    return { toolPolicy: { exclude: [AUTO_CHECKPOINT_TOOL] }, uiModel }
+    return { active: false }
   }
-
   if (state._tag === "Working") {
-    const uiModel: AutoUiModel = {
+    return {
       active: true,
       phase: "working",
       iteration: state.iteration,
       maxIterations: state.maxIterations,
       goal: state.goal,
-      learningsCount: state.learnings.length,
-    }
-    return {
-      promptSections: [workingPromptSection(state)],
-      uiModel,
+      learnings: state.learnings,
+      lastSummary: state.lastSummary,
+      nextIdea: state.nextIdea,
     }
   }
-
-  // AwaitingReview
-  const uiModel: AutoUiModel = {
+  return {
     active: true,
     phase: "awaiting-review",
     iteration: state.iteration,
     maxIterations: state.maxIterations,
     goal: state.goal,
-    learningsCount: state.learnings.length,
+    learnings: state.learnings,
+    lastSummary: state.lastSummary,
+    nextIdea: state.nextIdea,
   }
-  return {
-    promptSections: [reviewPromptSection(state)],
-    uiModel,
-  }
-}
-
-const projectSnapshot = (state: MachineState): AutoUiModel => {
-  const { uiModel } = derive(state)
-  return (uiModel ?? { active: false, learningsCount: 0 }) as AutoUiModel
-}
-
-const projectTurn = (state: MachineState, ctx: ExtensionTurnContext): TurnProjection => {
-  const { uiModel: _, ...turn } = derive(state, ctx)
-  return turn
 }
 
 // ── afterTransition ──
@@ -523,10 +441,10 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 // ── Workflow (effect-machine based) ──
 //
 // The auto extension is a genuine state machine with declared effects, so it
-// uses `WorkflowContribution` (per `composability-not-flags` — workflows
-// declare effects, projections derive views). The `snapshot`/`turn` fields
-// here are the residual workflow-owned UI surface; future migration moves
-// them into `ProjectionContribution.{ui,turn}` derivations.
+// uses `WorkflowContribution`. UI / turn projections moved out of the
+// workflow itself; the TUI widget reads state via `AutoProtocol.GetSnapshot`
+// (typed `ctx.ask`), and per-turn prompt comes from a separate
+// `ProjectionContribution` (auto-projection.ts).
 
 const autoWorkflow: WorkflowContribution<
   MachineState,
@@ -573,14 +491,6 @@ const autoWorkflow: WorkflowContribution<
     if (message._tag === "IsActive") return MachineEvent.IsActive
     if (message._tag === "GetSnapshot") return MachineEvent.GetSnapshot
     return undefined
-  },
-  // ── Transitional lowering bridge (deleted in C12) ──
-  snapshot: {
-    schema: AutoUiModel,
-    project: projectSnapshot,
-  },
-  turn: {
-    project: projectTurn,
   },
   stateSchema: MachineState.schema,
   afterTransition,
@@ -760,6 +670,7 @@ export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   contributions: ({ ctx }) => [
     workflowContribution(autoWorkflow),
+    projectionContribution(AutoProjection),
     toolContribution(AutoCheckpointTool),
     interceptorContribution(defineInterceptor("tool.result", journalInterceptorImpl)),
     interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),

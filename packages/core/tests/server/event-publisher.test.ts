@@ -38,12 +38,10 @@ describe("EventPublisher", () => {
       publish: (event) =>
         Effect.sync(() => {
           delivered.push(event._tag)
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -87,12 +85,10 @@ describe("EventPublisher", () => {
           if (event._tag === "NestedEvent") {
             yield* Deferred.succeed(nestedDelivered, void 0)
           }
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -139,12 +135,10 @@ describe("EventPublisher", () => {
           if (event._tag === "NestedEvent") {
             yield* Deferred.succeed(nestedDelivered, void 0)
           }
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -177,12 +171,10 @@ describe("EventPublisher", () => {
       publish: () =>
         Effect.sync(() => {
           delivered++
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -218,12 +210,10 @@ describe("EventPublisher", () => {
           if (event._tag === "BusNestedEvent") {
             yield* Deferred.succeed(busNested, void 0)
           }
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not implemented"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })

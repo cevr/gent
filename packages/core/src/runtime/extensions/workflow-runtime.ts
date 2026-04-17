@@ -11,17 +11,13 @@ import {
   Semaphore,
   Context,
 } from "effect"
-import type { AgentEvent, ExtensionUiSnapshot } from "../../domain/event.js"
-import { ExtensionUiSnapshot as ExtensionUiSnapshotClass } from "../../domain/event.js"
+import type { AgentEvent } from "../../domain/event.js"
 import type {
   AnyExtensionActorDefinition,
   ExtensionActorStatusInfo,
-  ExtensionTurnContext,
   ExtensionReduceContext,
   ExtensionRef,
-  ExtensionSnapshot,
   LoadedExtension,
-  TurnProjection,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type {
@@ -58,7 +54,7 @@ interface PublishMailboxItem {
   readonly sessionId: SessionId
   readonly ctx: ExtensionReduceContext
   readonly event: AgentEvent
-  readonly done: Deferred.Deferred<boolean>
+  readonly done: Deferred.Deferred<ReadonlyArray<string>>
 }
 
 interface SendMailboxItem {
@@ -86,11 +82,17 @@ interface MailboxSlot {
 const ACTOR_RESTART_LIMIT = 1
 
 export interface WorkflowRuntimeService {
-  readonly publish: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
-  readonly deriveAll: (
-    sessionId: SessionId,
-    ctx: ExtensionTurnContext,
-  ) => Effect.Effect<ReadonlyArray<{ extensionId: string; projection: TurnProjection }>>
+  /**
+   * Publish an event to all workflow actors for the session.
+   *
+   * Returns the list of extensionIds whose machine actually transitioned.
+   * EventPublisher uses this to emit `ExtensionStateChanged` pulses ONLY
+   * for extensions with real news — not blanket per-event broadcasts.
+   */
+  readonly publish: (
+    event: AgentEvent,
+    ctx: ExtensionReduceContext,
+  ) => Effect.Effect<ReadonlyArray<string>>
   readonly send: (
     sessionId: SessionId,
     message: AnyExtensionCommandMessage,
@@ -101,10 +103,6 @@ export interface WorkflowRuntimeService {
     message: M,
     branchId?: BranchId,
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
-  readonly getUiSnapshots: (
-    sessionId: SessionId,
-    branchId: BranchId,
-  ) => Effect.Effect<ReadonlyArray<ExtensionUiSnapshot>>
   readonly getActorStatuses: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<ExtensionActorStatusInfo>>
@@ -564,7 +562,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
 
           const publishImmediate = (event: AgentEvent, ctx: ExtensionReduceContext) =>
             Effect.gen(function* () {
-              let changed = false
+              const transitioned: string[] = []
               const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
               for (const entry of entries) {
                 const publishResult = yield* runSupervised(
@@ -583,9 +581,9 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
                     error: publishResult.error.message,
                   }).pipe(Effect.as(false))
                 }
-                if (actorChanged) changed = true
+                if (actorChanged) transitioned.push(entry.ref.id)
               }
-              return changed
+              return transitioned
             })
 
           const sendImmediate = (
@@ -753,7 +751,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
                 const complete = (() => {
                   switch (item._tag) {
                     case "publish":
-                      return Deferred.succeed(item.done, false)
+                      return Deferred.succeed(item.done, [] as ReadonlyArray<string>)
                     case "send":
                       return Deferred.succeed(
                         item.done,
@@ -819,7 +817,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
               })(
                 Effect.gen(function* () {
                   const slot = yield* ensureMailboxSlot(ctx.sessionId)
-                  const done = yield* Deferred.make<boolean>()
+                  const done = yield* Deferred.make<ReadonlyArray<string>>()
                   yield* Queue.offer(slot.queue, {
                     _tag: "publish",
                     sessionId: ctx.sessionId,
@@ -832,55 +830,14 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
                     currentSession._tag === "Some" &&
                     currentSession.value.sessionId === ctx.sessionId
                   ) {
-                    return false
+                    // Re-entrant publish from inside the same mailbox: cannot
+                    // wait on `done` (would deadlock). The caller is itself an
+                    // effect inside the mailbox loop and will be told via the
+                    // outer publish's deferred. Treat as "no transitions
+                    // observed by this nested call".
+                    return [] as ReadonlyArray<string>
                   }
                   return yield* Deferred.await(done)
-                }),
-              ),
-
-            deriveAll: (sessionId, ctx) =>
-              Effect.withSpan("WorkflowRuntime.deriveAll")(
-                Effect.gen(function* () {
-                  const entries = yield* getOrSpawnActors(sessionId)
-                  const results: Array<{ extensionId: string; projection: TurnProjection }> = []
-                  for (const entry of entries) {
-                    const { ref, actor } = entry
-                    const turnProject = actor?.turn?.project
-                    if (turnProject === undefined) continue
-                    const snapshotResult = yield* runSupervised(
-                      sessionId,
-                      undefined,
-                      entry,
-                      "snapshot",
-                      (actorRef) => actorRef.snapshot,
-                    )
-                    let snapshot: ExtensionSnapshot = { state: undefined, epoch: 0 }
-                    if (snapshotResult._tag === "success") {
-                      snapshot = snapshotResult.value
-                    } else if (snapshotResult._tag === "protocol") {
-                      snapshot = yield* logIsolatedFailure("extension.snapshot.failed", {
-                        actorId: ref.id,
-                        error: snapshotResult.error.message,
-                      }).pipe(Effect.as({ state: undefined, epoch: 0 }))
-                    }
-                    const { state } = snapshot
-                    if (state === undefined) continue
-                    const turnExit = yield* Effect.exit(
-                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                      Effect.sync(() => turnProject(state as { readonly _tag: string }, ctx)),
-                    )
-                    const derived =
-                      turnExit._tag === "Success"
-                        ? turnExit.value
-                        : yield* logIsolatedFailure("extension.derive.failed", {
-                            actorId: ref.id,
-                            error: formatCause(turnExit.cause),
-                          }).pipe(Effect.as(undefined))
-                    if (derived !== undefined) {
-                      results.push({ extensionId: ref.id, projection: derived })
-                    }
-                  }
-                  return results
                 }),
               ),
 
@@ -933,76 +890,6 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
                   }
                   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                   return result as ExtractExtensionReply<M>
-                }),
-              ),
-
-            getUiSnapshots: (sessionId, branchId) =>
-              Effect.withSpan("WorkflowRuntime.getUiSnapshots")(
-                Effect.gen(function* () {
-                  const snapshots: ExtensionUiSnapshot[] = []
-                  const entries = yield* getOrSpawnActors(sessionId, branchId)
-                  for (const entry of entries) {
-                    const { ref, actor } = entry
-                    const snapshotConfig = actor?.snapshot
-                    if (snapshotConfig === undefined) continue
-                    const snapshotResult = yield* runSupervised(
-                      sessionId,
-                      branchId,
-                      entry,
-                      "snapshot",
-                      (actorRef) => actorRef.snapshot,
-                    )
-                    let snapshot: ExtensionSnapshot = { state: undefined, epoch: 0 }
-                    if (snapshotResult._tag === "success") {
-                      snapshot = snapshotResult.value
-                    } else if (snapshotResult._tag === "protocol") {
-                      snapshot = yield* logIsolatedFailure("extension.snapshot.failed", {
-                        actorId: ref.id,
-                        error: snapshotResult.error.message,
-                      }).pipe(Effect.as({ state: undefined, epoch: 0 }))
-                    }
-                    const { state, epoch } = snapshot
-                    if (state === undefined) continue
-                    const project =
-                      snapshotConfig.project ??
-                      ((value: { readonly _tag: string }) => value as unknown)
-                    const snapshotProjectExit = yield* Effect.exit(
-                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                      Effect.sync(() => project(state as { readonly _tag: string })),
-                    )
-                    let model =
-                      snapshotProjectExit._tag === "Success"
-                        ? snapshotProjectExit.value
-                        : yield* logIsolatedFailure("extension.snapshot.project.failed", {
-                            actorId: ref.id,
-                            error: formatCause(snapshotProjectExit.cause),
-                          }).pipe(Effect.as(undefined))
-                    if (model !== undefined && snapshotConfig.schema !== undefined) {
-                      model = yield* Schema.decodeUnknownEffect(
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                        snapshotConfig.schema as Schema.Any,
-                      )(model).pipe(
-                        Effect.catchEager(() =>
-                          Effect.logWarning("extension.snapshot.schemaValidation.failed").pipe(
-                            Effect.annotateLogs({ actorId: ref.id }),
-                            Effect.as(undefined),
-                          ),
-                        ),
-                      )
-                    }
-                    if (model !== undefined) {
-                      snapshots.push(
-                        new ExtensionUiSnapshotClass({
-                          sessionId,
-                          branchId,
-                          extensionId: ref.id,
-                          epoch,
-                          model,
-                        }),
-                      )
-                    }
-                  }
-                  return snapshots
                 }),
               ),
 

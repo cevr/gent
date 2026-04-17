@@ -21,7 +21,6 @@ import {
   type ProjectionContribution,
   ProjectionError,
   type PromptSection,
-  type TurnProjection,
 } from "@gent/core/extensions/api"
 import {
   MemoryVault,
@@ -29,7 +28,6 @@ import {
   projectKey as projectKeyOf,
   type MemoryEntry,
 } from "./vault.js"
-import type { MemoryState } from "./state.js"
 
 const MAX_PROMPT_ENTRIES = 8
 const RECALL_HINT = "Use memory_recall to read full memory details or search for specific topics."
@@ -125,59 +123,4 @@ export const MemoryVaultProjection: ProjectionContribution<VaultProjectionValue,
     const section = buildVaultPromptSection(value.entries, value.projectKey)
     return section !== undefined ? [section] : []
   },
-  ui: {
-    schema: MemoryVaultUiModel,
-    project: (value) => ({
-      vaultCount: value.entries.length,
-      ...(value.projectKey !== undefined ? { projectKey: value.projectKey } : {}),
-      entries: value.entries.slice(0, 5).map((e) => ({
-        title: e.title,
-        scope: e.frontmatter.scope,
-        summary: e.summary,
-      })),
-    }),
-  },
-}
-
-// ── Session-memory projection helpers (consumed by the actor's turn/snapshot) ──
-
-const buildSessionPromptSection = (state: MemoryState): PromptSection | undefined => {
-  if (state.sessionMemories.length === 0) return undefined
-  const lines: string[] = ["### Session"]
-  for (const m of state.sessionMemories.slice(0, 3)) {
-    lines.push(`- **${m.title}** — ${m.content.slice(0, 80)}`)
-  }
-  return {
-    id: "memory-session",
-    content: `## Session Memory\n\n${lines.join("\n")}\n\n${RECALL_HINT}`,
-    priority: 51,
-  }
-}
-
-/**
- * UI snapshot model for the session-memory portion of the actor.
- * The vault portion has its own projection-emitted snapshot (`memory-vault`).
- */
-export const MemorySessionUiModel = Schema.Struct({
-  sessionCount: Schema.Number,
-  entries: Schema.Array(
-    Schema.Struct({
-      title: Schema.String,
-      summary: Schema.String,
-    }),
-  ),
-})
-export type MemorySessionUiModel = typeof MemorySessionUiModel.Type
-
-export const projectSessionMemorySnapshot = (state: MemoryState): MemorySessionUiModel => ({
-  sessionCount: state.sessionMemories.length,
-  entries: state.sessionMemories.slice(0, 5).map((m) => ({
-    title: m.title,
-    summary: m.content.slice(0, 80),
-  })),
-})
-
-export const projectSessionMemoryTurn = (state: MemoryState): TurnProjection => {
-  const section = buildSessionPromptSection(state)
-  return { promptSections: section !== undefined ? [section] : [] }
 }

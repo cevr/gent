@@ -333,16 +333,29 @@ export class AgentRestarted extends Schema.TaggedClass<AgentRestarted>()("AgentR
 
 // Extension State Events
 
-export class ExtensionUiSnapshot extends Schema.TaggedClass<ExtensionUiSnapshot>()(
-  "ExtensionUiSnapshot",
+/**
+ * Typed pulse emitted whenever an extension's externally-observable state
+ * may have changed. Carries no payload — clients fetch via the extension's
+ * typed `QueryContribution` (the published transport surface).
+ *
+ * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
+ * is honest: it tells subscribers "extension X has news" without coupling a
+ * schema between server and client. Any transport consumer (TUI, SDK, future
+ * web UI) reads the new state the same way — via `client.extension.query`.
+ *
+ * Server publishes this after:
+ *   - A workflow state machine transition (machine.afterTransition)
+ *   - A projection's underlying source emits an event the projection observes
+ *
+ * Client widgets subscribe by `extensionId` filter and refetch their typed
+ * query on each pulse.
+ */
+export class ExtensionStateChanged extends Schema.TaggedClass<ExtensionStateChanged>()(
+  "ExtensionStateChanged",
   {
     sessionId: SessionId,
     branchId: BranchId,
     extensionId: Schema.String,
-    /** Monotonic version for intent staleness detection */
-    epoch: Schema.Number,
-    /** Serialized uiModel from derive() — schema-validated per extension */
-    model: Schema.Unknown,
   },
 ) {}
 
@@ -393,7 +406,7 @@ export const AgentEvent = Schema.Union([
   TaskStopped,
   TaskDeleted,
   AgentRestarted,
-  ExtensionUiSnapshot,
+  ExtensionStateChanged,
 ])
 export type AgentEvent = typeof AgentEvent.Type
 
@@ -456,7 +469,7 @@ const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean =
 
 /**
  * BaseEventStore — raw storage-backed publisher.
- * Used directly for synthetic events (ExtensionUiSnapshot) to avoid recursion.
+ * Used directly for synthetic events (ExtensionStateChanged) to avoid recursion.
  * Production code should use EventStore which wraps this with extension reduce.
  */
 export class BaseEventStore extends Context.Service<BaseEventStore, EventStoreService>()(

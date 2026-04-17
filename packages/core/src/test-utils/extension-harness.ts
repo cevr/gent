@@ -319,8 +319,6 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     ask: dieStub("extension.ask"),
     query: dieStub("extension.query"),
     mutate: dieStub("extension.mutate"),
-    getUiSnapshots: dieStub("extension.getUiSnapshots"),
-    getUiSnapshot: dieStub("extension.getUiSnapshot"),
   },
   agent: {
     get: dieStub("agent.get"),

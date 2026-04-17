@@ -19,9 +19,6 @@ import {
   defineTool,
   toolContribution,
   type ExtensionActorDefinition,
-  type ExtensionTurnContext,
-  type TurnProjection,
-  type PromptSection,
   type ToolContext,
 } from "@gent/core/extensions/api"
 import {
@@ -31,8 +28,6 @@ import {
   ContentPatch,
   ReadQuery,
   type Artifact,
-  type ArtifactUiModel,
-  ArtifactUiModel as ArtifactUiModelSchema,
   Artifact as ArtifactSchema,
 } from "../artifacts-protocol.js"
 
@@ -176,46 +171,12 @@ const artifactsMachine = Machine.make({
     return Machine.reply(ArtifactsMachineState.Active({ items: state.items }), filtered)
   })
 
-// ── Prompt projection ──
-
-const projectTurn = (
-  state: typeof ArtifactsMachineState.Type,
-  ctx: ExtensionTurnContext,
-): TurnProjection => {
-  const items = state.items.filter(
-    (a) => a.status === "active" && (a.branchId === undefined || a.branchId === ctx.branchId),
-  )
-  if (items.length === 0) return {}
-
-  const lines = items.map((a) => {
-    const path = a.path !== undefined ? ` (${a.path})` : ""
-    return `- **${a.label}** [${a.sourceTool}]${path}`
-  })
-
-  const section: PromptSection = {
-    id: "active-artifacts",
-    content: `## Active Artifacts\n\n${lines.join("\n")}\n\nUse the \`artifact_read\` tool to view full content.`,
-    priority: 92,
-  }
-
-  return { promptSections: [section] }
-}
-
-// ── UI snapshot ──
-
-const projectSnapshot = (state: typeof ArtifactsMachineState.Type): ArtifactUiModel => ({
-  items: state.items.map((a) => ({
-    id: a.id,
-    label: a.label,
-    sourceTool: a.sourceTool,
-    status: a.status,
-    path: a.path,
-    branchId: a.branchId,
-    createdAt: a.createdAt,
-  })),
-})
-
 // ── Actor ──
+//
+// Snapshot/turn fields are gone — the artifacts widget reads via the typed
+// `ArtifactProtocol.List(...)` ask, and per-turn prompt would need either a
+// projection over machine state (not yet wired) or a typed workflow-state
+// reader. Per-turn prompt section temporarily dropped.
 
 const artifactsActor: ExtensionActorDefinition<
   typeof ArtifactsMachineState.Type,
@@ -229,13 +190,6 @@ const artifactsActor: ExtensionActorDefinition<
     if (ArtifactProtocol.Update.is(message)) return ArtifactsMachineEvent.Update(message)
     if (ArtifactProtocol.Clear.is(message)) return ArtifactsMachineEvent.Clear(message)
     if (ArtifactProtocol.List.is(message)) return ArtifactsMachineEvent.List(message)
-  },
-  snapshot: {
-    schema: ArtifactUiModelSchema,
-    project: projectSnapshot,
-  },
-  turn: {
-    project: projectTurn,
   },
   stateSchema: ArtifactsMachineState,
   protocols: ArtifactProtocol,

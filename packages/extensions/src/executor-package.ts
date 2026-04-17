@@ -1,8 +1,9 @@
 import { defineExtensionPackage } from "@gent/core/extensions/api"
-import { ExecutorExtension, ExecutorUiModel } from "./executor/index.js"
+import { ExecutorExtension } from "./executor/index.js"
+import { ExecutorProtocol } from "./executor/protocol.js"
 
 export const ExecutorPackage = defineExtensionPackage({
   id: "@gent/executor",
   server: ExecutorExtension,
-  snapshot: ExecutorUiModel,
+  snapshotRequest: () => ExecutorProtocol.GetSnapshot(),
 })
