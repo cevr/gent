@@ -181,13 +181,33 @@ export type AnyResourceContribution = ResourceContribution<any, ResourceScope, a
 // ── Smart constructor ──
 
 /**
+ * Spec type accepted by {@link defineResource}. Uses `NoInfer` on the
+ * `tag` field so the identity `A` is inferred from `layer` only — passing
+ * a tag for a different service identity is then a type error rather
+ * than a silent unification of `A` to a union supertype.
+ */
+export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
+  readonly tag?: Context.Key<NoInfer<A>, unknown>
+  readonly scope: S
+  readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
+  readonly start?: Effect.Effect<void, E, NoInfer<A> | R>
+  readonly stop?: Effect.Effect<void, never, NoInfer<A>>
+  readonly subscriptions?: ReadonlyArray<ResourceSubscription>
+  readonly schedule?: ReadonlyArray<ResourceSchedule>
+}
+
+/**
  * Author-facing factory for a {@link ResourceContribution}.
  *
  * The factory is identity at runtime — its purpose is to (a) infer the
  * generics from the inputs (so authors don't write `<MyService, "session", never, never>`)
  * and (b) anchor the public API surface so future shape changes have one
  * call site to migrate.
+ *
+ * Identity `A` is inferred from `layer`. The `tag` field, if present, is
+ * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
+ * identity exactly. Passing a tag for a different service is a type error.
  */
 export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
-  spec: Omit<ResourceContribution<A, S, R, E>, "_kind">,
+  spec: ResourceSpec<A, S, R, E>,
 ): ResourceContribution<A, S, R, E> => ({ _kind: "resource", ...spec })

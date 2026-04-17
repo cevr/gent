@@ -109,13 +109,25 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         : setupResult.active.map((ext) => {
             const override = config.layerOverrides?.[ext.manifest.id]
             if (override === undefined) return ext
-            // Replace any existing process-scope Resource layer with the
-            // override (or append a new process-scope Resource if none).
+            // E2E test override: REPLACE the entire process-Resource layer
+            // set for this extension with one merged override layer.
+            //
+            // Today every migrated extension has exactly one process Resource,
+            // so this is a 1:1 swap. If an extension grows multiple process
+            // Resources, this helper silently drops the originals — fail
+            // loudly so the test gets updated to provide a complete merged
+            // override (or `layerOverrides` grows a per-resource API).
+            const existingProcessResources = ext.contributions.filter(
+              (c) => c._kind === "resource" && c.scope === "process",
+            )
+            if (existingProcessResources.length > 1) {
+              throw new Error(
+                `e2e-layer.layerOverrides: extension "${ext.manifest.id}" has ${existingProcessResources.length} process-scope Resources; the override path replaces all of them with one merged layer. Provide a complete merged layer in the override factory, or extend layerOverrides to address Resources individually.`,
+              )
+            }
             // Test override layers are heterogeneous; the harness erases R/E
             // at this boundary the same way the legacy `layerContribution`
             // did. Production paths flow through `collectProcessLayers`.
-            // Test override layer; harness boundary erases R/E like the
-            // legacy `layerContribution` did. See header comment.
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
             // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
             const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>
