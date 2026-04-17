@@ -47,16 +47,14 @@ export class SubscriptionEngine extends Context.Service<
    * fail at emit time.
    */
   static withSubscriptions = (
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    subscriptions: ReadonlyArray<ResourceSubscription<any>>,
+    subscriptions: ReadonlyArray<ResourceSubscription>,
   ): Layer.Layer<SubscriptionEngine> => {
     if (subscriptions.length === 0) return SubscriptionEngine.Live
     const registrationLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         const engine = yield* SubscriptionEngine
         for (const sub of subscriptions) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          yield* engine.on(sub.pattern, sub.handler as SubscriptionHandler)
+          yield* engine.on(sub.pattern, sub.handler)
         }
       }),
     )

@@ -73,10 +73,25 @@ export type ScopeOf<S extends ResourceScope> = S extends "process"
  * Pattern: exact channel match, or `"<prefix>:*"` wildcard (matches all
  * `"<prefix>:<rest>"` channels). Errors caught per-handler — a failing
  * handler does not affect other subscribers.
+ *
+ * Handler `R` is `never` at the engine boundary. This matches the legacy
+ * `BusHandler` contract: handlers that need their owning Resource's
+ * service `A` must close over `A` themselves (typically by composing the
+ * subscription handler inside an `Effect.gen` that yields the tag and
+ * captures the resolved value before passing the closure to
+ * `defineResource`). Authoring the handler with an open `R` channel and
+ * relying on the engine to provide it is unsupported — subscriptions live
+ * on the SubscriptionEngine layer, not on per-Resource layers, so the
+ * engine cannot satisfy per-Resource requirements at emit time.
+ *
+ * The `Resource.layer` is the right place to provide `A`: subscriptions
+ * defined inside a `Layer.scopedDiscard` that yields `A` and registers
+ * pre-bound handlers will get `A` for free. C3.6 may revisit this once
+ * real call sites exist.
  */
-export interface ResourceSubscription<R> {
+export interface ResourceSubscription {
   readonly pattern: string
-  readonly handler: (envelope: ResourceBusEnvelope) => Effect.Effect<void, never, R>
+  readonly handler: (envelope: ResourceBusEnvelope) => Effect.Effect<void>
 }
 
 /**
@@ -146,7 +161,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
   readonly start?: Effect.Effect<void, E, A | R>
   readonly stop?: Effect.Effect<void, never, A>
-  readonly subscriptions?: ReadonlyArray<ResourceSubscription<A | R>>
+  readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
 }
 

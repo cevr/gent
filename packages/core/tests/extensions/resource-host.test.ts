@@ -258,6 +258,40 @@ describe("collectSubscriptions", () => {
   test("empty when no extensions provided", () => {
     expect(collectSubscriptions([])).toEqual([])
   })
+
+  test("default scope filter is process — non-process subscriptions excluded", () => {
+    const ext = makeStubExtension("ext", [
+      defineResource({
+        scope: "process",
+        layer: layerA,
+        subscriptions: [{ pattern: "p:exact", handler: () => Effect.void }],
+      }),
+      defineResource({
+        scope: "session",
+        layer: layerB,
+        subscriptions: [{ pattern: "s:exact", handler: () => Effect.void }],
+      }),
+    ])
+    const subs = collectSubscriptions([ext])
+    expect(subs.map((s) => s.pattern)).toEqual(["p:exact"])
+  })
+
+  test("explicit scopes filter — request session/branch only", () => {
+    const ext = makeStubExtension("ext", [
+      defineResource({
+        scope: "process",
+        layer: layerA,
+        subscriptions: [{ pattern: "p:exact", handler: () => Effect.void }],
+      }),
+      defineResource({
+        scope: "session",
+        layer: layerB,
+        subscriptions: [{ pattern: "s:exact", handler: () => Effect.void }],
+      }),
+    ])
+    const subs = collectSubscriptions([ext], ["session", "branch"])
+    expect(subs.map((s) => s.pattern)).toEqual(["s:exact"])
+  })
 })
 
 describe("collectProcessLayers", () => {
