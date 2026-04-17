@@ -3,6 +3,7 @@ import { Effect, Layer, Stream } from "effect"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { modelDriver as modelDriverContribution } from "@gent/core/domain/contribution"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
 import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
@@ -57,7 +58,7 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
   manifest: { id: extId },
   kind: "builtin",
   sourcePath: "test",
-  setup: { modelDrivers },
+  contributions: modelDrivers.map(modelDriverContribution),
 })
 
 const buildProviderLayer = (extensions: LoadedExtension[]) => {

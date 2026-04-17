@@ -4,6 +4,7 @@ import type {
   ScheduledJobContribution,
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
+import { extractJobs } from "../../domain/contribution.js"
 
 export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
 
@@ -166,7 +167,7 @@ const resolveDesiredJobs = (
 
     const desired: DesiredScheduledJob[] = []
     for (const ext of extensions) {
-      for (const job of ext.setup.jobs ?? []) {
+      for (const job of extractJobs(ext.contributions)) {
         const name = jobName(ext.manifest.id, job.id)
         const scriptPath = path.join(
           jobsDir,

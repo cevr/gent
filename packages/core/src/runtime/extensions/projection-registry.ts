@@ -21,6 +21,7 @@
 import { Effect, Schema } from "effect"
 import { ExtensionUiSnapshot } from "../../domain/event.js"
 import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
+import { extractProjections, extractWorkflow } from "../../domain/contribution.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type {
   AnyProjectionContribution,
@@ -114,7 +115,7 @@ const findUiOwners = (
     if (ext === undefined) continue
     if (uiOwner.has(ext.manifest.id)) continue
     if (extensionsWithActorSnapshot.has(ext.manifest.id)) continue
-    const projections = ext.setup.projections ?? []
+    const projections = extractProjections(ext.contributions)
     for (let pi = 0; pi < projections.length; pi++) {
       const projection = projections[pi]
       if (projection?.ui !== undefined) {
@@ -193,7 +194,7 @@ const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): Collect
   const sorted = sortedExtensions(extensions)
   const extensionsWithActorSnapshot = new Set<string>()
   for (const ext of sorted) {
-    if (ext.setup.actor?.snapshot !== undefined) {
+    if (extractWorkflow(ext.contributions)?.snapshot !== undefined) {
       extensionsWithActorSnapshot.add(ext.manifest.id)
     }
   }
@@ -204,7 +205,7 @@ const collectProjections = (extensions: ReadonlyArray<LoadedExtension>): Collect
   for (let ei = 0; ei < sorted.length; ei++) {
     const ext = sorted[ei]
     if (ext === undefined) continue
-    const projections = ext.setup.projections ?? []
+    const projections = extractProjections(ext.contributions)
     for (let pi = 0; pi < projections.length; pi++) {
       const projection = projections[pi]
       if (projection === undefined) continue

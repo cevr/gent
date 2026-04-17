@@ -31,6 +31,7 @@ import {
   isDynamicPromptSection,
 } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { extractBusSubscriptions, extractLayer } from "../domain/contribution.js"
 import { ExtensionEventBus } from "./extensions/event-bus.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -242,16 +243,14 @@ export const compileBaseSections = (
  * call this same builder so the wiring shape is identical.
  */
 export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
-  const extensionLayers = resolved.extensions
-    .filter((ext) => ext.setup.layer !== undefined)
+  const extensionLayers = resolved.extensions.flatMap((ext) => {
+    const layer = extractLayer(ext.contributions)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    .map((ext) => ext.setup.layer as Layer.Layer<any>)
+    return layer === undefined ? [] : [layer as Layer.Layer<any>]
+  })
 
   const busSubscriptions = resolved.extensions.flatMap((ext) =>
-    (ext.setup.busSubscriptions ?? []).map((sub) => ({
-      pattern: sub.pattern,
-      handler: sub.handler,
-    })),
+    extractBusSubscriptions(ext.contributions),
   )
 
   const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(

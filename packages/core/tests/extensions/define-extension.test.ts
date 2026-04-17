@@ -2,9 +2,9 @@
  * defineExtension regression locks.
  *
  * Locks the contract that the public `defineExtension({ id, contributions })` API
- * lowers a flat `Contribution[]` into the legacy `ExtensionSetup` shape that the
- * runtime registry consumes. Each contribution kind round-trips, lifecycle effects
- * compose in registration order, and the result wires into `ExtensionRegistry`.
+ * returns a flat `Contribution[]` from `setup()` that the runtime registry
+ * consumes. Each contribution kind round-trips, lifecycle effects compose in
+ * registration order, and the result wires into `ExtensionRegistry`.
  *
  * Tied to planify Commit 1 — without this, `defineExtension` is a paper API.
  */
@@ -26,6 +26,21 @@ import {
   onShutdownContribution,
   type Contribution,
 } from "@gent/core/extensions/api"
+import {
+  extractAgents,
+  extractBusSubscriptions,
+  extractCommands,
+  extractInterceptors,
+  extractJobs,
+  extractLayer,
+  extractLifecycle,
+  extractPermissionRules,
+  extractPromptSections,
+  extractTools,
+  extractWorkflow,
+  extractExternalDrivers,
+  extractModelDrivers,
+} from "@gent/core/domain/contribution"
 import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
@@ -49,28 +64,29 @@ const stubHostCtx = {
 const setupOf = (ext: ReturnType<typeof defineExtension>) => ext.setup(testSetupCtx())
 
 describe("defineExtension", () => {
-  it.live("empty contribution array produces an empty setup with no fields", () =>
+  it.live("empty contribution array produces an empty contribution list", () =>
     Effect.gen(function* () {
       const ext = defineExtension({ id: "empty", contributions: () => [] })
-      const setup = yield* setupOf(ext)
-      expect(setup.tools).toBeUndefined()
-      expect(setup.agents).toBeUndefined()
-      expect(setup.modelDrivers).toBeUndefined()
-      expect(setup.layer).toBeUndefined()
-      expect(setup.actor).toBeUndefined()
-      expect(setup.commands).toBeUndefined()
-      expect(setup.permissionRules).toBeUndefined()
-      expect(setup.promptSections).toBeUndefined()
-      expect(setup.busSubscriptions).toBeUndefined()
-      expect(setup.jobs).toBeUndefined()
-      expect(setup.externalDrivers).toBeUndefined()
-      expect(setup.hooks).toBeUndefined()
-      expect(setup.onStartup).toBeUndefined()
-      expect(setup.onShutdown).toBeUndefined()
+      const contributions = yield* setupOf(ext)
+      expect(contributions).toEqual([])
+      expect(extractTools(contributions)).toEqual([])
+      expect(extractAgents(contributions)).toEqual([])
+      expect(extractModelDrivers(contributions)).toEqual([])
+      expect(extractLayer(contributions)).toBeUndefined()
+      expect(extractWorkflow(contributions)).toBeUndefined()
+      expect(extractCommands(contributions)).toEqual([])
+      expect(extractPermissionRules(contributions)).toEqual([])
+      expect(extractPromptSections(contributions)).toEqual([])
+      expect(extractBusSubscriptions(contributions)).toEqual([])
+      expect(extractJobs(contributions)).toEqual([])
+      expect(extractExternalDrivers(contributions)).toEqual([])
+      expect(extractInterceptors(contributions)).toEqual([])
+      expect(extractLifecycle(contributions, "startup")).toEqual([])
+      expect(extractLifecycle(contributions, "shutdown")).toEqual([])
     }),
   )
 
-  it.live("each kind round-trips into the corresponding ExtensionSetup field", () =>
+  it.live("each kind round-trips into its corresponding extractor", () =>
     Effect.gen(function* () {
       const myTool = defineTool({
         name: "echo",
@@ -101,16 +117,16 @@ describe("defineExtension", () => {
           layerContribution(myLayer),
         ],
       })
-      const setup = yield* setupOf(ext)
-      expect(setup.tools?.[0]?.name).toBe("echo")
-      expect(setup.agents?.[0]?.name).toBe("cowork")
-      expect(setup.permissionRules?.[0]?.tool).toBe("echo")
-      expect(setup.promptSections?.[0]?.id).toBe("rules")
-      expect(setup.commands?.[0]?.name).toBe("test")
-      expect(setup.jobs?.[0]?.id).toBe("test-job")
-      expect(setup.busSubscriptions?.[0]?.pattern).toBe("agent:*")
-      expect(setup.hooks?.interceptors?.[0]?.key).toBe("prompt.system")
-      expect(setup.layer).toBeDefined()
+      const contributions = yield* setupOf(ext)
+      expect(extractTools(contributions)[0]?.name).toBe("echo")
+      expect(extractAgents(contributions)[0]?.name).toBe("cowork")
+      expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
+      expect(extractPromptSections(contributions)[0]?.id).toBe("rules")
+      expect(extractCommands(contributions)[0]?.name).toBe("test")
+      expect(extractJobs(contributions)[0]?.id).toBe("test-job")
+      expect(extractBusSubscriptions(contributions)[0]?.pattern).toBe("agent:*")
+      expect(extractInterceptors(contributions)[0]?.key).toBe("prompt.system")
+      expect(extractLayer(contributions)).toBeDefined()
     }),
   )
 
@@ -127,9 +143,13 @@ describe("defineExtension", () => {
           onShutdownContribution(append("shutdown-2")),
         ],
       })
-      const setup = yield* setupOf(ext)
-      yield* setup.onStartup ?? Effect.void
-      yield* setup.onShutdown ?? Effect.void
+      const contributions = yield* setupOf(ext)
+      for (const eff of extractLifecycle(contributions, "startup")) {
+        yield* eff
+      }
+      for (const eff of extractLifecycle(contributions, "shutdown")) {
+        yield* eff
+      }
       expect(log).toEqual(["startup-1", "startup-2", "shutdown-1", "shutdown-2"])
     }),
   )
@@ -145,9 +165,9 @@ describe("defineExtension", () => {
           commandContribution({ name: "cmd2", handler: () => Effect.void }),
         ],
       })
-      const setup = yield* setupOf(ext)
-      expect(setup.busSubscriptions?.length).toBe(2)
-      expect(setup.commands?.length).toBe(2)
+      const contributions = yield* setupOf(ext)
+      expect(extractBusSubscriptions(contributions).length).toBe(2)
+      expect(extractCommands(contributions).length).toBe(2)
     }),
   )
 
@@ -163,8 +183,8 @@ describe("defineExtension", () => {
             ] satisfies ReadonlyArray<Contribution>
           }),
       })
-      const setup = yield* setupOf(ext)
-      expect(setup.commands?.[0]?.name).toBe("from-effect")
+      const contributions = yield* setupOf(ext)
+      expect(extractCommands(contributions)[0]?.name).toBe("from-effect")
     }),
   )
 
@@ -206,12 +226,12 @@ describe("defineExtension", () => {
           ),
         ],
       })
-      const setup = yield* setupOf(ext)
+      const contributions = yield* setupOf(ext)
       const loaded = {
         manifest: { id: "wired" },
         kind: "builtin" as const,
         sourcePath: "/test/wired",
-        setup,
+        contributions,
       }
       const resolved = resolveExtensions([loaded])
       expect(resolved.tools.get("from-define")?.name).toBe("from-define")

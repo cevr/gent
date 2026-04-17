@@ -5,6 +5,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { workflow as workflowContribution } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -31,7 +32,12 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
     },
     derive: (state) => ({ uiModel: state }),
   })
-  return { manifest: { id }, kind: "builtin", sourcePath: "builtin", setup: { actor } }
+  return {
+    manifest: { id },
+    kind: "builtin",
+    sourcePath: "builtin",
+    contributions: [workflowContribution(actor)],
+  }
 }
 
 const makeLayer = (extensions: LoadedExtension[]) =>
@@ -138,7 +144,7 @@ describe("Extension state persistence", () => {
       manifest: { id: "ephemeral" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { actor },
+      contributions: [workflowContribution(actor)],
     }
 
     const layer = makeLayer([nonPersistent])
@@ -239,7 +245,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "corrupt-test" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { actor },
+      contributions: [workflowContribution(actor)],
     }
 
     const layer = makeLayer([ext])
@@ -290,7 +296,7 @@ describe("Persistence edge cases", () => {
       manifest: { id: "resilient" },
       kind: "builtin",
       sourcePath: "builtin",
-      setup: { actor },
+      contributions: [workflowContribution(actor)],
     }
 
     const layer = makeLayer([ext])

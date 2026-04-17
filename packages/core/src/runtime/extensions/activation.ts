@@ -6,6 +6,16 @@ import type {
   FailedExtensionPhase,
   LoadedExtension,
 } from "../../domain/extension.js"
+import {
+  type Contribution,
+  extractAgents,
+  extractExternalDrivers,
+  extractLifecycle,
+  extractModelDrivers,
+  extractPromptSections,
+  extractTools,
+  extractWorkflow,
+} from "../../domain/contribution.js"
 import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
@@ -83,9 +93,8 @@ export const setupBuiltinExtensions = (params: {
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
             kind: "builtin",
-            hasActor: exit.value.setup.actor !== undefined,
-            hasLayer: exit.value.setup.layer !== undefined,
-            tools: exit.value.setup.tools?.length ?? 0,
+            hasWorkflow: extractWorkflow(exit.value.contributions) !== undefined,
+            tools: extractTools(exit.value.contributions).length,
           }),
         )
       } else {
@@ -142,9 +151,8 @@ export const setupDiscoveredExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             kind: discovered.kind,
-            hasActor: exit.value.setup.actor !== undefined,
-            hasLayer: exit.value.setup.layer !== undefined,
-            tools: exit.value.setup.tools?.length ?? 0,
+            hasWorkflow: extractWorkflow(exit.value.contributions) !== undefined,
+            tools: extractTools(exit.value.contributions).length,
           }),
         )
       } else {
@@ -219,7 +227,7 @@ export const collectValidationFailures = (
   }
 
   const collectScopedCollisions = <T>(
-    extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
+    extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
     getKey: (item: T) => string,
     label: string,
   ) => {
@@ -227,7 +235,7 @@ export const collectValidationFailures = (
     for (const ext of extensions) {
       const scopeMap = byScope.get(ext.kind) ?? new Map<string, LoadedExtension[]>()
       const seen = new Set<string>()
-      for (const item of extract(ext.setup) ?? []) {
+      for (const item of extract(ext.contributions)) {
         const key = getKey(item)
         if (seen.has(key)) continue
         seen.add(key)
@@ -247,31 +255,11 @@ export const collectValidationFailures = (
     }
   }
 
-  collectScopedCollisions(
-    (setup) => setup.tools,
-    (tool) => tool.name,
-    "tool",
-  )
-  collectScopedCollisions(
-    (setup) => setup.agents,
-    (agent) => agent.name,
-    "agent",
-  )
-  collectScopedCollisions(
-    (setup) => setup.modelDrivers,
-    (driver) => driver.id,
-    "model driver",
-  )
-  collectScopedCollisions(
-    (setup) => setup.externalDrivers,
-    (driver) => driver.id,
-    "external driver",
-  )
-  collectScopedCollisions(
-    (setup) => setup.promptSections,
-    (section) => section.id,
-    "prompt section",
-  )
+  collectScopedCollisions(extractTools, (tool) => tool.name, "tool")
+  collectScopedCollisions(extractAgents, (agent) => agent.name, "agent")
+  collectScopedCollisions(extractModelDrivers, (driver) => driver.id, "model driver")
+  collectScopedCollisions(extractExternalDrivers, (driver) => driver.id, "external driver")
+  collectScopedCollisions(extractPromptSections, (section) => section.id, "prompt section")
 
   return failures
 }
@@ -304,17 +292,21 @@ export const activateLoadedExtensions = (
     const failed: FailedExtension[] = []
 
     for (const ext of extensions) {
-      if (ext.setup.onStartup !== undefined) {
-        const exit = yield* ext.setup.onStartup.pipe(Effect.exit)
+      const startupEffects = extractLifecycle(ext.contributions, "startup")
+      const shutdownEffects = extractLifecycle(ext.contributions, "shutdown")
+      let startupFailed = false
+      for (const effect of startupEffects) {
+        const exit = yield* effect.pipe(Effect.exit)
         if (exit._tag === "Failure") {
           const error = formatFailure(Cause.squash(exit.cause))
           failed.push(toFailedExtension(ext, "startup", error))
-          continue
+          startupFailed = true
+          break
         }
       }
+      if (startupFailed) continue
 
-      if (ext.setup.onShutdown !== undefined) {
-        const shutdown = ext.setup.onShutdown
+      for (const shutdown of shutdownEffects) {
         yield* Effect.addFinalizer(() => shutdown.pipe(Effect.catchCause(() => Effect.void)))
       }
 
@@ -366,15 +358,17 @@ export const reconcileLoadedExtensions = (params: {
       groupScheduledJobFailures(scheduledJobFailures),
     )
 
-    const actorCount = activated.active.filter((ext) => ext.setup.actor !== undefined).length
+    const workflowCount = activated.active.filter(
+      (ext) => extractWorkflow(ext.contributions) !== undefined,
+    ).length
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
       Effect.annotateLogs({
         active: activated.active.length,
         failed: allFailed.length,
-        withActors: actorCount,
+        withWorkflows: workflowCount,
         activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
-        actorIds: activated.active
-          .filter((ext) => ext.setup.actor !== undefined)
+        workflowIds: activated.active
+          .filter((ext) => extractWorkflow(ext.contributions) !== undefined)
           .map((ext) => ext.manifest.id)
           .join(", "),
         ...(allFailed.length > 0

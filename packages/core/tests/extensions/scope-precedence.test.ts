@@ -19,6 +19,13 @@ import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/exten
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
 import { defineTool } from "@gent/core/domain/tool"
+import {
+  agent as agentContribution,
+  interceptor as interceptorContribution,
+  promptSection as promptSectionContribution,
+  tool as toolContribution,
+  type Contribution,
+} from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -39,8 +46,8 @@ const toolReturning = (name: string, label: string) =>
 const ext = (
   id: string,
   kind: "builtin" | "user" | "project",
-  setup: LoadedExtension["setup"],
-): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, setup })
+  contributions: ReadonlyArray<Contribution>,
+): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
 
 describe("scope precedence", () => {
   describe("keyed contributions — later scope wins", () => {
@@ -50,9 +57,9 @@ describe("scope precedence", () => {
       const projectTool = toolReturning("greet", "from-project")
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { tools: [builtinTool] }),
-        ext("b", "user", { tools: [userTool] }),
-        ext("c", "project", { tools: [projectTool] }),
+        ext("a", "builtin", [toolContribution(builtinTool)]),
+        ext("b", "user", [toolContribution(userTool)]),
+        ext("c", "project", [toolContribution(projectTool)]),
       ])
 
       const tool = resolved.tools.get("greet")!
@@ -66,8 +73,8 @@ describe("scope precedence", () => {
       const projectAgent = { ...Agents.cowork, description: "shadowed" }
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { agents: [builtinAgent] }),
-        ext("b", "project", { agents: [projectAgent] }),
+        ext("a", "builtin", [agentContribution(builtinAgent)]),
+        ext("b", "project", [agentContribution(projectAgent)]),
       ])
       return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
     })
@@ -77,8 +84,8 @@ describe("scope precedence", () => {
       const projectSection = { id: "rules", content: "project rules", priority: 50 }
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { promptSections: [builtinSection] }),
-        ext("b", "project", { promptSections: [projectSection] }),
+        ext("a", "builtin", [promptSectionContribution(builtinSection)]),
+        ext("b", "project", [promptSectionContribution(projectSection)]),
       ])
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
@@ -91,8 +98,8 @@ describe("scope precedence", () => {
 
       // Pass in reverse order to prove the registry sorts, not just respects insertion
       const resolved = resolveExtensions([
-        ext("z-ext", "builtin", { tools: [toolFromZ] }),
-        ext("a-ext", "builtin", { tools: [toolFromA] }),
+        ext("z-ext", "builtin", [toolContribution(toolFromZ)]),
+        ext("a-ext", "builtin", [toolContribution(toolFromA)]),
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
@@ -107,21 +114,19 @@ describe("scope precedence", () => {
     it.live("execution order proves project is outermost", () => {
       const log: string[] = []
       const make = (id: string, kind: "builtin" | "user" | "project") =>
-        ext(id, kind, {
-          hooks: {
-            interceptors: [
-              defineInterceptor("prompt.system", (input, next) => {
-                log.push(`${kind}-before`)
-                return next(input).pipe(
-                  Effect.map((r) => {
-                    log.push(`${kind}-after`)
-                    return r
-                  }),
-                )
-              }),
-            ],
-          },
-        })
+        ext(id, kind, [
+          interceptorContribution(
+            defineInterceptor("prompt.system", (input, next) => {
+              log.push(`${kind}-before`)
+              return next(input).pipe(
+                Effect.map((r) => {
+                  log.push(`${kind}-after`)
+                  return r
+                }),
+              )
+            }),
+          ),
+        ])
 
       // Pass out of order to prove sorting, not insertion
       const compiled = compileInterceptors([

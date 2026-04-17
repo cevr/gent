@@ -15,6 +15,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
+import { command as commandContribution } from "@gent/core/domain/contribution"
 import { toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
@@ -23,19 +24,17 @@ describe("extension command RPCs", () => {
   const TestCommandsExtension: GentExtension = {
     manifest: { id: "@test/commands" },
     setup: () =>
-      Effect.succeed({
-        commands: [
-          {
-            name: "greet",
-            description: "Say hello",
-            handler: (args: string, ctx: ExtensionHostContext) =>
-              Effect.sync(() => {
-                invoked.push({ args, sessionId: ctx.sessionId })
-              }),
-          },
-          { name: "noop", handler: () => Effect.void },
-        ],
-      }),
+      Effect.succeed([
+        commandContribution({
+          name: "greet",
+          description: "Say hello",
+          handler: (args: string, ctx: ExtensionHostContext) =>
+            Effect.sync(() => {
+              invoked.push({ args, sessionId: ctx.sessionId })
+            }),
+        }),
+        commandContribution({ name: "noop", handler: () => Effect.void }),
+      ]),
   }
 
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(

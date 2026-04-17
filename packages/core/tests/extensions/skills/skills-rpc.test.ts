@@ -14,6 +14,7 @@ import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { Skill, Skills } from "@gent/extensions/skills/skills"
+import { layer as layerContribution } from "@gent/core/domain/contribution"
 import { createRpcHarness } from "../helpers/rpc-harness"
 
 const testSkills = [
@@ -40,12 +41,15 @@ const setupSkillsExtension = Effect.provide(
       "/test/cwd",
       "/test/home",
     )
+    const testLayerContribution = layerContribution(
+      Skills.Test(testSkills) as Layer.Layer<never, never, object>,
+    )
     return {
       ...loaded,
-      setup: {
-        ...loaded.setup,
-        layer: Skills.Test(testSkills) as Layer.Layer<never, never, object>,
-      },
+      contributions: [
+        ...loaded.contributions.filter((c) => c._kind !== "layer"),
+        testLayerContribution,
+      ],
     } satisfies LoadedExtension
   }),
   BunServices.layer,

@@ -15,6 +15,7 @@
  */
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../domain/extension.js"
+import { extractMutations } from "../../domain/contribution.js"
 import {
   MutationError,
   MutationNotFoundError,
@@ -52,7 +53,7 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredMutation[] = []
   for (const ext of sorted) {
-    for (const mutation of ext.setup.mutations ?? []) {
+    for (const mutation of extractMutations(ext.contributions)) {
       entries.push({ extensionId: ext.manifest.id, mutation })
     }
   }

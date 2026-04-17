@@ -8,6 +8,7 @@
 import { Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import type { AgentDefinition } from "../domain/agent.js"
+import { agent as agentContribution } from "../domain/contribution.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
@@ -41,7 +42,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
       manifest: { id: "test-agents" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { agents: [...agents], tools: [] },
+      contributions: agents.map(agentContribution),
     },
   ])
 

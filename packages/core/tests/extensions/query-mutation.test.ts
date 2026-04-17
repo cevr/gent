@@ -36,6 +36,10 @@ import {
 } from "@gent/core/domain/mutation"
 import { compileQueries } from "@gent/core/runtime/extensions/query-registry"
 import { compileMutations } from "@gent/core/runtime/extensions/mutation-registry"
+import {
+  query as queryContribution,
+  mutation as mutationContribution,
+} from "@gent/core/domain/contribution"
 
 const ctx: QueryContext & MutationContext = {
   sessionId: "s" as QueryContext["sessionId"],
@@ -53,7 +57,9 @@ const extWithQueries = (
   kind,
   sourcePath: `/test/${id}`,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  setup: { queries: queries as ReadonlyArray<QueryContribution<never, never, never>> },
+  contributions: (queries as ReadonlyArray<QueryContribution<never, never, never>>).map(
+    queryContribution,
+  ),
 })
 
 const extWithMutations = (
@@ -65,7 +71,9 @@ const extWithMutations = (
   kind,
   sourcePath: `/test/${id}`,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  setup: { mutations: mutations as ReadonlyArray<MutationContribution<never, never, never>> },
+  contributions: (mutations as ReadonlyArray<MutationContribution<never, never, never>>).map(
+    mutationContribution,
+  ),
 })
 
 describe("query-mutation registries", () => {

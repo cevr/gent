@@ -129,7 +129,7 @@ beforeAll(() => {
   writeFileSync(
     join(USER_DIR, "custom-read", "index.ts"),
     `// server-side extension (should be skipped by TUI discovery)
-export default { manifest: { id: "custom-read" }, setup: () => ({ tools: [] }) }`,
+export default { manifest: { id: "custom-read" }, setup: () => [] }`,
   )
   writeFileSync(
     join(USER_DIR, "custom-read", "client.ts"),
@@ -1072,7 +1072,7 @@ describe("ExtensionPackage.tui()", () => {
   const stubServer = (id: string) =>
     ({
       manifest: { id },
-      setup: () => Effect.succeed({}),
+      setup: () => Effect.succeed([]),
     }) as GentExtension
 
   const TestSnapshot = Schema.Struct({ value: Schema.Number })

@@ -6,6 +6,7 @@ import * as NodePath from "node:path"
 import * as Os from "node:os"
 import type { LoadedExtension, ScheduledJobContribution } from "@gent/core/domain/extension"
 import { reconcileScheduledJobs } from "@gent/core/runtime/extensions/scheduler"
+import { job as jobContribution } from "@gent/core/domain/contribution"
 
 const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
@@ -16,9 +17,7 @@ const makeLoaded = (
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
-  setup: {
-    jobs,
-  },
+  contributions: jobs.map(jobContribution),
 })
 
 describe("scheduled jobs", () => {

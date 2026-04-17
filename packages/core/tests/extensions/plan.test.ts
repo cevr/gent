@@ -2,6 +2,7 @@ import { describe, test, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { PlanExtension, PLAN_EXTENSION_ID } from "@gent/extensions/plan"
 import { testSetupCtx } from "@gent/core/test-utils"
+import { extractTools, extractWorkflow } from "@gent/core/domain/contribution"
 
 describe("Plan extension", () => {
   test("has correct extension ID", () => {
@@ -11,14 +12,14 @@ describe("Plan extension", () => {
 
   test("registers plan tool", () =>
     Effect.gen(function* () {
-      const setup = yield* PlanExtension.setup(testSetupCtx())
-      const toolNames = setup.tools.map((t) => t.name)
+      const contributions = yield* PlanExtension.setup(testSetupCtx())
+      const toolNames = extractTools(contributions).map((t) => t.name)
       expect(toolNames).toContain("plan")
     }).pipe(Effect.runPromise))
 
   test("has no actor (tool-only extension)", () =>
     Effect.gen(function* () {
-      const setup = yield* PlanExtension.setup(testSetupCtx())
-      expect(setup.actor).toBeUndefined()
+      const contributions = yield* PlanExtension.setup(testSetupCtx())
+      expect(extractWorkflow(contributions)).toBeUndefined()
     }).pipe(Effect.runPromise))
 })

@@ -1,13 +1,16 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type {
-  ExtensionKind,
-  ExtensionSetup,
-  GentExtension,
-  LoadedExtension,
-} from "../../domain/extension.js"
+import type { ExtensionKind, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
+import {
+  type Contribution,
+  extractAgents,
+  extractExternalDrivers,
+  extractModelDrivers,
+  extractPromptSections,
+  extractTools,
+} from "../../domain/contribution.js"
 import type { ExtensionPackage } from "../../domain/extension-package.js"
 
 // Discovery — scan directories for extension files
@@ -240,7 +243,7 @@ export const setupExtension = (
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const spawner = yield* ChildProcessSpawner
-    const setup: ExtensionSetup = yield* extension
+    const contributions: ReadonlyArray<Contribution> = yield* extension
       .setup({
         cwd,
         source: sourcePath,
@@ -265,20 +268,20 @@ export const setupExtension = (
       manifest: extension.manifest,
       kind,
       sourcePath,
-      setup,
+      contributions,
     }
   }).pipe(Effect.withSpan("ExtensionLoader.setupExtension"))
 
 /** Check same-scope collision for a keyed contribution. Returns error or undefined. */
 const checkScopedCollision = <T>(
   extensions: ReadonlyArray<LoadedExtension>,
-  extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
+  extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
   getKey: (item: T) => string,
   label: string,
 ): ExtensionLoadError | undefined => {
   const byScope = new Map<string, Map<string, string>>()
   for (const ext of extensions) {
-    const items = extract(ext.setup) ?? []
+    const items = extract(ext.contributions)
     const scope = ext.kind
     const scopeMap = byScope.get(scope) ?? new Map<string, string>()
     for (const item of items) {
@@ -320,36 +323,11 @@ export const validateExtensions = (
 
     // Check keyed contributions — same key in same scope from different extensions is ambiguous
     const checks = [
-      checkScopedCollision(
-        extensions,
-        (s) => s.tools,
-        (t) => t.name,
-        "tool",
-      ),
-      checkScopedCollision(
-        extensions,
-        (s) => s.agents,
-        (a) => a.name,
-        "agent",
-      ),
-      checkScopedCollision(
-        extensions,
-        (s) => s.modelDrivers,
-        (d) => d.id,
-        "model driver",
-      ),
-      checkScopedCollision(
-        extensions,
-        (s) => s.externalDrivers,
-        (d) => d.id,
-        "external driver",
-      ),
-      checkScopedCollision(
-        extensions,
-        (s) => s.promptSections,
-        (p) => p.id,
-        "prompt section",
-      ),
+      checkScopedCollision(extensions, extractTools, (t) => t.name, "tool"),
+      checkScopedCollision(extensions, extractAgents, (a) => a.name, "agent"),
+      checkScopedCollision(extensions, extractModelDrivers, (d) => d.id, "model driver"),
+      checkScopedCollision(extensions, extractExternalDrivers, (d) => d.id, "external driver"),
+      checkScopedCollision(extensions, extractPromptSections, (p) => p.id, "prompt section"),
     ]
     for (const error of checks) {
       if (error !== undefined) return yield* Effect.fail(error)

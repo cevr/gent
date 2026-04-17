@@ -19,6 +19,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { workflow as workflowContribution } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -46,7 +47,7 @@ const makeCounterExtension = (id: string): LoadedExtension => ({
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { actor: makeCounterActor(id) },
+  contributions: [workflowContribution(makeCounterActor(id))],
 })
 
 const makeRuntimeLayer = (extensions: LoadedExtension[]) => makeActorRuntimeLayer({ extensions })
@@ -192,13 +193,13 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "healthy-actor" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: healthy },
+        contributions: [workflowContribution(healthy)],
       },
       {
         manifest: { id: "broken-actor" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: broken },
+        contributions: [workflowContribution(broken)],
       },
     ])
 
@@ -251,13 +252,13 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "healthy-after-init-failure" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: healthy },
+        contributions: [workflowContribution(healthy)],
       },
       {
         manifest: { id: "broken-on-init" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: broken },
+        contributions: [workflowContribution(broken)],
       },
     ])
 
@@ -314,7 +315,7 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "flaky-publisher" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: flaky },
+        contributions: [workflowContribution(flaky)],
       },
     ])
 
@@ -364,7 +365,7 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "flaky-command" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: { ...flaky, protocols: { Ping } } },
+        contributions: [workflowContribution({ ...flaky, protocols: { Ping } })],
       },
     ])
 
@@ -418,7 +419,7 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "flaky-request" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: { actor: { ...flaky, protocols: { Ping } } },
+        contributions: [workflowContribution({ ...flaky, protocols: { Ping } })],
       },
     ])
 
@@ -453,8 +454,8 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "counter" },
         kind: "builtin",
         sourcePath: "builtin",
-        setup: {
-          actor: {
+        contributions: [
+          workflowContribution({
             ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
               id: "counter",
               initial: { count: 0 },
@@ -467,8 +468,8 @@ describe("WorkflowRuntime", () => {
                 }),
             }),
             protocols: { GetCount },
-          },
-        },
+          }),
+        ],
       },
     ])
 
@@ -563,7 +564,7 @@ describe("event routing", () => {
     manifest: { id: "test-recorder" },
     kind: "builtin",
     sourcePath: "builtin",
-    setup: { actor: recorderReducer },
+    contributions: [workflowContribution(recorderReducer)],
   }
 
   interface SnapshotCounterState {
@@ -593,7 +594,7 @@ describe("event routing", () => {
     manifest: { id: "snapshot-counter" },
     kind: "builtin",
     sourcePath: "builtin",
-    setup: { actor: snapshotCounterReducer },
+    contributions: [workflowContribution(snapshotCounterReducer)],
   }
 
   const makeRoutingLayer = (extensions: LoadedExtension[]) => {
@@ -699,7 +700,7 @@ describe("event routing", () => {
       manifest: { id: "bad-model" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { actor: badModelActor },
+      contributions: [workflowContribution(badModelActor)],
     }
 
     const { fullLayer } = makeRoutingLayer([badModelExtension])
@@ -746,7 +747,7 @@ describe("event routing", () => {
       manifest: { id: "crashing-derive" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { actor: crashingDerive },
+      contributions: [workflowContribution(crashingDerive)],
     }
     const { fullLayer } = makeRoutingLayer([recorderExtension, crashingExtension])
 

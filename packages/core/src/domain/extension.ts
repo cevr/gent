@@ -1,17 +1,15 @@
-import type { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import type { Effect, FileSystem, Path, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata, MessagePart } from "./message"
-import type { PermissionResult, PermissionRule } from "./permission"
+import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
-import type { AnyProjectionContribution } from "./projection.js"
-import type { AnyQueryContribution } from "./query.js"
-import type { AnyMutationContribution } from "./mutation.js"
-import type { PromptSection, PromptSectionInput } from "./prompt.js"
+import type { Contribution } from "./contribution.js"
+import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -32,7 +30,13 @@ export interface LoadedExtension {
   readonly manifest: ExtensionManifest
   readonly kind: ExtensionKind
   readonly sourcePath: string
-  readonly setup: ExtensionSetup
+  /**
+   * The flat contribution array produced by the extension's setup function.
+   * Consumers (registries, workflow runtime, scheduler, projection registry,
+   * etc.) read this directly via the `extractX` helpers from `contribution.ts`
+   * instead of a pre-bucketed setup-bag.
+   */
+  readonly contributions: ReadonlyArray<Contribution>
 }
 
 export type FailedExtensionPhase = "setup" | "validation" | "startup"
@@ -211,10 +215,6 @@ export type ExtensionInterceptorDescriptor<
   readonly run: ExtensionInterceptorMap[K]
 }
 
-export interface ExtensionHooks {
-  readonly interceptors?: ReadonlyArray<ExtensionInterceptorDescriptor>
-}
-
 // Extension State Machine — server-owned state that drives tool policy, prompt, and UI
 
 export interface ExtensionReduceContext {
@@ -376,7 +376,6 @@ export type {
   ProviderAuthContribution,
   ProviderAuthorizationResult,
 } from "./driver.js"
-import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 
 export interface ScheduledJobHeadlessAgentTarget {
   readonly kind: "headless-agent"
@@ -392,51 +391,6 @@ export interface ScheduledJobContribution {
   readonly id: string
   readonly schedule: string
   readonly target: ScheduledJobTarget
-}
-
-// Extension Setup — what an extension provides
-
-export interface ExtensionSetup {
-  readonly tools?: ReadonlyArray<AnyToolDefinition>
-  readonly agents?: ReadonlyArray<AgentDefinition>
-  readonly hooks?: ExtensionHooks
-  readonly layer?: Layer.Layer<never, never, object>
-  /** Session-scoped stateful actor. Omit for stateless extensions. */
-  readonly actor?: AnyExtensionActorDefinition
-  /** Slash commands contributed by this extension. */
-  readonly commands?: ReadonlyArray<CommandContribution>
-  /** Model driver contributions — register an LLM provider as a driver. */
-  readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
-  /** External driver contributions — register a `TurnExecutor`-shaped runner. */
-  readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
-  /** Durable host-owned scheduled jobs contributed by the extension. */
-  readonly jobs?: ReadonlyArray<ScheduledJobContribution>
-  /** Permission deny/allow rules contributed by this extension. */
-  readonly permissionRules?: ReadonlyArray<PermissionRule>
-  /** Prompt sections — merged into the base system prompt. Later scope shadows by section id.
-   *  Can be static PromptSection or Effect<PromptSection> for sections needing service access. */
-  readonly promptSections?: ReadonlyArray<PromptSectionInput>
-  /** Bus channel subscriptions — registered at startup time.
-   *  Each entry: { pattern, handler } where handler receives BusEnvelope and returns Effect<void>. */
-  readonly busSubscriptions?: ReadonlyArray<{
-    readonly pattern: string
-    readonly handler: (envelope: {
-      channel: string
-      payload: unknown
-      sessionId?: string
-      branchId?: string
-    }) => Effect.Effect<void>
-  }>
-  /** Read-only projections — derived views of services for prompt/UI/policy. */
-  readonly projections?: ReadonlyArray<AnyProjectionContribution>
-  /** Typed read-only RPC handlers — invoked via `ctx.extension.query(ref, input)`. */
-  readonly queries?: ReadonlyArray<AnyQueryContribution>
-  /** Typed write RPC handlers — invoked via `ctx.extension.mutate(ref, input)`. */
-  readonly mutations?: ReadonlyArray<AnyMutationContribution>
-  /** One-time startup effect — runs during dependency initialization. No service requirements. */
-  readonly onStartup?: Effect.Effect<void>
-  /** Cleanup effect — runs as scope finalizer during graceful shutdown. */
-  readonly onShutdown?: Effect.Effect<void>
 }
 
 // Extension — the core primitive
@@ -457,7 +411,15 @@ export interface ExtensionSetupContext {
 
 export interface GentExtension {
   readonly manifest: ExtensionManifest
-  readonly setup: (ctx: ExtensionSetupContext) => Effect.Effect<ExtensionSetup, ExtensionLoadError>
+  /**
+   * Returns the canonical `Contribution[]` for this extension. The runtime
+   * uploads this directly into `LoadedExtension.contributions`; consumers
+   * (registries, workflow runtime, scheduler, projections) read it via the
+   * `extractX` helpers from `domain/contribution.ts`.
+   */
+  readonly setup: (
+    ctx: ExtensionSetupContext,
+  ) => Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>
 }
 
 // Factory

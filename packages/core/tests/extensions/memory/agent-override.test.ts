@@ -17,6 +17,7 @@ import type { SteerCommand } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { agent as agentContribution } from "@gent/core/domain/contribution"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
@@ -27,7 +28,7 @@ const testExtensions = resolveExtensions([
     manifest: { id: "agents" },
     kind: "builtin" as const,
     sourcePath: "test",
-    setup: { agents: Object.values(Agents) },
+    contributions: Object.values(Agents).map(agentContribution),
   },
 ])
 

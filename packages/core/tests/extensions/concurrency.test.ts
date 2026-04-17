@@ -13,6 +13,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { workflow as workflowContribution } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 
 const sessionId = SessionId.of("test-session")
@@ -41,7 +42,7 @@ describe("extension concurrency", () => {
       const extensions = [
         {
           manifest: { id: "counter", version: "1.0.0" },
-          setup: { actor: wrappedActor },
+          contributions: [workflowContribution(wrappedActor)],
         },
       ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 
@@ -78,23 +79,25 @@ describe("extension concurrency", () => {
             manifest: { id: "ordered-restart", version: "1.0.0" },
             kind: "builtin" as const,
             sourcePath: "builtin",
-            setup: {
-              actor: reducerActor({
-                id: "ordered-restart",
-                initial: { delivered: [] as string[] },
-                reduce: (state, event) => {
-                  if (first && event._tag === "SessionStarted") {
-                    first = false
-                    Effect.runSync(
-                      Deferred.succeed(firstDeliveryEntered, void 0).pipe(Effect.ignore),
-                    )
-                    throw new Error("first delivery boom")
-                  }
-                  delivered.push(event._tag)
-                  return { state: { delivered } }
-                },
-              }),
-            },
+            contributions: [
+              workflowContribution(
+                reducerActor({
+                  id: "ordered-restart",
+                  initial: { delivered: [] as string[] },
+                  reduce: (state, event) => {
+                    if (first && event._tag === "SessionStarted") {
+                      first = false
+                      Effect.runSync(
+                        Deferred.succeed(firstDeliveryEntered, void 0).pipe(Effect.ignore),
+                      )
+                      throw new Error("first delivery boom")
+                    }
+                    delivered.push(event._tag)
+                    return { state: { delivered } }
+                  },
+                }),
+              ),
+            ],
           },
         ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 

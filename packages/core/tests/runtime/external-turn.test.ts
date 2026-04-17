@@ -25,6 +25,10 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { Agents } from "@gent/extensions/all-agents"
+import {
+  agent as agentContribution,
+  externalDriver as externalDriverContribution,
+} from "@gent/core/domain/contribution"
 
 // ── Helpers ──
 
@@ -73,10 +77,10 @@ const makeResolved = (executor: TurnExecutor) =>
       manifest: { id: "test-ext" },
       kind: "builtin" as const,
       sourcePath: "test",
-      setup: {
-        agents: [externalAgent],
-        externalDrivers: [{ id: "test-runner", executor }],
-      },
+      contributions: [
+        agentContribution(externalAgent),
+        externalDriverContribution({ id: "test-runner", executor }),
+      ],
     },
   ])
 
@@ -295,7 +299,7 @@ describe("external turn execution", () => {
         manifest: { id: "agents" },
         kind: "builtin" as const,
         sourcePath: "test",
-        setup: { agents: Object.values(Agents) },
+        contributions: Object.values(Agents).map(agentContribution),
       },
     ])
     const deps = Layer.mergeAll(

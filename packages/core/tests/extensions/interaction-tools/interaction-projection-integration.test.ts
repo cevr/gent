@@ -31,6 +31,7 @@ import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Session, Branch } from "@gent/core/domain/message"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { projection as projectionContribution } from "@gent/core/domain/contribution"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -60,7 +61,7 @@ const interactionExtensionRegistry = ExtensionRegistry.fromResolved(
       manifest: { id: INTERACTION_TOOLS_EXTENSION_ID },
       kind: "builtin" as const,
       sourcePath: "test",
-      setup: { projections: [InteractionProjection] },
+      contributions: [projectionContribution(InteractionProjection)],
     },
   ]),
 )

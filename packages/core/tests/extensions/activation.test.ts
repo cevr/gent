@@ -6,7 +6,6 @@ import * as NodePath from "node:path"
 import * as Os from "node:os"
 import type {
   ExtensionLoadError,
-  ExtensionSetup,
   GentExtension,
   LoadedExtension,
 } from "@gent/core/domain/extension"
@@ -16,6 +15,12 @@ import {
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
+import {
+  job as jobContribution,
+  onStartup as onStartupContribution,
+  tool as toolContribution,
+  type Contribution,
+} from "@gent/core/domain/contribution"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -25,33 +30,31 @@ const fsLayer = Layer.mergeAll(
 
 const makeBuiltin = (
   id: string,
-  setup: () => Effect.Effect<ExtensionSetup, ExtensionLoadError>,
+  setup: () => Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>,
 ): GentExtension => ({
   manifest: { id },
   setup: () => setup(),
 })
 
-const makeLoaded = (id: string, setup: ExtensionSetup): LoadedExtension => ({
+const makeLoaded = (id: string, contributions: ReadonlyArray<Contribution>): LoadedExtension => ({
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
-  setup,
+  contributions,
 })
 
 describe("extension activation isolation", () => {
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
       const good = makeBuiltin("good-ext", () =>
-        Effect.succeed({
-          tools: [
-            {
-              name: "good_tool",
-              description: "good",
-              params: {} as never,
-              execute: () => Effect.void,
-            },
-          ],
-        }),
+        Effect.succeed([
+          toolContribution({
+            name: "good_tool",
+            description: "good",
+            params: {} as never,
+            execute: () => Effect.void,
+          }),
+        ]),
       )
       const bad = makeBuiltin("bad-ext", () =>
         Effect.sync(() => {
@@ -79,7 +82,7 @@ describe("extension activation isolation", () => {
       const result = yield* setupDiscoveredExtensions({
         extensions: [
           {
-            extension: makeBuiltin("good-ext", () => Effect.succeed({})),
+            extension: makeBuiltin("good-ext", () => Effect.succeed([])),
             kind: "user",
             sourcePath: "/tmp/good.ts",
           },
@@ -115,36 +118,30 @@ describe("extension activation isolation", () => {
     () =>
       Effect.gen(function* () {
         const result = yield* validateLoadedExtensions([
-          makeLoaded("healthy-ext", {
-            tools: [
-              {
-                name: "healthy_tool",
-                description: "healthy",
-                params: {} as never,
-                execute: () => Effect.void,
-              },
-            ],
-          }),
-          makeLoaded("collider-a", {
-            tools: [
-              {
-                name: "shared_tool",
-                description: "a",
-                params: {} as never,
-                execute: () => Effect.void,
-              },
-            ],
-          }),
-          makeLoaded("collider-b", {
-            tools: [
-              {
-                name: "shared_tool",
-                description: "b",
-                params: {} as never,
-                execute: () => Effect.void,
-              },
-            ],
-          }),
+          makeLoaded("healthy-ext", [
+            toolContribution({
+              name: "healthy_tool",
+              description: "healthy",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ]),
+          makeLoaded("collider-a", [
+            toolContribution({
+              name: "shared_tool",
+              description: "a",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ]),
+          makeLoaded("collider-b", [
+            toolContribution({
+              name: "shared_tool",
+              description: "b",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ]),
         ])
 
         expect(result.active.map((ext) => ext.manifest.id)).toEqual(["healthy-ext"])
@@ -164,40 +161,36 @@ describe("extension activation isolation", () => {
 
       const result = yield* reconcileLoadedExtensions({
         extensions: [
-          makeLoaded("healthy-ext", {
-            tools: [
-              {
-                name: "healthy_tool",
-                description: "healthy",
-                params: {} as never,
-                execute: () => Effect.void,
-              },
-            ],
-            jobs: [
-              {
-                id: "reflect",
-                schedule: "0 21 * * 1-5",
-                target: {
-                  kind: "headless-agent",
-                  agent: "memory:reflect" as never,
-                  prompt: "Reflect.",
-                },
-              },
-            ],
-          }),
-          makeLoaded("failing-ext", {
-            tools: [
-              {
-                name: "failing_tool",
-                description: "failing",
-                params: {} as never,
-                execute: () => Effect.void,
-              },
-            ],
-            onStartup: Effect.sync(() => {
-              throw new Error("startup boom")
+          makeLoaded("healthy-ext", [
+            toolContribution({
+              name: "healthy_tool",
+              description: "healthy",
+              params: {} as never,
+              execute: () => Effect.void,
             }),
-          }),
+            jobContribution({
+              id: "reflect",
+              schedule: "0 21 * * 1-5",
+              target: {
+                kind: "headless-agent",
+                agent: "memory:reflect" as never,
+                prompt: "Reflect.",
+              },
+            }),
+          ]),
+          makeLoaded("failing-ext", [
+            toolContribution({
+              name: "failing_tool",
+              description: "failing",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+            onStartupContribution(
+              Effect.sync(() => {
+                throw new Error("startup boom")
+              }),
+            ),
+          ]),
         ],
         failedExtensions: [
           {

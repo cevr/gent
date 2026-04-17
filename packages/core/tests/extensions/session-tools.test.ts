@@ -18,13 +18,13 @@ const stubCtx = {} as unknown as ExtensionHostContext
 
 describe("SessionToolsExtension", () => {
   test("injects naming instruction for interactive prompts", async () => {
-    const setup = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
+    const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
     const compiled = compileInterceptors([
       {
         manifest: SessionToolsExtension.manifest,
         kind: "builtin",
         sourcePath: "test",
-        setup,
+        contributions,
       },
     ]).chain
 
@@ -42,13 +42,13 @@ describe("SessionToolsExtension", () => {
   })
 
   test("non-interactive prompts pass through unchanged", async () => {
-    const setup = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
+    const contributions = await Effect.runPromise(SessionToolsExtension.setup(testSetupCtx()))
     const compiled = compileInterceptors([
       {
         manifest: SessionToolsExtension.manifest,
         kind: "builtin",
         sourcePath: "test",
-        setup,
+        contributions,
       },
     ]).chain
 

@@ -9,7 +9,6 @@
  */
 import { Effect } from "effect"
 import type {
-  ExtensionHooks,
   ExtensionInterceptorDescriptor,
   ExtensionInterceptorKey,
   ExtensionInterceptorMap,
@@ -17,6 +16,7 @@ import type {
   LoadedExtension,
 } from "../../domain/extension.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
+import { extractInterceptors } from "../../domain/contribution.js"
 
 export interface CompiledHookMap {
   readonly runInterceptor: <K extends keyof ExtensionInterceptorMap>(
@@ -53,12 +53,6 @@ const emptyInterceptors = (): InterceptorChains => ({
   "message.input": [],
   "message.output": [],
 })
-
-const appendHooks = (hooks: ExtensionHooks | undefined, interceptors: InterceptorChains) => {
-  for (const descriptor of hooks?.interceptors ?? []) {
-    addInterceptor(interceptors, descriptor)
-  }
-}
 
 const addInterceptor = <K extends keyof ExtensionInterceptorMap>(
   interceptors: InterceptorChains,
@@ -113,7 +107,9 @@ export const compileInterceptors = (
   const interceptorChains = emptyInterceptors()
 
   for (const ext of sorted) {
-    appendHooks(ext.setup.hooks, interceptorChains)
+    for (const descriptor of extractInterceptors(ext.contributions)) {
+      addInterceptor(interceptorChains, descriptor)
+    }
   }
 
   const runInterceptor = <K extends keyof ExtensionInterceptorMap>(

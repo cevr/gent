@@ -23,11 +23,16 @@ import {
 import type {
   ExtensionTurnContext,
   ExtensionReduceContext,
-  ExtensionSetup,
   LoadedExtension,
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
+import {
+  type Contribution,
+  agent as agentContribution,
+  extractLayer,
+  tool as toolContribution,
+} from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -214,10 +219,10 @@ export interface ToolTestLayerConfig {
  * services (FileSystem, Path) should compose with BunServices.layer.
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
-  const builtinSetup: ExtensionSetup = {
-    agents: [...config.agents],
-    tools: [...(config.tools ?? [])],
-  }
+  const builtinContributions: ReadonlyArray<Contribution> = [
+    ...config.agents.map(agentContribution),
+    ...(config.tools ?? []).map(toolContribution),
+  ]
 
   const defaultRunner: AgentRunner = {
     run: () =>
@@ -248,7 +253,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
           manifest: { id: "test-agents" },
           kind: "builtin" as const,
           sourcePath: "test",
-          setup: builtinSetup,
+          contributions: builtinContributions,
         },
         ...setupResult.active,
       ]
@@ -284,8 +289,10 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       )
 
       const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
-        (ext) =>
-          ext.setup.layer === undefined ? [] : [Layer.provideMerge(ext.setup.layer, baseLayerAny)],
+        (ext) => {
+          const layer = extractLayer(ext.contributions)
+          return layer === undefined ? [] : [Layer.provideMerge(layer, baseLayerAny)]
+        },
       )
 
       let extensionLayer: Layer.Layer<never, never, object> | undefined

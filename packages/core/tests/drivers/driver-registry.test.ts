@@ -19,6 +19,11 @@ import type {
   TurnEvent,
   TurnExecutor,
 } from "@gent/core/domain/driver"
+import {
+  externalDriver as externalDriverContribution,
+  modelDriver as modelDriverContribution,
+  type Contribution,
+} from "@gent/core/domain/contribution"
 
 const stubResolution = (): ProviderResolution => ({ layer: Layer.empty as never })
 
@@ -39,13 +44,22 @@ const makeExecutor = (label: string): TurnExecutor => ({
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
-  setup: LoadedExtension["setup"],
-): LoadedExtension => ({
-  manifest: { id },
-  kind,
-  sourcePath: `/test/${id}`,
-  setup,
-})
+  opts: {
+    readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
+    readonly externalDrivers?: ReadonlyArray<{ id: string; executor: TurnExecutor }>
+  },
+): LoadedExtension => {
+  const contributions: Contribution[] = [
+    ...(opts.modelDrivers ?? []).map(modelDriverContribution),
+    ...(opts.externalDrivers ?? []).map(externalDriverContribution),
+  ]
+  return {
+    manifest: { id },
+    kind,
+    sourcePath: `/test/${id}`,
+    contributions,
+  }
+}
 
 const buildRegistry = (extensions: ReadonlyArray<LoadedExtension>) => {
   const resolved = resolveExtensions(extensions)

@@ -21,6 +21,12 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { LoadedExtension } from "../domain/extension.js"
+import {
+  type Contribution,
+  agent as agentContribution,
+  extractLayer,
+  layer as layerContribution,
+} from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -77,10 +83,7 @@ export interface E2ELayerConfig {
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions
-  const builtinSetup = {
-    agents: [...config.agents],
-    tools: [] as const,
-  }
+  const builtinContributions: ReadonlyArray<Contribution> = config.agents.map(agentContribution)
 
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -93,27 +96,27 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             disabled: new Set(),
           })
 
-      const loadedExtensions = config.extensions
+      const loadedExtensions: ReadonlyArray<LoadedExtension> = config.extensions
         ? [
             {
               manifest: { id: "test-agents" },
               kind: "builtin" as const,
               sourcePath: "test",
-              setup: builtinSetup,
+              contributions: builtinContributions,
             },
             ...setupResult.active,
           ]
         : setupResult.active.map((ext) => {
             const override = config.layerOverrides?.[ext.manifest.id]
-            return override === undefined
-              ? ext
-              : {
-                  ...ext,
-                  setup: {
-                    ...ext.setup,
-                    layer: override(),
-                  },
-                }
+            if (override === undefined) return ext
+            // Replace any existing layer contribution with the override (or
+            // append a new layer contribution if none was present).
+            const layerOverride = layerContribution(override())
+            const others = ext.contributions.filter((c) => c._kind !== "layer")
+            return {
+              ...ext,
+              contributions: [...others, layerOverride],
+            }
           })
 
       const reconciled = yield* reconcileLoadedExtensions({
@@ -127,16 +130,18 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Collect extension-provided layers (mirrors makeExtensionLayers in dependencies.ts).
       // Extension layers may require SqlClient, so provide it via storageLayer.
       const storageLayer = Storage.MemoryWithSql()
-      const extensionLayers: Layer.Layer<never>[] = resolved.extensions
-        .filter((ext) => ext.setup.layer !== undefined)
-        .map(
-          (ext) =>
-            Layer.provide(
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              ext.setup.layer as Layer.Layer<never>,
-              storageLayer,
-            ) as Layer.Layer<never>,
-        )
+      const extensionLayers: Layer.Layer<never>[] = resolved.extensions.flatMap((ext) => {
+        const layer = extractLayer(ext.contributions)
+        return layer === undefined
+          ? []
+          : [
+              Layer.provide(
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                layer as Layer.Layer<never>,
+                storageLayer,
+              ) as Layer.Layer<never>,
+            ]
+      })
 
       // Subagent runner
       const defaultRunner: AgentRunner = {

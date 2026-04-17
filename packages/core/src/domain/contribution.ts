@@ -238,3 +238,94 @@ export const filterByKind = <K extends ContributionKind>(
 ): ReadonlyArray<ContributionByKind<K>> =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   contributions.filter((c): c is ContributionByKind<K> => c._kind === kind)
+
+/** Find the (at most one) contribution of the given kind, or undefined. */
+export const findByKind = <K extends ContributionKind>(
+  contributions: ReadonlyArray<Contribution>,
+  kind: K,
+): ContributionByKind<K> | undefined =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  contributions.find((c): c is ContributionByKind<K> => c._kind === kind)
+
+/**
+ * Per-kind extractors that pull the typed payload out of a contribution array.
+ * These replace the legacy `ExtensionSetup` setup-bag — registries and runtime
+ * code call these directly instead of reading `ext.setup.tools` etc.
+ */
+export const extractTools = (cs: ReadonlyArray<Contribution>): ReadonlyArray<AnyToolDefinition> =>
+  filterByKind(cs, "tool").map((c) => c.tool)
+
+export const extractAgents = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<AgentContribution["agent"]> => filterByKind(cs, "agent").map((c) => c.agent)
+
+export const extractInterceptors = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<InterceptorContribution["descriptor"]> =>
+  filterByKind(cs, "interceptor").map((c) => c.descriptor)
+
+export const extractCommands = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<CommandKindContribution["command"]> =>
+  filterByKind(cs, "command").map((c) => c.command)
+
+export const extractPromptSections = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<PromptSectionContribution["section"]> =>
+  filterByKind(cs, "prompt-section").map((c) => c.section)
+
+export const extractPermissionRules = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<PermissionRuleContribution["rule"]> =>
+  filterByKind(cs, "permission-rule").map((c) => c.rule)
+
+export const extractModelDrivers = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<ModelDriverKindContribution["driver"]> =>
+  filterByKind(cs, "model-driver").map((c) => c.driver)
+
+export const extractExternalDrivers = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<ExternalDriverKindContribution["driver"]> =>
+  filterByKind(cs, "external-driver").map((c) => c.driver)
+
+export const extractJobs = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<JobContribution["job"]> => filterByKind(cs, "job").map((c) => c.job)
+
+export const extractBusSubscriptions = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<{
+  readonly pattern: string
+  readonly handler: BusSubscriptionContribution["handler"]
+}> => filterByKind(cs, "bus-subscription").map((c) => ({ pattern: c.pattern, handler: c.handler }))
+
+export const extractProjections = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<ProjectionKindContribution["projection"]> =>
+  filterByKind(cs, "projection").map((c) => c.projection)
+
+export const extractQueries = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<QueryKindContribution["query"]> => filterByKind(cs, "query").map((c) => c.query)
+
+export const extractMutations = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<MutationKindContribution["mutation"]> =>
+  filterByKind(cs, "mutation").map((c) => c.mutation)
+
+export const extractWorkflow = (
+  cs: ReadonlyArray<Contribution>,
+): WorkflowKindContribution["workflow"] | undefined => findByKind(cs, "workflow")?.workflow
+
+export const extractLayer = (
+  cs: ReadonlyArray<Contribution>,
+): LayerContribution["layer"] | undefined => findByKind(cs, "layer")?.layer
+
+export const extractLifecycle = (
+  cs: ReadonlyArray<Contribution>,
+  phase: "startup" | "shutdown",
+): ReadonlyArray<LifecycleContribution["effect"]> =>
+  filterByKind(cs, "lifecycle")
+    .filter((c) => c.phase === phase)
+    .map((c) => c.effect)

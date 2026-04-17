@@ -12,6 +12,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { TurnCompleted } from "@gent/core/domain/event"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { testSetupCtx } from "@gent/core/test-utils"
+import { extractWorkflow } from "@gent/core/domain/contribution"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -106,8 +107,8 @@ describe("Handoff cooldown workflow", () => {
 
       // The workflow is lowered into setup.actor by `defineExtension`, so we
       // can drive it through the same actor boundary used in production.
-      const setup = yield* HandoffExtension.setup(testSetupCtx())
-      const actorDef = setup.actor
+      const contributions = yield* HandoffExtension.setup(testSetupCtx())
+      const actorDef = extractWorkflow(contributions)
       expect(actorDef).toBeDefined()
 
       const actor = yield* spawnMachineExtensionRef(HANDOFF_EXTENSION_ID, actorDef!, {

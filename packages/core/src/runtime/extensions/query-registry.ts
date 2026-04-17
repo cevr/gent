@@ -14,6 +14,7 @@
  */
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../domain/extension.js"
+import { extractQueries } from "../../domain/contribution.js"
 import {
   QueryError,
   QueryNotFoundError,
@@ -54,7 +55,7 @@ export const compileQueries = (extensions: ReadonlyArray<LoadedExtension>): Comp
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredQuery[] = []
   for (const ext of sorted) {
-    for (const query of ext.setup.queries ?? []) {
+    for (const query of extractQueries(ext.contributions)) {
       entries.push({ extensionId: ext.manifest.id, query })
     }
   }

@@ -18,6 +18,16 @@ import {
 } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
+import {
+  type Contribution,
+  extractAgents,
+  extractCommands,
+  extractExternalDrivers,
+  extractModelDrivers,
+  extractPermissionRules,
+  extractPromptSections,
+  extractTools,
+} from "../../domain/contribution.js"
 import { type CompiledHookMap, compileInterceptors } from "./interceptor-registry.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileQueries, type CompiledQueries } from "./query-registry.js"
@@ -48,12 +58,12 @@ type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<Schedule
 /** Compile a keyed contribution from sorted extensions. Later scope wins. */
 const compileContributions = <T>(
   sorted: ReadonlyArray<LoadedExtension>,
-  extract: (setup: LoadedExtension["setup"]) => ReadonlyArray<T> | undefined,
+  extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
   getKey: (item: T) => string,
 ): Map<string, T> => {
   const result = new Map<string, T>()
   for (const ext of sorted) {
-    for (const item of extract(ext.setup) ?? []) {
+    for (const item of extract(ext.contributions)) {
       const key = getKey(item)
       result.set(key, item)
     }
@@ -74,44 +84,19 @@ export const resolveExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  const tools = compileContributions(
-    sorted,
-    (s) => s.tools,
-    (t) => t.name,
-  )
-  const agents = compileContributions(
-    sorted,
-    (s) => s.agents,
-    (a) => a.name,
-  )
-  const modelDrivers = compileContributions(
-    sorted,
-    (s) => s.modelDrivers,
-    (d) => d.id,
-  )
-
-  const externalDrivers = compileContributions(
-    sorted,
-    (s) => s.externalDrivers,
-    (d) => d.id,
-  )
+  const tools = compileContributions(sorted, extractTools, (t) => t.name)
+  const agents = compileContributions(sorted, extractAgents, (a) => a.name)
+  const modelDrivers = compileContributions(sorted, extractModelDrivers, (d) => d.id)
+  const externalDrivers = compileContributions(sorted, extractExternalDrivers, (d) => d.id)
 
   // Prompt sections: last scope wins by section id
-  const promptSectionsMap = compileContributions(
-    sorted,
-    (s) => s.promptSections,
-    (p) => p.id,
-  )
+  const promptSectionsMap = compileContributions(sorted, extractPromptSections, (p) => p.id)
 
   const commands: CommandContribution[] = []
   const permissionRules: PermissionRule[] = []
   for (const ext of sorted) {
-    for (const cmd of ext.setup.commands ?? []) {
-      commands.push(cmd)
-    }
-    for (const rule of ext.setup.permissionRules ?? []) {
-      permissionRules.push(rule)
-    }
+    for (const cmd of extractCommands(ext.contributions)) commands.push(cmd)
+    for (const rule of extractPermissionRules(ext.contributions)) permissionRules.push(rule)
   }
 
   const hooks = compileInterceptors(sorted).chain

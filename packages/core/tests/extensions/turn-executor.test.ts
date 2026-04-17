@@ -10,6 +10,7 @@ import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { TurnError, TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
+import { externalDriver as externalDriverContribution } from "@gent/core/domain/contribution"
 
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
@@ -30,9 +31,7 @@ const makeExt = (
   manifest: { id },
   kind: "builtin" as const,
   sourcePath: `/test/${id}`,
-  setup: {
-    externalDrivers,
-  },
+  contributions: (externalDrivers ?? []).map(externalDriverContribution),
 })
 
 describe("ExternalDriver registry", () => {

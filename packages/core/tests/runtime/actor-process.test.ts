@@ -2,6 +2,10 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import {
+  agent as agentContribution,
+  tool as toolContribution,
+} from "@gent/core/domain/contribution"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
@@ -21,7 +25,7 @@ const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
         manifest: { id: "agents" },
         kind: "builtin" as const,
         sourcePath: "test",
-        setup: { agents: Object.values(Agents) },
+        contributions: Object.values(Agents).map(agentContribution),
       },
       ...(tools.length > 0
         ? [
@@ -29,7 +33,7 @@ const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
               manifest: { id: "tools" },
               kind: "builtin" as const,
               sourcePath: "test",
-              setup: { tools },
+              contributions: tools.map(toolContribution),
             },
           ]
         : []),

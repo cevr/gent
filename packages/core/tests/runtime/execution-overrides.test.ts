@@ -15,6 +15,7 @@ import type { LoadedExtension, ExtensionTurnContext } from "@gent/core/domain/ex
 import { ToolCallId } from "@gent/core/domain/ids"
 import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
 import { RunSpecSchema } from "@gent/core/domain/agent"
+import { workflow as workflowContribution } from "@gent/core/domain/contribution"
 import { reducerActor } from "../extensions/helpers/reducer-actor"
 import { createRpcHarness } from "../extensions/helpers/rpc-harness"
 
@@ -38,7 +39,7 @@ const contextCaptureExtension: LoadedExtension = {
   manifest: { id: "ctx-capture" },
   kind: "builtin",
   sourcePath: "builtin",
-  setup: { actor: contextCaptureActor },
+  contributions: [workflowContribution(contextCaptureActor)],
 }
 
 // ── Tests ──

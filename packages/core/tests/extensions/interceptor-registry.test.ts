@@ -13,6 +13,10 @@ import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
 import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
+import {
+  interceptor as interceptorContribution,
+  type Contribution,
+} from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -25,8 +29,8 @@ const stubCtx = {
 const ext = (
   id: string,
   kind: "builtin" | "user" | "project",
-  setup: LoadedExtension["setup"],
-): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, setup })
+  contributions: ReadonlyArray<Contribution>,
+): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
 
 describe("interceptor registry", () => {
   it.live("composes scope-ordered chain inside-out (builtin innermost)", () =>
@@ -37,9 +41,9 @@ describe("interceptor registry", () => {
         )
 
       const extensions = [
-        ext("a", "builtin", { hooks: { interceptors: [make("builtin")] } }),
-        ext("b", "user", { hooks: { interceptors: [make("user")] } }),
-        ext("c", "project", { hooks: { interceptors: [make("project")] } }),
+        ext("a", "builtin", [interceptorContribution(make("builtin"))]),
+        ext("b", "user", [interceptorContribution(make("user"))]),
+        ext("c", "project", [interceptorContribution(make("project"))]),
       ]
 
       const facade = compileInterceptors(extensions)

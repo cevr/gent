@@ -30,6 +30,7 @@ import {
   type WorkflowContribution,
 } from "@gent/core/extensions/api"
 import { testSetupCtx } from "@gent/core/test-utils"
+import { extractWorkflow } from "@gent/core/domain/contribution"
 
 // ── Test workflow: counter + suppress command + declared follow-up effect ──
 
@@ -81,18 +82,19 @@ describe("WorkflowContribution", () => {
         id: "@gent/test-workflow",
         contributions: () => [workflowContribution(testWorkflow)],
       })
-      const setup = yield* ext.setup(testSetupCtx())
+      const contributions = yield* ext.setup(testSetupCtx())
+      const actor = extractWorkflow(contributions)
       // Workflow is structurally lowered to actor today (single runtime).
-      expect(setup.actor).toBeDefined()
+      expect(actor).toBeDefined()
       // Per `composability-not-flags`, workflows that omit `snapshot`/`turn`
       // contribute no UI surface — only control-flow state. The transitional
       // bridge fields are tested below.
-      expect(setup.actor?.snapshot).toBeUndefined()
-      expect(setup.actor?.turn).toBeUndefined()
+      expect(actor?.snapshot).toBeUndefined()
+      expect(actor?.turn).toBeUndefined()
       // Mappers and protocols round-trip through the lowering.
-      expect(setup.actor?.mapEvent).toBeDefined()
-      expect(setup.actor?.mapCommand).toBeDefined()
-      expect(setup.actor?.protocols).toBe(TestProtocol)
+      expect(actor?.mapEvent).toBeDefined()
+      expect(actor?.mapCommand).toBeDefined()
+      expect(actor?.protocols).toBe(TestProtocol)
     }),
   )
 
@@ -115,12 +117,13 @@ describe("WorkflowContribution", () => {
         id: "@gent/test-workflow-ui",
         contributions: () => [workflowContribution(wf)],
       })
-      const setup = yield* ext.setup(testSetupCtx())
+      const contributions = yield* ext.setup(testSetupCtx())
+      const actor = extractWorkflow(contributions)
 
       // Object identity — proves the lowering forwards by reference,
       // matching the pattern used for slots/stateSchema/onInit/mapRequest.
-      expect(setup.actor?.snapshot).toBe(snapshot)
-      expect(setup.actor?.turn).toBe(turn)
+      expect(actor?.snapshot).toBe(snapshot)
+      expect(actor?.turn).toBe(turn)
     }),
   )
 
@@ -146,13 +149,14 @@ describe("WorkflowContribution", () => {
           id: "@gent/test-workflow",
           contributions: () => [workflowContribution(flagged)],
         })
-        const setup = yield* ext.setup(testSetupCtx())
+        const contributions = yield* ext.setup(testSetupCtx())
+        const actor = extractWorkflow(contributions)
 
-        expect(setup.actor?.afterTransition).toBeDefined()
+        expect(actor?.afterTransition).toBeDefined()
 
         const before = TestState.Active({ count: 0, suppressed: false })
         const after = TestState.Active({ count: 1, suppressed: false })
-        const effects = setup.actor!.afterTransition!(before, after)
+        const effects = actor!.afterTransition!(before, after)
 
         // Effect identity preserved end-to-end
         expect(effects.length).toBe(1)
@@ -209,14 +213,15 @@ describe("WorkflowContribution", () => {
         id: "@gent/test-optional",
         contributions: () => [workflowContribution(wf)],
       })
-      const setup = yield* ext.setup(testSetupCtx())
+      const contributions = yield* ext.setup(testSetupCtx())
+      const actor = extractWorkflow(contributions)
 
       // Object identity — proves the lowering forwards by reference, not
       // through a coerce/clone path that could silently drop nested config.
-      expect(setup.actor?.slots).toBe(slots)
-      expect(setup.actor?.stateSchema).toBe(stateSchema)
-      expect(setup.actor?.onInit).toBe(onInit)
-      expect(setup.actor?.mapRequest).toBe(mapRequest)
+      expect(actor?.slots).toBe(slots)
+      expect(actor?.stateSchema).toBe(stateSchema)
+      expect(actor?.onInit).toBe(onInit)
+      expect(actor?.mapRequest).toBe(mapRequest)
     }),
   )
 })

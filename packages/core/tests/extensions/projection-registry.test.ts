@@ -36,6 +36,10 @@ import {
 } from "@gent/core/domain/projection"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileProjections } from "@gent/core/runtime/extensions/projection-registry"
+import {
+  projection as projectionContribution,
+  workflow as workflowContribution,
+} from "@gent/core/domain/contribution"
 
 const ext = (
   id: string,
@@ -46,7 +50,10 @@ const ext = (
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  setup: { projections, ...(extra?.actor !== undefined ? { actor: extra.actor } : {}) },
+  contributions: [
+    ...projections.map(projectionContribution),
+    ...(extra?.actor !== undefined ? [workflowContribution(extra.actor)] : []),
+  ],
 })
 
 const turnCtx: ExtensionTurnContext = {

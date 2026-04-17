@@ -19,6 +19,10 @@ import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { defineTool } from "@gent/core/domain/tool"
+import {
+  agent as agentContribution,
+  tool as toolContribution,
+} from "@gent/core/domain/contribution"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
@@ -45,7 +49,10 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
       manifest: { id: "agents" },
       kind: "builtin",
       sourcePath: "test",
-      setup: { agents: Object.values(Agents), tools: [bashStubTool] },
+      contributions: [
+        ...Object.values(Agents).map(agentContribution),
+        toolContribution(bashStubTool),
+      ],
     },
   ]),
 )
@@ -78,7 +85,7 @@ describe("RunSpec", () => {
         manifest: { id: "agents" },
         kind: "builtin",
         sourcePath: "test",
-        setup: { agents: Object.values(Agents) },
+        contributions: Object.values(Agents).map(agentContribution),
       },
     ])
     const impl = ExtensionRegistry.fromResolved(registry)
@@ -1163,7 +1170,10 @@ describe("ephemeral service propagation", () => {
             manifest: { id: "agents" },
             kind: "builtin" as const,
             sourcePath: "test",
-            setup: { agents: Object.values(Agents), tools: [approveTool] },
+            contributions: [
+              ...Object.values(Agents).map(agentContribution),
+              toolContribution(approveTool),
+            ],
           },
         ]),
       )

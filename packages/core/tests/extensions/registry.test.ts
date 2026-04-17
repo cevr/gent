@@ -1,13 +1,19 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import type { ExtensionHooks, LoadedExtension, RunContext } from "@gent/core/domain/extension"
+import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { PromptSectionInput } from "@gent/core/domain/prompt"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+import {
+  agent as agentContribution,
+  modelDriver as modelDriverContribution,
+  promptSection as promptSectionContribution,
+  tool as toolContribution,
+} from "@gent/core/domain/contribution"
 
 const makeTool = (name: string): AnyToolDefinition => ({
   name,
@@ -31,7 +37,6 @@ const makeExt = (
   opts?: {
     tools?: AnyToolDefinition[]
     agents?: AgentDefinition[]
-    hooks?: ExtensionHooks
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSectionInput[]
   },
@@ -39,13 +44,12 @@ const makeExt = (
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  setup: {
-    tools: opts?.tools,
-    agents: opts?.agents,
-    hooks: opts?.hooks,
-    modelDrivers: opts?.modelDrivers,
-    promptSections: opts?.promptSections,
-  },
+  contributions: [
+    ...(opts?.tools ?? []).map(toolContribution),
+    ...(opts?.agents ?? []).map(agentContribution),
+    ...(opts?.modelDrivers ?? []).map(modelDriverContribution),
+    ...(opts?.promptSections ?? []).map(promptSectionContribution),
+  ],
 })
 
 const runCtx: RunContext = {

@@ -31,7 +31,7 @@ const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
   kind: "builtin",
   sourcePath: "builtin",
-  setup: Effect.runSync(AutoExtension.setup(testSetupCtx())),
+  contributions: Effect.runSync(AutoExtension.setup(testSetupCtx())),
 }
 
 const makeLayer = () =>
