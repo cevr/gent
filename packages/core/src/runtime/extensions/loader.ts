@@ -80,7 +80,11 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     const mod = yield* Effect.tryPromise({
       try: () => import(filePath),
       catch: (err) =>
-        new ExtensionLoadError("unknown", `Failed to import ${filePath}: ${String(err)}`, err),
+        new ExtensionLoadError({
+          extensionId: "unknown",
+          message: `Failed to import ${filePath}: ${String(err)}`,
+          cause: err,
+        }),
     })
 
     // Find the extension — check default export, then named exports
@@ -104,27 +108,26 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     }
 
     if (candidates.length === 0) {
-      return yield* Effect.fail(
-        new ExtensionLoadError(
-          "unknown",
-          `No GentExtension found in ${filePath}. Export a defineExtension() result as default or named export.`,
-        ),
-      )
+      return yield* new ExtensionLoadError({
+        extensionId: "unknown",
+        message: `No GentExtension found in ${filePath}. Export a defineExtension() result as default or named export.`,
+      })
     }
 
     if (candidates.length > 1) {
-      return yield* Effect.fail(
-        new ExtensionLoadError(
-          "unknown",
-          `Multiple GentExtension exports found in ${filePath}. Export exactly one.`,
-        ),
-      )
+      return yield* new ExtensionLoadError({
+        extensionId: "unknown",
+        message: `Multiple GentExtension exports found in ${filePath}. Export exactly one.`,
+      })
     }
 
     // candidates.length === 1 guaranteed by checks above
     const result = candidates[0]
     if (result === undefined) {
-      return yield* Effect.fail(new ExtensionLoadError("unknown", `No extension in ${filePath}`))
+      return yield* new ExtensionLoadError({
+        extensionId: "unknown",
+        message: `No extension in ${filePath}`,
+      })
     }
     return result
   }).pipe(Effect.withSpan("ExtensionLoader.loadExtensionFile"))
@@ -255,11 +258,11 @@ export const setupExtension = (
       .pipe(
         Effect.catchDefect((defect) =>
           Effect.fail(
-            new ExtensionLoadError(
-              extension.manifest.id,
-              `Extension setup threw: ${String(defect)}`,
-              defect,
-            ),
+            new ExtensionLoadError({
+              extensionId: extension.manifest.id,
+              message: `Extension setup threw: ${String(defect)}`,
+              cause: defect,
+            }),
           ),
         ),
       )
@@ -288,10 +291,10 @@ const checkScopedCollision = <T>(
       const key = getKey(item)
       const existing = scopeMap.get(key)
       if (existing !== undefined && existing !== ext.manifest.id) {
-        return new ExtensionLoadError(
-          ext.manifest.id,
-          `Ambiguous ${label} "${key}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${scope}"`,
-        )
+        return new ExtensionLoadError({
+          extensionId: ext.manifest.id,
+          message: `Ambiguous ${label} "${key}" — provided by both "${existing}" and "${ext.manifest.id}" in scope "${scope}"`,
+        })
       }
       scopeMap.set(key, ext.manifest.id)
     }
@@ -310,12 +313,10 @@ export const validateExtensions = (
     for (const ext of extensions) {
       const ids = idsByScope.get(ext.kind) ?? new Set()
       if (ids.has(ext.manifest.id)) {
-        return yield* Effect.fail(
-          new ExtensionLoadError(
-            ext.manifest.id,
-            `Duplicate extension id "${ext.manifest.id}" in scope "${ext.kind}"`,
-          ),
-        )
+        return yield* new ExtensionLoadError({
+          extensionId: ext.manifest.id,
+          message: `Duplicate extension id "${ext.manifest.id}" in scope "${ext.kind}"`,
+        })
       }
       ids.add(ext.manifest.id)
       idsByScope.set(ext.kind, ids)
@@ -330,6 +331,6 @@ export const validateExtensions = (
       checkScopedCollision(extensions, extractPromptSections, (p) => p.id, "prompt section"),
     ]
     for (const error of checks) {
-      if (error !== undefined) return yield* Effect.fail(error)
+      if (error !== undefined) return yield* error
     }
   }).pipe(Effect.withSpan("ExtensionLoader.validateExtensions"))

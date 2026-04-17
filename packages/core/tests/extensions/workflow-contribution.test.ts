@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import {
@@ -172,7 +172,7 @@ describe("WorkflowContribution", () => {
   )
 
   it.live(
-    "lowering throws when an extension declares more than one workflow (single-slot constraint)",
+    "fails with ExtensionLoadError when an extension declares more than one workflow (single-slot constraint)",
     () =>
       Effect.gen(function* () {
         const ext = defineExtension({
@@ -185,11 +185,15 @@ describe("WorkflowContribution", () => {
 
         const exit = yield* Effect.exit(ext.setup(testSetupCtx()))
         expect(exit._tag).toBe("Failure")
-        // The current single-slot constraint is enforced via a thrown error
-        // that surfaces through the effect failure cause.
+        // Single-slot constraint surfaces as a typed ExtensionLoadError, not a
+        // thrown defect — the failure is in the typed error channel.
         if (exit._tag === "Failure") {
-          const text = String(exit.cause)
-          expect(text).toContain("at most one workflow")
+          const fails = exit.cause.reasons.filter(Cause.isFailReason)
+          expect(fails.length).toBe(1)
+          const error = fails[0]?.error
+          expect(error?._tag).toBe("ExtensionLoadError")
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          expect((error as { message: string }).message).toContain("at most one workflow")
         }
       }),
   )

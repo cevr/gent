@@ -15,7 +15,7 @@
 
 import { Clock, Effect, Schema } from "effect"
 import { EventStoreError } from "./event"
-import type { BranchId, SessionId } from "./ids"
+import { BranchId, SessionId } from "./ids"
 
 // ============================================================================
 // Approval schemas
@@ -37,14 +37,13 @@ export interface ApprovalDecision {
 // Interaction pending signal
 // ============================================================================
 
-export class InteractionPendingError {
-  readonly _tag = "InteractionPendingError" as const
-  constructor(
-    readonly requestId: string,
-    readonly sessionId: SessionId,
-    readonly branchId: BranchId,
-  ) {}
-}
+export class InteractionPendingError extends Schema.TaggedErrorClass<InteractionPendingError>(
+  "@gent/core/domain/interaction-request/InteractionPendingError",
+)("InteractionPendingError", {
+  requestId: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
+}) {}
 
 // ============================================================================
 // Durable interaction record
@@ -200,7 +199,11 @@ export const makeInteractionService = (config: InteractionServiceConfig): Intera
       yield* config.onPresent(requestId, params, ctx)
 
       // Signal the machine to park in WaitingForInteraction.
-      return yield* Effect.fail(new InteractionPendingError(requestId, ctx.sessionId, ctx.branchId))
+      return yield* new InteractionPendingError({
+        requestId,
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+      })
     }),
 
     respond: Effect.fn("InteractionService.respond")(function* (requestId: string) {

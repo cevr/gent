@@ -98,6 +98,9 @@ const loadCredentialsEffect = (
     return result
   })
 
+/** SDK boundary: Anthropic SDK invokes this loader as a Promise-returning function.
+ *  The wrapped Effect has `R = never` (closure-captured state), so `runPromise`
+ *  here is the explicit Effect→SDK edge, not an internal escape hatch. */
 const buildCredentialLoader = (cache: CredentialCache, authInfo?: ProviderAuthInfo) => () =>
   Effect.runPromise(loadCredentialsEffect(cache, authInfo))
 

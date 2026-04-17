@@ -193,9 +193,6 @@ export const RepoTool = defineTool({
     const cachePath = getCachePath(path, cacheDir, params.spec)
     const parsed = parseSpec(params.spec)
 
-    const services = yield* Effect.context<never>()
-    const run = Effect.runPromiseWith(services)
-
     switch (params.action) {
       case "fetch": {
         yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true }).pipe(Effect.ignore)
@@ -229,16 +226,20 @@ export const RepoTool = defineTool({
             )
           }
         } else if (parsed.type === "npm") {
+          yield* fs.makeDirectory(cachePath, { recursive: true }).pipe(
+            Effect.mapError(
+              (e) =>
+                new RepoExplorerError({
+                  message: `Failed to create cache directory: ${e}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+            ),
+          )
+          const versionSuffix = parsed.version !== undefined ? `@${parsed.version}` : ""
           yield* Effect.tryPromise({
-            try: async () => {
-              await run(fs.makeDirectory(cachePath, { recursive: true }))
-              await $`npm pack ${parsed.name}${parsed.version !== undefined ? `@${parsed.version}` : ""} --pack-destination ${cachePath}`.quiet()
-              const tarballs = await run(fs.readDirectory(cachePath))
-              const tarball = tarballs.find((f) => f.endsWith(".tgz"))
-              if (tarball !== undefined) {
-                await $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet()
-              }
-            },
+            try: () =>
+              $`npm pack ${parsed.name}${versionSuffix} --pack-destination ${cachePath}`.quiet(),
             catch: (e) =>
               new RepoExplorerError({
                 message: `Failed to fetch npm: ${e}`,
@@ -246,6 +247,28 @@ export const RepoTool = defineTool({
                 cause: e,
               }),
           })
+          const tarballs = yield* fs.readDirectory(cachePath).pipe(
+            Effect.mapError(
+              (e) =>
+                new RepoExplorerError({
+                  message: `Failed to read cache directory: ${e}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+            ),
+          )
+          const tarball = tarballs.find((f) => f.endsWith(".tgz"))
+          if (tarball !== undefined) {
+            yield* Effect.tryPromise({
+              try: () => $`tar -xzf ${path.join(cachePath, tarball)} -C ${cachePath}`.quiet(),
+              catch: (e) =>
+                new RepoExplorerError({
+                  message: `Failed to extract npm tarball: ${e}`,
+                  spec: params.spec,
+                  cause: e,
+                }),
+            })
+          }
         }
         // pypi/crates: simplified - would need pip download / cargo fetch
         return { path: cachePath, message: "Fetched successfully" }

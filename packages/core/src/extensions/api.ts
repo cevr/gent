@@ -33,11 +33,8 @@
  * @module
  */
 import { Effect } from "effect"
-import type {
-  ExtensionLoadError,
-  GentExtension,
-  ExtensionSetupContext,
-} from "../domain/extension.js"
+import { ExtensionLoadError } from "../domain/extension.js"
+import type { GentExtension, ExtensionSetupContext } from "../domain/extension.js"
 import { type Contribution, filterByKind } from "../domain/contribution.js"
 import type { AgentEvent } from "../domain/event.js"
 
@@ -373,7 +370,10 @@ export const defineExtension = (params: {
       const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
       const workflows = filterByKind(contribs, "workflow")
       if (workflows.length > 1) {
-        throw new Error("extension may declare at most one workflow")
+        return yield* new ExtensionLoadError({
+          extensionId: params.id,
+          message: "extension may declare at most one workflow",
+        })
       }
       return contribs
     }),

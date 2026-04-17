@@ -316,10 +316,11 @@ const buildRequestHeaders = (
 }
 
 // Retryable fetch — 429/529 with exponential backoff
-class FetchRetryableError {
-  readonly _tag = "FetchRetryableError"
-  constructor(readonly response: Response) {}
-}
+class FetchRetryableError extends Schema.TaggedErrorClass<FetchRetryableError>(
+  "@gent/extensions/anthropic/oauth/FetchRetryableError",
+)("FetchRetryableError", {
+  response: Schema.Any,
+}) {}
 
 const fetchOnce = (
   input: RequestInfo | URL,
@@ -329,12 +330,12 @@ const fetchOnce = (
     const doFetch = yield* FetchHttpClient.Fetch
     return yield* Effect.tryPromise({
       try: () => doFetch(input, init),
-      catch: (e) => new FetchRetryableError(new Response(String(e), { status: 500 })),
+      catch: (e) => new FetchRetryableError({ response: new Response(String(e), { status: 500 }) }),
     })
   }).pipe(
     Effect.flatMap((res) =>
       res.status === 429 || res.status === 529
-        ? Effect.fail(new FetchRetryableError(res))
+        ? Effect.fail(new FetchRetryableError({ response: res }))
         : Effect.succeed(res),
     ),
   )
@@ -349,10 +350,11 @@ const fetchWithRetry = (input: RequestInfo | URL, init?: RequestInit): Effect.Ef
   )
 
 // Long-context beta error — retried by excluding offending betas
-class LongContextBetaError {
-  readonly _tag = "LongContextBetaError"
-  constructor(readonly response: Response) {}
-}
+class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>(
+  "@gent/extensions/anthropic/oauth/LongContextBetaError",
+)("LongContextBetaError", {
+  response: Schema.Any,
+}) {}
 
 const fetchWithBetaRetry = (
   input: RequestInfo | URL,
@@ -371,14 +373,14 @@ const fetchWithBetaRetry = (
         }
         return Effect.tryPromise({
           try: () => response.clone().text(),
-          catch: () => new LongContextBetaError(response),
+          catch: () => new LongContextBetaError({ response }),
         }).pipe(
           Effect.flatMap((body) => {
             if (!isLongContextError(body)) return Effect.succeed(response)
             const beta = getNextBetaToExclude(modelId)
             if (beta === null) return Effect.succeed(response)
             addExcludedBeta(modelId, beta)
-            return Effect.fail(new LongContextBetaError(response))
+            return Effect.fail(new LongContextBetaError({ response }))
           }),
         )
       }),
@@ -418,6 +420,9 @@ export const createAnthropicKeychainFetch = (
       }
     }
 
+    // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-returning
+    // function (typeof fetch). The wrapped Effect has `R = never` so this is the
+    // explicit Effect→SDK edge, not an internal escape hatch.
     return Effect.runPromise(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
   }
   return Object.assign(fetcher, {

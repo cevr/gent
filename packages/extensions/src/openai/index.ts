@@ -53,7 +53,9 @@ const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
       accountId: refreshed.accountId ?? current.accountId,
     }
 
-    // Persist back to AuthStore
+    // Persist back to AuthStore. SDK boundary: this loader is invoked by the
+    // OpenAI SDK as a Promise-returning function. `persist` is `Effect<void>`
+    // (R=never), so this is the explicit Effect→SDK edge.
     if (authInfo.persist !== undefined) {
       try {
         await Effect.runPromise(authInfo.persist(current))

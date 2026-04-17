@@ -125,11 +125,12 @@ export const makeAcpTurnExecutor = (
 ): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
-      // Capture the Effect context so the codemode proxy can dispatch tool
-      // calls through ToolRunner.run() from Promise-land. The captured context
-      // includes ToolRunner and all its dependencies — each runTool call creates
-      // an Effect that yields ToolRunner and runs the tool, executed via
-      // runPromiseWith with the full context.
+      // SDK boundary: the codemode JS sandbox invokes `runTool` as a
+      // Promise-returning function. We capture the Effect context once at turn
+      // start and use `runPromiseWith` per call so each tool dispatch sees the
+      // full ToolRunner service graph. This is the explicit Effect→SDK edge,
+      // not an internal escape hatch — the boundary is mandated by the
+      // codemode sandbox interface.
       const services = yield* Effect.context<never>()
       const baseRun = Effect.runPromiseWith(services)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion

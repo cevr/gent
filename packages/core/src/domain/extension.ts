@@ -1,4 +1,5 @@
-import type { Effect, FileSystem, Path, Schema } from "effect"
+import type { Effect, FileSystem, Path } from "effect"
+import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName } from "./agent"
@@ -90,14 +91,13 @@ export type ExtensionKind = "builtin" | "user" | "project"
 
 // Extension Load Error
 
-export class ExtensionLoadError {
-  readonly _tag = "ExtensionLoadError"
-  constructor(
-    readonly extensionId: string,
-    readonly message: string,
-    readonly cause?: unknown,
-  ) {}
-}
+export class ExtensionLoadError extends Schema.TaggedErrorClass<ExtensionLoadError>(
+  "@gent/core/domain/extension/ExtensionLoadError",
+)("ExtensionLoadError", {
+  extensionId: Schema.String,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 // Run Context — per-run metadata for tool policy decisions
 

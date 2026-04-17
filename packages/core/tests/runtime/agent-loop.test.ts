@@ -1171,9 +1171,11 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const count = yield* Ref.getAndUpdate(callCount, (n) => n + 1)
           if (count === 0) {
-            return yield* Effect.fail(
-              new InteractionPendingError("req-test-1", ctx.sessionId, ctx.branchId),
-            )
+            return yield* new InteractionPendingError({
+              requestId: "req-test-1",
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            })
           }
           yield* Deferred.succeed(resolution, void 0)
           return { resolved: true, value: params.value }

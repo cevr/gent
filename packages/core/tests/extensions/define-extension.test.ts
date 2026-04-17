@@ -251,7 +251,8 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        contributions: () => Effect.fail(new ExtensionLoadError("boom", "nope")),
+        contributions: () =>
+          Effect.fail(new ExtensionLoadError({ extensionId: "boom", message: "nope" })),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")

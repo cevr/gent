@@ -247,8 +247,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               // transitions to WaitingForInteraction. The interceptor type system erases
               // the error to `never`, but the error exists at runtime.
               const failure = executeResult.failure as unknown
-              if (failure instanceof InteractionPendingError) {
-                return yield* Effect.fail(failure)
+              if (Schema.is(InteractionPendingError)(failure)) {
+                return yield* failure
               }
 
               const message = Schema.isSchemaError(failure)
