@@ -23,11 +23,7 @@ import {
   buildResourceLayer,
 } from "@gent/core/runtime/extensions/resource-host"
 import type { ResourceBusEnvelope } from "@gent/core/domain/resource"
-import {
-  defineResource,
-  extractMachine,
-  workflow as workflowContribution,
-} from "@gent/core/domain/contribution"
+import { defineResource, extractMachine } from "@gent/core/domain/contribution"
 import { defineExtension } from "@gent/core/extensions/api"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { LoadedExtension } from "@gent/core/domain/extension"
@@ -252,41 +248,11 @@ describe("defineResource", () => {
     expect(found).toBe(stubMachine)
   })
 
-  test("extractMachine prefers Resource.machine when both Resource.machine and legacy workflow are declared", () => {
-    const resourceMachine = {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      machine: { _from: "resource" } as any,
-    }
-    const legacyMachine = {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      machine: { _from: "workflow" } as any,
-    }
-    const ext = makeStubExtension("ext-both", [
-      defineResource({
-        scope: "process",
-        layer: layerA,
-        machine: resourceMachine,
-      }),
-      // Legacy WorkflowContribution path (kept until C3.5c).
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      workflowContribution(legacyMachine as never),
-    ])
-    const found = extractMachine(ext.contributions)
-    expect(found).toBe(resourceMachine)
-  })
-
-  test("extractMachine falls back to legacy WorkflowContribution when no Resource.machine present", () => {
-    const legacyMachine = {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      machine: { _from: "workflow" } as any,
-    }
-    const ext = makeStubExtension("ext-legacy-only", [
+  test("extractMachine returns undefined when no Resource declares a machine", () => {
+    const ext = makeStubExtension("ext-no-machine", [
       defineResource({ scope: "process", layer: layerA }),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      workflowContribution(legacyMachine as never),
     ])
-    const found = extractMachine(ext.contributions)
-    expect(found).toBe(legacyMachine)
+    expect(extractMachine(ext.contributions)).toBeUndefined()
   })
 })
 
@@ -328,20 +294,6 @@ describe("defineExtension validation: Resource.machine constraints", () => {
       expect(message).toContain('Resource.machine on scope "session"')
       expect(message).toContain("not yet supported")
     }
-  })
-
-  test("accepts Resource.machine + legacy workflowContribution side-by-side (migration window)", async () => {
-    const ext = defineExtension({
-      id: "@test/migration-coexist",
-      contributions: () => [
-        defineResource({ scope: "process", layer: layerA, machine: stubMachine }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        workflowContribution(stubMachine as never),
-      ],
-    })
-    const contribs = await Effect.runPromise(ext.setup(testSetupCtx()))
-    // Resource takes precedence in extractMachine.
-    expect(extractMachine(contribs)).toBe(stubMachine)
   })
 })
 

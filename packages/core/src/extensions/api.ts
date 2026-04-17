@@ -181,7 +181,6 @@ export {
   type ProjectionKindContribution,
   type QueryKindContribution,
   type MutationKindContribution,
-  type WorkflowKindContribution,
   filterByKind,
   // smart constructors
   tool as toolContribution,
@@ -197,7 +196,6 @@ export {
   pulseSubscription as pulseSubscriptionContribution,
   query as queryContribution,
   mutation as mutationContribution,
-  workflow as workflowContribution,
   defineResource,
   defineLifecycleResource,
 } from "../domain/contribution.js"
@@ -240,12 +238,6 @@ export type {
   AnyMutationContribution,
 } from "../domain/mutation.js"
 export { MutationError, MutationNotFoundError } from "../domain/mutation.js"
-export type {
-  WorkflowContribution,
-  WorkflowEffect,
-  WorkflowInitContext,
-  AnyWorkflowContribution,
-} from "../domain/workflow.js"
 export {
   InteractionPendingReader,
   type InteractionPendingReaderService,
@@ -351,9 +343,8 @@ export type { ExtensionSetupContext } from "../domain/extension.js"
  * receives the setup context and returns a `Contribution[]` (or an Effect
  * that yields one). Later scope wins per the registry's scope precedence rule.
  *
- * Validates the single-workflow constraint inherited from the legacy
- * `setup.actor` slot: an extension may declare at most one
- * `WorkflowContribution`.
+ * Validates the single-machine constraint: an extension may declare at most
+ * one `Resource` with a `machine`.
  *
  * @example
  * ```ts
@@ -391,23 +382,12 @@ export const defineExtension = (params: {
           }),
       })
       const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
-      const workflows = filterByKind(contribs, "workflow")
       const resourcesWithMachine = filterByKind(contribs, "resource").filter(
         (r) => r.machine !== undefined,
       )
-      // At most one machine per extension. Counting both Resource.machine and
-      // legacy `workflow` together: an extension migrating from legacy to
-      // Resource is allowed to keep both during the transition (Resource takes
-      // precedence per `extractMachine`), but cannot declare 2+ Resources with
-      // `machine`. Codex BLOCK 1 on C3.5a — without this check, the runtime
+      // At most one machine per extension. Without this check the runtime
       // silently picks the first Resource by array order and drops the second
       // machine's protocols / mappers / effects on the floor.
-      if (workflows.length > 1) {
-        return yield* new ExtensionLoadError({
-          extensionId: params.id,
-          message: "extension may declare at most one workflow",
-        })
-      }
       if (resourcesWithMachine.length > 1) {
         return yield* new ExtensionLoadError({
           extensionId: params.id,

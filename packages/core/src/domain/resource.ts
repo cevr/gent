@@ -132,9 +132,7 @@ export interface ResourceSchedule {
  *  as `ExtensionEffect` so the host runtime can dispatch them unchanged. */
 export type ResourceMachineEffect = ExtensionEffect
 
-/** Lifecycle context handed to `onInit`. Same surface today's
- *  `WorkflowInitContext` exposes — Resource.machine is the renamed seat
- *  for what was previously `WorkflowContribution`. */
+/** Lifecycle context handed to `onInit`. */
 export interface ResourceMachineInitContext<State, Event, SD extends SlotsDef> {
   readonly sessionId: SessionId
   readonly snapshot: Effect.Effect<State>
@@ -152,10 +150,6 @@ export interface ResourceMachineInitContext<State, Event, SD extends SlotsDef> {
  *
  * Type parameters mirror `effect-machine`'s machine: State, Event, optional
  * slot-providing services, optional slot definitions.
- *
- * Structurally identical to the legacy `WorkflowContribution` — the runtime
- * lowering is a no-op cast. C3.5b migrates extensions over; C3.5c deletes
- * `WorkflowContribution`.
  */
 export interface ResourceMachine<
   State extends { readonly _tag: string } = { readonly _tag: string },
@@ -201,7 +195,7 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  * - `machine` — optional state machine + mappers + declared effects. The
  *   host (today: `WorkflowRuntime`, soon: a Resource-machine engine inside
  *   `resource-host/`) supervises one actor per session per Resource that
- *   declares `machine`. Replaces `WorkflowContribution`.
+ *   declares `machine`.
  *
  * Authors typically create a Resource through the smart constructor
  * `defineResource(...)`. The `tag` is the canonical entry into the service

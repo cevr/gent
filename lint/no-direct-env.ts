@@ -791,7 +791,7 @@ const plugin: Plugin = {
     /**
      * Enforces that `ProjectionContribution.query` AND `QueryContribution.handler`
      * Effects are read-only — both are read surfaces; writes belong in
-     * `MutationContribution.handler` or `WorkflowContribution`.
+     * `MutationContribution.handler` or `Resource.machine`.
      *
      * Valid:   query:   () => MyService.list().pipe(Effect.map(...))
      *          handler: () => MyService.get(id)

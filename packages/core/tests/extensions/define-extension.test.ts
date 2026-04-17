@@ -30,9 +30,9 @@ import {
   extractInterceptors,
   extractPermissionRules,
   extractPromptSections,
+  extractMachine,
   extractResources,
   extractTools,
-  extractWorkflow,
   extractExternalDrivers,
   extractModelDrivers,
 } from "@gent/core/domain/contribution"
@@ -69,7 +69,7 @@ describe("defineExtension", () => {
       expect(extractAgents(contributions)).toEqual([])
       expect(extractModelDrivers(contributions)).toEqual([])
       expect(extractResources(contributions)).toEqual([])
-      expect(extractWorkflow(contributions)).toBeUndefined()
+      expect(extractMachine(contributions)).toBeUndefined()
       expect(extractCommands(contributions)).toEqual([])
       expect(extractPermissionRules(contributions)).toEqual([])
       expect(extractPromptSections(contributions)).toEqual([])

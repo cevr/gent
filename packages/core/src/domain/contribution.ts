@@ -21,7 +21,6 @@ import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
 import type { AnyResourceContribution, AnyResourceMachine } from "./resource.js"
 import type { AnyToolDefinition } from "./tool.js"
-import type { AnyWorkflowContribution } from "./workflow.js"
 
 // ── Per-kind contribution shapes ──
 
@@ -91,11 +90,6 @@ export interface MutationKindContribution {
   readonly mutation: AnyMutationContribution
 }
 
-export interface WorkflowKindContribution {
-  readonly _kind: "workflow"
-  readonly workflow: AnyWorkflowContribution
-}
-
 /**
  * Declares that the contributing extension's externally-observable state
  * changes when any of these `AgentEvent._tag`s is published. The
@@ -129,7 +123,6 @@ export type Contribution =
   | ProjectionKindContribution
   | QueryKindContribution
   | MutationKindContribution
-  | WorkflowKindContribution
   | PulseSubscriptionContribution
   | AnyResourceContribution
 
@@ -198,11 +191,6 @@ export const query = (q: AnyQueryContribution): QueryKindContribution => ({
 export const mutation = (m: AnyMutationContribution): MutationKindContribution => ({
   _kind: "mutation",
   mutation: m,
-})
-
-export const workflow = (w: AnyWorkflowContribution): WorkflowKindContribution => ({
-  _kind: "workflow",
-  workflow: w,
 })
 
 export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptionContribution => ({
@@ -298,10 +286,6 @@ export const extractMutations = (
 ): ReadonlyArray<MutationKindContribution["mutation"]> =>
   filterByKind(cs, "mutation").map((c) => c.mutation)
 
-export const extractWorkflow = (
-  cs: ReadonlyArray<Contribution>,
-): WorkflowKindContribution["workflow"] | undefined => findByKind(cs, "workflow")?.workflow
-
 export const extractPulseSubscriptions = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<PulseSubscriptionContribution> => filterByKind(cs, "pulse-subscription")
@@ -311,41 +295,9 @@ export const extractResources = (
 ): ReadonlyArray<AnyResourceContribution> => filterByKind(cs, "resource")
 
 /**
- * Returns the machine declared by an extension's contributions, looking at
- * both legacy `WorkflowContribution` and `Resource.machine` (C3.5).
- *
- * Until C3.5b migrates all extensions, both shapes coexist; the runtime
- * should prefer `Resource.machine` when both are present (lets a single
- * extension migrate one at a time during C3.5b).
- *
- * After C3.5c deletes `WorkflowContribution`, this collapses to "look up
- * the first Resource that declares `machine`".
+ * Returns the machine declared by an extension's contributions — i.e., the
+ * first `Resource` that declares a `machine`. Returns `undefined` if no
+ * Resource carries a machine.
  */
-export const extractMachine = (cs: ReadonlyArray<Contribution>): AnyResourceMachine | undefined => {
-  const fromResource = extractResources(cs).find((r) => r.machine !== undefined)?.machine
-  if (fromResource !== undefined) return fromResource
-  const legacy = extractWorkflow(cs)
-  // `WorkflowContribution` is structurally a `ResourceMachine` (same field
-  // names, same effect-machine `Machine.Machine` shape) — the C3.5 design
-  // intent is "Resource.machine IS the workflow contribution, just hosted
-  // by Resource." The cast preserves runtime identity. Drift is gated by
-  // the compile-time check below.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  return legacy as AnyResourceMachine | undefined
-}
-
-// Codex C3.5a ADVISORY 1 — drift guard. `WorkflowContribution` and
-// `ResourceMachine` are intentionally structurally identical during the
-// C3.5a→c migration window. If a future edit adds an asymmetric field to
-// either type, the cast in `extractMachine` would silently lose it. These
-// type-level checks force the symmetry: a non-empty diff between the two
-// shapes (in either direction) becomes a TypeScript error.
-//
-// After C3.5c deletes WorkflowContribution, this guard goes with it.
-type _WorkflowIsResourceMachine = AnyWorkflowContribution extends AnyResourceMachine ? true : false
-type _ResourceMachineIsWorkflow = AnyResourceMachine extends AnyWorkflowContribution ? true : false
-const _workflowIsResourceMachine: _WorkflowIsResourceMachine = true
-const _resourceMachineIsWorkflow: _ResourceMachineIsWorkflow = true
-// Reference the constants so they're not flagged as unused by the linter.
-void _workflowIsResourceMachine
-void _resourceMachineIsWorkflow
+export const extractMachine = (cs: ReadonlyArray<Contribution>): AnyResourceMachine | undefined =>
+  extractResources(cs).find((r) => r.machine !== undefined)?.machine

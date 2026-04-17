@@ -123,12 +123,9 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
           const spawnByExtension = new Map<string, ActorSpawnSpec>()
           const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
           for (const ext of extensions) {
-            // `WorkflowContribution` and `Resource.machine` are structurally
-            // identical to `ExtensionActorDefinition` — see workflow.ts /
-            // resource.ts. `extractMachine` returns whichever shape the
-            // extension declared, preferring `Resource.machine` when both
-            // are present. Cast to the runtime shape so existing actor-
-            // named code paths stay intact.
+            // `Resource.machine` is structurally identical to
+            // `ExtensionActorDefinition` — see resource.ts. Cast to the
+            // runtime shape so existing actor-named code paths stay intact.
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             const actor = extractMachine(ext.contributions) as
               | AnyExtensionActorDefinition
