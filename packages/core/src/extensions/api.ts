@@ -366,7 +366,19 @@ export const defineExtension = (params: {
   manifest: { id: params.id },
   setup: (ctx) =>
     Effect.gen(function* () {
-      const result = params.contributions({ ctx })
+      // Guard the synchronous factory call so author throws surface as typed
+      // ExtensionLoadError rather than fiber defects. Direct `ext.setup(...)`
+      // callers (tests, programmatic uses) get the same typed-failure shape
+      // as the loader's `setupExtension` defect-catching path.
+      const result = yield* Effect.try({
+        try: () => params.contributions({ ctx }),
+        catch: (cause) =>
+          new ExtensionLoadError({
+            extensionId: params.id,
+            message: `Contribution factory threw: ${String(cause)}`,
+            cause,
+          }),
+      })
       const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
       const workflows = filterByKind(contribs, "workflow")
       if (workflows.length > 1) {

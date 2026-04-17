@@ -9,7 +9,7 @@
  *
  * @module
  */
-import { Deferred, Effect, Stream } from "effect"
+import { Context, Deferred, Effect, Stream } from "effect"
 import {
   TurnError,
   ToolCallId,
@@ -126,25 +126,27 @@ export const makeAcpTurnExecutor = (
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
       // SDK boundary: the codemode JS sandbox invokes `runTool` as a
-      // Promise-returning function. We capture the Effect context once at turn
-      // start and use `runPromiseWith` per call so each tool dispatch sees the
-      // full ToolRunner service graph. This is the explicit Effect→SDK edge,
-      // not an internal escape hatch — the boundary is mandated by the
-      // codemode sandbox interface.
+      // Promise-returning function. The `TurnExecutor` interface pins the
+      // executor stream's `R = never`, but at runtime the agent runtime
+      // provides `ToolRunner` ambiently. We capture the live ServiceMap
+      // once and build a narrowly typed adapter — the only Effect we ever
+      // cross the SDK edge with is `toolRunner.run`'s typed
+      // `Effect<ToolResultPart, InteractionPendingError>`. No generic
+      // Effect-runner cast is exposed; `runTool`'s argument and return
+      // types pin the boundary to exactly one shape.
       const services = yield* Effect.context<never>()
-      const baseRun = Effect.runPromiseWith(services)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      const run = baseRun as (e: Effect.Effect<any, any, any>) => Promise<any>
+      // The TurnExecutor interface pins R = never, but the agent runtime
+      // ambiently provides ToolRunner at executor invocation time. Re-type
+      // the captured ServiceMap to expose the typed ToolRunner key.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const ambient = services as unknown as Context.Context<ToolRunner>
+      const toolRunner = Context.get(ambient, ToolRunner)
+      const runOnRuntime = Effect.runPromiseWith(services)
 
       const runTool: CodemodeConfig["runTool"] = (toolName, args) => {
         const toolCallId = ToolCallId.of(crypto.randomUUID())
         const toolCtx = { ...ctx.hostCtx, toolCallId }
-        return run(
-          Effect.gen(function* () {
-            const toolRunner = yield* ToolRunner
-            return yield* toolRunner.run({ toolCallId, toolName, input: args }, toolCtx)
-          }),
-        )
+        return runOnRuntime(toolRunner.run({ toolCallId, toolName, input: args }, toolCtx))
       }
 
       const codemodeConfig: CodemodeConfig = {
