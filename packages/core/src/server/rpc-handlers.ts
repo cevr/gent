@@ -4,7 +4,7 @@ import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-bou
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { GentRpcs } from "./rpcs"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
@@ -55,7 +55,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
-    const extensionStateRuntime = yield* ExtensionStateRuntime
+    const extensionStateRuntime = yield* WorkflowRuntime
     const extensionRegistry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
     const busOpt = yield* Effect.serviceOption(ExtensionEventBus)

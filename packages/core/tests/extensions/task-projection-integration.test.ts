@@ -27,7 +27,7 @@ import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Session, Branch } from "@gent/core/domain/message"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -81,7 +81,7 @@ describe("TaskProjection × EventPublisherLive integration", () => {
       const taskStorageLayer = Layer.provide(TaskStorage.Live, storageLayer)
       const taskServiceLayer = Layer.provide(TaskService.Live, taskStorageLayer)
       const baseEventStoreLayer = makeRecordingBaseEventStore(sink)
-      const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions([]).pipe(
+      const stateRuntimeLayer = WorkflowRuntime.fromExtensions([]).pipe(
         Layer.provideMerge(ExtensionTurnControl.Test()),
       )
       const runtimePlatformLayer = RuntimePlatform.Test({

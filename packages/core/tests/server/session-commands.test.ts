@@ -8,7 +8,7 @@ import { Provider } from "@gent/core/providers/provider"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { AppServicesLive } from "@gent/core/server/index"
 import { SessionCommands } from "@gent/core/server/session-commands"
@@ -29,7 +29,7 @@ describe("SessionCommands", () => {
         baseEventStore,
         ActorProcess.Test(),
         AgentLoop.Test(),
-        ExtensionStateRuntime.Test(),
+        WorkflowRuntime.Test(),
         ExtensionRegistry.fromResolved(resolveExtensions([])),
         Permission.Live([], "allow"),
         ConfigService.Test(),

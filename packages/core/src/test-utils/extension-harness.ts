@@ -39,7 +39,7 @@ import {
   setupBuiltinExtensions,
 } from "../runtime/extensions/activation.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
@@ -273,7 +273,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         ...(config.extraLayers ?? []),
       )
-      const stateRuntimeLayer = ExtensionStateRuntime.fromExtensions(activeExtensions).pipe(
+      const stateRuntimeLayer = WorkflowRuntime.fromExtensions(activeExtensions).pipe(
         Layer.provideMerge(turnControlLayer),
       )
       const runtimeDeps = Layer.merge(baseLayer, stateRuntimeLayer)

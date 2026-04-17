@@ -6,7 +6,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { defineTool } from "@gent/core/domain/tool"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 
 describe("ToolRunner", () => {
   test("returns error result when tool fails", async () => {
@@ -31,7 +31,7 @@ describe("ToolRunner", () => {
       Permission.Test(),
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -73,7 +73,7 @@ describe("ToolRunner", () => {
       Permission.Test(),
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)
@@ -121,7 +121,7 @@ describe("ToolRunner", () => {
       denyAllPermission,
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
     )
     const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
     const layer = Layer.mergeAll(deps, runnerLayer)

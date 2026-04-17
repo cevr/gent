@@ -12,7 +12,7 @@
 import { Effect, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import {
-  actorContribution,
+  workflowContribution,
   ArtifactId,
   BranchId,
   defineExtension,
@@ -349,7 +349,7 @@ const ArtifactClearTool = defineTool({
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
   contributions: () => [
-    actorContribution(artifactsActor),
+    workflowContribution(artifactsActor),
     toolContribution(ArtifactSaveTool),
     toolContribution(ArtifactReadTool),
     toolContribution(ArtifactUpdateTool),

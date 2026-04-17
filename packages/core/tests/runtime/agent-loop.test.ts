@@ -8,7 +8,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -91,7 +91,7 @@ const makeLayer = (providerLayer: Layer.Layer<Provider>, tools: AnyToolDefinitio
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     EventStore.Test(),
@@ -113,7 +113,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ToolRunner.Test(),
@@ -138,7 +138,7 @@ const makeLiveToolLayer = (
     Storage.TestWithSql(),
     providerLayer,
     extRegistry,
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     EventStore.Test(),
@@ -184,7 +184,7 @@ const makeLayerWithEvents = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     makeCountingEventStore(eventsRef),
@@ -313,7 +313,7 @@ describe("streaming", () => {
       slowStorage,
       providerLayer,
       makeExtRegistry(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
@@ -717,13 +717,13 @@ describe("streaming", () => {
       Permission.Test(),
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       BunServices.layer,
@@ -1214,7 +1214,7 @@ describe("interaction", () => {
       Storage.TestWithSql(),
       providerLayer ?? makeInteractionProviderLayer(),
       makeExtRegistry(tools),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ApprovalService.Test(),
@@ -1331,7 +1331,7 @@ describe("interaction", () => {
         generate: () => Effect.succeed("test"),
       }),
       makeExtRegistry(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
@@ -1532,7 +1532,7 @@ describe("recovery", () => {
       storageLayer,
       eventStoreLayer,
       extensionLayer,
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       providerLayer,

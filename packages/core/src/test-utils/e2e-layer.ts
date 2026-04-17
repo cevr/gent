@@ -2,7 +2,7 @@
  * E2E test layer with real extension actors, queued event publishing, and tool execution.
  *
  * Unlike baseLocalLayerWithProvider (which stubs everything), this layer wires the
- * prod-shaped event publisher, real ExtensionStateRuntime.Live, real ToolRunner.Live,
+ * prod-shaped event publisher, real WorkflowRuntime.Live, real ToolRunner.Live,
  * and real ExtensionTurnControl.Live — so QueueFollowUp actually drives multi-turn loops.
  *
  * Import from @gent/core/test-utils/e2e-layer
@@ -33,7 +33,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -70,7 +70,7 @@ export interface E2ELayerConfig {
  * Build a complete E2E test layer with real extension actors and queued event publishing.
  *
  * Key differences from baseLocalLayerWithProvider:
- * - ExtensionStateRuntime.Live(extensions) — spawns real actors
+ * - WorkflowRuntime.Live(extensions) — spawns real actors
  * - EventPublisherLive — appends events, then delivers them through the queued extension runtime
  * - ToolRunner.Live — executes tools for real
  * - ExtensionTurnControl.Live — QueueFollowUp calls agentLoop.followUp()
@@ -163,7 +163,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const authDeps = Layer.mergeAll(authStoreLive, extensionRegistryLive, driverRegistryLive)
       const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
       const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
-      const extensionRuntimeLive = ExtensionStateRuntime.Live(resolved.extensions).pipe(
+      const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
       )
 

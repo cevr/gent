@@ -13,7 +13,7 @@ import type { AgentEvent, EventStoreService } from "@gent/core/domain/event"
 import { BranchId, SessionId, TaskId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -173,10 +173,10 @@ describe("spawnMachineExtensionRef", () => {
 })
 
 // ============================================================================
-// ExtensionStateRuntime — supervisor behavior
+// WorkflowRuntime — supervisor behavior
 // ============================================================================
 
-describe("ExtensionStateRuntime", () => {
+describe("WorkflowRuntime", () => {
   it.live("healthy actor still runs when another actor fails during spawn", () => {
     const healthy = makeCounterActor("healthy-actor")
     const broken = {
@@ -203,7 +203,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -262,7 +262,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -319,7 +319,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -369,7 +369,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.send(sessionId, Ping({}), branchId)
       const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
       const statuses = yield* runtime.getActorStatuses(sessionId)
@@ -423,7 +423,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       const reply = yield* runtime.ask(sessionId, Ping({}), branchId)
       const statuses = yield* runtime.getActorStatuses(sessionId)
 
@@ -473,7 +473,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       const exit = yield* runtime.ask(sessionId, GetCount(), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -494,7 +494,7 @@ describe("ExtensionStateRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
@@ -516,7 +516,7 @@ describe("ExtensionStateRuntime", () => {
     const layer = makeRuntimeLayer([makeCounterExtension("ephemeral")])
 
     return Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
 
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
@@ -598,7 +598,7 @@ describe("event routing", () => {
 
   const makeRoutingLayer = (extensions: LoadedExtension[]) => {
     const published = Effect.runSync(Ref.make<AgentEvent[]>([]))
-    const stateRuntimeLayer = ExtensionStateRuntime.Live(extensions).pipe(
+    const stateRuntimeLayer = WorkflowRuntime.Live(extensions).pipe(
       Layer.provideMerge(ExtensionTurnControl.Test()),
     )
     const baseService: EventStoreService = {
@@ -629,7 +629,7 @@ describe("event routing", () => {
 
     return Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
       yield* eventPublisher.publish(
@@ -666,7 +666,7 @@ describe("event routing", () => {
 
     return Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }))
 
@@ -706,7 +706,7 @@ describe("event routing", () => {
 
     return Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       yield* eventPublisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }))
 
@@ -721,7 +721,7 @@ describe("event routing", () => {
 
     return Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
 
@@ -752,7 +752,7 @@ describe("event routing", () => {
 
     return Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
 
@@ -768,7 +768,7 @@ describe("event routing", () => {
     const { fullLayer } = makeRoutingLayer([recorderExtension])
 
     return Effect.gen(function* () {
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
 
       const changed = yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,

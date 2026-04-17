@@ -5,7 +5,7 @@ import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { SessionStarted } from "@gent/core/domain/event"
 import { ARTIFACTS_EXTENSION_ID, ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
 
@@ -13,16 +13,14 @@ const sessionId = SessionId.of("art-test-session")
 const branchId = BranchId.of("art-test-branch")
 
 const withRuntime = (
-  fn: (
-    runtime: typeof ExtensionStateRuntime.Type,
-  ) => Effect.Effect<void, unknown, ExtensionStateRuntime>,
+  fn: (runtime: typeof WorkflowRuntime.Type) => Effect.Effect<void, unknown, WorkflowRuntime>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
     const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
     yield* Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
       yield* fn(runtime)
     }).pipe(Effect.provide(e2eLayer))

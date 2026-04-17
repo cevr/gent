@@ -18,7 +18,7 @@ import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol } from "@gent/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
 import { testSetupCtx } from "@gent/core/test-utils"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
@@ -36,21 +36,19 @@ const autoExtension: LoadedExtension = {
 
 const makeLayer = () =>
   Layer.mergeAll(
-    ExtensionStateRuntime.Live([autoExtension]).pipe(
-      Layer.provideMerge(ExtensionTurnControl.Test()),
-    ),
+    WorkflowRuntime.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     EventStore.Memory,
     Storage.Test(),
   )
 
-const getSnapshot = (runtime: ExtensionStateRuntime) =>
+const getSnapshot = (runtime: WorkflowRuntime) =>
   Effect.gen(function* () {
     const snapshots = yield* runtime.getUiSnapshots(sessionId, branchId)
     return snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
   })
 
 const sendAuto = (
-  runtime: ExtensionStateRuntime,
+  runtime: WorkflowRuntime,
   intent:
     | { readonly _tag: "StartAuto"; readonly goal: string; readonly maxIterations?: number }
     | { readonly _tag: "CancelAuto" }
@@ -96,7 +94,7 @@ const turnCompleted = () => new TurnCompleted({ sessionId, branchId, durationMs:
 describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -144,7 +142,7 @@ describe("Auto runtime integration", () => {
 
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -163,7 +161,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -179,7 +177,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -201,7 +199,7 @@ describe("Auto runtime integration", () => {
 
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -229,7 +227,7 @@ describe("Auto runtime integration", () => {
 
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -251,7 +249,7 @@ describe("Auto runtime integration", () => {
 
   it.live("unrelated tool does not advance the loop", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -280,7 +278,7 @@ describe("Auto runtime integration", () => {
 
   it.live("review while Working is ignored (must checkpoint first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -300,7 +298,7 @@ describe("Auto runtime integration", () => {
 
   it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -329,7 +327,7 @@ describe("Auto runtime integration", () => {
 
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -376,7 +374,7 @@ describe("Auto runtime integration", () => {
         version: 5,
       })
 
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -395,7 +393,7 @@ describe("Auto runtime integration", () => {
 
   it.live("derive injects learnings into prompt sections", () =>
     Effect.gen(function* () {
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -453,15 +451,13 @@ describe("Auto JSONL replay via onInit", () => {
 
   const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
     Layer.mergeAll(
-      ExtensionStateRuntime.Live([autoExtension]).pipe(
-        Layer.provideMerge(ExtensionTurnControl.Test()),
-      ),
+      WorkflowRuntime.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
       EventStore.Memory,
       Storage.Test(),
       mockJournal(rows, originSessionId),
     )
 
-  const getAutoSnapshot = (runtime: ExtensionStateRuntime) =>
+  const getAutoSnapshot = (runtime: WorkflowRuntime) =>
     Effect.gen(function* () {
       const snapshots = yield* runtime.getUiSnapshots(childId, childBranchId)
       return snapshots.find((s) => s.extensionId === AUTO_EXTENSION_ID)
@@ -478,7 +474,7 @@ describe("Auto JSONL replay via onInit", () => {
         new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
       )
 
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
@@ -520,7 +516,7 @@ describe("Auto JSONL replay via onInit", () => {
       const now = new Date()
       yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
 
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId: parentId, branchId }), {
         sessionId: parentId,
         branchId,
@@ -559,7 +555,7 @@ describe("Auto JSONL replay via onInit", () => {
         }),
       )
 
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
@@ -588,7 +584,7 @@ describe("Auto JSONL replay via onInit", () => {
         new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
       )
 
-      const runtime = yield* ExtensionStateRuntime
+      const runtime = yield* WorkflowRuntime
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,

@@ -6,19 +6,13 @@
  * transitions: auto loop, handoff cooldown, ACP per-session managers.
  *
  * Distinct from `ProjectionContribution` (which is read-only UI/prompt/policy
- * derivation from storage) and from `ActorContribution` (which conflates
- * machine + UI snapshot + protocol RPC). Per `composability-not-flags` —
- * workflows declare effects, projections derive views, and the two never
- * own the same state.
+ * derivation from storage). Per `composability-not-flags` — workflows declare
+ * effects, projections derive views, and the two never own the same state.
  *
- * **Lowering today (8a → 8c):** workflow lowers into the existing
- * `ExtensionActorDefinition` shape so the same `ExtensionStateRuntime` hosts
- * both. The legacy `setup.actor` slot is single-valued, so this implementation
- * intentionally accepts at most one workflow per extension — same constraint
- * as actors today. The plan calls for a dedicated `workflow-runtime.ts` and
- * the deletion of `state-runtime.ts` in C8 itself; that split is deferred
- * until after 8b/8c migrate the in-tree consumers (auto, handoff, ACP) so
- * the runtime split has concrete callers driving its shape.
+ * Hosted by `WorkflowRuntime` (file: `runtime/extensions/workflow-runtime.ts`).
+ * `WorkflowContribution` is structurally identical to the runtime-internal
+ * `ExtensionActorDefinition` shape — they share field names so the lowering
+ * is a no-op cast rather than a field-by-field copy.
  *
  * @module
  */

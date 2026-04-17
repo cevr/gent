@@ -11,7 +11,7 @@ import type { AgentRunner, AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import type { MutationRef, MutationError, MutationNotFoundError } from "../domain/mutation.js"
 import type { QueryRef, QueryError, QueryNotFoundError } from "../domain/query.js"
-import type { ExtensionStateRuntimeService } from "./extensions/state-runtime.js"
+import type { WorkflowRuntimeService } from "./extensions/workflow-runtime.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
 import type { PromptPresenterService } from "../domain/prompt-presenter.js"
@@ -31,7 +31,7 @@ import {
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
-  readonly extensionStateRuntime: ExtensionStateRuntimeService
+  readonly extensionStateRuntime: WorkflowRuntimeService
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService

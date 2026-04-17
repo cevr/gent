@@ -23,9 +23,9 @@ import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
-  ExtensionStateRuntime,
-  type ExtensionStateRuntimeService,
-} from "@gent/core/runtime/extensions/state-runtime"
+  WorkflowRuntime,
+  type WorkflowRuntimeService,
+} from "@gent/core/runtime/extensions/workflow-runtime"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -52,7 +52,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
 
 const withEventPublisher = (
   baseEventStoreLayer: Layer.Layer<EventStore>,
-  stateRuntimeLayer: Layer.Layer<ExtensionStateRuntime> = ExtensionStateRuntime.Test(),
+  stateRuntimeLayer: Layer.Layer<WorkflowRuntime> = WorkflowRuntime.Test(),
 ) =>
   Layer.provide(
     EventPublisherLive,
@@ -546,7 +546,7 @@ describe("AgentRunner", () => {
     const storageLayer = Storage.TestWithSql()
     const baseEventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const publishedSessionIds: string[] = []
-    const stateRuntime: ExtensionStateRuntimeService = {
+    const stateRuntime: WorkflowRuntimeService = {
       publish: (_event, ctx) =>
         Effect.sync(() => {
           publishedSessionIds.push(ctx.sessionId)
@@ -563,7 +563,7 @@ describe("AgentRunner", () => {
       EventPublisherLive,
       Layer.mergeAll(
         baseEventStoreLayer,
-        Layer.succeed(ExtensionStateRuntime, stateRuntime),
+        Layer.succeed(WorkflowRuntime, stateRuntime),
         testRegistryLayer,
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ),

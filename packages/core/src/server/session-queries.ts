@@ -5,7 +5,7 @@ import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
@@ -51,7 +51,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
     Effect.gen(function* () {
       const storage = yield* Storage
       const actorProcess = yield* ActorProcess
-      const extensionStateRuntime = yield* ExtensionStateRuntime
+      const extensionStateRuntime = yield* WorkflowRuntime
       const extensionRegistry = yield* ExtensionRegistry
       const platform = yield* RuntimePlatform
 
@@ -159,7 +159,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           )
 
         // Extension UI snapshots for cold-start hydration. Two sources:
-        //  - actors  → `ExtensionStateRuntime.getUiSnapshots` (in-memory state)
+        //  - actors  → `WorkflowRuntime.getUiSnapshots` (in-memory state)
         //  - projections → `projections.evaluateUi` (re-derived from disk)
         // Compile-time UI ownership rule (projection-registry) guarantees an
         // extensionId cannot own both an actor.snapshot and a projection.ui,

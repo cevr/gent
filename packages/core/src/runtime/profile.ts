@@ -34,7 +34,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import { ExtensionEventBus } from "./extensions/event-bus.js"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
+import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
   reconcileLoadedExtensions,
@@ -254,7 +254,7 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
     })),
   )
 
-  const extensionRuntimeLive = ExtensionStateRuntime.Live(resolved.extensions).pipe(
+  const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
 

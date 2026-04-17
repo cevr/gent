@@ -25,7 +25,7 @@ import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { SearchStorage } from "../storage/search-storage.js"
-import { ExtensionStateRuntime } from "./extensions/state-runtime.js"
+import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { ResourceManager } from "./resource-manager.js"
 
@@ -189,10 +189,10 @@ export const LocalActorProcessLive: Layer.Layer<
         home: "",
         platform: "unknown",
       }),
-      extensionStateRuntime: opt(yield* Effect.serviceOption(ExtensionStateRuntime), {
-        send: die("ExtensionStateRuntime"),
-        ask: die("ExtensionStateRuntime"),
-        getUiSnapshots: die("ExtensionStateRuntime"),
+      extensionStateRuntime: opt(yield* Effect.serviceOption(WorkflowRuntime), {
+        send: die("WorkflowRuntime"),
+        ask: die("WorkflowRuntime"),
+        getUiSnapshots: die("WorkflowRuntime"),
       }),
       approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
         present: die("ApprovalService"),

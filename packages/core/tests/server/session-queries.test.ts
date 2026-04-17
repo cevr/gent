@@ -13,7 +13,7 @@ import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
@@ -46,7 +46,7 @@ describe("Session Snapshot", () => {
       Provider.Test([]),
       eventStoreLayer,
       actorProcessLayer,
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
       emptyRegistryLayer,
@@ -93,7 +93,7 @@ describe("Session Tree", () => {
       Provider.Test([]),
       eventStoreLayer,
       ActorProcess.Test(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
       emptyRegistryLayer,

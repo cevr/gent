@@ -14,7 +14,6 @@ import type { Effect, Layer } from "effect"
 import type { AgentDefinition } from "./agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type {
-  AnyExtensionActorDefinition,
   CommandContribution,
   ExtensionInterceptorDescriptor,
   ScheduledJobContribution,
@@ -47,11 +46,6 @@ export interface InterceptorContribution {
 export interface LayerContribution {
   readonly _kind: "layer"
   readonly layer: Layer.Layer<never, never, object>
-}
-
-export interface ActorContribution {
-  readonly _kind: "actor"
-  readonly actor: AnyExtensionActorDefinition
 }
 
 export interface CommandKindContribution {
@@ -128,7 +122,6 @@ export type Contribution =
   | AgentContribution
   | InterceptorContribution
   | LayerContribution
-  | ActorContribution
   | CommandKindContribution
   | ModelDriverKindContribution
   | ExternalDriverKindContribution
@@ -158,11 +151,6 @@ export const layer = <A, R>(l: Layer.Layer<A, never, R>): LayerContribution => (
   _kind: "layer",
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   layer: l as Layer.Layer<never, never, object>,
-})
-
-export const actor = (a: AnyExtensionActorDefinition): ActorContribution => ({
-  _kind: "actor",
-  actor: a,
 })
 
 export const command = (c: CommandContribution): CommandKindContribution => ({

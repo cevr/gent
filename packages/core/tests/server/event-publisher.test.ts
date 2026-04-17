@@ -3,7 +3,7 @@ import { Deferred, Effect, Layer } from "effect"
 import { type AgentEvent, BaseEventStore } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { ExtensionEventBus } from "@gent/core/runtime/extensions/event-bus"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -34,7 +34,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+    const stateRuntimeLayer = Layer.succeed(WorkflowRuntime, {
       publish: (event) =>
         Effect.sync(() => {
           delivered.push(event._tag)
@@ -73,7 +73,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+    const stateRuntimeLayer = Layer.succeed(WorkflowRuntime, {
       publish: (event) =>
         Effect.gen(function* () {
           delivered.push(event._tag)
@@ -126,7 +126,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+    const stateRuntimeLayer = Layer.succeed(WorkflowRuntime, {
       publish: (event) =>
         Effect.gen(function* () {
           if (event._tag === "OuterEvent" && publishFn !== undefined) {
@@ -173,7 +173,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+    const stateRuntimeLayer = Layer.succeed(WorkflowRuntime, {
       publish: () =>
         Effect.sync(() => {
           delivered++
@@ -211,7 +211,7 @@ describe("EventPublisher", () => {
       removeSession: () => Effect.void,
     })
 
-    const stateRuntimeLayer = Layer.succeed(ExtensionStateRuntime, {
+    const stateRuntimeLayer = Layer.succeed(WorkflowRuntime, {
       publish: (event) =>
         Effect.gen(function* () {
           delivered.push(event._tag)

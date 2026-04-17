@@ -4,7 +4,7 @@
  * Locks the contract introduced in planify Commit 8a:
  *
  *   1. `workflowContribution` lowers into `ExtensionSetup.actor` so the existing
- *      `ExtensionStateRuntime` hosts it without code duplication.
+ *      `WorkflowRuntime` hosts it without code duplication.
  *   2. The lowered workflow's machine reacts to `mapEvent` (agent events),
  *      `mapCommand` (extension command messages), and `afterTransition`
  *      (declared workflow effects) — proving the four primitive surfaces
@@ -185,7 +185,7 @@ describe("WorkflowContribution", () => {
         // that surfaces through the effect failure cause.
         if (exit._tag === "Failure") {
           const text = String(exit.cause)
-          expect(text).toContain("at most one workflow or actor")
+          expect(text).toContain("at most one workflow")
         }
       }),
   )

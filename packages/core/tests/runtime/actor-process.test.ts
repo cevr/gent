@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
@@ -45,7 +45,7 @@ describe("ActorProcess", () => {
       Storage.Test(),
       agentLoopLayer,
       extRegistry,
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       eventStoreLayer,
       recorderLayer,
       ToolRunner.Test(),
@@ -182,7 +182,7 @@ describe("ActorProcess", () => {
       Storage.Test(),
       agentLoopLayer,
       extRegistry2,
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       eventStoreLayer,
       recorderLayer,
       toolRunnerLayer,

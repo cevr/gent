@@ -8,7 +8,7 @@ import { Deferred, Effect, Layer } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -43,15 +43,15 @@ describe("extension concurrency", () => {
           manifest: { id: "counter", version: "1.0.0" },
           setup: { actor: wrappedActor },
         },
-      ] as Parameters<typeof ExtensionStateRuntime.fromExtensions>[0]
+      ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 
       const layer = Layer.provide(
-        ExtensionStateRuntime.fromExtensions(extensions),
+        WorkflowRuntime.fromExtensions(extensions),
         ExtensionTurnControl.Test(),
       )
 
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
         const event = new SessionStarted({ sessionId, branchId })
         const ctx = { sessionId, branchId }
 
@@ -96,11 +96,11 @@ describe("extension concurrency", () => {
               }),
             },
           },
-        ] as Parameters<typeof ExtensionStateRuntime.fromExtensions>[0]
+        ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 
         const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
         const baseLayer = Layer.mergeAll(
-          ExtensionStateRuntime.fromExtensions(extensions).pipe(
+          WorkflowRuntime.fromExtensions(extensions).pipe(
             Layer.provideMerge(ExtensionTurnControl.Test()),
           ),
           EventStore.Memory,
@@ -111,7 +111,7 @@ describe("extension concurrency", () => {
 
         yield* Effect.gen(function* () {
           const publisher = yield* EventPublisher
-          const runtime = yield* ExtensionStateRuntime
+          const runtime = yield* WorkflowRuntime
 
           yield* Effect.all(
             [

@@ -84,7 +84,7 @@ interface MailboxSlot {
 
 const ACTOR_RESTART_LIMIT = 1
 
-export interface ExtensionStateRuntimeService {
+export interface WorkflowRuntimeService {
   readonly publish: (event: AgentEvent, ctx: ExtensionReduceContext) => Effect.Effect<boolean>
   readonly deriveAll: (
     sessionId: SessionId,
@@ -110,15 +110,14 @@ export interface ExtensionStateRuntimeService {
   readonly terminateAll: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-export class ExtensionStateRuntime extends Context.Service<
-  ExtensionStateRuntime,
-  ExtensionStateRuntimeService
->()("@gent/core/src/runtime/extensions/state-runtime/ExtensionStateRuntime") {
+export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRuntimeService>()(
+  "@gent/core/src/runtime/extensions/workflow-runtime/WorkflowRuntime",
+) {
   static fromExtensions = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<ExtensionStateRuntime, never, ExtensionTurnControl> =>
+  ): Layer.Layer<WorkflowRuntime, never, ExtensionTurnControl> =>
     Layer.effect(
-      ExtensionStateRuntime,
+      WorkflowRuntime,
       Effect.acquireRelease(
         Effect.gen(function* () {
           const spawnSpecs: ActorSpawnSpec[] = []
@@ -417,7 +416,7 @@ export class ExtensionStateRuntime extends Context.Service<
             sessionId: SessionId,
             branchId?: BranchId,
           ): Effect.Effect<ActorEntry[]> =>
-            Effect.withSpan("ExtensionStateRuntime.spawnActors")(
+            Effect.withSpan("WorkflowRuntime.spawnWorkflows")(
               Effect.gen(function* () {
                 const result = yield* spawnSemaphore.withPermits(1)(
                   Effect.gen(function* () {
@@ -808,7 +807,7 @@ export class ExtensionStateRuntime extends Context.Service<
 
           const service = {
             publish: (event, ctx) =>
-              Effect.withSpan("ExtensionStateRuntime.publish", {
+              Effect.withSpan("WorkflowRuntime.publish", {
                 attributes: { "extension.event": event._tag },
               })(
                 Effect.gen(function* () {
@@ -833,7 +832,7 @@ export class ExtensionStateRuntime extends Context.Service<
               ),
 
             deriveAll: (sessionId, ctx) =>
-              Effect.withSpan("ExtensionStateRuntime.deriveAll")(
+              Effect.withSpan("WorkflowRuntime.deriveAll")(
                 Effect.gen(function* () {
                   const entries = yield* getOrSpawnActors(sessionId)
                   const results: Array<{ extensionId: string; projection: TurnProjection }> = []
@@ -879,7 +878,7 @@ export class ExtensionStateRuntime extends Context.Service<
               ),
 
             send: (sessionId, message, branchId) =>
-              Effect.withSpan("ExtensionStateRuntime.send", {
+              Effect.withSpan("WorkflowRuntime.send", {
                 attributes: {
                   "extension.id": message.extensionId,
                   "extension.message": message._tag,
@@ -905,7 +904,7 @@ export class ExtensionStateRuntime extends Context.Service<
               message: M,
               branchId?: BranchId,
             ) =>
-              Effect.withSpan("ExtensionStateRuntime.ask", {
+              Effect.withSpan("WorkflowRuntime.ask", {
                 attributes: {
                   "extension.id": message.extensionId,
                   "extension.message": message._tag,
@@ -931,7 +930,7 @@ export class ExtensionStateRuntime extends Context.Service<
               ),
 
             getUiSnapshots: (sessionId, branchId) =>
-              Effect.withSpan("ExtensionStateRuntime.getUiSnapshots")(
+              Effect.withSpan("WorkflowRuntime.getUiSnapshots")(
                 Effect.gen(function* () {
                   const snapshots: ExtensionUiSnapshot[] = []
                   const entries = yield* getOrSpawnActors(sessionId, branchId)
@@ -1008,7 +1007,7 @@ export class ExtensionStateRuntime extends Context.Service<
               }),
 
             terminateAll: (sessionId) =>
-              Effect.withSpan("ExtensionStateRuntime.terminateAll")(
+              Effect.withSpan("WorkflowRuntime.terminateAll")(
                 Effect.gen(function* () {
                   const slot = (yield* Ref.get(actorsRef)).get(sessionId)
                   if (slot !== undefined && slot._tag === "ready") {
@@ -1037,7 +1036,7 @@ export class ExtensionStateRuntime extends Context.Service<
                   }
                 }),
               ),
-          } as ExtensionStateRuntimeService
+          } as WorkflowRuntimeService
           return { runtimeScope, service }
         }),
         ({ runtimeScope }) => Scope.close(runtimeScope, Exit.void),
@@ -1046,9 +1045,9 @@ export class ExtensionStateRuntime extends Context.Service<
 
   static Live = (
     extensions: ReadonlyArray<LoadedExtension>,
-  ): Layer.Layer<ExtensionStateRuntime, never, ExtensionTurnControl> =>
-    ExtensionStateRuntime.fromExtensions(extensions)
+  ): Layer.Layer<WorkflowRuntime, never, ExtensionTurnControl> =>
+    WorkflowRuntime.fromExtensions(extensions)
 
-  static Test = (): Layer.Layer<ExtensionStateRuntime> =>
-    ExtensionStateRuntime.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Test()))
+  static Test = (): Layer.Layer<WorkflowRuntime> =>
+    WorkflowRuntime.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Test()))
 }

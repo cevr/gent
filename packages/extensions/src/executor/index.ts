@@ -4,7 +4,7 @@
 
 import { Effect, Layer } from "effect"
 import {
-  actorContribution,
+  workflowContribution,
   commandContribution,
   defineExtension,
   layerContribution,
@@ -23,7 +23,7 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   contributions: ({ ctx }) => [
-    actorContribution(executorActor),
+    workflowContribution(executorActor),
     toolContribution(ExecuteTool),
     toolContribution(ResumeTool),
     commandContribution({

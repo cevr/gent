@@ -13,7 +13,7 @@ import {
 } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { EventStore, SessionStarted, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
 import type { AgentName } from "@gent/core/domain/agent"
@@ -56,7 +56,7 @@ const runE2ETest = (
     controls: Awaited<
       ReturnType<typeof Effect.runPromise<ReturnType<typeof createSequenceProvider>>>["then"]
     >["controls"],
-  ) => Effect.Effect<void, unknown, AgentLoop | ExtensionStateRuntime>,
+  ) => Effect.Effect<void, unknown, AgentLoop | WorkflowRuntime>,
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* createSequenceProvider(steps)
@@ -67,7 +67,7 @@ const runE2ETest = (
     })
 
     yield* Effect.gen(function* () {
-      const stateRuntime = yield* ExtensionStateRuntime
+      const stateRuntime = yield* WorkflowRuntime
       yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -92,7 +92,7 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* ExtensionStateRuntime
+          const stateRuntime = yield* WorkflowRuntime
 
           yield* agentLoop.run(makeMessage("begin"))
 
@@ -139,7 +139,7 @@ describe("Auto extension E2E", () => {
       (controls) =>
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          const stateRuntime = yield* ExtensionStateRuntime
+          const stateRuntime = yield* WorkflowRuntime
 
           yield* agentLoop.run(makeMessage("begin"))
 
@@ -224,7 +224,7 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ExtensionStateRuntime
+        const stateRuntime = yield* WorkflowRuntime
 
         yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -269,7 +269,7 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ExtensionStateRuntime
+        const stateRuntime = yield* WorkflowRuntime
 
         yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -336,7 +336,7 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ExtensionStateRuntime
+        const stateRuntime = yield* WorkflowRuntime
 
         yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -388,7 +388,7 @@ describe("Auto extension E2E", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        const stateRuntime = yield* ExtensionStateRuntime
+        const stateRuntime = yield* WorkflowRuntime
 
         yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -431,7 +431,7 @@ describe("Auto extension E2E", () => {
 
           yield* Effect.gen(function* () {
             const agentLoop = yield* AgentLoop
-            const stateRuntime = yield* ExtensionStateRuntime
+            const stateRuntime = yield* WorkflowRuntime
 
             yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
               sessionId,

@@ -46,7 +46,7 @@ import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/
 import { ToolRunner } from "./tool-runner.js"
 import type { Provider } from "../../providers/provider.js"
 import { ExtensionEventBus } from "../extensions/event-bus.js"
-import { ExtensionStateRuntime } from "../extensions/state-runtime.js"
+import { WorkflowRuntime } from "../extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { DriverRegistry } from "../extensions/driver-registry.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
@@ -472,7 +472,7 @@ const buildEphemeralLayer = (params: {
 
   // EventPublisher reaches into bus + state runtime + registry so extension
   // subscriptions fire on local events. RuntimePlatform comes from parent.
-  // Order matters: parent first so locally-built `ExtensionStateRuntime`,
+  // Order matters: parent first so locally-built `WorkflowRuntime`,
   // `ExtensionEventBus`, registry win — otherwise the child silently uses
   // the parent's state runtime and child events leak into parent reduction.
   const eventPublisherLayer = Layer.provide(
@@ -557,7 +557,7 @@ const runEphemeralAgent = (params: {
     PromptPresenter,
     ResourceManager,
     ExtensionRegistry,
-    ExtensionStateRuntime,
+    WorkflowRuntime,
     ExtensionEventBus,
     ExtensionTurnControl,
     DriverRegistry,

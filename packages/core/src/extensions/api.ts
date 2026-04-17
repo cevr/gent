@@ -191,7 +191,6 @@ export {
   type AgentContribution,
   type InterceptorContribution as InterceptorKindContribution,
   type LayerContribution,
-  type ActorContribution,
   type CommandKindContribution,
   type ModelDriverKindContribution,
   type ExternalDriverKindContribution,
@@ -210,7 +209,6 @@ export {
   agent as agentContribution,
   interceptor as interceptorContribution,
   layer as layerContribution,
-  actor as actorContribution,
   command as commandContribution,
   modelDriver as modelDriverContribution,
   externalDriver as externalDriverContribution,
@@ -451,17 +449,12 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
       if (c.phase === "startup") b.startupEffects.push(c.effect)
       else b.shutdownEffects.push(c.effect)
       return
-    case "actor":
-      placeActor(b, c.actor)
-      return
     case "workflow":
-      // Workflows lower into the actor shape so the existing
-      // `ExtensionStateRuntime` hosts them. The dedicated `workflow-runtime.ts`
-      // and the deletion of the actor primitive happen later in C8 once the
-      // in-tree consumers (auto, handoff, ACP) have migrated to the workflow
-      // surface. Same single-slot constraint as actors today: at most one
-      // workflow per extension.
-      placeActor(b, workflowToActor(c.workflow))
+      // `WorkflowContribution` and `ExtensionActorDefinition` are
+      // structurally identical (same fields, same machine type) — the legacy
+      // `setup.actor` slot is the runtime-internal storage for the single
+      // workflow per extension. No field-by-field copy is needed.
+      placeWorkflow(b, c.workflow)
       return
     case "layer":
       b.layer = c.layer
@@ -475,40 +468,17 @@ const placeContribution = (b: LoweredBuckets, c: Contribution): void => {
   }
 }
 
-/** Single-slot guard: extensions declare at most one actor or workflow today,
- *  inherited from the legacy `ExtensionSetup.actor` shape. */
-const placeActor = (b: LoweredBuckets, def: AnyExtensionActorDefinition): void => {
+/** Single-slot guard: at most one workflow per extension. */
+const placeWorkflow = (b: LoweredBuckets, def: AnyWorkflowContribution): void => {
   if (b.actor !== undefined) {
-    throw new Error(
-      "extension may declare at most one workflow or actor (single-slot constraint inherited from ExtensionSetup.actor)",
-    )
+    throw new Error("extension may declare at most one workflow")
   }
-  b.actor = def
+  // `WorkflowContribution` is structurally a `ExtensionActorDefinition` — the
+  // runtime stores it in the `b.actor` slot which is the internal field name
+  // until the registry's setup-bag is dropped (Phase 6 / B2).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  b.actor = def as AnyExtensionActorDefinition
 }
-
-/**
- * Lower a `WorkflowContribution` into the legacy `ExtensionActorDefinition`
- * shape. Workflows omit UI by default (UI belongs in `ProjectionContribution`
- * per `composability-not-flags`). C8 carries a temporary `snapshot`/`turn`
- * bridge for workflows whose UI is derived purely from machine state — this
- * lowering forwards those by reference when present and leaves the actor
- * fields undefined when absent. C12 deletes the bridge.
- */
-const workflowToActor = (w: AnyWorkflowContribution): AnyExtensionActorDefinition => ({
-  machine: w.machine,
-  ...(w.slots !== undefined ? { slots: w.slots } : {}),
-  ...(w.mapEvent !== undefined ? { mapEvent: w.mapEvent } : {}),
-  ...(w.mapCommand !== undefined ? { mapCommand: w.mapCommand } : {}),
-  ...(w.mapRequest !== undefined ? { mapRequest: w.mapRequest } : {}),
-  ...(w.afterTransition !== undefined ? { afterTransition: w.afterTransition } : {}),
-  ...(w.stateSchema !== undefined ? { stateSchema: w.stateSchema } : {}),
-  ...(w.protocols !== undefined ? { protocols: w.protocols } : {}),
-  ...(w.onInit !== undefined ? { onInit: w.onInit } : {}),
-  // Transitional lowering bridge (deleted in C12) — preserves UI/turn
-  // surfaces for workflows whose UI is derived from machine state today.
-  ...(w.snapshot !== undefined ? { snapshot: w.snapshot } : {}),
-  ...(w.turn !== undefined ? { turn: w.turn } : {}),
-})
 
 const bucketsToSetup = (b: LoweredBuckets): ExtensionSetup => {
   const onStartup = mergeEffectHooks(b.startupEffects)

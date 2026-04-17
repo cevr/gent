@@ -86,9 +86,9 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       platform: "test",
     } as MakeExtensionHostContextDeps["platform"],
     extensionStateRuntime: {
-      send: die("ExtensionStateRuntime"),
-      ask: die("ExtensionStateRuntime"),
-      getUiSnapshots: die("ExtensionStateRuntime"),
+      send: die("WorkflowRuntime"),
+      ask: die("WorkflowRuntime"),
+      getUiSnapshots: die("WorkflowRuntime"),
     } as unknown as MakeExtensionHostContextDeps["extensionStateRuntime"],
     approvalService: {
       present: die("ApprovalService"),

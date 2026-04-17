@@ -1,7 +1,7 @@
 import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
 import {
-  actorContribution,
+  workflowContribution,
   defineExtension,
   layerContribution,
   promptSectionContribution,
@@ -103,7 +103,7 @@ export const SkillsExtension = defineExtension({
     layerContribution(Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie)),
     toolContribution(SkillsTool),
     toolContribution(SearchSkillsTool),
-    actorContribution(skillsActor),
+    workflowContribution(skillsActor),
     promptSectionContribution({
       id: "skills",
       priority: 80,

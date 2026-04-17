@@ -58,7 +58,7 @@ const counterActor = reducerActor<CounterState, never, CounterRequest>({
   derive: (state) => ({ uiModel: state }),
 })
 
-// Attach protocol definitions so ExtensionStateRuntime validates ask() calls
+// Attach protocol definitions so WorkflowRuntime validates ask() calls
 const counterActorWithProtocol = { ...counterActor, protocols: CounterProtocol }
 
 const counterExtension: LoadedExtension = {
@@ -172,7 +172,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           yield* client.message.send({ sessionId, branchId, content: "hello" })
 
           // Actor must still be alive and respond after message.send's
-          // event publishing ran through ExtensionStateRuntime.publish
+          // event publishing ran through WorkflowRuntime.publish
           const r = yield* client.extension.ask({
             sessionId,
             branchId,

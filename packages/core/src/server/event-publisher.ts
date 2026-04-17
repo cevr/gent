@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { BaseEventStore, getEventBranchId, getEventSessionId } from "../domain/event.js"
-import { ExtensionStateRuntime } from "../runtime/extensions/state-runtime.js"
+import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionEventBus } from "../runtime/extensions/event-bus.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
@@ -13,19 +13,19 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 /**
  * EventPublisher routes agent events to storage + extension state runtime.
  *
- * NOTE: Currently uses the server-wide ExtensionStateRuntime. In multi-cwd
+ * NOTE: Currently uses the server-wide WorkflowRuntime. In multi-cwd
  * shared mode (future), this would need profile-aware routing via SessionProfileCache.
  * For V1 (one cwd per server), the server-wide runtime matches the active profile.
  */
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
   never,
-  BaseEventStore | ExtensionStateRuntime | ExtensionRegistry | RuntimePlatform
+  BaseEventStore | WorkflowRuntime | ExtensionRegistry | RuntimePlatform
 > = Layer.effect(
   EventPublisher,
   Effect.gen(function* () {
     const baseEventStore = yield* BaseEventStore
-    const stateRuntime = yield* ExtensionStateRuntime
+    const stateRuntime = yield* WorkflowRuntime
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
     const projections = registry.getResolved().projections

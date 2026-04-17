@@ -29,10 +29,7 @@ import {
   ExtensionRegistry,
 } from "./extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "./extensions/driver-registry.js"
-import {
-  ExtensionStateRuntime,
-  type ExtensionStateRuntimeService,
-} from "./extensions/state-runtime.js"
+import { WorkflowRuntime, type WorkflowRuntimeService } from "./extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/scheduler.js"
@@ -46,7 +43,7 @@ export interface SessionProfile {
   readonly resolved: ResolvedExtensions
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
-  readonly extensionStateRuntime: ExtensionStateRuntimeService
+  readonly extensionStateRuntime: WorkflowRuntimeService
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
 }
@@ -153,7 +150,7 @@ export class SessionProfileCache extends Context.Service<
             )
             const registryService = Context.get(combinedCtx, ExtensionRegistry)
             const driverRegistryService = Context.get(combinedCtx, DriverRegistry)
-            const stateRuntime = Context.get(combinedCtx, ExtensionStateRuntime)
+            const stateRuntime = Context.get(combinedCtx, WorkflowRuntime)
 
             // Compile base sections inside the built layer's runtime so any
             // dynamic prompt section (e.g. `Skills`) can read its required
@@ -264,12 +261,10 @@ export class SessionProfileCache extends Context.Service<
             extensionStateRuntime: Context.get(
               Effect.runSync(
                 Layer.build(
-                  ExtensionStateRuntime.fromExtensions([]).pipe(
-                    Layer.provide(ExtensionTurnControl.Live),
-                  ),
+                  WorkflowRuntime.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Live)),
                 ).pipe(Effect.scoped),
               ),
-              ExtensionStateRuntime,
+              WorkflowRuntime,
             ),
             baseSections: [],
             instructions: "",

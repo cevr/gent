@@ -1,6 +1,6 @@
 /**
  * Executor integration tests — tool execution with mocked services,
- * and actor lifecycle through ExtensionStateRuntime.
+ * and actor lifecycle through WorkflowRuntime.
  */
 
 import { describe, test, expect } from "bun:test"
@@ -22,7 +22,7 @@ import { ExecutorMcpBridge } from "@gent/extensions/executor/mcp-bridge"
 import { ExecutorSidecar } from "@gent/extensions/executor/sidecar"
 import { ExecutorProtocol } from "@gent/extensions/executor/protocol"
 import { ExecuteTool, ResumeTool } from "@gent/extensions/executor/tools"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStarted } from "@gent/core/domain/event"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
@@ -120,7 +120,7 @@ const makeExecutorExtension = (overrides?: {
 }
 
 const waitForExecutorStatus = (
-  runtime: typeof ExtensionStateRuntime.Type,
+  runtime: typeof WorkflowRuntime.Type,
   status: ExecutorUiModel["status"],
 ) =>
   waitFor(
@@ -270,7 +270,7 @@ describe("Executor actor lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -296,7 +296,7 @@ describe("Executor actor lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -326,7 +326,7 @@ describe("Executor actor lifecycle", () => {
         },
       })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -351,7 +351,7 @@ describe("Executor actor lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: false } })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -385,7 +385,7 @@ describe("Executor actor lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
@@ -430,7 +430,7 @@ describe("Executor actor lifecycle", () => {
         },
       })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
 
         // First init → autoStart → failure → Error
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -464,7 +464,7 @@ describe("Executor actor lifecycle", () => {
     () => {
       const { extension } = makeExecutorExtension({ settings: { autoStart: true } })
       return Effect.gen(function* () {
-        const runtime = yield* ExtensionStateRuntime
+        const runtime = yield* WorkflowRuntime
         const storage = yield* Storage
 
         yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {

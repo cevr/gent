@@ -16,7 +16,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Agents } from "@gent/extensions/all-agents"
 
@@ -92,7 +92,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(
@@ -188,7 +188,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(
@@ -254,7 +254,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(

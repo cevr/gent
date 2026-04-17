@@ -82,10 +82,7 @@ import { withRetry } from "../retry"
 import { SessionProfileCache } from "../session-profile.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { DriverRegistry, type DriverRegistryService } from "../extensions/driver-registry.js"
-import {
-  ExtensionStateRuntime,
-  type ExtensionStateRuntimeService,
-} from "../extensions/state-runtime.js"
+import { WorkflowRuntime, type WorkflowRuntimeService } from "../extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import type { TurnExecutor, TurnEvent } from "../../domain/driver.js"
@@ -225,7 +222,7 @@ const resolveTurnContext = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: ExtensionStateRuntimeService
+  extensionStateRuntime: WorkflowRuntimeService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
@@ -527,7 +524,7 @@ const executeToolCalls = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime?: ExtensionStateRuntimeService
+  extensionStateRuntime?: WorkflowRuntimeService
   resourceManager: ResourceManagerService
 }) =>
   Effect.forEach(
@@ -606,7 +603,7 @@ export const resolveTurnPhase = (params: {
   storage: StorageService
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: ExtensionStateRuntimeService
+  extensionStateRuntime: WorkflowRuntimeService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
@@ -1123,7 +1120,7 @@ export const executeToolsPhase = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime?: ExtensionStateRuntimeService
+  extensionStateRuntime?: WorkflowRuntimeService
   resourceManager: ResourceManagerService
   storage: StorageService
 }) =>
@@ -1640,7 +1637,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | Provider
     | ExtensionRegistry
     | DriverRegistry
-    | ExtensionStateRuntime
+    | WorkflowRuntime
     | ExtensionTurnControl
     | EventPublisher
     | ToolRunner
@@ -1654,7 +1651,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const provider = yield* Provider
         const extensionRegistry = yield* ExtensionRegistry
         const driverRegistry = yield* DriverRegistry
-        const extensionStateRuntime = yield* ExtensionStateRuntime
+        const extensionStateRuntime = yield* WorkflowRuntime
         const extensionTurnControl = yield* ExtensionTurnControl
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
@@ -1780,7 +1777,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               return {
                 turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
                 turnDriverRegistry: driverRegistry as DriverRegistryService,
-                turnExtensionStateRuntime: extensionStateRuntime as ExtensionStateRuntimeService,
+                turnExtensionStateRuntime: extensionStateRuntime as WorkflowRuntimeService,
                 turnBaseSections: config.baseSections,
                 turnHostCtx: defaultHostCtx,
               }

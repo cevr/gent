@@ -1,10 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import {
-  ExtensionStateRuntime,
-  type ExtensionStateRuntimeService,
-} from "../extensions/state-runtime.js"
+import { WorkflowRuntime, type WorkflowRuntimeService } from "../extensions/workflow-runtime.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission } from "../../domain/permission.js"
@@ -53,7 +50,7 @@ export interface ToolRunnerService {
      *  and extension state runtime use this instead of the server-wide services. */
     profileOverride?: {
       readonly registry: ExtensionRegistryService
-      readonly stateRuntime?: ExtensionStateRuntimeService
+      readonly stateRuntime?: WorkflowRuntimeService
     },
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
@@ -75,7 +72,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
   static Live: Layer.Layer<
     ToolRunner,
     never,
-    ExtensionRegistry | Permission | ApprovalService | RuntimePlatform | ExtensionStateRuntime
+    ExtensionRegistry | Permission | ApprovalService | RuntimePlatform | WorkflowRuntime
   > = Layer.effect(
     ToolRunner,
     Effect.gen(function* () {
@@ -83,7 +80,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const permission = yield* Permission
       const approvalService = yield* ApprovalService
       const platform = yield* RuntimePlatform
-      const extensionStateRuntime = yield* ExtensionStateRuntime
+      const extensionStateRuntime = yield* WorkflowRuntime
 
       return ToolRunner.of({
         run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {

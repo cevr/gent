@@ -144,8 +144,8 @@ const memoryWorkflow: WorkflowContribution<
   // No `snapshot` — UI surface is owned by `MemoryVaultProjection` (compile-time
   // structural conflict rule in projection-registry forbids both at once for the
   // same extensionId; vault entries are the user-visible memory state).
-  // `turn` here is the C8 transitional lowering bridge — deleted in C12 when
-  // `state-runtime.ts` splits and projections take over per-turn surface.
+  // `turn` is the residual workflow-owned per-turn surface; future migration
+  // moves it into a `ProjectionContribution.turn` derivation.
   turn: {
     project: (state) => projectSessionMemoryTurn(state.memory),
   },

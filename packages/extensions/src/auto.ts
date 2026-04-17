@@ -523,10 +523,10 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 // ── Workflow (effect-machine based) ──
 //
 // The auto extension is a genuine state machine with declared effects, so it
-// migrates to `WorkflowContribution` (per `composability-not-flags` — workflows
+// uses `WorkflowContribution` (per `composability-not-flags` — workflows
 // declare effects, projections derive views). The `snapshot`/`turn` fields
-// here are the C8 transitional lowering bridge; C12 deletes them when
-// `state-runtime.ts` splits and projections take over UI duties.
+// here are the residual workflow-owned UI surface; future migration moves
+// them into `ProjectionContribution.{ui,turn}` derivations.
 
 const autoWorkflow: WorkflowContribution<
   MachineState,

@@ -10,7 +10,7 @@ import { Effect, Layer, Ref, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -122,7 +122,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     providerLayer,
     makeExtRegistry(executor),
     makeDriverRegistry(executor),
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     ExtensionTurnControl.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
@@ -306,7 +306,7 @@ describe("external turn execution", () => {
         modelDrivers: agentsResolved.modelDrivers,
         externalDrivers: agentsResolved.externalDrivers,
       }),
-      ExtensionStateRuntime.Test(),
+      WorkflowRuntime.Test(),
       ExtensionTurnControl.Test(),
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),

@@ -5,7 +5,7 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
-import { ExtensionStateRuntime } from "@gent/core/runtime/extensions/state-runtime"
+import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -19,7 +19,7 @@ const makeLayer = () => {
   const baseDeps = Layer.mergeAll(
     storageLayer,
     EventStore.Memory,
-    ExtensionStateRuntime.Test(),
+    WorkflowRuntime.Test(),
     registryLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   )
