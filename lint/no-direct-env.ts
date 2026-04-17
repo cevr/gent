@@ -21,6 +21,9 @@
  * - no-projection-write-services: type-aware fence on Projection's R channel
  *   for write-tagged services (sharpened replacement for no-projection-writes
  *   string-match — installed alongside, supersedes in C5)
+ * - no-dynamic-imports: bans dynamic `import(...)` and `require(...)` outside
+ *   a small allow-list of architecturally-justified files (extension plugin
+ *   discovery, optional native module fallbacks). Compiled-binary safety.
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -651,6 +654,78 @@ const plugin: Plugin = {
           },
           TSTypeAssertion(node) {
             checkTypeAnnotation(getNodeField(node, "typeAnnotation"), node)
+          },
+        }
+      },
+    },
+
+    /**
+     * Bans dynamic `import("...")` expressions and `require(...)` calls
+     * across the codebase.
+     *
+     * Why: dynamic imports defeat static analysis (typecheck, bundler graph,
+     * dead-code elimination) and hide test/runtime coupling. The repo's
+     * compiled-binary deployment (`Bun.build` for the TUI) requires every
+     * module to be reachable through static imports — dynamic `import(...)`
+     * results in load failures at runtime in the binary.
+     *
+     * Allowed: a small allow-list of files where dynamic loading is the
+     * documented architectural choice (extension plugin discovery via
+     * filesystem scan, optional native-module fallback).
+     *
+     * Valid:   import { foo } from "./foo.js"
+     * Invalid: const foo = await import("./foo.js")
+     * Invalid: const fs = require("node:fs")
+     *
+     * Allow-list entries each carry a justification comment in
+     * {@link DYNAMIC_IMPORT_ALLOWED}; new entries require a comment naming
+     * the architectural reason.
+     */
+    "no-dynamic-imports": {
+      create(context) {
+        const filename = context.filename
+
+        // Allow lint plugin file itself (rule definition references the API in messages)
+        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
+
+        const DYNAMIC_IMPORT_ALLOWED = [
+          // Extension plugin loaders: walk the filesystem and dynamically
+          // import user/project extensions discovered at runtime. The set of
+          // extensions is unknown at build time by design.
+          "apps/tui/src/extensions/loader.ts",
+          "packages/core/src/runtime/extensions/loader.ts",
+          // Optional native git binding: gracefully degrades when the native
+          // module isn't installed. Static import would harden the dependency.
+          "packages/extensions/src/librarian/git-reader.ts",
+          // Optional native filesystem indexer: same fallback rationale as above.
+          "packages/core/src/runtime/file-index/native-adapter.ts",
+          // node:fs `watch` is loaded lazily inside an Effect to keep the
+          // `node:fs` surface area pruned in the compiled binary.
+          "apps/tui/src/workspace/context.tsx",
+          // Lazy import to break a circular dependency: this file lives in
+          // `runtime/` but needs `SessionCommands` from `server/`, and
+          // `server/session-commands.ts` already imports `runtime/`. Static
+          // import would form a cycle. The `Effect.serviceOption` pattern
+          // makes the dependency optional at the layer level.
+          "packages/core/src/runtime/make-extension-host-context.ts",
+        ]
+        if (DYNAMIC_IMPORT_ALLOWED.some((f) => filename.endsWith(f))) return {}
+
+        return {
+          ImportExpression(node) {
+            context.report({
+              message: `Dynamic \`import(...)\` is forbidden — use a top-level static import. Dynamic imports defeat static analysis and break the compiled-binary build (Bun.build cannot resolve runtime-determined module paths). If your use case is a documented architectural exception, add the file to the allow-list in \`lint/no-direct-env.ts\` with a justification comment.`,
+              node,
+            })
+          },
+          CallExpression(node) {
+            const callee = node.callee
+            if (callee.type === "Identifier" && "name" in callee && callee.name === "require") {
+              context.report({
+                message: `\`require(...)\` is forbidden — use a top-level static \`import\` statement. CommonJS dynamic loading defeats static analysis, leaks into the compiled binary unpredictably, and is the wrong primitive in an ESM Bun project. If your use case is a documented architectural exception, add the file to the allow-list in \`lint/no-direct-env.ts\` with a justification comment.`,
+                node,
+              })
+            }
           },
         }
       },

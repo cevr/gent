@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 import {
   ServerRegistryEntry,
   computeLocalFingerprint,
@@ -29,7 +29,7 @@ const makeEntry = (overrides?: Partial<ServerRegistryEntry>) =>
   new ServerRegistryEntry({
     serverId: "test-server-1",
     pid: process.pid,
-    hostname: require("node:os").hostname(),
+    hostname: hostname(),
     rpcUrl: "ws://127.0.0.1:9999",
     dbPath: "/tmp/test.db",
     buildFingerprint: "test-fp",
@@ -326,7 +326,7 @@ describe("Cross-Process Lock", () => {
       join(lockDir, "info.json"),
       JSON.stringify({
         pid: 99999999,
-        hostname: require("node:os").hostname(),
+        hostname: hostname(),
         createdAt: Date.now(),
       }),
     )

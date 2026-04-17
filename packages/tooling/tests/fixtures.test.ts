@@ -99,6 +99,11 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "no-scope-brand-cast.invalid.ts",
     valid: "no-scope-brand-cast.valid.ts",
   },
+  {
+    rule: "gent/no-dynamic-imports",
+    invalid: "no-dynamic-imports.invalid.ts",
+    valid: "no-dynamic-imports.valid.ts",
+  },
 ]
 
 const assertOxlintProcessed = (run: OxlintRun, fixtureFile: string): void => {

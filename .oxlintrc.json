@@ -33,6 +33,8 @@
     "gent/brand-constructor-callers": "error",
     // Custom — `as ServerProfile|CwdProfile|EphemeralProfile` casts forbidden
     "gent/no-scope-brand-cast": "error",
+    // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
+    "gent/no-dynamic-imports": "error",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)
