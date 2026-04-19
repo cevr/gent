@@ -1,7 +1,7 @@
 import { clientCommandContribution } from "@gent/core/domain/extension-client.js"
-import { PlanPackage } from "@gent/extensions/plan-package.js"
+import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
 
-export default PlanPackage.tui((ctx) => [
+export default ExtensionPackage.tui("@gent/plan", (ctx) => [
   clientCommandContribution({
     id: "plan.create",
     title: "Plan",

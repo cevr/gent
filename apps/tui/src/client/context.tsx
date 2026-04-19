@@ -152,13 +152,15 @@ export interface ClientContextValue {
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
 
-  // Extension state-change pulse callback (wired by ExtensionUIProvider).
-  // Fires once per `ExtensionStateChanged` event seen on the active session.
-  // The pulse carries no payload — consumers refetch via the extension's
-  // typed `client.extension.query(...)`.
+  // Extension state-change pulse subscription. Fires once per
+  // `ExtensionStateChanged` event seen on the active session for each
+  // registered subscriber. The pulse carries no payload — consumers
+  // refetch via the extension's typed `client.extension.query(...)`.
+  // Returns an unsubscribe function. Replaces a single-slot callback so
+  // multiple widgets can listen for their own extension's pulses.
   onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
-  ) => void
+  ) => () => void
 }
 
 const ClientContext = createContext<ClientContextValue>()
@@ -197,13 +199,18 @@ export function ClientProvider(props: ClientProviderProps) {
     runtime.cast(effect)
   }
 
-  // Extension state-change pulse callback — wired by ExtensionUIProvider.
-  // Fires once per `ExtensionStateChanged` event seen on the active session.
-  // The pulse carries no payload — consumers refetch via the extension's
-  // typed `client.extension.query(...)`.
-  let extensionStateChangedCb:
-    | ((s: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void)
-    | undefined
+  // Extension state-change pulse subscribers — registered by widgets
+  // (via `ClientTransport`) and by `ExtensionUIProvider` for the legacy
+  // snapshot cache. Fires once per `ExtensionStateChanged` event seen on
+  // the active session for each subscriber. The pulse carries no payload
+  // — consumers refetch via the extension's typed
+  // `client.extension.query(...)`.
+  type ExtensionPulseCallback = (s: {
+    sessionId: SessionId
+    branchId: BranchId
+    extensionId: string
+  }) => void
+  const extensionStateChangedSubscribers = new Set<ExtensionPulseCallback>()
 
   const [sessionState, setSessionState] = createSignal<SessionState>(
     props.initialSession !== undefined
@@ -351,12 +358,24 @@ export function ClientProvider(props: ClientProviderProps) {
       const isActiveSession = () => !cancelled && sessionKey() === key
 
       const forwardExtensionStateChanged = (event: EventEnvelope["event"]): void => {
-        if (event._tag === "ExtensionStateChanged" && extensionStateChangedCb !== undefined) {
-          extensionStateChangedCb({
-            sessionId: event.sessionId,
-            branchId: event.branchId,
-            extensionId: event.extensionId,
-          })
+        if (event._tag !== "ExtensionStateChanged") return
+        if (extensionStateChangedSubscribers.size === 0) return
+        const pulse = {
+          sessionId: event.sessionId,
+          branchId: event.branchId,
+          extensionId: event.extensionId,
+        }
+        for (const cb of extensionStateChangedSubscribers) {
+          // Each subscriber owns its own try/catch — one bad subscriber
+          // shouldn't starve siblings. We log + drop.
+          try {
+            cb(pulse)
+          } catch (err) {
+            log.warn("client.extensionStateChanged.subscriber.threw", {
+              extensionId: event.extensionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
         }
       }
 
@@ -729,7 +748,10 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     onExtensionStateChanged: (cb) => {
-      extensionStateChangedCb = cb
+      extensionStateChangedSubscribers.add(cb)
+      return () => {
+        extensionStateChangedSubscribers.delete(cb)
+      }
     },
 
     switchBranch: (branchId, summarize) => {

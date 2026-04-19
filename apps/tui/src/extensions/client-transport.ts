@@ -42,6 +42,13 @@ export interface ClientTransportShape {
   readonly runtime: GentRuntime
   /** Active (sessionId, branchId) — `undefined` before a session is mounted. */
   readonly currentSession: () => { sessionId: SessionId; branchId: BranchId } | undefined
+  /** Subscribe to `ExtensionStateChanged` pulses from the active session.
+   *  Returns an unsubscribe function. Multiple subscribers receive each
+   *  pulse independently. Widgets use this to invalidate cached state
+   *  when their server-side extension publishes a state change. */
+  readonly onExtensionStateChanged: (
+    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
+  ) => () => void
 }
 
 export class ClientTransport extends Context.Service<ClientTransport, ClientTransportShape>()(

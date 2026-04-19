@@ -2,10 +2,10 @@ import {
   clientCommandContribution,
   interactionRendererContribution,
 } from "@gent/core/domain/extension-client.js"
-import { HandoffPackage } from "@gent/extensions/handoff-package.js"
+import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 
-export default HandoffPackage.tui((ctx) => [
+export default ExtensionPackage.tui("@gent/handoff", (ctx) => [
   interactionRendererContribution(HandoffRenderer, "handoff"),
   clientCommandContribution({
     id: "handoff.trigger",

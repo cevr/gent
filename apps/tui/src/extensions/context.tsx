@@ -182,6 +182,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           if (session === null) return undefined
           return { sessionId: session.sessionId, branchId: session.branchId }
         },
+        onExtensionStateChanged: (cb) => clientCtx.onExtensionStateChanged(cb),
       }),
       makeClientWorkspaceLayer({
         cwd: workspace.cwd,
@@ -340,8 +341,13 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   // Wire extension state-change pulses from the client event stream.
   // Each pulse triggers a refetch for that extension only — no fan-out, no
   // schema travelling through the channel (see EventPublisher pulse policy).
-  clientCtx.onExtensionStateChanged(({ extensionId }) => {
+  // Now multi-subscriber: we clean up our subscription on unmount so the
+  // provider can be remounted without leaking handlers.
+  const unsubscribePulses = clientCtx.onExtensionStateChanged(({ extensionId }) => {
     void refetchExtensionSnapshot(extensionId, false)
+  })
+  onCleanup(() => {
+    unsubscribePulses()
   })
 
   onMount(async () => {

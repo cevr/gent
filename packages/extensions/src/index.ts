@@ -19,14 +19,13 @@ import { CounselExtension } from "./counsel/index.js"
 import { ResearchExtension } from "./research/index.js"
 import { LibrarianExtension } from "./librarian/index.js"
 import { AcpAgentsExtension } from "./acp-agents/index.js"
-// Package-based builtins
-import { AutoPackage } from "./auto-package.js"
-import { PlanPackage } from "./plan-package.js"
-import { TaskToolsPackage } from "./task-tools-package.js"
-import { HandoffPackage } from "./handoff-package.js"
-import { InteractionToolsPackage } from "./interaction-tools-package.js"
-import { ArtifactsPackage } from "./artifacts-package.js"
-import { ExecutorPackage } from "./executor-package.js"
+import { AutoExtension } from "./auto.js"
+import { PlanExtension } from "./plan.js"
+import { TaskExtension } from "./task-tools/index.js"
+import { HandoffExtension } from "./handoff.js"
+import { InteractionToolsExtension } from "./interaction-tools/index.js"
+import { ArtifactsExtension } from "./artifacts/index.js"
+import { ExecutorExtension } from "./executor/index.js"
 
 export {
   FsToolsExtension,
@@ -44,31 +43,31 @@ export {
   ResearchExtension,
   LibrarianExtension,
   AcpAgentsExtension,
-  AutoPackage,
-  PlanPackage,
-  TaskToolsPackage,
-  HandoffPackage,
-  InteractionToolsPackage,
-  ArtifactsPackage,
-  ExecutorPackage,
+  AutoExtension,
+  PlanExtension,
+  TaskExtension,
+  HandoffExtension,
+  InteractionToolsExtension,
+  ArtifactsExtension,
+  ExecutorExtension,
 }
 
 export { AllBuiltinAgents, Agents } from "./all-agents.js"
 
 export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
-  HandoffPackage,
+  HandoffExtension,
   FsToolsExtension,
   ExecToolsExtension,
   NetworkToolsExtension,
-  ExecutorPackage,
+  ExecutorExtension,
   DelegateExtension,
-  InteractionToolsPackage,
+  InteractionToolsExtension,
   SessionToolsExtension,
-  TaskToolsPackage,
+  TaskExtension,
   AuditExtension,
   AgentsExtension,
-  PlanPackage,
-  AutoPackage,
+  PlanExtension,
+  AutoExtension,
   MemoryExtension,
   PrinciplesExtension,
   SkillsExtension,
@@ -82,5 +81,5 @@ export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
   BedrockExtension,
   GoogleExtension,
   MistralExtension,
-  ArtifactsPackage,
+  ArtifactsExtension,
 ]

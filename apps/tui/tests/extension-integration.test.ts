@@ -19,6 +19,7 @@ import {
   makeClientComposerLayer,
   makeClientSnapshotsLayer,
 } from "../src/extensions/client-services"
+import { makeClientTransportLayer } from "../src/extensions/client-transport"
 // applyExtensionSnapshot is gone in C2 — provide a local stub so the legacy
 // "snapshot ordering" tests still load. TODO(c2): port to ExtensionStateChanged.
 const applyExtensionSnapshot = (
@@ -83,6 +84,18 @@ const _testRuntime = ManagedRuntime.make(
       }),
     }),
     makeClientSnapshotsLayer({ read: () => undefined }),
+    // B11.6: builtin widgets that migrated off the paired-package
+    // snapshot cache (auto, artifacts, tasks) yield `ClientTransport`
+    // from setup. Test runtime stubs the surface; pure-load tests do
+    // not invoke any of these methods so failures bubble loudly if hit.
+    makeClientTransportLayer({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: {} as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      runtime: {} as any,
+      currentSession: () => undefined,
+      onExtensionStateChanged: () => () => {},
+    }),
   ),
 )
 const loadTuiExtensions = (
