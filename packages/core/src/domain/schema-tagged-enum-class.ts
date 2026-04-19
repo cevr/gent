@@ -85,23 +85,27 @@ export type AssertNoTagField<F extends VariantFields> = "_tag" extends keyof F
 
 /**
  * Names that the merged shape (`Schema.Union(...).pipe(toTaggedUnion("_tag"))`)
- * attaches as own properties. Variant tag names that match any of these would
- * shadow the wrapper's own surface — reject at the type level and at runtime.
+ * exposes — own properties AND inherited methods from `Schema.Bottom`'s
+ * prototype (`pipe`, `annotate`, `annotateKey`, `check`, etc.). Variant tag
+ * names that match any of these would shadow the wrapper's surface because
+ * `Object.assign(union, variantClasses)` installs the variant constructor as
+ * an own property, masking any inherited method of the same name.
  *
  * Note: this is about VARIANT TAG NAMES, not payload field names. A payload
  * field named `cases` is fine (it lives on instances). A variant tag named
- * `cases` would collide with `Shape.cases` because we attach the variant
- * class via `Object.assign(union, variantClasses)`, which only walks own
- * enumerable properties.
+ * `cases` would collide with `Shape.cases`.
  *
  * The runtime list is derived from a probe at module load (see
  * `RESERVED_TAGS` below) so it stays correct as Effect evolves; this static
- * list is the type-level mirror, manually kept in sync with the probe and
- * verified by a test in `schema-tagged-enum-class.test.ts`.
+ * list is the type-level mirror, kept in sync with the probe and verified
+ * by a test that asserts exact set equality.
  */
 export type ReservedVariantTag =
+  | "annotate"
+  | "annotateKey"
   | "ast"
   | "cases"
+  | "check"
   | "guards"
   | "isAnyOf"
   | "make"
@@ -110,6 +114,7 @@ export type ReservedVariantTag =
   | "mapMembers"
   | "match"
   | "members"
+  | "pipe"
   | "rebuild"
 
 export type AssertNoReservedTags<V extends VariantsMap> = {
@@ -123,9 +128,9 @@ export type AssertNoReservedTags<V extends VariantsMap> = {
 /**
  * The actual reserved-key set. Built dynamically from a probe union at
  * module load so we get the truth from Effect itself rather than a
- * hand-curated list that ages like milk. The static `ReservedVariantTag`
- * union above is the type-level mirror, and a test asserts the two stay in
- * sync.
+ * hand-curated list that ages like milk. Walks the entire prototype chain
+ * (stopping at `Object.prototype`) because `Object.assign` will shadow
+ * inherited methods like `pipe`/`annotate`/`check`, not just own keys.
  */
 const probeReservedTags = (): ReadonlySet<string> => {
   // Two-variant probe — the union must have at least two members for
@@ -148,10 +153,39 @@ const probeReservedTags = (): ReadonlySet<string> => {
   const members = [__ProbeA, __ProbeB] as ReadonlyArray<any>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
   const probe = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag" as any))
-  return new Set(Object.getOwnPropertyNames(probe))
+
+  const reserved = new Set<string>()
+  // Walk the entire prototype chain so inherited methods (`pipe`,
+  // `annotate`, `check`, etc.) are also rejected — `Object.assign` will
+  // happily shadow them with a variant class constructor.
+  let current: object | null = probe
+  while (current !== null && current !== Object.prototype) {
+    for (const key of Object.getOwnPropertyNames(current)) {
+      // Skip:
+      // - `constructor` — present on every prototype, never a meaningful
+      //   variant name
+      // - keys starting with `~` — Effect's internal type-marker keys
+      //   (e.g. `~effect/Schema/Schema`); they're not callable methods and
+      //   no realistic variant name would start with `~`
+      if (key === "constructor") continue
+      if (key.startsWith("~")) continue
+      reserved.add(key)
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    current = Object.getPrototypeOf(current) as object | null
+  }
+  return reserved
 }
 
 const RESERVED_TAGS: ReadonlySet<string> = probeReservedTags()
+
+/**
+ * Test-only accessor — exposed so the substrate test can assert exact set
+ * equality between the probe-derived runtime set and the static
+ * `ReservedVariantTag` type union. Not part of the public substrate API;
+ * importing this in production code should be considered a smell.
+ */
+export const __getReservedTagsForTesting = (): ReadonlySet<string> => RESERVED_TAGS
 
 /**
  * Defect raised at construction time when the variant map violates the
@@ -213,10 +247,15 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
     Schema.Struct.DecodingServices<F>,
     Schema.Struct.EncodingServices<F>
   > {
-  // Constructor input mirrors `Schema.TaggedClass`'s contract: fields with
-  // schema-level constructor defaults may be omitted. Falling back to
-  // `Type<F>` would force callers to pass defaulted fields explicitly.
-  new (props: Schema.Struct.MakeIn<F>): Schema.Struct.Type<F> & { readonly _tag: Tag }
+  // Constructor input mirrors `Schema.TaggedClass`'s contract: a rest tuple
+  // form so when every field is optional/defaulted the props arg may itself
+  // be omitted (`new MyEnum.Variant()`), and `MakeOptions` (validation
+  // toggles) is accepted as a second argument.
+  new (
+    ...args: Record<string, never> extends Schema.Struct.MakeIn<F>
+      ? [props?: Schema.Struct.MakeIn<F>, options?: Schema.MakeOptions]
+      : [props: Schema.Struct.MakeIn<F>, options?: Schema.MakeOptions]
+  ): Schema.Struct.Type<F> & { readonly _tag: Tag }
 }
 
 /**

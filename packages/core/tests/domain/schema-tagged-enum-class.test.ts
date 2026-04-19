@@ -17,7 +17,11 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
-import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import {
+  __getReservedTagsForTesting,
+  TaggedEnumClass,
+  type ReservedVariantTag,
+} from "@gent/core/domain/schema-tagged-enum-class"
 import { AgentEvent } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
@@ -134,14 +138,26 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
 })
 
 describe("TaggedEnumClass — construction-time validation", () => {
-  // Codex review found the original RESERVED_TAGS list missed real own-keys
-  // (`makeEffect`, `makeOption`, `mapMembers`, `rebuild`). The runtime now
-  // probes the actual own-keys from a probe union; this test guards against
-  // the static type-level list drifting from the probe.
-  test("rejects every actual own-key of the toTaggedUnion-augmented Union", () => {
-    const expectedReservedKeys = [
+  // The static `ReservedVariantTag` type union and the runtime
+  // `RESERVED_TAGS` set must remain in lockstep. Codex's S0 review caught
+  // two independent bugs from the static list drifting:
+  //   - missed `makeEffect`/`makeOption`/`mapMembers`/`rebuild` (own-key
+  //     additions to the augmented Union)
+  //   - missed `pipe`/`annotate`/`annotateKey`/`check` (inherited methods
+  //     from `Schema.Bottom` that Object.assign happily shadows)
+  //
+  // This test asserts exact set equality between the runtime probe and the
+  // hand-mirrored static type union, so any future Effect change that adds
+  // or removes a reserved key fails this test rather than silently letting
+  // a variant tag shadow critical schema methods.
+  test("static `ReservedVariantTag` type union matches runtime probe set", () => {
+    const runtimeSet = __getReservedTagsForTesting()
+    const staticSet = new Set<ReservedVariantTag>([
+      "annotate",
+      "annotateKey",
       "ast",
       "cases",
+      "check",
       "guards",
       "isAnyOf",
       "make",
@@ -150,9 +166,18 @@ describe("TaggedEnumClass — construction-time validation", () => {
       "mapMembers",
       "match",
       "members",
+      "pipe",
       "rebuild",
-    ] as const
-    for (const key of expectedReservedKeys) {
+    ])
+    // Set equality both ways — fails on additions or removals.
+    const runtimeOnly = [...runtimeSet].filter((k) => !staticSet.has(k as ReservedVariantTag))
+    const staticOnly = [...staticSet].filter((k) => !runtimeSet.has(k))
+    expect(runtimeOnly).toEqual([])
+    expect(staticOnly).toEqual([])
+  })
+
+  test("rejects every reserved key (parametrized over the runtime probe)", () => {
+    for (const key of __getReservedTagsForTesting()) {
       expect(() =>
         TaggedEnumClass("ReservedScan", {
           [key]: { value: Schema.Number },
@@ -197,15 +222,17 @@ describe("TaggedEnumClass — construction-time validation", () => {
     ).toThrow(/reserved/)
   })
 
-  test("ALLOWS variant tag named `pipe` (prototype method, not an own-key)", () => {
-    // `pipe` lives on the prototype chain — `Object.assign` only walks own
-    // enumerable properties so a variant called `pipe` does not actually
-    // shadow `schema.pipe(...)`. Documented as accepted via this test.
+  test("rejects variant tag named `pipe` (inherited Schema method)", () => {
+    // `Object.assign(union, variantClasses)` installs the variant
+    // constructor as an own property — that own property SHADOWS the
+    // inherited `pipe` method from `Schema.Bottom`'s prototype, breaking
+    // the schema API. Probe walks the entire prototype chain so this is
+    // detected.
     expect(() =>
-      TaggedEnumClass("AllowsPipe", {
+      TaggedEnumClass("RejectsPipe", {
         pipe: { value: Schema.Number },
       }),
-    ).not.toThrow()
+    ).toThrow(/reserved/)
   })
 })
 
