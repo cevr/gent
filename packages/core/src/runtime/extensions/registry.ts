@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ModelId } from "../../domain/model.js"
@@ -18,9 +18,11 @@ import {
 } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
+import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import {
   type Contribution,
   extractAgents,
+  extractCapabilities,
   extractCommands,
   extractExternalDrivers,
   extractModelDrivers,
@@ -71,6 +73,48 @@ const compileContributions = <T>(
   return result
 }
 
+/**
+ * C4.3 bridge — lower a `Capability` whose `audiences` includes a human-facing
+ * surface ("human-slash"/"human-palette") with `intent: "write"` into a
+ * `CommandContribution` shape. Args (a string) are decoded through the
+ * capability's `input` schema (typically `Schema.String`), and any
+ * `CapabilityError` is escalated to a defect — commands have no typed-failure
+ * channel today.
+ *
+ * The wrapper preserves the capability's `id` as the command `name`. This
+ * bridge is scoped to C4.3-4 and deleted in C4.5 along with the
+ * `CommandContribution` type.
+ */
+const capabilityToCommand = (cap: AnyCapabilityContribution): CommandContribution => ({
+  name: cap.id,
+  ...(cap.promptSnippet !== undefined ? { description: cap.promptSnippet } : {}),
+  handler: (args, hostCtx) => {
+    // The capability's effect signature is wider than the command host
+    // surface (ModelCapabilityContext extends ExtensionHostContext), so the
+    // structural cast is sound — every field the capability core context
+    // demands is present on hostCtx. CommandContribution.handler returns
+    // `Effect<void>`; the capability's requirements + error channel are
+    // erased at this command-bridge boundary, mirroring the query/mutation
+    // registries — those services are provided by the extension's
+    // contributed Layer at composition time.
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
+    const wrapped = Effect.gen(function* () {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const decoded = yield* Schema.decodeUnknownEffect(cap.input as Schema.Any)(args).pipe(
+        Effect.orDie,
+      )
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
+      yield* cap
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        .effect(decoded, hostCtx as Parameters<typeof cap.effect>[1])
+        .pipe(Effect.orDie, Effect.asVoid)
+    })
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return wrapped as Effect.Effect<void>
+  },
+})
+
 /** Compile prevalidated extensions into an immutable resolved snapshot. */
 export const resolveExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -96,6 +140,20 @@ export const resolveExtensions = (
   const permissionRules: PermissionRule[] = []
   for (const ext of sorted) {
     for (const cmd of extractCommands(ext.contributions)) commands.push(cmd)
+    // C4.3 bridge: capability(audiences includes "human-slash"|"human-palette",
+    // intent: "write") shows up here as a CommandContribution. Decodes args
+    // through the capability's input schema (typically Schema.String) and
+    // translates CapabilityError → defect (commands have no typed-failure
+    // channel). Identical "scope-shadowing-then-authorize" rule as the
+    // query/mutation bridges, but commands' identity is `name`, not `(extId, id)`,
+    // so we keep their flat array shape.
+    for (const cap of extractCapabilities(ext.contributions)) {
+      if (cap.intent !== "write") continue
+      if (!cap.audiences.includes("human-slash") && !cap.audiences.includes("human-palette")) {
+        continue
+      }
+      commands.push(capabilityToCommand(cap))
+    }
     for (const rule of extractPermissionRules(ext.contributions)) permissionRules.push(rule)
   }
 
