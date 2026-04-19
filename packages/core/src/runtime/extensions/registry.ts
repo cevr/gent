@@ -104,10 +104,16 @@ const capabilityToCommand = (cap: AnyCapabilityContribution): CommandContributio
         Effect.orDie,
       )
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
-      yield* cap
+      const output = yield* cap
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         .effect(decoded, hostCtx as Parameters<typeof cap.effect>[1])
-        .pipe(Effect.orDie, Effect.asVoid)
+        .pipe(Effect.orDie)
+      // Validate the output even though the command surface discards it —
+      // keeps the bridge honest about CapabilityContribution's input/output
+      // boundary contract (codex ADVISORY 3 on C4.3). Misshape is a host
+      // bug, so coerce to defect.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      yield* Schema.encodeUnknownEffect(cap.output as Schema.Any)(output).pipe(Effect.orDie)
     })
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -136,25 +142,57 @@ export const resolveExtensions = (
   // Prompt sections: last scope wins by section id
   const promptSectionsMap = compileContributions(sorted, extractPromptSections, (p) => p.id)
 
-  const commands: CommandContribution[] = []
+  // C4.3 command bridge — identity-first scope shadowing followed by
+  // audience/intent authorization, mirroring the query/mutation bridges.
+  //
+  // Commands' identity is `name` (flat). Both legacy `CommandContribution`s
+  // AND every `CapabilityContribution` enter the candidate map keyed by name;
+  // since `sorted` walks builtin → user → project, later writes win
+  // (project shadows builtin). Authorization happens AFTER selection — a
+  // higher-scope override that doesn't match `intent: "write"` +
+  // `audiences.includes("human-slash")` SHADOWS the lower-scope command and
+  // disappears from the slash list (codex BLOCK on C4.3, mirrors the C4.1
+  // findEntry rule).
+  //
+  // `"human-palette"` is deliberately NOT eligible here — the legacy
+  // CommandContribution shape has no audience field, so the TUI surfaces every
+  // listed entry as both a slash AND a palette command. Including palette-only
+  // capabilities would accidentally make them slash-invokable. The
+  // palette-vs-slash split materializes when C4.5 routes commands through
+  // CapabilityHost directly.
+  type CommandCandidate =
+    | { readonly _source: "command"; readonly cmd: CommandContribution }
+    | { readonly _source: "capability"; readonly cap: AnyCapabilityContribution }
+
+  const commandWinners = new Map<string, CommandCandidate>()
   const permissionRules: PermissionRule[] = []
   for (const ext of sorted) {
-    for (const cmd of extractCommands(ext.contributions)) commands.push(cmd)
-    // C4.3 bridge: capability(audiences includes "human-slash"|"human-palette",
-    // intent: "write") shows up here as a CommandContribution. Decodes args
-    // through the capability's input schema (typically Schema.String) and
-    // translates CapabilityError → defect (commands have no typed-failure
-    // channel). Identical "scope-shadowing-then-authorize" rule as the
-    // query/mutation bridges, but commands' identity is `name`, not `(extId, id)`,
-    // so we keep their flat array shape.
+    for (const cmd of extractCommands(ext.contributions)) {
+      commandWinners.set(cmd.name, { _source: "command", cmd })
+    }
     for (const cap of extractCapabilities(ext.contributions)) {
-      if (cap.intent !== "write") continue
-      if (!cap.audiences.includes("human-slash") && !cap.audiences.includes("human-palette")) {
-        continue
+      // Only capabilities authorizable as a slash command are *candidates*.
+      // We still SHADOW: a project capability with `audiences:["human-palette"]`
+      // wins by identity over a builtin slash command of the same name and
+      // makes it disappear from the slash list (filtered out below).
+      if (
+        cap.intent === "write" &&
+        (cap.audiences.includes("human-slash") || cap.audiences.includes("human-palette"))
+      ) {
+        commandWinners.set(cap.id, { _source: "capability", cap })
       }
-      commands.push(capabilityToCommand(cap))
     }
     for (const rule of extractPermissionRules(ext.contributions)) permissionRules.push(rule)
+  }
+
+  const isAuthorizedAsSlashCommand = (entry: CommandCandidate): boolean =>
+    entry._source === "command" ||
+    (entry.cap.intent === "write" && entry.cap.audiences.includes("human-slash"))
+
+  const commands: CommandContribution[] = []
+  for (const entry of commandWinners.values()) {
+    if (!isAuthorizedAsSlashCommand(entry)) continue
+    commands.push(entry._source === "command" ? entry.cmd : capabilityToCommand(entry.cap))
   }
 
   const hooks = compileInterceptors(sorted).chain

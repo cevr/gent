@@ -1,15 +1,18 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { PromptSectionInput } from "@gent/core/domain/prompt"
+import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import {
   agent as agentContribution,
+  capability as capabilityContribution,
+  command as commandContribution,
   modelDriver as modelDriverContribution,
   promptSection as promptSectionContribution,
   tool as toolContribution,
@@ -39,6 +42,8 @@ const makeExt = (
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSectionInput[]
+    commands?: Array<Parameters<typeof commandContribution>[0]>
+    capabilities?: AnyCapabilityContribution[]
   },
 ): LoadedExtension => ({
   manifest: { id },
@@ -49,6 +54,8 @@ const makeExt = (
     ...(opts?.agents ?? []).map(agentContribution),
     ...(opts?.modelDrivers ?? []).map(modelDriverContribution),
     ...(opts?.promptSections ?? []).map(promptSectionContribution),
+    ...(opts?.commands ?? []).map(commandContribution),
+    ...(opts?.capabilities ?? []).map(capabilityContribution),
   ],
 })
 
@@ -543,5 +550,110 @@ describe("ExtensionRegistry", () => {
     const ids = sections.map((s) => s.id)
     expect(ids).toContain("static")
     expect(ids).toContain("dynamic")
+  })
+})
+
+// C4.3 command bridge — identity-first scope shadowing followed by
+// audience/intent authorization. Mirrors the query/mutation bridge tests in
+// `query-mutation.test.ts`. These lock the four scenarios codex's C4.3 review
+// (BLOCK 2) called out: capability surfaces in commands, invocation runs the
+// effect, project-scope narrowing-to-non-slash shadows builtin, palette-only
+// is excluded from the slash list.
+//
+// These tests poke at `resolveExtensions(...).commands` directly — that is the
+// surface `ExtensionRegistry.listCommands()` returns and the legacy
+// `extension.invokeCommand` ultimately walks. Going through the registry layer
+// would only re-test `Layer.succeed` glue.
+describe("resolveExtensions — command bridge (C4.3)", () => {
+  // Minimal `ModelCapabilityContext`-shaped stub. The synthesized
+  // CommandContribution.handler accepts the wide host context but the test
+  // capabilities below ask for `CapabilityCoreContext` only — the structural
+  // subtype lets the bridge pass any wider value.
+  const makeHostCtx = (cwd = "/test/cwd") =>
+    ({
+      sessionId: SessionId.of("test-session"),
+      branchId: BranchId.of("test-branch"),
+      cwd,
+      home: "/test/home",
+      // The wide `ExtensionHostContext` surface is unused by the test
+      // capabilities (they only read sessionId/cwd) — narrow stub is fine.
+    }) as unknown as Parameters<
+      ReturnType<typeof resolveExtensions>["commands"][number]["handler"]
+    >[1]
+
+  test('Capability(audiences:["human-slash"], intent:"write") appears in commands', () => {
+    const cap: AnyCapabilityContribution = {
+      id: "echo",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      promptSnippet: "Echo the args back.",
+      effect: () => Effect.void,
+    }
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
+    expect(resolved.commands.map((c) => c.name)).toContain("echo")
+    expect(resolved.commands.find((c) => c.name === "echo")?.description).toBe(
+      "Echo the args back.",
+    )
+  })
+
+  test("invoking a synthesized command decodes args and runs the capability effect", async () => {
+    const seen: string[] = []
+    const cap: AnyCapabilityContribution = {
+      id: "remember",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: (input: string, _ctx: CapabilityCoreContext) =>
+        Effect.sync(() => {
+          seen.push(input)
+        }),
+    }
+    const resolved = resolveExtensions([
+      makeExt("@test/remember", "builtin", { capabilities: [cap] }),
+    ])
+    const cmd = resolved.commands.find((c) => c.name === "remember")
+    expect(cmd).toBeDefined()
+    await Effect.runPromise(cmd!.handler("hello", makeHostCtx()))
+    expect(seen).toEqual(["hello"])
+  })
+
+  test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
+    // Builtin exposes a slash command via legacy `commandContribution`.
+    const builtin = makeExt("@test/shadow", "builtin", {
+      commands: [{ name: "act", handler: () => Effect.void }],
+    })
+    // Project overrides the same name with a capability that explicitly
+    // narrows audiences to palette-only — must shadow + remove from slash list,
+    // NOT fall through to the builtin command.
+    const projectCap: AnyCapabilityContribution = {
+      id: "act",
+      audiences: ["human-palette"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.commands.map((c) => c.name)).not.toContain("act")
+  })
+
+  test("palette-only capability does not appear in the slash-backed command list", () => {
+    const cap: AnyCapabilityContribution = {
+      id: "palette-only",
+      audiences: ["human-palette"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const resolved = resolveExtensions([
+      makeExt("@test/palette", "builtin", { capabilities: [cap] }),
+    ])
+    expect(resolved.commands.map((c) => c.name)).not.toContain("palette-only")
   })
 })

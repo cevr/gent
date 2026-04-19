@@ -35,7 +35,7 @@ export const ExecutorExtension = defineExtension({
     // command list keeps working unchanged.
     capabilityContribution({
       id: "executor-start",
-      audiences: ["human-slash"],
+      audiences: ["human-slash", "transport-public"],
       intent: "write",
       promptSnippet: "Connect to the configured Executor endpoint.",
       input: Schema.String,
@@ -45,7 +45,7 @@ export const ExecutorExtension = defineExtension({
     }),
     capabilityContribution({
       id: "executor-stop",
-      audiences: ["human-slash"],
+      audiences: ["human-slash", "transport-public"],
       intent: "write",
       promptSnippet: "Disconnect from the Executor sidecar.",
       input: Schema.String,
