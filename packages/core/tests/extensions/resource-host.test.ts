@@ -228,7 +228,7 @@ describe("defineResource", () => {
     // Minimal `ResourceMachine` shape — the runtime cares about field
     // presence + structural identity to `effect-machine`'s Machine.
     // We only need to assert the field round-trips through defineResource +
-    // extractMachine; the actual supervision is tested by workflow-runtime
+    // extractMachine; the actual supervision is tested by machine-engine
     // tests that drive a real machine end-to-end.
     const stubMachine = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
