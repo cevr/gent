@@ -2,51 +2,17 @@ import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effe
 
 import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
+import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
-// Event Types
-
-export class SessionStarted extends Schema.TaggedClass<SessionStarted>()("SessionStarted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-}) {}
-
-export class MessageReceived extends Schema.TaggedClass<MessageReceived>()("MessageReceived", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  messageId: MessageId,
-  role: Schema.Literals(["user", "assistant", "system", "tool"]),
-}) {}
-
-export class StreamStarted extends Schema.TaggedClass<StreamStarted>()("StreamStarted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-}) {}
-
-export class StreamChunk extends Schema.TaggedClass<StreamChunk>()("StreamChunk", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  chunk: Schema.String,
-}) {}
+// ============================================================================
+// Shared sub-schemas
+// ============================================================================
 
 export const UsageSchema = Schema.Struct({
   inputTokens: Schema.Number,
   outputTokens: Schema.Number,
 })
 export type Usage = typeof UsageSchema.Type
-
-export class StreamEnded extends Schema.TaggedClass<StreamEnded>()("StreamEnded", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  usage: Schema.optional(UsageSchema),
-  interrupted: Schema.optional(Schema.Boolean),
-}) {}
-
-export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnCompleted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  durationMs: Schema.Number,
-  interrupted: Schema.optional(Schema.Boolean),
-}) {}
 
 export const RecoveryPhase = Schema.Literals(["Idle", "Running", "WaitingForInteraction"])
 export type RecoveryPhase = typeof RecoveryPhase.Type
@@ -58,85 +24,6 @@ export const RecoveryAction = Schema.Literals([
 ])
 export type RecoveryAction = typeof RecoveryAction.Type
 
-export class TurnRecoveryApplied extends Schema.TaggedClass<TurnRecoveryApplied>()(
-  "TurnRecoveryApplied",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    phase: RecoveryPhase,
-    action: RecoveryAction,
-    detail: Schema.optional(Schema.String),
-  },
-) {}
-
-export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  input: Schema.optional(Schema.Unknown),
-}) {}
-
-export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
-  "ToolCallSucceeded",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    summary: Schema.optional(Schema.String),
-    output: Schema.optional(Schema.String),
-  },
-) {}
-
-export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  summary: Schema.optional(Schema.String),
-  output: Schema.optional(Schema.String),
-}) {}
-
-/** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
-export class InteractionPresented extends Schema.TaggedClass<InteractionPresented>()(
-  "InteractionPresented",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    requestId: Schema.String,
-    text: Schema.String,
-    metadata: Schema.optional(Schema.Unknown),
-  },
-) {}
-
-/** Generic interaction resolution — replaces all Confirmed/Rejected/Dismissed events */
-export class InteractionResolved extends Schema.TaggedClass<InteractionResolved>()(
-  "InteractionResolved",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    requestId: Schema.String,
-    approved: Schema.Boolean,
-    notes: Schema.optional(Schema.String),
-  },
-) {}
-
-export class ErrorOccurred extends Schema.TaggedClass<ErrorOccurred>()("ErrorOccurred", {
-  sessionId: SessionId,
-  branchId: Schema.optional(BranchId),
-  error: Schema.String,
-}) {}
-
-export class ProviderRetrying extends Schema.TaggedClass<ProviderRetrying>()("ProviderRetrying", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  attempt: Schema.Int,
-  maxAttempts: Schema.Int,
-  delayMs: Schema.Int,
-  error: Schema.String,
-}) {}
-
 export const MachineInspectionType = Schema.Literals([
   "@machine.spawn",
   "@machine.event",
@@ -147,45 +34,6 @@ export const MachineInspectionType = Schema.Literals([
   "@machine.stop",
 ])
 export type MachineInspectionType = typeof MachineInspectionType.Type
-
-/**
- * Machine inspection events are published to the EventStore on purpose.
- *
- * Why:
- * - They let the TUI/debug surfaces observe real actor transitions without bespoke debug channels.
- * - They give us post-hoc receipts for queue/turn/task bugs that normal message history loses.
- * - They bridge machine internals into the same session-scoped event stream the rest of Gent already uses.
- *
- * They are observability events, not business events. Consumers should treat them as optional diagnostics.
- */
-export class MachineInspected extends Schema.TaggedClass<MachineInspected>()("MachineInspected", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  actorId: Schema.String,
-  inspectionType: MachineInspectionType,
-  payload: Schema.Unknown,
-}) {}
-
-export class MachineTaskSucceeded extends Schema.TaggedClass<MachineTaskSucceeded>()(
-  "MachineTaskSucceeded",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    actorId: Schema.String,
-    stateTag: Schema.String,
-  },
-) {}
-
-export class MachineTaskFailed extends Schema.TaggedClass<MachineTaskFailed>()(
-  "MachineTaskFailed",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    actorId: Schema.String,
-    stateTag: Schema.String,
-    error: Schema.String,
-  },
-) {}
 
 export const QuestionOptionSchema = Schema.Struct({
   label: Schema.String,
@@ -202,61 +50,178 @@ export const QuestionSchema = Schema.Struct({
 })
 export type Question = typeof QuestionSchema.Type
 
-export class SessionNameUpdated extends Schema.TaggedClass<SessionNameUpdated>()(
-  "SessionNameUpdated",
-  {
+// ============================================================================
+// AgentEvent — the discriminated union of every event the runtime emits.
+//
+// Authored via `TaggedEnumClass` (see `./schema-tagged-enum-class.ts`) — one
+// call replaces 34 hand-written `Schema.TaggedClass` declarations + a
+// hand-assembled `Schema.Union(...)`. Per-variant classes are exposed as own
+// properties (`AgentEvent.SessionStarted`) so construction reads
+// `new SessionStarted({...})`. Pattern-match via `Match.tag` or
+// `_tag === "X"` works unchanged — the wire shape is identical.
+// ============================================================================
+
+export const AgentEvent = TaggedEnumClass("AgentEvent", {
+  SessionStarted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+  },
+  MessageReceived: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    messageId: MessageId,
+    role: Schema.Literals(["user", "assistant", "system", "tool"]),
+  },
+  StreamStarted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+  },
+  StreamChunk: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    chunk: Schema.String,
+  },
+  StreamEnded: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    usage: Schema.optional(UsageSchema),
+    interrupted: Schema.optional(Schema.Boolean),
+  },
+  TurnCompleted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    durationMs: Schema.Number,
+    interrupted: Schema.optional(Schema.Boolean),
+  },
+  TurnRecoveryApplied: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    phase: RecoveryPhase,
+    action: RecoveryAction,
+    detail: Schema.optional(Schema.String),
+  },
+  ToolCallStarted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    toolCallId: ToolCallId,
+    toolName: Schema.String,
+    input: Schema.optional(Schema.Unknown),
+  },
+  ToolCallSucceeded: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    toolCallId: ToolCallId,
+    toolName: Schema.String,
+    summary: Schema.optional(Schema.String),
+    output: Schema.optional(Schema.String),
+  },
+  ToolCallFailed: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    toolCallId: ToolCallId,
+    toolName: Schema.String,
+    summary: Schema.optional(Schema.String),
+    output: Schema.optional(Schema.String),
+  },
+  /** Generic interaction event — replaces PromptPresented, HandoffPresented, QuestionsAsked */
+  InteractionPresented: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    requestId: Schema.String,
+    text: Schema.String,
+    metadata: Schema.optional(Schema.Unknown),
+  },
+  /** Generic interaction resolution — replaces all Confirmed/Rejected/Dismissed events */
+  InteractionResolved: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    requestId: Schema.String,
+    approved: Schema.Boolean,
+    notes: Schema.optional(Schema.String),
+  },
+  ErrorOccurred: {
+    sessionId: SessionId,
+    branchId: Schema.optional(BranchId),
+    error: Schema.String,
+  },
+  ProviderRetrying: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    attempt: Schema.Int,
+    maxAttempts: Schema.Int,
+    delayMs: Schema.Int,
+    error: Schema.String,
+  },
+  /**
+   * Machine inspection events are published to the EventStore on purpose.
+   *
+   * Why:
+   * - They let the TUI/debug surfaces observe real actor transitions without bespoke debug channels.
+   * - They give us post-hoc receipts for queue/turn/task bugs that normal message history loses.
+   * - They bridge machine internals into the same session-scoped event stream the rest of Gent already uses.
+   *
+   * They are observability events, not business events. Consumers should treat them as optional diagnostics.
+   */
+  MachineInspected: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    actorId: Schema.String,
+    inspectionType: MachineInspectionType,
+    payload: Schema.Unknown,
+  },
+  MachineTaskSucceeded: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    actorId: Schema.String,
+    stateTag: Schema.String,
+  },
+  MachineTaskFailed: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    actorId: Schema.String,
+    stateTag: Schema.String,
+    error: Schema.String,
+  },
+  SessionNameUpdated: {
     sessionId: SessionId,
     name: Schema.String,
   },
-) {}
-
-export class SessionSettingsUpdated extends Schema.TaggedClass<SessionSettingsUpdated>()(
-  "SessionSettingsUpdated",
-  {
+  SessionSettingsUpdated: {
     sessionId: SessionId,
     reasoningLevel: Schema.optional(ReasoningEffort),
   },
-) {}
-
-export class BranchCreated extends Schema.TaggedClass<BranchCreated>()("BranchCreated", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  parentBranchId: Schema.optional(BranchId),
-  parentMessageId: Schema.optional(MessageId),
-}) {}
-
-export class BranchSwitched extends Schema.TaggedClass<BranchSwitched>()("BranchSwitched", {
-  sessionId: SessionId,
-  fromBranchId: BranchId,
-  toBranchId: BranchId,
-}) {}
-
-export class BranchSummarized extends Schema.TaggedClass<BranchSummarized>()("BranchSummarized", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  summary: Schema.String,
-}) {}
-
-export class AgentSwitched extends Schema.TaggedClass<AgentSwitched>()("AgentSwitched", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  fromAgent: Schema.String,
-  toAgent: Schema.String,
-}) {}
-
-export class AgentRunSpawned extends Schema.TaggedClass<AgentRunSpawned>()("AgentRunSpawned", {
-  parentSessionId: SessionId,
-  childSessionId: SessionId,
-  agentName: Schema.String,
-  prompt: Schema.String,
-  toolCallId: Schema.optional(ToolCallId),
-  branchId: Schema.optional(BranchId),
-  childBranchId: Schema.optional(BranchId),
-}) {}
-
-export class AgentRunSucceeded extends Schema.TaggedClass<AgentRunSucceeded>()(
-  "AgentRunSucceeded",
-  {
+  BranchCreated: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    parentBranchId: Schema.optional(BranchId),
+    parentMessageId: Schema.optional(MessageId),
+  },
+  BranchSwitched: {
+    sessionId: SessionId,
+    fromBranchId: BranchId,
+    toBranchId: BranchId,
+  },
+  BranchSummarized: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    summary: Schema.String,
+  },
+  AgentSwitched: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    fromAgent: Schema.String,
+    toAgent: Schema.String,
+  },
+  AgentRunSpawned: {
+    parentSessionId: SessionId,
+    childSessionId: SessionId,
+    agentName: Schema.String,
+    prompt: Schema.String,
+    toolCallId: Schema.optional(ToolCallId),
+    branchId: Schema.optional(BranchId),
+    childBranchId: Schema.optional(BranchId),
+  },
+  AgentRunSucceeded: {
     parentSessionId: SessionId,
     childSessionId: SessionId,
     agentName: Schema.String,
@@ -272,99 +237,162 @@ export class AgentRunSucceeded extends Schema.TaggedClass<AgentRunSucceeded>()(
     preview: Schema.optional(Schema.String),
     savedPath: Schema.optional(Schema.String),
   },
-) {}
-
-export class AgentRunFailed extends Schema.TaggedClass<AgentRunFailed>()("AgentRunFailed", {
-  parentSessionId: SessionId,
-  childSessionId: SessionId,
-  agentName: Schema.String,
-  toolCallId: Schema.optional(ToolCallId),
-  branchId: Schema.optional(BranchId),
-}) {}
-
-// Task events
-
-export class TaskCreated extends Schema.TaggedClass<TaskCreated>()("TaskCreated", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-  subject: Schema.String,
-}) {}
-
-export class TaskUpdated extends Schema.TaggedClass<TaskUpdated>()("TaskUpdated", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-  status: Schema.String,
-}) {}
-
-export class TaskCompleted extends Schema.TaggedClass<TaskCompleted>()("TaskCompleted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-  owner: Schema.optional(SessionId),
-}) {}
-
-export class TaskFailed extends Schema.TaggedClass<TaskFailed>()("TaskFailed", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-  error: Schema.optional(Schema.String),
-}) {}
-
-export class TaskStopped extends Schema.TaggedClass<TaskStopped>()("TaskStopped", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-}) {}
-
-export class TaskDeleted extends Schema.TaggedClass<TaskDeleted>()("TaskDeleted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  taskId: TaskId,
-}) {}
-
-export class AgentRestarted extends Schema.TaggedClass<AgentRestarted>()("AgentRestarted", {
-  sessionId: SessionId,
-  branchId: BranchId,
-  attempt: Schema.Number,
-  error: Schema.optional(Schema.String),
-}) {}
-
-// Extension State Events
-
-/**
- * Typed pulse emitted whenever an extension's externally-observable state
- * may have changed. Carries no payload — clients fetch via the extension's
- * typed `QueryContribution` (the published transport surface).
- *
- * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
- * is honest: it tells subscribers "extension X has news" without coupling a
- * schema between server and client. Any transport consumer (TUI, SDK, future
- * web UI) reads the new state the same way — via `client.extension.query`.
- *
- * Server publishes this after:
- *   - A workflow state machine transition (machine.afterTransition)
- *   - A projection's underlying source emits an event the projection observes
- *
- * Client widgets subscribe by `extensionId` filter and refetch their typed
- * query on each pulse.
- */
-export class ExtensionStateChanged extends Schema.TaggedClass<ExtensionStateChanged>()(
-  "ExtensionStateChanged",
-  {
+  AgentRunFailed: {
+    parentSessionId: SessionId,
+    childSessionId: SessionId,
+    agentName: Schema.String,
+    toolCallId: Schema.optional(ToolCallId),
+    branchId: Schema.optional(BranchId),
+  },
+  TaskCreated: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+    subject: Schema.String,
+  },
+  TaskUpdated: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+    status: Schema.String,
+  },
+  TaskCompleted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+    owner: Schema.optional(SessionId),
+  },
+  TaskFailed: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+    error: Schema.optional(Schema.String),
+  },
+  TaskStopped: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+  },
+  TaskDeleted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    taskId: TaskId,
+  },
+  AgentRestarted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    attempt: Schema.Number,
+    error: Schema.optional(Schema.String),
+  },
+  /**
+   * Typed pulse emitted whenever an extension's externally-observable state
+   * may have changed. Carries no payload — clients fetch via the extension's
+   * typed `QueryContribution` (the published transport surface).
+   *
+   * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
+   * is honest: it tells subscribers "extension X has news" without coupling a
+   * schema between server and client. Any transport consumer (TUI, SDK, future
+   * web UI) reads the new state the same way — via `client.extension.query`.
+   *
+   * Server publishes this after:
+   *   - A workflow state machine transition (machine.afterTransition)
+   *   - A projection's underlying source emits an event the projection observes
+   *
+   * Client widgets subscribe by `extensionId` filter and refetch their typed
+   * query on each pulse.
+   */
+  ExtensionStateChanged: {
     sessionId: SessionId,
     branchId: BranchId,
     extensionId: Schema.String,
   },
-) {}
+})
+export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
+
+// ============================================================================
+// Per-variant re-exports — same class identity as `AgentEvent.X`, exposed at
+// module scope so consumers may import variants directly without going
+// through the enum object. A `new SessionStarted(...)` and a
+// `new SessionStarted(...)` produce instances of the SAME class;
+// these are aliases, not parallel implementations. Use whichever reads better
+// at the call site — both communicate "variant of AgentEvent."
+// ============================================================================
+
+export const SessionStarted = AgentEvent.SessionStarted
+export type SessionStarted = typeof AgentEvent.SessionStarted.Type
+export const MessageReceived = AgentEvent.MessageReceived
+export type MessageReceived = typeof AgentEvent.MessageReceived.Type
+export const StreamStarted = AgentEvent.StreamStarted
+export type StreamStarted = typeof AgentEvent.StreamStarted.Type
+export const StreamChunk = AgentEvent.StreamChunk
+export type StreamChunk = typeof AgentEvent.StreamChunk.Type
+export const StreamEnded = AgentEvent.StreamEnded
+export type StreamEnded = typeof AgentEvent.StreamEnded.Type
+export const TurnCompleted = AgentEvent.TurnCompleted
+export type TurnCompleted = typeof AgentEvent.TurnCompleted.Type
+export const TurnRecoveryApplied = AgentEvent.TurnRecoveryApplied
+export type TurnRecoveryApplied = typeof AgentEvent.TurnRecoveryApplied.Type
+export const ToolCallStarted = AgentEvent.ToolCallStarted
+export type ToolCallStarted = typeof AgentEvent.ToolCallStarted.Type
+export const ToolCallSucceeded = AgentEvent.ToolCallSucceeded
+export type ToolCallSucceeded = typeof AgentEvent.ToolCallSucceeded.Type
+export const ToolCallFailed = AgentEvent.ToolCallFailed
+export type ToolCallFailed = typeof AgentEvent.ToolCallFailed.Type
+export const InteractionPresented = AgentEvent.InteractionPresented
+export type InteractionPresented = typeof AgentEvent.InteractionPresented.Type
+export const InteractionResolved = AgentEvent.InteractionResolved
+export type InteractionResolved = typeof AgentEvent.InteractionResolved.Type
+export const ErrorOccurred = AgentEvent.ErrorOccurred
+export type ErrorOccurred = typeof AgentEvent.ErrorOccurred.Type
+export const ProviderRetrying = AgentEvent.ProviderRetrying
+export type ProviderRetrying = typeof AgentEvent.ProviderRetrying.Type
+export const MachineInspected = AgentEvent.MachineInspected
+export type MachineInspected = typeof AgentEvent.MachineInspected.Type
+export const MachineTaskSucceeded = AgentEvent.MachineTaskSucceeded
+export type MachineTaskSucceeded = typeof AgentEvent.MachineTaskSucceeded.Type
+export const MachineTaskFailed = AgentEvent.MachineTaskFailed
+export type MachineTaskFailed = typeof AgentEvent.MachineTaskFailed.Type
+export const SessionNameUpdated = AgentEvent.SessionNameUpdated
+export type SessionNameUpdated = typeof AgentEvent.SessionNameUpdated.Type
+export const SessionSettingsUpdated = AgentEvent.SessionSettingsUpdated
+export type SessionSettingsUpdated = typeof AgentEvent.SessionSettingsUpdated.Type
+export const BranchCreated = AgentEvent.BranchCreated
+export type BranchCreated = typeof AgentEvent.BranchCreated.Type
+export const BranchSwitched = AgentEvent.BranchSwitched
+export type BranchSwitched = typeof AgentEvent.BranchSwitched.Type
+export const BranchSummarized = AgentEvent.BranchSummarized
+export type BranchSummarized = typeof AgentEvent.BranchSummarized.Type
+export const AgentSwitched = AgentEvent.AgentSwitched
+export type AgentSwitched = typeof AgentEvent.AgentSwitched.Type
+export const AgentRunSpawned = AgentEvent.AgentRunSpawned
+export type AgentRunSpawned = typeof AgentEvent.AgentRunSpawned.Type
+export const AgentRunSucceeded = AgentEvent.AgentRunSucceeded
+export type AgentRunSucceeded = typeof AgentEvent.AgentRunSucceeded.Type
+export const AgentRunFailed = AgentEvent.AgentRunFailed
+export type AgentRunFailed = typeof AgentEvent.AgentRunFailed.Type
+export const TaskCreated = AgentEvent.TaskCreated
+export type TaskCreated = typeof AgentEvent.TaskCreated.Type
+export const TaskUpdated = AgentEvent.TaskUpdated
+export type TaskUpdated = typeof AgentEvent.TaskUpdated.Type
+export const TaskCompleted = AgentEvent.TaskCompleted
+export type TaskCompleted = typeof AgentEvent.TaskCompleted.Type
+export const TaskFailed = AgentEvent.TaskFailed
+export type TaskFailed = typeof AgentEvent.TaskFailed.Type
+export const TaskStopped = AgentEvent.TaskStopped
+export type TaskStopped = typeof AgentEvent.TaskStopped.Type
+export const TaskDeleted = AgentEvent.TaskDeleted
+export type TaskDeleted = typeof AgentEvent.TaskDeleted.Type
+export const AgentRestarted = AgentEvent.AgentRestarted
+export type AgentRestarted = typeof AgentEvent.AgentRestarted.Type
+export const ExtensionStateChanged = AgentEvent.ExtensionStateChanged
+export type ExtensionStateChanged = typeof AgentEvent.ExtensionStateChanged.Type
 
 // ============================================================================
 // Interaction types — shared between server and client
 // ============================================================================
 
 /** Active interaction — the generic InteractionPresented event */
-export type ActiveInteraction = typeof InteractionPresented.Type
+export type ActiveInteraction = InteractionPresented
 
 /** Approval decision — the generic resolution */
 export type ApprovalResult = {
@@ -372,43 +400,9 @@ export type ApprovalResult = {
   readonly notes?: string
 }
 
-export const AgentEvent = Schema.Union([
-  SessionStarted,
-  MessageReceived,
-  StreamStarted,
-  StreamChunk,
-  StreamEnded,
-  TurnCompleted,
-  TurnRecoveryApplied,
-  ToolCallStarted,
-  ToolCallSucceeded,
-  ToolCallFailed,
-  InteractionPresented,
-  InteractionResolved,
-  ErrorOccurred,
-  ProviderRetrying,
-  MachineInspected,
-  MachineTaskSucceeded,
-  MachineTaskFailed,
-  SessionNameUpdated,
-  SessionSettingsUpdated,
-  BranchCreated,
-  BranchSwitched,
-  BranchSummarized,
-  AgentSwitched,
-  AgentRunSpawned,
-  AgentRunSucceeded,
-  AgentRunFailed,
-  TaskCreated,
-  TaskUpdated,
-  TaskCompleted,
-  TaskFailed,
-  TaskStopped,
-  TaskDeleted,
-  AgentRestarted,
-  ExtensionStateChanged,
-])
-export type AgentEvent = typeof AgentEvent.Type
+// ============================================================================
+// EventEnvelope + EventStore
+// ============================================================================
 
 export const EventId = Schema.Number.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
