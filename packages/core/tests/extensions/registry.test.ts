@@ -718,6 +718,130 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     expect(resolved.commands.map((c) => c.name)).not.toContain("run")
   })
 
+  // ── C4.4 tool bridge ────────────────────────────────────────────────
+  // Same shape as the C4.3 command tests: identity-first scope shadowing
+  // followed by audience authorization. Tools' identity is `name`, audience
+  // discriminator is `"model"`. These mirror the BLOCK 1/BLOCK 2 lessons we
+  // hammered into the command bridge so C4.4's 50-file migration cannot
+  // re-introduce the leak class.
+
+  test('Capability(audiences:["model"]) appears as a tool', () => {
+    const cap: AnyCapabilityContribution = {
+      id: "echo",
+      description: "Echo input back as output.",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }
+    const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
+    expect(resolved.tools.has("echo")).toBe(true)
+    expect(resolved.tools.get("echo")?.description).toBe("Echo input back as output.")
+  })
+
+  test("invoking a synthesized tool runs the capability effect", async () => {
+    const seen: string[] = []
+    const cap: AnyCapabilityContribution = {
+      id: "remember-tool",
+      description: "Record input.",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({ msg: Schema.String }),
+      output: Schema.Unknown,
+      effect: (input: { msg: string }) =>
+        Effect.sync(() => {
+          seen.push(input.msg)
+          return undefined
+        }),
+    }
+    const resolved = resolveExtensions([
+      makeExt("@test/remember", "builtin", { capabilities: [cap] }),
+    ])
+    const tool = resolved.tools.get("remember-tool")
+    expect(tool).toBeDefined()
+    // Tool's `execute` shape — params already decoded by the runner; here we
+    // pass a typed object directly. The bridge does not validate; the runner
+    // does (mirrors the existing tool contract).
+    await Effect.runPromise(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      tool!.execute(
+        { msg: "hello" },
+        makeHostCtx() as unknown as Parameters<typeof tool.execute>[1],
+      ),
+    )
+    expect(seen).toEqual(["hello"])
+  })
+
+  test('project capability with audiences:["agent-protocol"] SHADOWS builtin tool', () => {
+    // Same leak class codex hammered for C4.3: a project capability with a
+    // non-model audience must still shadow same-name builtin tools. Otherwise
+    // the builtin tool keeps surfacing to the LLM even though the project
+    // tried to override it.
+    const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("act")] })
+    const projectCap: AnyCapabilityContribution = {
+      id: "act",
+      audiences: ["agent-protocol"],
+      intent: "write",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.tools.has("act")).toBe(false)
+  })
+
+  test('project capability with audiences:["transport-public"] SHADOWS builtin tool', () => {
+    const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("look")] })
+    const projectCap: AnyCapabilityContribution = {
+      id: "look",
+      audiences: ["transport-public"],
+      intent: "read",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.tools.has("look")).toBe(false)
+  })
+
+  test("project capability with audiences including model OVERRIDES builtin tool", () => {
+    // Identity-first override: project capability with `"model"` in its
+    // audience set should win and replace the builtin tool entirely.
+    const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("run")] })
+    const projectCap: AnyCapabilityContribution = {
+      id: "run",
+      description: "project run override",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.tools.has("run")).toBe(true)
+    expect(resolved.tools.get("run")?.description).toBe("project run override")
+  })
+
+  test("non-model capability does NOT appear as a tool", () => {
+    const cap: AnyCapabilityContribution = {
+      id: "rpc-only",
+      audiences: ["agent-protocol"],
+      intent: "read",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(undefined),
+    }
+    const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { capabilities: [cap] })])
+    expect(resolved.tools.has("rpc-only")).toBe(false)
+  })
+
   test("bridge dies (defect) when capability output fails to encode", async () => {
     // Capability declares output: Schema.Number but its effect returns a
     // string. CommandContribution.handler has no typed-failure channel, so

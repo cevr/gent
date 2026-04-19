@@ -157,6 +157,12 @@ export interface CapabilityContribution<
 > extends ModelAudienceFields {
   /** Stable id (extension-local). Used for routing. */
   readonly id: string
+  /** Human-readable description. For `audiences:["model"]`, this is sent to
+   *  the LLM as part of the tool schema (so the model knows what the
+   *  capability does); for other audiences it is informational. Distinct
+   *  from `promptSnippet`, which is the one-liner injected into the system
+   *  prompt's tool list. */
+  readonly description?: string
   /** Who may invoke. */
   readonly audiences: ReadonlyArray<Audience>
   /** Read vs write. Lint-enforced on `R` for `"read"`. */

@@ -74,6 +74,45 @@ const compileContributions = <T>(
 }
 
 /**
+ * C4.4 bridge — lower a `Capability` whose `audiences` includes `"model"`
+ * into an `AnyToolDefinition` so the existing `ToolRunner` (which still
+ * consumes `tool: AnyToolDefinition` from the registry) keeps working
+ * unchanged.
+ *
+ * Field mapping:
+ *   `cap.id`               → `tool.name`
+ *   `cap.description ?? ""` → `tool.description`
+ *   `cap.input`            → `tool.params`
+ *   `cap.effect`           → `tool.execute` (CapabilityCoreContext is a
+ *                             structural subtype of ToolContext, so any
+ *                             handler that asks for the narrower type
+ *                             remains well-typed at the contravariant arg)
+ *
+ * `ModelAudienceFields` (`resources`, `idempotent`, `promptSnippet`,
+ * `promptGuidelines`, `interactive`) flow through unchanged.
+ *
+ * Output validation lives in the ToolRunner today (the LLM consumes the
+ * raw effect output as JSON), so this bridge does NOT encode through
+ * `cap.output`. C4.5 will delete this wrapper along with the
+ * `ToolDefinition` type once the runner consumes Capability directly.
+ */
+const capabilityToTool = (cap: AnyCapabilityContribution): AnyToolDefinition => ({
+  name: cap.id,
+  description: cap.description ?? "",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  params: cap.input as AnyToolDefinition["params"],
+  ...(cap.resources !== undefined ? { resources: cap.resources } : {}),
+  ...(cap.idempotent !== undefined ? { idempotent: cap.idempotent } : {}),
+  ...(cap.promptSnippet !== undefined ? { promptSnippet: cap.promptSnippet } : {}),
+  ...(cap.promptGuidelines !== undefined ? { promptGuidelines: cap.promptGuidelines } : {}),
+  ...(cap.interactive !== undefined ? { interactive: cap.interactive } : {}),
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at tool-bridge boundary
+  execute: (params, ctx) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    cap.effect(params, ctx as Parameters<typeof cap.effect>[1]),
+})
+
+/**
  * C4.3 bridge — lower a `Capability` with `intent: "write"` and
  * `audiences.includes("human-slash")` into a `CommandContribution` shape.
  * (Palette-only capabilities never reach this wrapper — the slash-list
@@ -135,7 +174,40 @@ export const resolveExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  const tools = compileContributions(sorted, extractTools, (t) => t.name)
+  // C4.4 tool bridge — identity-first scope shadowing followed by audience
+  // authorization, mirroring C4.3 commands. Tools' identity is `name` (flat).
+  // Both legacy `ToolContribution`s AND every `CapabilityContribution` enter
+  // the candidate map keyed by name — pre-filtering by audience would let a
+  // builtin tool leak when a higher-scope capability with the same id but a
+  // non-model audience is registered. Authorization (`audiences.includes("model")`)
+  // happens AFTER selection. C4.5 deletes this bridge along with
+  // `ToolContribution` once `ToolRunner` consumes Capability directly.
+  type ToolCandidate =
+    | { readonly _source: "tool"; readonly tool: AnyToolDefinition }
+    | { readonly _source: "capability"; readonly cap: AnyCapabilityContribution }
+
+  const toolWinners = new Map<string, ToolCandidate>()
+  for (const ext of sorted) {
+    for (const t of extractTools(ext.contributions)) {
+      toolWinners.set(t.name, { _source: "tool", tool: t })
+    }
+    for (const cap of extractCapabilities(ext.contributions)) {
+      // Identity-first: ALL capabilities shadow same-name lower-scope tools by
+      // id. A project-scope capability with `audiences:["agent-protocol"]`
+      // MUST shadow the builtin tool — otherwise the builtin leaks.
+      toolWinners.set(cap.id, { _source: "capability", cap })
+    }
+  }
+
+  const isAuthorizedAsTool = (entry: ToolCandidate): boolean =>
+    entry._source === "tool" || entry.cap.audiences.includes("model")
+
+  const tools = new Map<string, AnyToolDefinition>()
+  for (const [name, entry] of toolWinners) {
+    if (!isAuthorizedAsTool(entry)) continue
+    tools.set(name, entry._source === "tool" ? entry.tool : capabilityToTool(entry.cap))
+  }
+
   const agents = compileContributions(sorted, extractAgents, (a) => a.name)
   const modelDrivers = compileContributions(sorted, extractModelDrivers, (d) => d.id)
   const externalDrivers = compileContributions(sorted, extractExternalDrivers, (d) => d.id)
