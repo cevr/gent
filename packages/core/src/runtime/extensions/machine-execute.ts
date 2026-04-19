@@ -22,6 +22,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
+import { type ReadOnly, withReadOnly } from "../../domain/read-only.js"
 import { MachineEngine, type MachineEngineService } from "./resource-host/machine-engine.js"
 
 export interface MachineExecuteService {
@@ -32,9 +33,15 @@ export interface MachineExecuteService {
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
 }
 
-export class MachineExecute extends Context.Service<MachineExecute, MachineExecuteService>()(
-  "@gent/core/src/runtime/extensions/machine-execute/MachineExecute",
-) {
+/**
+ * `MachineExecute` carries the `ReadOnly` brand — it exposes only
+ * `execute<M>` and projection R-channels (`ProjectionContribution.R`)
+ * accept only `ReadOnly`-branded service Tags. See `domain/read-only.ts`.
+ */
+export class MachineExecute extends Context.Service<
+  MachineExecute,
+  ReadOnly<MachineExecuteService>
+>()("@gent/core/src/runtime/extensions/machine-execute/MachineExecute") {
   /**
    * Live layer — projects `MachineEngine.execute` onto the read-only
    * `execute` surface. Requires `MachineEngine` (provided alongside
@@ -44,9 +51,9 @@ export class MachineExecute extends Context.Service<MachineExecute, MachineExecu
     MachineExecute,
     Effect.gen(function* () {
       const engine: MachineEngineService = yield* MachineEngine
-      return {
+      return withReadOnly({
         execute: (sessionId, message, branchId) => engine.execute(sessionId, message, branchId),
-      }
+      } satisfies MachineExecuteService)
     }),
   )
 }
