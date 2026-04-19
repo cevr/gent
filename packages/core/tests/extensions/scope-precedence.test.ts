@@ -3,25 +3,23 @@
  *
  * Locks the rule that builtin < user < project across:
  *  - keyed contributions (tools, agents, prompt sections) — later scope wins
- *  - interceptor chain (later scope wraps earlier — outermost runs first)
+ *  - pipeline chain (later scope wraps earlier — outermost runs first)
  *  - alphabetical tie-break on extension id within the same scope
  *
  * Providers and turn executors share the keyed-contribution code path
  * (`compileContributions` in registry.ts) — the tools test exercises that path.
- *
- * Tied to the planify Commit 1 substrate. If the registry stops honoring scope precedence
- * across these dimensions, the contribution model has regressed.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
+import { definePipeline } from "@gent/core/domain/pipeline"
+import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { defineTool } from "@gent/core/domain/tool"
 import {
   agent as agentContribution,
-  interceptor as interceptorContribution,
+  pipeline as pipelineContribution,
   promptSection as promptSectionContribution,
   tool as toolContribution,
   type Contribution,
@@ -110,13 +108,13 @@ describe("scope precedence", () => {
     })
   })
 
-  describe("interceptor chain — project wraps user wraps builtin", () => {
+  describe("pipeline chain — project wraps user wraps builtin", () => {
     it.live("execution order proves project is outermost", () => {
       const log: string[] = []
       const make = (id: string, kind: "builtin" | "user" | "project") =>
         ext(id, kind, [
-          interceptorContribution(
-            defineInterceptor("prompt.system", (input, next) => {
+          pipelineContribution(
+            definePipeline("prompt.system", (input, next) => {
               log.push(`${kind}-before`)
               return next(input).pipe(
                 Effect.map((r) => {
@@ -129,14 +127,14 @@ describe("scope precedence", () => {
         ])
 
       // Pass out of order to prove sorting, not insertion
-      const compiled = compileInterceptors([
+      const compiled = compilePipelines([
         make("p", "project"),
         make("a", "builtin"),
         make("u", "user"),
-      ]).chain
+      ])
 
       return compiled
-        .runInterceptor(
+        .runPipeline(
           "prompt.system",
           { basePrompt: "x", agent: Agents.cowork },
           () => Effect.succeed("base"),

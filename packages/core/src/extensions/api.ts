@@ -66,10 +66,6 @@ export {
   type AgentRunResult,
 } from "../domain/agent.js"
 export {
-  defineInterceptor,
-  type ExtensionInterceptorDescriptor,
-  type ExtensionInterceptorKey,
-  type ExtensionInterceptorMap,
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type TurnProjection,
@@ -170,7 +166,8 @@ export {
   type Contribution,
   type ContributionKind,
   type AgentContribution,
-  type InterceptorContribution as InterceptorKindContribution,
+  type PipelineKindContribution,
+  type SubscriptionKindContribution,
   type CommandKindContribution,
   type ModelDriverKindContribution,
   type ExternalDriverKindContribution,
@@ -182,7 +179,8 @@ export {
   // smart constructors
   tool as toolContribution,
   agent as agentContribution,
-  interceptor as interceptorContribution,
+  pipeline as pipelineContribution,
+  subscription as subscriptionContribution,
   command as commandContribution,
   modelDriver as modelDriverContribution,
   externalDriver as externalDriverContribution,
@@ -196,6 +194,26 @@ export {
   defineResource,
   defineLifecycleResource,
 } from "../domain/contribution.js"
+export {
+  type PipelineContribution,
+  type AnyPipelineContribution,
+  type PipelineKey,
+  type PipelineHandler,
+  type PipelineInput,
+  type PipelineOutput,
+  type PipelineMap,
+  definePipeline,
+} from "../domain/pipeline.js"
+export {
+  type SubscriptionContribution,
+  type AnySubscriptionContribution,
+  type SubscriptionKey,
+  type SubscriptionHandler,
+  type SubscriptionEvent,
+  type SubscriptionMap,
+  type SubscriptionFailureMode,
+  defineSubscription,
+} from "../domain/subscription.js"
 export type {
   CapabilityContribution,
   AnyCapabilityContribution,
@@ -252,12 +270,6 @@ export {
   type InteractionPendingReaderService,
   type PendingInteraction,
 } from "../storage/interaction-pending-reader.js"
-export type {
-  InterceptorContribution as InterceptorContributionDescriptor,
-  InterceptorKey,
-  InterceptorMap,
-} from "../domain/interceptor.js"
-export { InterceptorError } from "../domain/interceptor.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"

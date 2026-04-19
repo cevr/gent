@@ -1,7 +1,7 @@
 import {
   defineExtension,
-  defineInterceptor,
-  interceptorContribution,
+  definePipeline,
+  pipelineContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
 import { SearchSessionsTool } from "./search-sessions.js"
@@ -18,8 +18,8 @@ export const SessionToolsExtension = defineExtension({
     toolContribution(SearchSessionsTool),
     toolContribution(ReadSessionTool),
     toolContribution(RenameSessionTool),
-    interceptorContribution(
-      defineInterceptor("prompt.system", (input, next) =>
+    pipelineContribution(
+      definePipeline("prompt.system", (input, next) =>
         input.interactive === false
           ? next(input)
           : next({ ...input, basePrompt: input.basePrompt + NAMING_INSTRUCTION }),

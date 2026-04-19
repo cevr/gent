@@ -2,12 +2,13 @@
 
 ## Overview
 
-Extensions add tools, agents, prompt sections, interceptors, projections,
-queries, mutations, resources (long-lived state with optional state machines,
-schedules, subscriptions, and lifecycle hooks), and drivers to gent.
-The single authoring API is `defineExtension({ id, contributions })`.
-Contributions are a flat array of typed values built with smart constructors
-(`toolContribution`, `agentContribution`, `interceptorContribution`, …).
+Extensions add tools, agents, prompt sections, pipelines (transformers),
+subscriptions (observers), projections, queries, mutations, resources
+(long-lived state with optional state machines, schedules, subscriptions, and
+lifecycle hooks), and drivers to gent. The single authoring API is
+`defineExtension({ id, contributions })`. Contributions are a flat array of
+typed values built with smart constructors (`toolContribution`,
+`agentContribution`, `pipelineContribution`, `subscriptionContribution`, …).
 gent itself is a library used inside Effect programs — every contribution
 returns `Effect`, no Promise edges.
 
@@ -79,7 +80,8 @@ collisions.
 | ------------------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Tool               | `toolContribution(def)`                                                                  | Agent-callable tool                                                                                                                                |
 | Agent              | `agentContribution(def)`                                                                 | Spawnable subagent                                                                                                                                 |
-| Interceptor        | `interceptorContribution(d)`                                                             | Wrap a runtime pipeline (`prompt.system`, etc.)                                                                                                    |
+| Pipeline           | `pipelineContribution(definePipeline(hook, handler))`                                    | Transforming middleware with `next` (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `message.input`)      |
+| Subscription       | `subscriptionContribution(defineSubscription(event, failureMode, handler))`              | Void observer (`turn.before`, `turn.after`, `message.output`); `failureMode` is `continue` / `isolate` / `halt`                                    |
 | Projection         | `projectionContribution(p)`                                                              | Read-only view (prompt section / tool policy)                                                                                                      |
 | Query              | `queryContribution(q)`                                                                   | Typed read-only RPC                                                                                                                                |
 | Mutation           | `mutationContribution(m)`                                                                | Typed write RPC                                                                                                                                    |
@@ -131,40 +133,65 @@ export default defineExtension({
 })
 ```
 
-### Interceptor
+### Pipeline (transforming middleware)
 
-Seven keys are defined; every handler returns Effect.
+Six hooks. Handler shape: `(input, next, ctx) => Effect<output>`. `next`
+actually does work — call it to invoke the inner chain, transform its output,
+or skip it entirely to short-circuit.
 
-| Key                | Shape           | Purpose                          |
-| ------------------ | --------------- | -------------------------------- |
-| `prompt.system`    | Transform       | Modify the system prompt         |
-| `tool.execute`     | Transform       | Intercept tool execution         |
-| `permission.check` | Transform       | Override permission decisions    |
-| `context.messages` | Transform       | Filter/modify context messages   |
-| `tool.result`      | Transform       | Enrich/modify tool results       |
-| `turn.before`      | Fire-and-forget | Pre-turn observation             |
-| `turn.after`       | Fire-and-forget | Post-turn observation            |
-| `message.input`    | Transform       | Transform user input before send |
-| `message.output`   | Transform       | Transform assistant output       |
+| Key                | Output shape             | Purpose                        |
+| ------------------ | ------------------------ | ------------------------------ |
+| `prompt.system`    | `string`                 | Modify the system prompt       |
+| `tool.execute`     | `unknown`                | Intercept tool execution       |
+| `permission.check` | `PermissionResult`       | Override permission decisions  |
+| `context.messages` | `ReadonlyArray<Message>` | Filter/modify context messages |
+| `tool.result`      | `unknown`                | Enrich/modify tool results     |
+| `message.input`    | `string`                 | Transform user input on send   |
 
 ```ts
-import { defineInterceptor } from "@gent/core/extensions/api"
+import { definePipeline, pipelineContribution } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
   id: "prompt-rules",
   contributions: () => [
-    interceptorContribution(
-      defineInterceptor("prompt.system", (input, next) =>
+    pipelineContribution(
+      definePipeline("prompt.system", (input, next) =>
         next(input).pipe(Effect.map((s) => s + "\n## House rule\n…")),
       ),
     ),
-    interceptorContribution(
-      defineInterceptor("turn.after", (input, next) =>
-        Effect.gen(function* () {
-          yield* next(input)
-          yield* Effect.logInfo(`Turn completed in ${input.durationMs}ms`)
-        }),
+  ],
+})
+```
+
+### Subscription (void observer)
+
+Three hooks. Handler shape: `(event, ctx) => Effect<void>`. No `next` —
+subscriptions don't transform; they fan out. Each subscription declares a
+`failureMode`:
+
+| Mode       | Behavior on handler failure                                |
+| ---------- | ---------------------------------------------------------- |
+| `continue` | Log debug, skip; remaining subscriptions still fire        |
+| `isolate`  | Log warning with extension id, skip; remaining still fire  |
+| `halt`     | Log error and surface a defect; subsequent ones don't fire |
+
+| Event            | Purpose                  |
+| ---------------- | ------------------------ |
+| `turn.before`    | Pre-turn observation     |
+| `turn.after`     | Post-turn observation    |
+| `message.output` | Observe assistant output |
+
+```ts
+import { defineSubscription, subscriptionContribution } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+export default defineExtension({
+  id: "turn-logger",
+  contributions: () => [
+    subscriptionContribution(
+      defineSubscription("turn.after", "isolate", (event) =>
+        Effect.logInfo(`Turn completed in ${event.durationMs}ms`),
       ),
     ),
   ],

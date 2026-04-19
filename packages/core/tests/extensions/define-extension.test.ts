@@ -19,14 +19,14 @@ import {
   permissionRuleContribution,
   promptSectionContribution,
   commandContribution,
-  interceptorContribution,
+  pipelineContribution,
   type Contribution,
 } from "@gent/core/extensions/api"
 import {
   extractAgents,
   extractCapabilities,
   extractCommands,
-  extractInterceptors,
+  extractPipelines,
   extractPermissionRules,
   extractPromptSections,
   extractMachine,
@@ -38,13 +38,13 @@ import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
-  defineInterceptor,
   ExtensionLoadError,
   type ExtensionSetupContext,
   type SystemPromptInput,
 } from "@gent/core/domain/extension"
+import { definePipeline } from "@gent/core/domain/pipeline"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
+import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -72,7 +72,7 @@ describe("defineExtension", () => {
       expect(extractPermissionRules(contributions)).toEqual([])
       expect(extractPromptSections(contributions)).toEqual([])
       expect(extractExternalDrivers(contributions)).toEqual([])
-      expect(extractInterceptors(contributions)).toEqual([])
+      expect(extractPipelines(contributions)).toEqual([])
     }),
   )
 
@@ -97,7 +97,7 @@ describe("defineExtension", () => {
             description: "test cmd",
             handler: () => Effect.void,
           }),
-          interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
+          pipelineContribution(definePipeline("prompt.system", (i, next) => next(i))),
           defineResource({
             scope: "process",
             layer: myLayer,
@@ -124,7 +124,7 @@ describe("defineExtension", () => {
       expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
       expect(extractPromptSections(contributions)[0]?.id).toBe("rules")
       expect(extractCommands(contributions)[0]?.name).toBe("test")
-      expect(extractInterceptors(contributions)[0]?.key).toBe("prompt.system")
+      expect(extractPipelines(contributions)[0]?.hook).toBe("prompt.system")
       const resources = extractResources(contributions)
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
@@ -232,7 +232,7 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("defineExtension result wires through ExtensionRegistry + interceptor chain", () =>
+  it.live("defineExtension result wires through ExtensionRegistry + pipeline chain", () =>
     Effect.gen(function* () {
       const myTool = defineTool({
         name: "from-define",
@@ -244,8 +244,8 @@ describe("defineExtension", () => {
         id: "wired",
         contributions: () => [
           toolContribution(myTool),
-          interceptorContribution(
-            defineInterceptor(
+          pipelineContribution(
+            definePipeline(
               "prompt.system",
               (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
                 next(input).pipe(Effect.map((s) => `${s}!!`)),
@@ -263,8 +263,8 @@ describe("defineExtension", () => {
       const resolved = resolveExtensions([loaded])
       expect(resolved.tools.get("from-define")?.name).toBe("from-define")
 
-      const compiled = compileInterceptors([loaded]).chain
-      const result = yield* compiled.runInterceptor(
+      const compiled = compilePipelines([loaded])
+      const result = yield* compiled.runPipeline(
         "prompt.system",
         { basePrompt: "yo", agent: Agents.cowork },
         (input) => Effect.succeed(input.basePrompt),

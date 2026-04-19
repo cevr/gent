@@ -13,13 +13,19 @@
 import type { AgentDefinition } from "./agent.js"
 import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type { CommandContribution, ExtensionInterceptorDescriptor } from "./extension.js"
+import type { CommandContribution } from "./extension.js"
 import type { PermissionRule } from "./permission.js"
 import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./prompt.js"
 import type { AnyMutationContribution } from "./mutation.js"
+import type { AnyPipelineContribution, PipelineContribution, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
 import type { AnyResourceContribution, AnyResourceMachine } from "./resource.js"
+import type {
+  AnySubscriptionContribution,
+  SubscriptionContribution,
+  SubscriptionKey,
+} from "./subscription.js"
 import type { AnyToolDefinition } from "./tool.js"
 import { Schema } from "effect"
 
@@ -30,9 +36,29 @@ export interface AgentContribution {
   readonly agent: AgentDefinition
 }
 
-export interface InterceptorContribution {
-  readonly _kind: "interceptor"
-  readonly descriptor: ExtensionInterceptorDescriptor
+/**
+ * Pipeline — transforming middleware with a real `next` and a meaningful
+ * (non-void) return type. Six hooks: `prompt.system`, `tool.execute`,
+ * `permission.check`, `context.messages`, `tool.result`, `message.input`.
+ *
+ * Sister kind: `SubscriptionKindContribution` for void observers. C6 split
+ * the legacy `Interceptor<I, O>` shape into Pipeline (transformer) +
+ * Subscription (observer) — `Interceptor<I, void>` was a deceptive shape
+ * where `next` was bookkeeping (codex C6 correction).
+ */
+export interface PipelineKindContribution {
+  readonly _kind: "pipeline"
+  readonly pipeline: AnyPipelineContribution
+}
+
+/**
+ * Subscription — ordered void observer with declared failure policy. Three
+ * hooks: `turn.before`, `turn.after`, `message.output`. Each subscription
+ * declares `failureMode: "continue" | "isolate" | "halt"`.
+ */
+export interface SubscriptionKindContribution {
+  readonly _kind: "subscription"
+  readonly subscription: AnySubscriptionContribution
 }
 
 export interface CommandKindContribution {
@@ -100,7 +126,8 @@ export interface PulseSubscriptionContribution {
 
 export type Contribution =
   | AgentContribution
-  | InterceptorContribution
+  | PipelineKindContribution
+  | SubscriptionKindContribution
   | CommandKindContribution
   | ModelDriverKindContribution
   | ExternalDriverKindContribution
@@ -165,9 +192,34 @@ export const tool = (t: AnyToolDefinition): CapabilityKindContribution => ({
 
 export const agent = (a: AgentDefinition): AgentContribution => ({ _kind: "agent", agent: a })
 
-export const interceptor = (
-  descriptor: ExtensionInterceptorDescriptor,
-): InterceptorContribution => ({ _kind: "interceptor", descriptor })
+/**
+ * Smart constructor for the Pipeline primitive (transformer with `next`).
+ * Six hooks; output type ≠ void. See `pipeline.ts` for the full key map.
+ *
+ * Generic over `K, E, R` so authors keep their typed handler shape; the
+ * contribution's `R`/`E` is provided by the extension's Resource layer at
+ * composition time, then erased into the union shape.
+ */
+export const pipeline = <K extends PipelineKey, E, R>(
+  p: PipelineContribution<K, E, R>,
+): PipelineKindContribution => ({
+  _kind: "pipeline",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  pipeline: p as unknown as AnyPipelineContribution,
+})
+
+/**
+ * Smart constructor for the Subscription primitive (ordered void observer).
+ * Three hooks: `turn.before`, `turn.after`, `message.output`. Each
+ * subscription declares a `failureMode`.
+ */
+export const subscription = <K extends SubscriptionKey, E, R>(
+  s: SubscriptionContribution<K, E, R>,
+): SubscriptionKindContribution => ({
+  _kind: "subscription",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  subscription: s as unknown as AnySubscriptionContribution,
+})
 
 export const command = (c: CommandContribution): CommandKindContribution => ({
   _kind: "command",
@@ -310,10 +362,14 @@ export const extractAgents = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<AgentContribution["agent"]> => filterByKind(cs, "agent").map((c) => c.agent)
 
-export const extractInterceptors = (
+export const extractPipelines = (
   cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<InterceptorContribution["descriptor"]> =>
-  filterByKind(cs, "interceptor").map((c) => c.descriptor)
+): ReadonlyArray<AnyPipelineContribution> => filterByKind(cs, "pipeline").map((c) => c.pipeline)
+
+export const extractSubscriptions = (
+  cs: ReadonlyArray<Contribution>,
+): ReadonlyArray<AnySubscriptionContribution> =>
+  filterByKind(cs, "subscription").map((c) => c.subscription)
 
 export const extractCommands = (
   cs: ReadonlyArray<Contribution>,

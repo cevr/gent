@@ -16,10 +16,12 @@ import { Effect, Layer, Schema } from "effect"
 import {
   commandContribution,
   defineExtension,
-  defineInterceptor,
+  definePipeline,
   defineResource,
+  defineSubscription,
   defineTool,
-  interceptorContribution,
+  pipelineContribution,
+  subscriptionContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
 
@@ -44,10 +46,18 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("defineInterceptor handler MUST return Effect — async handler rejected", () => {
-    interceptorContribution(
-      // @ts-expect-error — async handler must not be assignable to Effect-returning interceptor
-      defineInterceptor("prompt.system", async (input, next) => next(input)),
+  test("definePipeline handler MUST return Effect — async handler rejected", () => {
+    pipelineContribution(
+      // @ts-expect-error — async handler must not be assignable to Effect-returning pipeline
+      definePipeline("prompt.system", async (input, next) => next(input)),
+    )
+    expect(true).toBe(true)
+  })
+
+  test("defineSubscription handler MUST return Effect — async handler rejected", () => {
+    subscriptionContribution(
+      // @ts-expect-error — async handler must not be assignable to Effect-returning subscription
+      defineSubscription("turn.after", "isolate", async () => undefined),
     )
     expect(true).toBe(true)
   })
@@ -98,7 +108,7 @@ describe("Effect-purity locks (compile-time)", () => {
             execute: () => Effect.succeed("ok"),
           }),
         ),
-        interceptorContribution(defineInterceptor("prompt.system", (i, next) => next(i))),
+        pipelineContribution(definePipeline("prompt.system", (i, next) => next(i))),
         commandContribution({ name: "ok", handler: () => Effect.void }),
         defineResource({
           scope: "process",

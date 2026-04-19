@@ -249,8 +249,8 @@ const resolveTurnContext = (params: {
     }
     const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
 
-    // Run context.messages interceptor — extensions can inject hidden context or filter messages
-    const interceptedMessages = yield* params.extensionRegistry.hooks.runInterceptor(
+    // Run context.messages pipeline — extensions can inject hidden context or filter messages
+    const interceptedMessages = yield* params.extensionRegistry.pipelines.runPipeline(
       "context.messages",
       {
         messages: rawMessages,
@@ -316,7 +316,7 @@ const resolveTurnContext = (params: {
       extensionSections,
       allAgents,
     )
-    const systemPrompt = yield* params.extensionRegistry.hooks.runInterceptor(
+    const systemPrompt = yield* params.extensionRegistry.pipelines.runPipeline(
       "prompt.system",
       { basePrompt: turnPrompt, agent: effectiveAgent, interactive: params.interactive },
       (input) => Effect.succeed(input.basePrompt),
@@ -470,21 +470,21 @@ export const persistAssistantTurn = (params: {
     const existing = yield* params.storage.getMessage(assistantMessage.id)
     if (existing !== undefined) return
 
-    // Fire message.output hook — only for new messages (idempotent)
+    // Fire message.output subscription — only for new messages (idempotent).
+    // SubscriptionHost handles per-subscriber failureMode internally; the
+    // overall emit Effect never fails (succeeds with void), so no
+    // catch-and-swallow at the call site.
     if (params.extensionRegistry !== undefined && params.hostCtx !== undefined) {
-      yield* params.extensionRegistry.hooks
-        .runInterceptor(
-          "message.output",
-          {
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            agentName: params.agentName,
-            parts: assistantParts,
-          },
-          () => Effect.void,
-          params.hostCtx,
-        )
-        .pipe(Effect.catchEager(() => Effect.void))
+      yield* params.extensionRegistry.subscriptions.emit(
+        "message.output",
+        {
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          agentName: params.agentName,
+          parts: assistantParts,
+        },
+        params.hostCtx,
+      )
     }
 
     yield* params.storage.createMessageIfAbsent(assistantMessage)
@@ -642,20 +642,17 @@ const runTurnBeforeHook = (
   branchId: BranchId,
   hostCtx: ExtensionHostContext,
 ) =>
-  extensionRegistry.hooks
-    .runInterceptor(
-      "turn.before",
-      {
-        sessionId,
-        branchId,
-        agentName: resolved.currentTurnAgent,
-        toolCount: resolved.tools?.length ?? 0,
-        systemPromptLength: resolved.systemPrompt.length,
-      },
-      () => Effect.void,
-      hostCtx,
-    )
-    .pipe(Effect.catchEager(() => Effect.void))
+  extensionRegistry.subscriptions.emit(
+    "turn.before",
+    {
+      sessionId,
+      branchId,
+      agentName: resolved.currentTurnAgent,
+      toolCount: resolved.tools?.length ?? 0,
+      systemPromptLength: resolved.systemPrompt.length,
+    },
+    hostCtx,
+  )
 
 /**
  * Attempt to dispatch a turn to an external driver (TurnExecutor).
@@ -1257,22 +1254,20 @@ export const finalizeTurnPhase = (params: {
       )
       .pipe(Effect.orDie)
 
-    // Run turn.after interceptor — extensions can schedule follow-ups, count turns, etc.
+    // Fire turn.after subscription — extensions can schedule follow-ups, count
+    // turns, etc. Per-subscriber failureMode handled inside the host.
     yield* Effect.logDebug("finalize.turn-after.start")
-    yield* params.extensionRegistry.hooks
-      .runInterceptor(
-        "turn.after",
-        {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          durationMs: Number(turnDurationMs),
-          agentName: params.currentAgent,
-          interrupted: params.turnInterrupted,
-        },
-        () => Effect.void,
-        params.hostCtx,
-      )
-      .pipe(Effect.catchEager(() => Effect.void))
+    yield* params.extensionRegistry.subscriptions.emit(
+      "turn.after",
+      {
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        durationMs: Number(turnDurationMs),
+        agentName: params.currentAgent,
+        interrupted: params.turnInterrupted,
+      },
+      params.hostCtx,
+    )
     yield* Effect.logDebug("finalize.turn-after.done")
 
     yield* Effect.logInfo("turn.completed").pipe(

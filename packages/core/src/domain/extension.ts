@@ -6,7 +6,6 @@ import type { AgentDefinition, AgentName } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata, MessagePart } from "./message"
-import type { PermissionResult } from "./permission"
 import type { AnyToolDefinition } from "./tool"
 import type { ExtensionHostContext } from "./extension-host-context"
 import type { Contribution } from "./contribution.js"
@@ -112,15 +111,9 @@ export interface RunContext {
   readonly interactive?: boolean
 }
 
-// Interceptor type
-
-export type Interceptor<I, O, E = never, R = never> = (
-  input: I,
-  next: (input: I) => Effect.Effect<O, E, R>,
-  ctx: ExtensionHostContext,
-) => Effect.Effect<O, E, R>
-
-// Hook input types
+// Hook input types — consumed by Pipeline and Subscription primitives. The
+// legacy `Interceptor<I, O>` shape and `ExtensionInterceptorMap` were deleted
+// in C6; pipeline/subscription own their own key maps.
 
 export interface SystemPromptInput {
   readonly basePrompt: string
@@ -187,33 +180,11 @@ export interface MessageInputInput {
   readonly branchId: BranchId
 }
 
-// Interceptor map — only hooks that have production callers
-
-export interface ExtensionInterceptorMap {
-  readonly "prompt.system": Interceptor<SystemPromptInput, string>
-  readonly "tool.execute": Interceptor<ToolExecuteInput, unknown>
-  readonly "permission.check": Interceptor<PermissionCheckInput, PermissionResult>
-  readonly "context.messages": Interceptor<ContextMessagesInput, ReadonlyArray<Message>>
-  /** Pre-turn hook — fires after prompt assembly + tool resolution, before provider.stream() */
-  readonly "turn.before": Interceptor<TurnBeforeInput, void>
-  /** Post-turn hook — extensions can schedule follow-ups, count turns, trigger side effects */
-  readonly "turn.after": Interceptor<TurnAfterInput, void>
-  /** Post-execution hook — extensions can enrich/append to tool results */
-  readonly "tool.result": Interceptor<ToolResultInput, unknown>
-  /** Pre-message hook — transform user input before message construction */
-  readonly "message.input": Interceptor<MessageInputInput, string>
-  /** Post-stream hook — fires after assistant message is assembled, before persistence */
-  readonly "message.output": Interceptor<MessageOutputInput, void>
-}
-
-export type ExtensionInterceptorKey = keyof ExtensionInterceptorMap
-
-export type ExtensionInterceptorDescriptor<
-  K extends ExtensionInterceptorKey = ExtensionInterceptorKey,
-> = {
-  readonly key: K
-  readonly run: ExtensionInterceptorMap[K]
-}
+// Pipeline and Subscription key maps live in `pipeline.ts` and
+// `subscription.ts` respectively. The legacy `ExtensionInterceptorMap`
+// (a single map for both transformers and observers) was deleted in C6 —
+// the union was a deceptive shape where `Interceptor<I, void>` made `next`
+// look meaningful for observer hooks where it was bookkeeping.
 
 // Extension State Machine — server-owned state that drives tool policy, prompt, and UI
 
@@ -392,9 +363,6 @@ export interface GentExtension {
   ) => Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>
 }
 
-// Factory
-
-export const defineInterceptor = <K extends ExtensionInterceptorKey>(
-  key: K,
-  run: ExtensionInterceptorMap[K],
-): ExtensionInterceptorDescriptor<K> => ({ key, run })
+// Pipeline / Subscription factories — see `pipeline.ts` and `subscription.ts`.
+// `defineInterceptor` (legacy single shape) was deleted in C6 — use
+// `definePipeline` for transformers and `defineSubscription` for observers.

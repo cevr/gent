@@ -1,18 +1,15 @@
 /**
- * Example: prompt.system interceptor that appends project-specific rules.
+ * Example: `prompt.system` Pipeline that appends project-specific rules to
+ * the system prompt.
  */
 import { Effect } from "effect"
-import {
-  defineExtension,
-  defineInterceptor,
-  interceptorContribution,
-} from "@gent/core/extensions/api"
+import { defineExtension, definePipeline, pipelineContribution } from "@gent/core/extensions/api"
 
 export default defineExtension({
   id: "prompt-rules",
   contributions: () => [
-    interceptorContribution(
-      defineInterceptor("prompt.system", (input, next) =>
+    pipelineContribution(
+      definePipeline("prompt.system", (input, next) =>
         next(input).pipe(
           Effect.map(
             (result) =>

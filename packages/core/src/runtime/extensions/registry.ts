@@ -29,7 +29,8 @@ import {
   extractPermissionRules,
   extractPromptSections,
 } from "../../domain/contribution.js"
-import { type CompiledHookMap, compileInterceptors } from "./interceptor-registry.js"
+import { type CompiledPipelines, compilePipelines } from "./pipeline-host.js"
+import { type CompiledSubscriptions, compileSubscriptions } from "./subscription-host.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
@@ -44,7 +45,8 @@ export interface ResolvedExtensions {
   readonly promptSections: ReadonlyMap<string, PromptSectionInput>
   readonly commands: ReadonlyArray<CommandContribution>
   readonly permissionRules: ReadonlyArray<PermissionRule>
-  readonly hooks: CompiledHookMap
+  readonly pipelines: CompiledPipelines
+  readonly subscriptions: CompiledSubscriptions
   readonly projections: CompiledProjections
   readonly capabilities: CompiledCapabilities
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -274,7 +276,8 @@ export const resolveExtensions = (
     commands.push(entry._source === "command" ? entry.cmd : capabilityToCommand(entry.cap))
   }
 
-  const hooks = compileInterceptors(sorted).chain
+  const pipelines = compilePipelines(sorted)
+  const subscriptions = compileSubscriptions(sorted)
   const projections = compileProjections(sorted)
   const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -304,7 +307,8 @@ export const resolveExtensions = (
     promptSections: promptSectionsMap,
     commands,
     permissionRules,
-    hooks,
+    pipelines,
+    subscriptions,
     projections,
     capabilities,
     extensions: sorted,
@@ -424,8 +428,9 @@ export interface ExtensionRegistryService {
   readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
 
-  // Hooks
-  readonly hooks: CompiledHookMap
+  // Pipelines (transformers with `next`) and Subscriptions (void observers)
+  readonly pipelines: CompiledPipelines
+  readonly subscriptions: CompiledSubscriptions
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
@@ -487,7 +492,8 @@ export class ExtensionRegistry extends Context.Service<
         ),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
-      hooks: resolved.hooks,
+      pipelines: resolved.pipelines,
+      subscriptions: resolved.subscriptions,
       getResolved: () => resolved,
     })
 

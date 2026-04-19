@@ -1,8 +1,8 @@
 /**
- * InterceptorRegistry locks.
+ * PipelineHost locks.
  *
- * `compileInterceptors` is now the sole owner of the contribution-side
- * interceptor composition algorithm. These tests pin its behavior:
+ * `compilePipelines` is the sole owner of the pipeline composition algorithm.
+ * These tests pin its behavior:
  *   - empty registry no-ops to the base
  *   - chains compose left-fold inside-out (last registered is outermost)
  *
@@ -11,12 +11,10 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
-import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
-import {
-  interceptor as interceptorContribution,
-  type Contribution,
-} from "@gent/core/domain/contribution"
+import { definePipeline } from "@gent/core/domain/pipeline"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
+import { pipeline as pipelineContribution, type Contribution } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -32,22 +30,22 @@ const ext = (
   contributions: ReadonlyArray<Contribution>,
 ): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
 
-describe("interceptor registry", () => {
+describe("pipeline host", () => {
   it.live("composes scope-ordered chain inside-out (builtin innermost)", () =>
     Effect.gen(function* () {
       const make = (label: string) =>
-        defineInterceptor("prompt.system", (input, next) =>
+        definePipeline("prompt.system", (input, next) =>
           next(input).pipe(Effect.map((s) => `${s}[${label}]`)),
         )
 
       const extensions = [
-        ext("a", "builtin", [interceptorContribution(make("builtin"))]),
-        ext("b", "user", [interceptorContribution(make("user"))]),
-        ext("c", "project", [interceptorContribution(make("project"))]),
+        ext("a", "builtin", [pipelineContribution(make("builtin"))]),
+        ext("b", "user", [pipelineContribution(make("user"))]),
+        ext("c", "project", [pipelineContribution(make("project"))]),
       ]
 
-      const facade = compileInterceptors(extensions)
-      const result = yield* facade.chain.runInterceptor(
+      const facade = compilePipelines(extensions)
+      const result = yield* facade.runPipeline(
         "prompt.system",
         { basePrompt: "x", agent: Agents.cowork },
         () => Effect.succeed("base"),
@@ -59,8 +57,8 @@ describe("interceptor registry", () => {
 
   it.live("empty registry is a no-op (returns base output)", () =>
     Effect.gen(function* () {
-      const facade = compileInterceptors([])
-      const result = yield* facade.chain.runInterceptor(
+      const facade = compilePipelines([])
+      const result = yield* facade.runPipeline(
         "prompt.system",
         { basePrompt: "x", agent: Agents.cowork },
         () => Effect.succeed("base"),

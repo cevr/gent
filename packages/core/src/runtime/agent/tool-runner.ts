@@ -90,7 +90,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
-            const activeHooks = activeRegistry.hooks
+            const activePipelines = activeRegistry.pipelines
 
             const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
               toolCall.toolName,
@@ -107,8 +107,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run permission.check interceptor, falling back to base Permission service
-            const permCheckResult = yield* activeHooks
-              .runInterceptor(
+            const permCheckResult = yield* activePipelines
+              .runPipeline(
                 "permission.check",
                 { toolName: toolCall.toolName, input: toolCall.input },
                 (input) => permission.check(input.toolName, input.input),
@@ -225,8 +225,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
 
             // Run tool.execute interceptor, falling back to direct tool execution
-            const executeResult = yield* activeHooks
-              .runInterceptor(
+            const executeResult = yield* activePipelines
+              .runPipeline(
                 "tool.execute",
                 {
                   toolCallId: toolCall.toolCallId,
@@ -268,8 +268,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run tool.result interceptor — extensions can enrich/append to tool results
-            const enrichedResult = yield* activeHooks
-              .runInterceptor(
+            const enrichedResult = yield* activePipelines
+              .runPipeline(
                 "tool.result",
                 {
                   toolCallId: toolCall.toolCallId,

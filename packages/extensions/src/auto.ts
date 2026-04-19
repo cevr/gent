@@ -17,11 +17,13 @@ import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   defineExtension,
-  defineInterceptor,
+  definePipeline,
   defineResource,
-  interceptorContribution,
+  defineSubscription,
   isRecord,
+  pipelineContribution,
   projectionContribution,
+  subscriptionContribution,
   toolContribution,
   type ResourceMachine,
   type ExtensionEffect,
@@ -610,16 +612,10 @@ const journalInterceptorImpl = (
     return result
   })
 
-// ── turn.after interceptor — auto-handoff on context fill ──
+// ── turn.after subscription — auto-handoff on context fill ──
 
-const autoHandoffImpl = (
-  input: TurnAfterInput,
-  next: (input: TurnAfterInput) => Effect.Effect<void>,
-  ctx: ExtensionHostContext,
-) =>
+const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
-    yield* next(input)
-
     if (input.interrupted) return
 
     // Check if auto is active via typed reply protocol
@@ -672,8 +668,8 @@ export const AutoExtension = defineExtension({
   contributions: ({ ctx }) => [
     projectionContribution(AutoProjection),
     toolContribution(AutoCheckpointTool),
-    interceptorContribution(defineInterceptor("tool.result", journalInterceptorImpl)),
-    interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
+    pipelineContribution(definePipeline("tool.result", journalInterceptorImpl)),
+    subscriptionContribution(defineSubscription("turn.after", "isolate", autoHandoffImpl)),
     // Single Resource carries the AutoJournal service layer AND the auto
     // workflow machine. The machine declares `AutoJournal` in its `slots`
     // requirements; the `layer` here provides it. C3.5b merge per the

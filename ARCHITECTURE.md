@@ -253,7 +253,8 @@ Extension shape lives in:
 - `packages/core/src/domain/contribution.ts` — `Contribution` union (foundational data structure)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
 - `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
-- `packages/core/src/runtime/extensions/interceptor-registry.ts` — interceptor compilation (`compileInterceptors`)
+- `packages/core/src/runtime/extensions/pipeline-host.ts` — pipeline compilation (`compilePipelines`)
+- `packages/core/src/runtime/extensions/subscription-host.ts` — subscription compilation (`compileSubscriptions`)
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
 - `packages/extensions/src/` — all 27 builtin extension implementations
 - `apps/tui/src/extensions/` — TUI discovery, loading, resolution
@@ -294,14 +295,15 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `interceptorContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
+One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `pipelineContribution`, `subscriptionContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
 
 Internally `defineExtension` lowers the contribution array into `ExtensionSetup` for the runtime registry. The `Contribution` union (`packages/core/src/domain/contribution.ts`) is the foundational data structure — adding a new kind triggers a compile error in `placeContribution` until handled.
 
-- Stateless: tools, interceptors
+- Stateless: tools, pipelines, subscriptions
 - Stateful: `defineResource({ scope, layer, machine, schedule?, subscriptions?, start?, stop? })` — long-lived state with explicit scope. The `machine` field carries an `effect-machine` machine + declared effects when the extension owns one. `defineLifecycleResource` is the no-service variant for Resources that contribute lifecycle / schedule / subscriptions / machine without a service tag.
-- `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`ui`/`policy` projectors. Replaces the actor-as-mirror pattern; lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
-- `Interceptor` (`interceptorContribution(defineInterceptor(key, handler))`) — typed pipeline transformations at known keys (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `turn.before`, `turn.after`, `message.input`, `message.output`). Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/interceptor.ts` and `runtime/extensions/interceptor-registry.ts`.
+- `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`policy` projectors (UI deleted in C2; client widgets read state via transport queries). Lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
+- `Pipeline` (`pipelineContribution(definePipeline(hook, handler))`) — transforming middleware at six hooks (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
+- `Subscription` (`subscriptionContribution(defineSubscription(event, failureMode, handler))`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
 - `Query` / `Mutation` (`queryContribution(...)` / `mutationContribution(...)`) — typed RPC handlers invoked via `ctx.extension.query(ref, input)` / `ctx.extension.mutate(ref, input)` from tools or other extensions.
 - `ModelDriver` / `ExternalDriver` — LLM providers and out-of-process turn executors (e.g. ACP). See `packages/core/src/domain/driver.ts`.
 - Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.

@@ -3,8 +3,8 @@ import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
   defineLifecycleResource,
-  interceptorContribution,
-  defineInterceptor,
+  defineSubscription,
+  subscriptionContribution,
   toolContribution,
   type ExtensionHostContext,
   type Message,
@@ -78,14 +78,8 @@ const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   return recentText.length > 0 ? recentText.slice(0, 4000) : "Session context"
 }
 
-const autoHandoffImpl = (
-  input: TurnAfterInput,
-  next: (input: TurnAfterInput) => Effect.Effect<void>,
-  ctx: ExtensionHostContext,
-) =>
+const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
   Effect.gen(function* () {
-    yield* next(input)
-
     if (input.interrupted) return
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
@@ -135,7 +129,7 @@ export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   contributions: () => [
     toolContribution(HandoffTool),
-    interceptorContribution(defineInterceptor("turn.after", autoHandoffImpl)),
+    subscriptionContribution(defineSubscription("turn.after", "isolate", autoHandoffImpl)),
     // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
     defineLifecycleResource({
       scope: "process",

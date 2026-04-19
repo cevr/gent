@@ -1,25 +1,20 @@
 /**
- * Interceptor composition regression locks.
+ * Pipeline composition regression locks.
  *
  * Locks the contract for `next` semantics:
  *  - calling `next(input)` runs the inner chain, returns its Effect
  *  - skipping `next` short-circuits — inner chain does not run
  *  - calling `next` multiple times is allowed (e.g., retry semantics)
  *  - typed errors raised in inner chain propagate to outer (no swallow)
- *  - defects in one interceptor fall through to the next (caught per-interceptor)
- *
- * Tied to planify Commit 1 — the substrate that later commits (2, 3, 4, 5, 6, 8, 10)
- * lean on for splitting projection/interceptor primitives.
+ *  - defects in one pipeline fall through to the next (caught per-pipeline)
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineInterceptor, type LoadedExtension } from "@gent/core/domain/extension"
-import { compileInterceptors } from "@gent/core/runtime/extensions/interceptor-registry"
-import {
-  interceptor as interceptorContribution,
-  type Contribution,
-} from "@gent/core/domain/contribution"
+import { definePipeline } from "@gent/core/domain/pipeline"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
+import { pipeline as pipelineContribution, type Contribution } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -35,33 +30,33 @@ const makeExt = (
   contributions: ReadonlyArray<Contribution>,
 ): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
 
-class CustomError extends Data.TaggedError("@gent/core/tests/interceptor-composition/CustomError")<{
+class CustomError extends Data.TaggedError("@gent/core/tests/pipeline-composition/CustomError")<{
   readonly reason: string
 }> {}
 
-describe("interceptor composition", () => {
+describe("pipeline composition", () => {
   it.live("short-circuit: skipping next prevents inner chain from running", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (input, next) => {
+      pipelineContribution(
+        definePipeline("prompt.system", (input, next) => {
           log.push("inner")
           return next(input)
         }),
       ),
     ])
     const outer = makeExt("outer", "project", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (_input, _next) => {
+      pipelineContribution(
+        definePipeline("prompt.system", (_input, _next) => {
           log.push("outer-short-circuit")
           return Effect.succeed("override")
         }),
       ),
     ])
 
-    const compiled = compileInterceptors([inner, outer]).chain
+    const compiled = compilePipelines([inner, outer])
     return compiled
-      .runInterceptor(
+      .runPipeline(
         "prompt.system",
         { basePrompt: "real", agent: Agents.cowork },
         (input) => {
@@ -83,8 +78,8 @@ describe("interceptor composition", () => {
   it.live("multiple next() calls re-runs inner chain (retry semantics allowed)", () => {
     let baseCalls = 0
     const retrying = makeExt("retrier", "project", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (input, next) =>
+      pipelineContribution(
+        definePipeline("prompt.system", (input, next) =>
           Effect.gen(function* () {
             const first = yield* next(input)
             const second = yield* next(input)
@@ -94,9 +89,9 @@ describe("interceptor composition", () => {
       ),
     ])
 
-    const compiled = compileInterceptors([retrying]).chain
+    const compiled = compilePipelines([retrying])
     return compiled
-      .runInterceptor(
+      .runPipeline(
         "prompt.system",
         { basePrompt: "p", agent: Agents.cowork },
         (input) => {
@@ -117,17 +112,17 @@ describe("interceptor composition", () => {
 
   it.live("typed errors from inner chain propagate to outer", () => {
     const passThrough = makeExt("pass", "project", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (input, next) =>
+      pipelineContribution(
+        definePipeline("prompt.system", (input, next) =>
           // outer doesn't catch — error must propagate
           next(input),
         ),
       ),
     ])
 
-    const compiled = compileInterceptors([passThrough]).chain
+    const compiled = compilePipelines([passThrough])
     return compiled
-      .runInterceptor(
+      .runPipeline(
         "prompt.system",
         { basePrompt: "p", agent: Agents.cowork },
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -140,36 +135,36 @@ describe("interceptor composition", () => {
       )
   })
 
-  it.live("defect in middle interceptor falls through to outer's previous", () => {
+  it.live("defect in middle pipeline falls through to outer's previous", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (input, next) => {
+      pipelineContribution(
+        definePipeline("prompt.system", (input, next) => {
           log.push("inner")
           return next(input)
         }),
       ),
     ])
     const middle = makeExt("middle", "user", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", () => {
+      pipelineContribution(
+        definePipeline("prompt.system", () => {
           log.push("middle-defect")
           throw new Error("middle blew up")
         }),
       ),
     ])
     const outer = makeExt("outer", "project", [
-      interceptorContribution(
-        defineInterceptor("prompt.system", (input, next) => {
+      pipelineContribution(
+        definePipeline("prompt.system", (input, next) => {
           log.push("outer")
           return next(input).pipe(Effect.map((r) => `${r}!`))
         }),
       ),
     ])
 
-    const compiled = compileInterceptors([inner, middle, outer]).chain
+    const compiled = compilePipelines([inner, middle, outer])
     return compiled
-      .runInterceptor(
+      .runPipeline(
         "prompt.system",
         { basePrompt: "ok", agent: Agents.cowork },
         (input) => {
@@ -181,7 +176,7 @@ describe("interceptor composition", () => {
       .pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            // middle defects → composeInterceptors falls through to previous (inner)
+            // middle defects → composeChain falls through to previous (inner)
             // outer still runs and appends "!"
             expect(result).toBe("ok!")
             expect(log).toContain("outer")

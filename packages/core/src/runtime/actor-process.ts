@@ -240,7 +240,7 @@ export const LocalActorProcessLive: Layer.Layer<
             { sessionId: input.sessionId, branchId: input.branchId, sessionCwd: session?.cwd },
             { ...hostDeps, extensionRegistry: activeRegistry },
           )
-          const content = yield* activeRegistry.hooks.runInterceptor(
+          const content = yield* activeRegistry.pipelines.runPipeline(
             "message.input",
             { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
             (i) => Effect.succeed(i.content),
