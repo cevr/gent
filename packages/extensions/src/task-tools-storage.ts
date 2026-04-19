@@ -15,6 +15,7 @@ import {
   type BranchId,
   type TaskId,
   type ReadOnly,
+  ReadOnlyBrand,
   withReadOnly,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
@@ -125,7 +126,10 @@ export interface TaskStorageService extends TaskStorageReadOnlyService {
 export class TaskStorageReadOnly extends Context.Service<
   TaskStorageReadOnly,
   ReadOnly<TaskStorageReadOnlyService>
->()("@gent/core/src/extensions/task-tools-storage/TaskStorageReadOnly") {}
+>()("@gent/core/src/extensions/task-tools-storage/TaskStorageReadOnly") {
+  // Brand on the Tag identifier — see `domain/read-only.ts`.
+  declare readonly [ReadOnlyBrand]: true
+}
 
 /**
  * Construct the underlying TaskStorage service value. Module-local —

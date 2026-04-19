@@ -19,7 +19,7 @@
 
 import { Context, Effect, Layer } from "effect"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
-import { type ReadOnly, withReadOnly } from "../domain/read-only.js"
+import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "../domain/read-only.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { InteractionStorage } from "./interaction-storage.js"
 import type { StorageError } from "./sqlite-storage.js"
@@ -53,6 +53,9 @@ export class InteractionPendingReader extends Context.Service<
   InteractionPendingReader,
   ReadOnly<InteractionPendingReaderService>
 >()("@gent/core/src/storage/interaction-pending-reader/InteractionPendingReader") {
+  // Brand on the Tag identifier — see `domain/read-only.ts`.
+  declare readonly [ReadOnlyBrand]: true
+
   static Live: Layer.Layer<InteractionPendingReader, never, InteractionStorage> = Layer.effect(
     InteractionPendingReader,
     Effect.gen(function* () {

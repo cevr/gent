@@ -29,9 +29,17 @@
  * @module
  */
 
-declare const ReadOnlyBrand: unique symbol
+/**
+ * Phantom brand symbol — exported so per-Tag classes can declare
+ * the brand directly on their identifier (`declare readonly
+ * [ReadOnlyBrand]: true`). The symbol value exists at runtime (so
+ * `import { ReadOnlyBrand }` resolves through the bundler) but the
+ * brand itself is type-only — class declarations use `declare readonly`,
+ * never assigning the property at runtime.
+ */
+export const ReadOnlyBrand: unique symbol = Symbol.for("@gent/core/ReadOnlyBrand")
 
-/** Phantom brand applied to read-only service shapes. */
+/** Phantom brand applied to read-only service identifiers + shapes. */
 export interface ReadOnlyTag {
   readonly [ReadOnlyBrand]: true
 }
@@ -44,11 +52,22 @@ export type ReadOnly<S> = S & ReadOnlyTag
  * the runtime value is unchanged. Use at Tag construction sites where
  * the shape carries only read methods.
  *
+ * The companion brand on the Tag identifier (so projection R-channels
+ * resolve under the `R extends ReadOnlyTag` fence in
+ * `ProjectionContribution`) is declared on the Tag class itself:
+ *
  * @example
+ * ```ts
  * interface MyServiceShape { readonly get: () => Effect<Value> }
- * export class MyService extends Context.Service<MyService, ReadOnly<MyServiceShape>>()(
- *   "@me/MyService",
- * ) {}
+ * export class MyService extends Context.Service<
+ *   MyService,
+ *   ReadOnly<MyServiceShape>
+ * >()("@me/MyService") {
+ *   // Brand the class identifier so `yield* MyService` produces
+ *   // `R extends ReadOnlyTag` for projection R-channels.
+ *   declare readonly [ReadOnlyBrand]: true
+ * }
+ * ```
  */
 export const withReadOnly = <S>(value: S): ReadOnly<S> =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion

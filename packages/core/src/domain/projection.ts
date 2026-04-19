@@ -22,6 +22,7 @@ import { Schema, type Effect } from "effect"
 import type { ExtensionTurnContext, ToolPolicyFragment } from "./extension.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { PromptSection } from "./prompt.js"
+import type { ReadOnlyTag } from "./read-only.js"
 
 /** Failure raised by a projection query. Carries projection id + cause for diagnostics. */
 export class ProjectionError extends Schema.TaggedErrorClass<ProjectionError>()("ProjectionError", {
@@ -53,15 +54,21 @@ export type ProjectionContext = ProjectionTurnContext
 /**
  * A pure derivation of a value from services, surfaced into the agent loop
  * as prompt sections and/or tool policy. UI is the client's concern.
+ *
+ * The `R` channel is type-fenced: every service Tag yielded by `query` must
+ * carry the `ReadOnly` brand (`ReadOnlyTag`). Write-capable Tags fail to
+ * compile in this position. See `domain/read-only.ts` for the brand and
+ * the per-service read-only Tags introduced in B11.4 (`MachineExecute`,
+ * `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `InteractionPendingReader`,
+ * `Skills`).
  */
-export interface ProjectionContribution<A = unknown, R = never> {
+export interface ProjectionContribution<A = unknown, R extends ReadOnlyTag = never> {
   /** Stable id (extension-local). Used for keying, logging, and dedupe. */
   readonly id: string
 
   /**
-   * Read-only Effect producing the projected value. Must not perform writes
-   * (no `.create(`, `.update(`, `.delete(`, `.set(`, `.write(` calls on
-   * service interfaces). Enforced by `gent/no-projection-writes` lint rule.
+   * Read-only Effect producing the projected value. The `R` channel must be
+   * `ReadOnly`-branded — write capabilities are blocked at the type level.
    *
    * The Effect's requirement `R` is provided by the runtime — typically an
    * extension-contributed service Layer.

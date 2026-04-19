@@ -11,7 +11,7 @@
  */
 import { Effect } from "effect"
 import { type ProjectionContribution, ProjectionError, type Task } from "@gent/core/extensions/api"
-import { TaskStorage } from "../task-tools-storage.js"
+import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { type TaskEntry, type TaskUiModel as TaskUiModelType } from "./identity.js"
 
 const taskToEntry = (task: Task): TaskEntry => ({
@@ -20,11 +20,11 @@ const taskToEntry = (task: Task): TaskEntry => ({
   status: task.status,
 })
 
-export const TaskProjection: ProjectionContribution<TaskUiModelType, TaskStorage> = {
+export const TaskProjection: ProjectionContribution<TaskUiModelType, TaskStorageReadOnly> = {
   id: "task-list",
   query: (ctx) =>
     Effect.gen(function* () {
-      const storage = yield* TaskStorage
+      const storage = yield* TaskStorageReadOnly
       const tasks = yield* storage.listTasks(ctx.sessionId, ctx.branchId).pipe(
         Effect.catchEager((error) =>
           Effect.fail(

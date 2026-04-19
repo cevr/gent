@@ -1,6 +1,6 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
-import { type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
+import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/extensions/api"
 
 // Skill Schema
 
@@ -35,6 +35,9 @@ export interface SkillsService {
 export class Skills extends Context.Service<Skills, ReadOnly<SkillsService>>()(
   "@gent/core/src/extensions/skills/skills",
 ) {
+  // Brand on the Tag identifier — see `@gent/core/domain/read-only`.
+  declare readonly [ReadOnlyBrand]: true
+
   static Live = (options: {
     cwd: string
     home: string

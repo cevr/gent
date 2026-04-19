@@ -6,8 +6,11 @@
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
  * - no-extension-internal-imports: enforces extension boundary — extensions must import
  *   from @gent/core/extensions/api, not core internals (domain/, runtime/, etc.)
- * - no-projection-writes: enforces ProjectionContribution.query AND
- *                          QueryContribution.handler are read-only
+ * - no-projection-writes: heuristic AST-string-match fence on
+ *   `QueryContribution.handler` AND read-intent `CapabilityContribution.effect`
+ *   for write-shaped method names. Projection coverage was deleted in B11.4 —
+ *   `ProjectionContribution<A, R extends ReadOnlyTag>` enforces it
+ *   structurally now.
  *
  * Six-primitive substrate rules (C0 scaffolds, sharpened in later batches):
  * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
@@ -18,9 +21,6 @@
  *   throw — must return Effect with typed error channel
  * - no-r-equals-never-comment: flag inline R-channel annotation comments
  *   at provider/SDK edges; require SdkBoundary<E> brand instead
- * - no-projection-write-services: type-aware fence on Projection's R channel
- *   for write-tagged services (sharpened replacement for no-projection-writes
- *   string-match — installed alongside, supersedes in C5)
  * - no-dynamic-imports: bans dynamic `import(...)` and `require(...)` outside
  *   a small allow-list of architecturally-justified files (extension plugin
  *   discovery, optional native module fallbacks). Compiled-binary safety.
@@ -38,13 +38,13 @@ const LOG_METHODS = new Set([
 ])
 
 // After B11.1c the `projection` / `capability` identity smart constructors are
-// gone; only `query` and `mutation` survive as real lowering helpers. The
+// gone; only `query` and `mutation` survive as real lowering helpers. After
+// B11.4 the projection arm is gone too — `ProjectionContribution<A, R extends
+// ReadOnlyTag>` enforces the read-only fence at the type level. The
 // CallExpression detection branch below uses these sets for factory-call
 // matching; type-annotation and `satisfies` paths still cover direct
-// `CapabilityContribution` / `ProjectionContribution` / `QueryContribution`
-// object literals.
-const PROJECTION_FACTORY_NAMES = new Set<string>()
-/** Query factory names — `QueryContribution.handler` is also enforced read-only by this rule. */
+// `CapabilityContribution` / `QueryContribution` object literals.
+/** Query factory names — `QueryContribution.handler` is enforced read-only by this rule. */
 const QUERY_FACTORY_NAMES = new Set(["query"])
 /** Capability factory names — `CapabilityContribution.effect` is enforced
  *  read-only by this rule when `intent: "read"`. */
@@ -113,11 +113,6 @@ const calleeName = (node: AstNode): string | undefined => {
     }
   }
   return undefined
-}
-
-const projectionFactoryName = (node: AstNode): string | undefined => {
-  const name = calleeName(node)
-  return name !== undefined && PROJECTION_FACTORY_NAMES.has(name) ? name : undefined
 }
 
 const queryFactoryName = (node: AstNode): string | undefined => {
@@ -197,7 +192,6 @@ const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefin
   return findArrowInObject(arg, propName)
 }
 
-const PROJECTION_TYPE_NAMES = new Set(["ProjectionContribution", "AnyProjectionContribution"])
 const QUERY_TYPE_NAMES = new Set(["QueryContribution", "AnyQueryContribution"])
 const CAPABILITY_TYPE_NAMES = new Set(["CapabilityContribution", "AnyCapabilityContribution"])
 
@@ -219,8 +213,6 @@ const isTypeRefIn = (typeNode: AstNode | undefined, names: ReadonlySet<string>):
   return false
 }
 
-const isProjectionTypeRef = (typeNode: AstNode | undefined): boolean =>
-  isTypeRefIn(typeNode, PROJECTION_TYPE_NAMES)
 const isQueryTypeRef = (typeNode: AstNode | undefined): boolean =>
   isTypeRefIn(typeNode, QUERY_TYPE_NAMES)
 const isCapabilityTypeRef = (typeNode: AstNode | undefined): boolean =>
@@ -841,36 +833,22 @@ const plugin: Plugin = {
     },
 
     /**
-     * Type-aware fence on `ProjectionContribution`'s `R` channel for
-     * write-tagged services. Sharpened replacement for the AST-string-match
-     * `no-projection-writes` rule.
+     * Heuristic AST-name-match fence on `QueryContribution.handler` AND
+     * read-intent `CapabilityContribution.effect` for write-shaped method
+     * calls (`.create(`, `.update(`, `.delete(`, `.set(`, `.write(`, etc.).
      *
-     * NOTE: C0 stub. The full check requires the `ReadOnly` brand on service
-     * tags (introduced in C5). Until then the rule reports nothing — the
-     * existing `no-projection-writes` rule covers the runtime invariant via
-     * write-method name matching.
-     */
-    "no-projection-write-services": {
-      create() {
-        // Stub — sharpened in C5 once the `ReadOnly` brand exists on service tags.
-        return {}
-      },
-    },
-
-    /**
-     * Enforces that `ProjectionContribution.query` AND `QueryContribution.handler`
-     * Effects are read-only — both are read surfaces; writes belong in
-     * `MutationContribution.handler` or `Resource.machine`.
+     * Projections are NOT covered here — B11.4 replaced the heuristic for
+     * projections with a structural type fence: `ProjectionContribution<A,
+     * R extends ReadOnlyTag>` makes write-capable Tags fail to compile in
+     * the projection R channel. See `domain/read-only.ts` and
+     * `domain/projection.ts`.
      *
-     * Valid:   query:   () => MyService.list().pipe(Effect.map(...))
-     *          handler: () => MyService.get(id)
-     * Invalid: query:   () => MyService.create({ ... })
-     *          handler: () => MyService.update(id, ...)
+     * Query/capability coverage stays heuristic until B11.5 introduces the
+     * `request({ intent: "read" })` factory whose R channel can be branded
+     * the same way.
      *
-     * Detection — for each authoring shape (factory call, typed binding, satisfies),
-     * the rule walks the `query` body (projection) or `handler` body (query) for
-     * member-call expressions whose method name matches a known write capability
-     * (set, create, update, delete, write, etc.).
+     * Valid:   handler: () => MyService.get(id)
+     * Invalid: handler: () => MyService.update(id, ...)
      *
      * Limitations: AST-only, no symbol resolution. False positives possible
      * (e.g. `Set#add`, `Map#set` on local collections). Suppress with
@@ -879,14 +857,12 @@ const plugin: Plugin = {
      */
     "no-projection-writes": {
       create(context) {
-        const reportWritesIn = (kind: "Projection" | "Query" | "Capability", fn: AstNode): void => {
-          const bodyNameByKind: Record<"Projection" | "Query" | "Capability", string> = {
-            Projection: "`query`",
+        const reportWritesIn = (kind: "Query" | "Capability", fn: AstNode): void => {
+          const bodyNameByKind: Record<"Query" | "Capability", string> = {
             Query: "`handler`",
             Capability: "`effect`",
           }
-          const remediationByKind: Record<"Projection" | "Query" | "Capability", string> = {
-            Projection: "Use a Mutation or Workflow contribution for state changes.",
+          const remediationByKind: Record<"Query" | "Capability", string> = {
             Query: "Use a Mutation or Workflow contribution for state changes.",
             Capability: 'Switch `intent` to `"write"` for state changes.',
           }
@@ -899,24 +875,19 @@ const plugin: Plugin = {
             })
           })
         }
-        // Locate the read-only body of an object literal — `query` for
-        // projections, `handler` for queries, `effect` for read capabilities.
-        // Returns undefined when the literal is not a recognized authoring
-        // shape (e.g., a write capability, which is opted out of the fence).
+        // Locate the read-only body of an object literal — `handler` for
+        // queries, `effect` for read capabilities. Returns undefined when
+        // the literal is not a recognized authoring shape (e.g., a write
+        // capability, which is opted out of the fence).
         const findCapabilityReadEffect = (objExpr: AstNode): AstNode | undefined => {
           const intent = intentLiteral(objExpr)
           if (intent !== "read") return undefined
           return findArrowInObject(objExpr, "effect")
         }
         return {
-          // Projection — factory / typed-binding / satisfies forms (property: query)
+          // Query / read-intent capability — factory call form
           CallExpression(node) {
             if (!isAstNode(node)) return
-            if (projectionFactoryName(node) !== undefined) {
-              const queryFn = findArrowInFirstArg(node, "query")
-              if (queryFn !== undefined) reportWritesIn("Projection", queryFn)
-              return
-            }
             if (queryFactoryName(node) !== undefined) {
               const handlerFn = findArrowInFirstArg(node, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
@@ -935,11 +906,6 @@ const plugin: Plugin = {
             const typeAnn = getNodeField(id, "typeAnnotation")
             const init = getNodeField(node, "init")
             if (init === undefined) return
-            if (isProjectionTypeRef(typeAnn)) {
-              const queryFn = findArrowInObject(init, "query")
-              if (queryFn !== undefined) reportWritesIn("Projection", queryFn)
-              return
-            }
             if (isQueryTypeRef(typeAnn)) {
               const handlerFn = findArrowInObject(init, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)
@@ -955,11 +921,6 @@ const plugin: Plugin = {
             const typeAnn = getNodeField(node, "typeAnnotation")
             const expr = getNodeField(node, "expression")
             if (expr === undefined) return
-            if (isProjectionTypeRef(typeAnn)) {
-              const queryFn = findArrowInObject(expr, "query")
-              if (queryFn !== undefined) reportWritesIn("Projection", queryFn)
-              return
-            }
             if (isQueryTypeRef(typeAnn)) {
               const handlerFn = findArrowInObject(expr, "handler")
               if (handlerFn !== undefined) reportWritesIn("Query", handlerFn)

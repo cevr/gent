@@ -22,7 +22,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
-import { type ReadOnly, withReadOnly } from "../../domain/read-only.js"
+import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "../../domain/read-only.js"
 import { MachineEngine, type MachineEngineService } from "./resource-host/machine-engine.js"
 
 export interface MachineExecuteService {
@@ -42,6 +42,14 @@ export class MachineExecute extends Context.Service<
   MachineExecute,
   ReadOnly<MachineExecuteService>
 >()("@gent/core/src/runtime/extensions/machine-execute/MachineExecute") {
+  /**
+   * Brand on the Tag identifier so `yield* MachineExecute` produces an
+   * `R extends ReadOnlyTag` requirement — projection R-channels accept
+   * it under the `ProjectionContribution<A, R extends ReadOnlyTag>`
+   * fence in `domain/projection.ts`.
+   */
+  declare readonly [ReadOnlyBrand]: true
+
   /**
    * Live layer — projects `MachineEngine.execute` onto the read-only
    * `execute` surface. Requires `MachineEngine` (provided alongside

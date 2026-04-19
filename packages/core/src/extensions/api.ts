@@ -259,7 +259,12 @@ export { MachineExecute } from "../runtime/extensions/machine-execute.js"
 // their Tag's inner shape with `ReadOnly<MyServiceShape>`. Use
 // `withReadOnly(value)` to apply the brand at the Live layer construction
 // site. See `domain/read-only.ts` for usage.
-export { type ReadOnly, type ReadOnlyTag, withReadOnly } from "../domain/read-only.js"
+export {
+  type ReadOnly,
+  type ReadOnlyTag,
+  ReadOnlyBrand,
+  withReadOnly,
+} from "../domain/read-only.js"
 export type {
   QueryContribution,
   QueryContext,

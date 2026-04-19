@@ -21,9 +21,10 @@ import {
   type ProjectionContribution,
   ProjectionError,
   type PromptSection,
+  type ReadOnly,
 } from "@gent/core/extensions/api"
 import {
-  MemoryVault,
+  MemoryVaultReadOnly,
   projectDisplayName,
   projectKey as projectKeyOf,
   type MemoryEntry,
@@ -99,11 +100,14 @@ interface VaultProjectionValue {
  * `~/.gent/memory/project/`. Cheap O(N) where N = entries in the active
  * session's project + global, not all projects across the user's history.
  */
-export const MemoryVaultProjection: ProjectionContribution<VaultProjectionValue, MemoryVault> = {
+export const MemoryVaultProjection: ProjectionContribution<
+  VaultProjectionValue,
+  ReadOnly<MemoryVaultReadOnly>
+> = {
   id: "memory-vault",
   query: (ctx) =>
     Effect.gen(function* () {
-      const vault = yield* MemoryVault
+      const vault = yield* MemoryVaultReadOnly
       const key = ctx.cwd !== undefined ? projectKeyOf(ctx.cwd) : undefined
       const failed = (e: unknown): ProjectionError =>
         new ProjectionError({
