@@ -1,20 +1,24 @@
 /**
- * Task-tools queries — typed read-only RPC handlers.
+ * Task-tools queries — typed read-only Capabilities (C4.2 migration).
  *
- * Replaces the actor's `GetTask`/`ListTasks`/`GetDependencies` request paths
- * with `QueryContribution`s. Each handler reads from `TaskService` (which
- * delegates to `TaskStorage`) and returns typed output via Schema.
+ * Authored as `CapabilityContribution`s with `intent: "read"` and
+ * `audiences: ["agent-protocol"]`. The legacy `compileQueries` dispatcher
+ * lowers them into `QueryContribution`-shaped entries so existing callers
+ * (`ctx.extension.query(ref, input)`) keep working unchanged.
  *
- * The handlers are read-only by design — `gent/no-projection-writes` lint
- * applies (TaskService.get/list/getDeps are read methods).
+ * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) are still exported as
+ * `QueryRef`-shaped values; their `queryId` matches the capability's `id`,
+ * so routing through the bridge is identity-preserving. C4.5 swaps them to
+ * `CapabilityRef` once the legacy types are deleted.
  *
  * @module
  */
 import { Effect, Schema } from "effect"
 import {
-  type QueryContribution,
+  type CapabilityContribution,
+  type CapabilityCoreContext,
+  CapabilityError,
   type QueryRef,
-  QueryError,
   Task,
   TaskId,
 } from "@gent/core/extensions/api"
@@ -26,23 +30,25 @@ import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 export const TaskGetInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetOutput = Schema.NullOr(Task)
 
-export const TaskGetQuery: QueryContribution<
+export const TaskGetQuery: CapabilityContribution<
   typeof TaskGetInput.Type,
   typeof TaskGetOutput.Type,
   TaskService
 > = {
   id: "task.get",
+  audiences: ["agent-protocol"],
+  intent: "read",
   input: TaskGetInput,
   output: TaskGetOutput,
-  handler: (input) =>
+  effect: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       const task = yield* taskService.get(input.taskId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
-            new QueryError({
+            new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
-              queryId: "task.get",
+              capabilityId: "task.get",
               reason: `TaskService.get failed: ${String(e)}`,
             }),
           ),
@@ -64,25 +70,27 @@ export const TaskGetRef: QueryRef<typeof TaskGetInput.Type, typeof TaskGetOutput
 export const TaskListInput = Schema.Struct({})
 export const TaskListOutput = Schema.Array(Task)
 
-export const TaskListQuery: QueryContribution<
+export const TaskListQuery: CapabilityContribution<
   typeof TaskListInput.Type,
   typeof TaskListOutput.Type,
   TaskService
 > = {
   id: "task.list",
+  audiences: ["agent-protocol"],
+  intent: "read",
   input: TaskListInput,
   output: TaskListOutput,
-  handler: (_input, ctx) =>
+  effect: (_input, ctx: CapabilityCoreContext) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      // QueryContext supplies sessionId + (optional) branchId; list scopes to
-      // the active session, optionally narrowing to a branch.
+      // CapabilityCoreContext supplies sessionId + branchId; list scopes to
+      // the active session, narrowing to the active branch.
       return yield* taskService.list(ctx.sessionId, ctx.branchId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
-            new QueryError({
+            new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
-              queryId: "task.list",
+              capabilityId: "task.list",
               reason: `TaskService.list failed: ${String(e)}`,
             }),
           ),
@@ -103,23 +111,25 @@ export const TaskListRef: QueryRef<typeof TaskListInput.Type, typeof TaskListOut
 export const TaskGetDepsInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetDepsOutput = Schema.Array(TaskId)
 
-export const TaskGetDepsQuery: QueryContribution<
+export const TaskGetDepsQuery: CapabilityContribution<
   typeof TaskGetDepsInput.Type,
   typeof TaskGetDepsOutput.Type,
   TaskService
 > = {
   id: "task.getDeps",
+  audiences: ["agent-protocol"],
+  intent: "read",
   input: TaskGetDepsInput,
   output: TaskGetDepsOutput,
-  handler: (input) =>
+  effect: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       return yield* taskService.getDeps(input.taskId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
-            new QueryError({
+            new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
-              queryId: "task.getDeps",
+              capabilityId: "task.getDeps",
               reason: `TaskService.getDeps failed: ${String(e)}`,
             }),
           ),

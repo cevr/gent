@@ -17,12 +17,11 @@
  */
 import { Layer } from "effect"
 import {
+  capabilityContribution,
   defineExtension,
   defineResource,
-  mutationContribution,
   projectionContribution,
   pulseSubscriptionContribution,
-  queryContribution,
   toolContribution,
 } from "@gent/core/extensions/api"
 import { TaskCreateTool } from "./task-create.js"
@@ -56,14 +55,14 @@ export const TaskExtension = defineExtension({
       layer: Layer.merge(TaskStorage.Live, TaskService.Live),
     }),
     projectionContribution(TaskProjection),
-    queryContribution(TaskGetQuery),
-    queryContribution(TaskListQuery),
-    queryContribution(TaskGetDepsQuery),
-    mutationContribution(TaskCreateMutation),
-    mutationContribution(TaskUpdateMutation),
-    mutationContribution(TaskDeleteMutation),
-    mutationContribution(TaskAddDepMutation),
-    mutationContribution(TaskRemoveDepMutation),
+    capabilityContribution(TaskGetQuery),
+    capabilityContribution(TaskListQuery),
+    capabilityContribution(TaskGetDepsQuery),
+    capabilityContribution(TaskCreateMutation),
+    capabilityContribution(TaskUpdateMutation),
+    capabilityContribution(TaskDeleteMutation),
+    capabilityContribution(TaskAddDepMutation),
+    capabilityContribution(TaskRemoveDepMutation),
     // Query-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
     // for `@gent/task-tools` whenever any of these tags is published, so the
     // TUI widget refetches `TaskListRef` on every relevant mutation.

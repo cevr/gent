@@ -14,7 +14,8 @@
  */
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../domain/extension.js"
-import { extractQueries } from "../../domain/contribution.js"
+import { type AnyCapabilityContribution } from "../../domain/capability.js"
+import { extractCapabilities, extractQueries } from "../../domain/contribution.js"
 import {
   QueryError,
   QueryNotFoundError,
@@ -50,6 +51,48 @@ const sortedExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
+/**
+ * C4.2 bridge — lower a `Capability` whose `intent: "read"` includes the
+ * `"agent-protocol"` audience into a `QueryContribution`-shaped adapter so
+ * the legacy `compileQueries` dispatch path keeps working while extensions
+ * migrate. `ctx.extension.query(ref, input)` continues to call this
+ * registry; underneath the contribution may be either a legacy `query()` or
+ * a new `capability()` declaration.
+ *
+ * Per the migrate-callers-then-delete-legacy-apis rule, this bridge exists
+ * only for the duration of C4.2-4. C4.5 deletes the legacy QueryContribution
+ * type and replaces this whole file with a thin wrapper around
+ * `CapabilityHost`.
+ */
+const capabilityToQuery = (cap: AnyCapabilityContribution): AnyQueryContribution => ({
+  id: cap.id,
+  input: cap.input,
+  output: cap.output,
+  handler: (input, ctx) => {
+    // The capability declares the full `CapabilityContext` (= ModelCapabilityContext)
+    // but the handlers we bridge here only ever read CapabilityCoreContext fields
+    // (sessionId/branchId/cwd/home). The legacy registry call sites already
+    // supply those four fields via `QueryContext`. Cast through `unknown`
+    // because QueryContext.branchId is optional while CapabilityCoreContext
+    // requires it — at every real call site upstream branchId is present.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const wideCtx = ctx as unknown as Parameters<typeof cap.effect>[1]
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
+    return cap.effect(input, wideCtx).pipe(
+      Effect.catchTag("@gent/core/src/domain/capability/CapabilityError", (e) =>
+        Effect.fail(
+          new QueryError({
+            extensionId: e.extensionId,
+            queryId: e.capabilityId,
+            reason: e.reason,
+          }),
+        ),
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    ) as ReturnType<AnyQueryContribution["handler"]>
+  },
+})
+
 /** Compile registered queries into a dispatcher. */
 export const compileQueries = (extensions: ReadonlyArray<LoadedExtension>): CompiledQueries => {
   const sorted = sortedExtensions(extensions)
@@ -57,6 +100,12 @@ export const compileQueries = (extensions: ReadonlyArray<LoadedExtension>): Comp
   for (const ext of sorted) {
     for (const query of extractQueries(ext.contributions)) {
       entries.push({ extensionId: ext.manifest.id, query })
+    }
+    // Bridge: read+agent-protocol capabilities show up here as queries.
+    for (const capability of extractCapabilities(ext.contributions)) {
+      if (capability.intent !== "read") continue
+      if (!capability.audiences.includes("agent-protocol")) continue
+      entries.push({ extensionId: ext.manifest.id, query: capabilityToQuery(capability) })
     }
   }
 

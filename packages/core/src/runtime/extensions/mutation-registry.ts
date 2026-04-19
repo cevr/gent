@@ -15,7 +15,8 @@
  */
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../domain/extension.js"
-import { extractMutations } from "../../domain/contribution.js"
+import { type AnyCapabilityContribution } from "../../domain/capability.js"
+import { extractCapabilities, extractMutations } from "../../domain/contribution.js"
 import {
   MutationError,
   MutationNotFoundError,
@@ -48,6 +49,38 @@ const sortedExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
+/**
+ * C4.2 bridge — lower a `Capability` whose `intent: "write"` includes the
+ * `"agent-protocol"` audience into a `MutationContribution`-shaped adapter
+ * so the legacy `compileMutations` dispatch path keeps working while
+ * extensions migrate. Mirrors the bridge in `query-registry.ts`. Deleted in
+ * C4.5 along with the legacy MutationContribution type.
+ */
+const capabilityToMutation = (cap: AnyCapabilityContribution): AnyMutationContribution => ({
+  id: cap.id,
+  input: cap.input,
+  output: cap.output,
+  handler: (input, ctx) => {
+    // See `query-registry.capabilityToQuery` for the rationale on this cast —
+    // the bridged ctx satisfies CapabilityCoreContext at every real call site.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const wideCtx = ctx as unknown as Parameters<typeof cap.effect>[1]
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
+    return cap.effect(input, wideCtx).pipe(
+      Effect.catchTag("@gent/core/src/domain/capability/CapabilityError", (e) =>
+        Effect.fail(
+          new MutationError({
+            extensionId: e.extensionId,
+            mutationId: e.capabilityId,
+            reason: e.reason,
+          }),
+        ),
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    ) as ReturnType<AnyMutationContribution["handler"]>
+  },
+})
+
 /** Compile registered mutations into a dispatcher. */
 export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): CompiledMutations => {
   const sorted = sortedExtensions(extensions)
@@ -55,6 +88,12 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
   for (const ext of sorted) {
     for (const mutation of extractMutations(ext.contributions)) {
       entries.push({ extensionId: ext.manifest.id, mutation })
+    }
+    // Bridge: write+agent-protocol capabilities show up here as mutations.
+    for (const capability of extractCapabilities(ext.contributions)) {
+      if (capability.intent !== "write") continue
+      if (!capability.audiences.includes("agent-protocol")) continue
+      entries.push({ extensionId: ext.manifest.id, mutation: capabilityToMutation(capability) })
     }
   }
 
