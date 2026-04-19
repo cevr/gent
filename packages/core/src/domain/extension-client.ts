@@ -293,13 +293,18 @@ export interface ExtensionClientContext {
  *     `AsyncFileSystem`, Promise-typed `ask`, etc.). Sync only — async work
  *     must happen inside contributions, not during setup.
  *   - **Effect** (C9 target): `ClientEffect<ReadonlyArray<ClientContribution>>`.
- *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`;
- *     `ClientTransport` joins the union in C9.2 once the TUI shell
- *     publishes the typed re-export). Errors flow on the typed
+ *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`)
+ *     plus any extra services the extension widens `R` with. The TUI shell
+ *     publishes its typed `ClientTransport` tag at
+ *     `apps/tui/src/extensions/client-transport.ts`; an extension that
+ *     needs the transport yields it from its setup and the TUI's
+ *     per-provider `ManagedRuntime` provides it. Errors flow on the typed
  *     `ClientSetupError` channel.
  *
  * The loader detects which shape was returned and dispatches accordingly.
- * C9.2 migrates builtins to the Effect shape; C9.3 deletes the legacy one.
+ * C9.2 proved the Effect shape with `skills.client.ts`; C9.3 deletes
+ * `AsyncFileSystem` and the Promise-typed `ask` and migrates the
+ * remaining builtins.
  */
 export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> =
   | ((ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>)

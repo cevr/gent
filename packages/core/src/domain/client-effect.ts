@@ -8,24 +8,29 @@
  * `ReadonlyArray<ClientContribution>` through an Effect, with errors
  * surfaced on the typed `ClientSetupError` channel.
  *
- * The legacy Promise shape continues to compile during C9.1 — both signatures
- * are accepted by `ExtensionClientModule.setup`. C9.2 migrates the 10 builtin
- * client extensions to the new shape; C9.3 deletes `AsyncFileSystem` and the
- * Promise-typed `ask` surface.
+ * The legacy Promise shape continues to compile during C9.1/C9.2 — both
+ * signatures are accepted by `ExtensionClientModule.setup`. C9.3 deletes
+ * `AsyncFileSystem` and the Promise-typed `ask` surface and migrates the
+ * remaining ~9 builtins (only `skills.client.ts` migrated in C9.2 as the
+ * pattern proof).
  *
  * Solid integration: extensions return contributions; the TUI shell owns one
- * `ManagedRuntime<ClientDeps, never>` (`ClientRuntime`) and runs each setup
- * via `runtime.runPromise`. Async work inside contributions (autocomplete
- * `items`, etc.) is wired via `runtime.runFork(effect, signal.set)` per
- * Solid signal-update lane — the seam is at the rendering edge, not in the
- * Effect surface.
+ * per-provider `ManagedRuntime` widened with the union of services any
+ * Effect-typed setup may yield (e.g. `FileSystem | Path | ClientTransport`),
+ * and runs each setup via `runtime.runPromise`. Async work inside
+ * contributions (autocomplete `items`, etc.) is wired via the same runtime —
+ * the seam is at the rendering edge, not in the Effect surface.
  *
- * Layering: `ClientTransport` is declared here as an opaque service tag —
- * the TUI shell wires it in `apps/tui/src/extensions/client-runtime.ts`
- * because the SDK client types live downstream of `@gent/core`.
+ * Layering: `ClientDeps` is the core-level *floor* (`FileSystem | Path`).
+ * Each client surface (TUI shell, future SDK headless, web UI) augments its
+ * runtime with the services its extensions need, and an extension widens its
+ * `R` accordingly. The TUI shell publishes its typed `ClientTransport` tag
+ * downstream at `apps/tui/src/extensions/client-transport.ts` because the
+ * SDK client types (`GentNamespacedClient`, `GentRuntime`) live downstream
+ * of `@gent/core`.
  */
 
-import { Context, type Effect, type FileSystem, type Path, Schema } from "effect"
+import { type Effect, type FileSystem, type Path, Schema } from "effect"
 
 // ── Errors ────────────────────────────────────────────────────────────────
 
@@ -71,7 +76,3 @@ export type ClientDeps = FileSystem.FileSystem | Path.Path
  * provides whatever services the extension yields.
  */
 export type ClientEffect<A, E = ClientSetupError, R = ClientDeps> = Effect.Effect<A, E, R>
-
-// `Context` import retained for downstream tag declarations re-exporting
-// from this module (currently none — kept for API stability).
-export { Context }
