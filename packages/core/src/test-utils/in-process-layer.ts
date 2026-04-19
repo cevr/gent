@@ -19,6 +19,7 @@ import type { Provider } from "../providers/provider.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
+import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
@@ -65,12 +66,17 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   const extensionRuntimeLive = WorkflowRuntime.Test().pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
+  // Mirror profile.ts / e2e-layer.ts so projections under `extraLayers`
+  // resolve their `MachineExecute` dependency instead of silently defecting
+  // through `ProjectionRegistry`'s failure isolation.
+  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   const baseDeps = Layer.mergeAll(
     Storage.MemoryWithSql(),
     providerLive,
     extensionRegistryLive,
     extensionRuntimeLive,
+    machineExecuteLive,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     Permission.Test(),
     ConfigService.Test(),

@@ -34,6 +34,7 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { MachineExecute } from "../runtime/extensions/machine-execute.js"
 import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
@@ -195,6 +196,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
         Layer.provideMerge(ExtensionTurnControl.Live),
       )
+      // Read-only call surface for projections — must mirror profile.ts so
+      // that projections like `AutoProjection`/`ExecutorProjection` (which
+      // require `MachineExecute`) don't silently defect under
+      // `ProjectionRegistry`'s failure isolation.
+      const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
       // Base services — everything that doesn't depend on reducing event store
       const baseDeps = Layer.mergeAll(
@@ -204,6 +210,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRegistryLive,
         driverRegistryLive,
         extensionRuntimeLive,
+        machineExecuteLive,
         Permission.Test(),
         ApprovalService.Test(),
         ConfigService.Test(),
