@@ -4,9 +4,14 @@
  * Builtins are passed as pre-imported modules (static imports at the call site)
  * so Bun's bundler includes them in compiled binaries. User/project extensions
  * are discovered via filesystem scan and dynamic import().
+ *
+ * `*-boundary.ts` per the `no-runpromise-outside-boundary` lint rule:
+ * `runtime.runPromise` calls live inside this file because the loader runs
+ * each extension's Effect-typed setup at the boundary between the JS module
+ * world and the Effect runtime.
  */
 
-import { Effect, type ManagedRuntime } from "effect"
+import { Effect, type FileSystem, type ManagedRuntime, type Path } from "effect"
 import type {
   ExtensionClientModule,
   ExtensionClientContext,
@@ -22,9 +27,9 @@ import {
 /**
  * Bridge legacy and Effect-typed `setup` shapes (C9.1). Detects whether the
  * module's `setup` is a sync function (legacy: takes `ctx`, returns array)
- * or an Effect value (new: reads `ClientDeps`, returns array). Both shapes
- * produce `ReadonlyArray<ClientContribution>` — only the dependency channel
- * differs.
+ * or an Effect value (new: reads from the runtime, returns array). Both
+ * shapes produce `ReadonlyArray<ClientContribution>` — only the dependency
+ * channel differs.
  */
 const invokeSetup = async (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,6 +101,10 @@ const importExtension = async (
  * `makeCtx(id)` returns a fresh `ExtensionClientContext` whose `getSnapshotRaw`
  * reads the cache slot for that specific extension id (so paired packages
  * narrow correctly to their own snapshot shape).
+ *
+ * Discovery uses `FileSystem` and `Path` from the runtime — the loader does
+ * NOT take `fs`/`path` parameters. Any runtime that satisfies
+ * `FileSystem | Path | <other services>` works.
  */
 export const loadTuiExtensions = async (
   opts: {
@@ -109,18 +118,20 @@ export const loadTuiExtensions = async (
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readonly onModuleLoaded?: (module: ExtensionClientModule<unknown, any>) => void
     /** ManagedRuntime that satisfies the union of services any Effect-typed
-     *  setup may yield. The TUI shell builds this with `FileSystem | Path |
-     *  ClientTransport` (and any future shell-specific services). Legacy
-     *  sync-function setups don't touch the runtime. */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    readonly runtime: ManagedRuntime.ManagedRuntime<any, never>
+     *  setup may yield, plus `FileSystem | Path` for discovery. The TUI
+     *  shell builds this with the full client-services Layer. */
+    readonly runtime: ManagedRuntime.ManagedRuntime<FileSystem.FileSystem | Path.Path, never>
   },
   makeCtx: (extensionId: string) => ExtensionClientContext,
-  fs: ExtensionClientContext["fs"],
-  path: ExtensionClientContext["path"],
 ): Promise<ResolvedTuiExtensions> => {
   const disabledSet = new Set(opts.disabled ?? [])
-  const discovered = await discoverTuiExtensions(opts, fs, path)
+
+  // Discovery runs through the runtime so `FileSystem`/`Path` come from the
+  // same Layer that powers Effect-typed extension setups. This is the only
+  // place outside `invokeSetup` that crosses the runtime boundary.
+  const discovered = await opts.runtime.runPromise(
+    discoverTuiExtensions({ userDir: opts.userDir, projectDir: opts.projectDir }),
+  )
 
   // Import user/project modules, then filter by disabled before calling setup()
   const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))

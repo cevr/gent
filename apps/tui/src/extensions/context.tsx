@@ -15,10 +15,9 @@ import {
   type Accessor,
   type JSX,
 } from "solid-js"
-import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
-import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import type { JSX as _JSX } from "@opentui/solid"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
@@ -36,7 +35,7 @@ import type {
   ExtensionClientModule,
   SnapshotSource,
 } from "@gent/core/domain/extension-client.js"
-import { loadTuiExtensions } from "./loader"
+import { loadTuiExtensions } from "./loader-boundary"
 import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
@@ -49,20 +48,6 @@ import { useClient } from "../client/context"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
-
-const platformRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
-const { _fsInstance, _pathInstance } = Effect.runSync(
-  // @effect-diagnostics-next-line strictEffectProvide:off — module-level platform capture
-  Effect.provide(
-    Effect.gen(function* () {
-      const _fsInstance = yield* FileSystem.FileSystem
-      const _pathInstance = yield* Path.Path
-      return { _fsInstance, _pathInstance }
-    }),
-    Layer.merge(BunFileSystem.layer, BunServices.layer),
-  ),
-)
-const _asyncFs = makeAsyncFs(_fsInstance, (effect) => platformRuntime.runPromise(effect))
 
 export const decodeExtensionAskReply = <M extends AnyExtensionRequestMessage>(
   message: M,
@@ -356,7 +341,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       const home = workspace.home
 
       // Read disabled extensions from user + project config (shared with server)
-      const disabledSet = await platformRuntime.runPromise(
+      const disabledSet = await clientRuntime.runPromise(
         readDisabledExtensions({ home, cwd: workspace.cwd }),
       )
 
@@ -373,11 +358,12 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
       // Build a per-extension context: each extension's `getSnapshotRaw`
       // reads its own slot in the cache, so paired packages narrow correctly.
+      // C9.3: `fs`/`path`/`ask` deleted — Effect-typed setups read those
+      // through TUI services (`FileSystem.FileSystem`, `Path.Path`,
+      // `ClientTransport`/`askExtension`).
       const makeCtx = (extensionId: string): ExtensionClientContext => ({
         cwd: workspace.cwd,
         home,
-        fs: _asyncFs,
-        path: _pathInstance,
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
         get sessionId() {
@@ -397,42 +383,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
               branchId: bid,
             }),
           )
-        },
-        ask: async <M extends AnyExtensionRequestMessage>(message: M) => {
-          const sid = clientCtx.session()?.sessionId
-          const bid = clientCtx.session()?.branchId
-          if (sid === undefined) {
-            throw new Error("Cannot ask extension without an active session")
-          }
-          clientCtx.log.debug("extension.ask.sending", {
-            extensionId: message.extensionId,
-            tag: message._tag,
-            sessionId: sid,
-            branchId: bid,
-          })
-          try {
-            const result = await clientCtx.runtime.run(
-              clientCtx.client.extension
-                .ask({
-                  sessionId: sid,
-                  message,
-                  branchId: bid,
-                })
-                .pipe(Effect.flatMap((reply) => decodeExtensionAskReply(message, reply))),
-            )
-            clientCtx.log.debug("extension.ask.received", {
-              extensionId: message.extensionId,
-              tag: message._tag,
-            })
-            return result
-          } catch (err) {
-            clientCtx.log.error("extension.ask.failed", {
-              extensionId: message.extensionId,
-              tag: message._tag,
-              error: err instanceof Error ? err.message : String(err),
-            })
-            throw err
-          }
         },
         getSnapshotRaw: () => {
           const session = clientCtx.session()
@@ -464,8 +414,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           runtime: clientRuntime,
         },
         makeCtx,
-        _asyncFs,
-        _pathInstance,
       )
       setResolved(result)
 

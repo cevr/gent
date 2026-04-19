@@ -20,12 +20,11 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import type { Effect, FileSystem, Path } from "effect"
+import type { Effect } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
-  ExtractExtensionReply,
 } from "./extension-protocol.js"
 import type { QueryRef } from "./query.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
@@ -233,18 +232,6 @@ export const autocompleteContribution = (
   opts: Omit<AutocompleteContribution, "_kind">,
 ): AutocompleteContribution => ({ _kind: "autocomplete", ...opts })
 
-/**
- * Async filesystem proxy — every method that returns Effect<A, E> returns Promise<A> instead.
- * Built via `new Proxy` over Effect's FileSystem at setup time.
- */
-export type AsyncFileSystem = {
-  [K in keyof FileSystem.FileSystem]: FileSystem.FileSystem[K] extends (
-    ...args: infer Args
-  ) => Effect.Effect<infer A, infer _E, infer _R>
-    ? (...args: Args) => Promise<A>
-    : FileSystem.FileSystem[K]
-}
-
 /** Overlay identifier (registered in `OverlayContribution`). */
 export type OverlayId = string
 
@@ -256,17 +243,22 @@ export interface ComposerState {
   readonly autocompleteOpen: boolean
 }
 
-/** Runtime API provided to extensions during setup */
+/**
+ * Runtime API provided to legacy `(ctx) => Array` setups. Effect-typed
+ * setups read these values via TUI services (`ClientWorkspace`, `ClientShell`,
+ * `ClientComposer`, `ClientSnapshots`) instead.
+ *
+ * C9.3 deleted the Promise-typed `fs` (AsyncFileSystem), Promise-typed `ask`,
+ * and `path` fields. Effect-typed setups yield `FileSystem.FileSystem` /
+ * `Path.Path` from the runtime; for `ask`-style RPCs they yield the TUI's
+ * `ClientTransport` and call `askExtension(message)`.
+ */
 export interface ExtensionClientContext {
   /** Working directory for the current workspace */
   readonly cwd: string
   /** User home directory */
   readonly home: string
-  /** Async file system — same shape as Effect FileSystem, but returns Promises. */
-  readonly fs: AsyncFileSystem
-  /** Sync path utilities (join, resolve, dirname, basename, etc). */
-  readonly path: Path.Path
-  readonly openOverlay: (id: string) => void
+  readonly openOverlay: (id: OverlayId) => void
   readonly closeOverlay: () => void
   /** Current session ID (reactive — may be undefined before session is active) */
   readonly sessionId?: string
@@ -274,10 +266,6 @@ export interface ExtensionClientContext {
   readonly branchId?: string
   /** Send a protocol command to a server-side extension actor (fire-and-forget) */
   readonly send: (message: AnyExtensionCommandMessage) => void
-  /** Ask a protocol request of a server-side extension actor */
-  readonly ask: <M extends AnyExtensionRequestMessage>(
-    message: M,
-  ) => Promise<ExtractExtensionReply<M>>
   /** Sync read of the latest cached snapshot for this extension, if the
    *  package declared a `snapshotRequest` or `snapshotQuery`. The cache is
    *  populated by the TUI provider on every `ExtensionStateChanged` pulse.

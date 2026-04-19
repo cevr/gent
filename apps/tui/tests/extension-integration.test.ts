@@ -8,11 +8,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
-import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader"
+import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import { decodeExtensionAskReply } from "../src/extensions/context"
 import {
   makeClientWorkspaceLayer,
@@ -92,12 +91,7 @@ const loadTuiExtensions = (
   },
   ctx: ExtensionClientContext,
 ): ReturnType<typeof _loadTuiExtensions> =>
-  _loadTuiExtensions(
-    { ...opts, runtime: opts.runtime ?? _testRuntime },
-    () => ctx,
-    ctx.fs,
-    ctx.path,
-  )
+  _loadTuiExtensions({ ...opts, runtime: opts.runtime ?? _testRuntime }, () => ctx)
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { defineExtensionPackage } from "@gent/core/domain/extension-package.js"
 import type { GentExtension } from "@gent/core/domain/extension.js"
@@ -114,30 +108,13 @@ const PROJECT_DIR = join(TEST_DIR, "project")
 // Use the same barrel as production context.tsx
 import { builtinClientModules } from "../src/extensions/builtins/index"
 
-const { _testFsRaw, _testPath } = Effect.runSync(
-  Effect.provide(
-    Effect.gen(function* () {
-      const _testFsRaw = yield* FileSystem.FileSystem
-      const _testPath = yield* Path.Path
-      return { _testFsRaw, _testPath }
-    }),
-    Layer.merge(BunFileSystem.layer, BunServices.layer),
-  ),
-)
-const _testFs = makeAsyncFs(_testFsRaw, (effect) =>
-  Effect.runPromise(Effect.provide(effect, BunServices.layer)),
-)
-
 const noopCtx: ExtensionClientContext = {
   cwd: TEST_DIR,
   home: "/tmp",
-  fs: _testFs,
-  path: _testPath,
   openOverlay: () => {},
   closeOverlay: () => {},
   send: () => {},
-  ask: async () => undefined,
-  getSnapshot: () => undefined,
+  getSnapshotRaw: () => undefined,
   sendMessage: () => {},
   composerState: () => ({
     draft: "",
@@ -153,13 +130,10 @@ const createRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    fs: _testFs,
-    path: _testPath,
     openOverlay: (id) => calls.push(id),
     closeOverlay: () => calls.push("__close__"),
     send: () => {},
-    ask: async () => undefined,
-    getSnapshot: () => undefined,
+    getSnapshotRaw: () => undefined,
     sendMessage: () => {},
     composerState: () => ({
       draft: "",
@@ -176,13 +150,10 @@ const createProtocolRecordingCtx = () => {
   const ctx: ExtensionClientContext = {
     cwd: TEST_DIR,
     home: "/tmp",
-    fs: _testFs,
-    path: _testPath,
     openOverlay: () => {},
     closeOverlay: () => {},
     send: (message) => sent.push(message),
-    ask: async () => undefined,
-    getSnapshot: () => undefined,
+    getSnapshotRaw: () => undefined,
     sendMessage: () => {},
     composerState: () => ({
       draft: "",

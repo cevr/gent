@@ -1,17 +1,20 @@
 /**
- * C9.1 lock: `loadTuiExtensions` accepts both legacy sync `setup(ctx)` AND
+ * C9.1/C9.3 lock: `loadTuiExtensions` accepts both legacy sync `setup(ctx)` AND
  * Effect-typed `setup` shapes via the new `runtime: ManagedRuntime` opt.
  *
- * This proves the bridge in `loader.ts` (`invokeSetup`) routes correctly
- * based on `Effect.isEffect` and that an Effect-typed setup whose deps are
- * `FileSystem | Path` resolves through the platform runtime.
+ * This proves the bridge in `loader-boundary.ts` (`invokeSetup`) routes
+ * correctly based on `Effect.isEffect` and that an Effect-typed setup whose
+ * deps are `FileSystem | Path` resolves through the platform runtime.
+ *
+ * C9.3: the loader no longer takes `fs`/`path` parameters — discovery runs
+ * through the runtime so any runtime that satisfies `FileSystem | Path`
+ * works. The legacy `AsyncFileSystem` proxy is gone.
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import {
   type AutocompleteContribution,
   autocompleteContribution,
@@ -19,31 +22,17 @@ import {
   type ExtensionClientModule,
 } from "@gent/core/domain/extension-client.js"
 import type { ClientEffect } from "@gent/core/domain/client-effect.js"
-import { loadTuiExtensions } from "../src/extensions/loader"
+import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 
 const runtime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
-const { fsRaw, pathSvc } = Effect.runSync(
-  Effect.provide(
-    Effect.gen(function* () {
-      const fsRaw = yield* FileSystem.FileSystem
-      const pathSvc = yield* Path.Path
-      return { fsRaw, pathSvc }
-    }),
-    Layer.merge(BunFileSystem.layer, BunServices.layer),
-  ),
-)
-const asyncFs = makeAsyncFs(fsRaw, (effect) => runtime.runPromise(effect))
 
 const noopCtx = (cwd = "/tmp"): ExtensionClientContext =>
   ({
     cwd,
     home: "/tmp",
-    fs: undefined,
-    path: undefined,
     openOverlay: () => {},
     closeOverlay: () => {},
     send: () => {},
-    ask: async () => undefined,
     getSnapshotRaw: () => undefined,
     sendMessage: () => {},
     composerState: () => ({
@@ -55,7 +44,7 @@ const noopCtx = (cwd = "/tmp"): ExtensionClientContext =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any
 
-describe("loadTuiExtensions setup-shape bridge (C9.1)", () => {
+describe("loadTuiExtensions setup-shape bridge (C9.1/C9.3)", () => {
   test("legacy sync setup(ctx) returning array is invoked with the ctx", async () => {
     const seen: ExtensionClientContext[] = []
     const legacy: ExtensionClientModule = {
@@ -79,8 +68,6 @@ describe("loadTuiExtensions setup-shape bridge (C9.1)", () => {
         runtime,
       },
       noopCtx,
-      asyncFs,
-      pathSvc,
     )
     expect(seen).toHaveLength(1)
     expect(result.autocompleteItems.map((c) => c.prefix)).toContain("?")
@@ -111,8 +98,6 @@ describe("loadTuiExtensions setup-shape bridge (C9.1)", () => {
         runtime,
       },
       noopCtx,
-      asyncFs,
-      pathSvc,
     )
     expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
   })
@@ -159,12 +144,7 @@ export default {
     })
 
     test("imports + runs an Effect-valued setup discovered from userDir", async () => {
-      const result = await loadTuiExtensions(
-        { userDir, projectDir, runtime },
-        noopCtx,
-        asyncFs,
-        pathSvc,
-      )
+      const result = await loadTuiExtensions({ userDir, projectDir, runtime }, noopCtx)
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("#")
     })
   })

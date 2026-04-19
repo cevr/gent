@@ -782,7 +782,7 @@ const plugin: Plugin = {
           // Extension plugin loaders: walk the filesystem and dynamically
           // import user/project extensions discovered at runtime. The set of
           // extensions is unknown at build time by design.
-          "apps/tui/src/extensions/loader.ts",
+          "apps/tui/src/extensions/loader-boundary.ts",
           "packages/core/src/runtime/extensions/loader.ts",
           // Optional native git binding: gracefully degrades when the native
           // module isn't installed. Static import would harden the dependency.
