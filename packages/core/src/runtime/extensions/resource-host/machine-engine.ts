@@ -131,8 +131,11 @@ export interface MachineEngineService {
   /**
    * Typed call/await-reply against an actor's request protocol.
    *
-   * Renamed from `ask` in B11.3d together with the `extension.ask` RPC.
-   * The internal mailbox-item tag stayed as `_tag: "execute"` since the
+   * Renamed from `ask` in B11.3d (substrate-level only). The matching
+   * `extension.ask` RPC + `ctx.extension.ask(...)` host-context surface
+   * rename lands in B11.5 alongside the per-factory capability rebuild
+   * (those need a unified `extension.execute` RPC schema design).
+   * The internal mailbox-item tag has been `_tag: "execute"` since the
    * B11.3a extraction.
    */
   readonly execute: <M extends AnyExtensionRequestMessage>(
@@ -658,7 +661,7 @@ export const makeMachineEngine = (
         }
       })
 
-    const askImmediate = <M extends AnyExtensionRequestMessage>(
+    const executeImmediate = <M extends AnyExtensionRequestMessage>(
       sessionId: SessionId,
       message: M,
       branchId?: BranchId,
@@ -677,7 +680,7 @@ export const makeMachineEngine = (
         }
         const entry = findEntry(entries, decoded.extensionId)
         if (entry === undefined) {
-          yield* Effect.logWarning("extension.ask.not-loaded").pipe(
+          yield* Effect.logWarning("extension.execute.not-loaded").pipe(
             Effect.annotateLogs({
               extensionId: decoded.extensionId,
               tag: decoded._tag,
@@ -693,7 +696,7 @@ export const makeMachineEngine = (
             `extension "${decoded.extensionId}" is not loaded`,
           )
         }
-        const replyResult = yield* runSupervised(sessionId, branchId, entry, "ask", (ref) =>
+        const replyResult = yield* runSupervised(sessionId, branchId, entry, "execute", (ref) =>
           ref.execute(decoded, branchId),
         )
         if (replyResult._tag === "protocol") {
@@ -749,7 +752,7 @@ export const makeMachineEngine = (
           }
           case "execute": {
             const exit = yield* Effect.exit(
-              askImmediate(item.sessionId, item.message, item.branchId).pipe(
+              executeImmediate(item.sessionId, item.message, item.branchId).pipe(
                 Effect.provideService(CurrentExtensionSession, currentSession),
                 Effect.provideService(CurrentMailboxSession, currentSession),
               ),
@@ -956,9 +959,10 @@ export const makeMachineEngine = (
 // ── Public Tag ──
 //
 // `MachineEngine` is the substrate-wide call surface for the machine engine:
-// `publish` / `send` / `ask` / `getActorStatuses` / `terminateAll`. Producers
-// yield this Tag (event-publisher, agent-loop, actor-process, rpc-handlers).
-// Read-only consumers (projections) yield `MachineExecute` instead.
+// `publish` / `send` / `execute` / `getActorStatuses` / `terminateAll`.
+// Producers yield this Tag (event-publisher, agent-loop, actor-process,
+// rpc-handlers). Read-only consumers (projections) yield `MachineExecute`
+// instead.
 
 export class MachineEngine extends Context.Service<MachineEngine, MachineEngineService>()(
   "@gent/core/src/runtime/extensions/resource-host/machine-engine/MachineEngine",

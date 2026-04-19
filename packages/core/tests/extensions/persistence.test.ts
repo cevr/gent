@@ -81,7 +81,7 @@ describe("Extension state persistence", () => {
   })
 
   // TODO(c2): "state hydrated on actor init for resumed session" — removed.
-  // Rewrite to read state via MachineEngine.ask(GetSnapshot) once the new
+  // Rewrite to read state via MachineEngine.execute(GetSnapshot) once the new
   // snapshot-readback path is wired into the reducerActor helper.
 
   it.live("durability updates existing state on subsequent transitions", () => {

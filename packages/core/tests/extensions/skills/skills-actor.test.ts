@@ -1,6 +1,6 @@
 /**
  * Actor runtime test: exercises SkillsExtension through direct
- * MachineEngine.ask (bypasses RPC per-request scopes).
+ * MachineEngine.execute (bypasses RPC per-request scopes).
  * For RPC acceptance coverage, see skills-rpc.test.ts.
  */
 import { describe, it, expect } from "effect-bun-test"

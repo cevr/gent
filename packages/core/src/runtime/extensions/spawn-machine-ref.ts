@@ -283,7 +283,7 @@ export const spawnMachineExtensionRef = <
             }
             const result = yield* dispatch(mapped, branchId)
             if (!result.hasReply) {
-              yield* Effect.logWarning("extension.actor.ask.no-reply").pipe(
+              yield* Effect.logWarning("extension.actor.execute.no-reply").pipe(
                 Effect.annotateLogs({
                   extensionId,
                   tag: message._tag,
