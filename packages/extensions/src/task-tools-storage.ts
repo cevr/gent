@@ -8,7 +8,15 @@
  */
 
 import { Clock, Context, Effect, Layer, Schema } from "effect"
-import { Task, TaskStatus, SessionId, type BranchId, type TaskId } from "@gent/core/extensions/api"
+import {
+  Task,
+  TaskStatus,
+  SessionId,
+  type BranchId,
+  type TaskId,
+  type ReadOnly,
+  withReadOnly,
+} from "@gent/core/extensions/api"
 import { SqlClient } from "effect/unstable/sql"
 
 export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>()(
@@ -67,13 +75,28 @@ const taskFromRow = (row: TaskRow) =>
     updatedAt: new Date(row.updated_at),
   })
 
-export interface TaskStorageService {
-  readonly createTask: (task: Task) => Effect.Effect<Task, TaskStorageError>
+/**
+ * Read-only slice of the TaskStorage surface — list/get queries +
+ * dependency reads. Projections (and `request({ intent: "read" })`
+ * capabilities once B11.5 lands) yield this branded sub-Tag instead
+ * of `TaskStorage` so the type system blocks accidental write
+ * dependencies in read contexts.
+ *
+ * The Live layer for `TaskStorage` provides BOTH this Tag and the
+ * write-capable `TaskStorage` Tag from the same underlying state —
+ * see `TaskStorageReadOnly.Live` below.
+ */
+export interface TaskStorageReadOnlyService {
   readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, TaskStorageError>
   readonly listTasks: (
     sessionId: SessionId,
     branchId?: BranchId,
   ) => Effect.Effect<ReadonlyArray<Task>, TaskStorageError>
+  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, TaskStorageError>
+}
+
+export interface TaskStorageService extends TaskStorageReadOnlyService {
+  readonly createTask: (task: Task) => Effect.Effect<Task, TaskStorageError>
   readonly updateTask: (
     id: TaskId,
     fields: Partial<{
@@ -92,16 +115,51 @@ export interface TaskStorageService {
     taskId: TaskId,
     blockedById: TaskId,
   ) => Effect.Effect<void, TaskStorageError>
-  readonly getTaskDeps: (taskId: TaskId) => Effect.Effect<ReadonlyArray<TaskId>, TaskStorageError>
 }
+
+/**
+ * Read-only branded Tag onto the TaskStorage substrate. Projections
+ * and read-intent request capabilities yield this instead of
+ * `TaskStorage`. Provided alongside `TaskStorage` by `TaskStorage.Live`.
+ */
+export class TaskStorageReadOnly extends Context.Service<
+  TaskStorageReadOnly,
+  ReadOnly<TaskStorageReadOnlyService>
+>()("@gent/core/src/extensions/task-tools-storage/TaskStorageReadOnly") {}
 
 export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService>()(
   "@gent/core/src/extensions/task-tools-storage/TaskStorage",
 ) {
-  /** Runs its own DDL — only requires SqlClient, not host Storage */
-  static Live: Layer.Layer<TaskStorage, never, SqlClient.SqlClient> = Layer.effect(
-    TaskStorage,
-    Effect.gen(function* () {
+  /**
+   * Runs its own DDL — only requires SqlClient, not host Storage.
+   *
+   * Provides BOTH `TaskStorage` (write surface) and `TaskStorageReadOnly`
+   * (read-only branded Tag) from the same underlying service value —
+   * the read-only Tag is a structurally narrower projection that
+   * downstream projections and read-intent capabilities can yield
+   * without picking up the write methods.
+   */
+  static Live: Layer.Layer<TaskStorage | TaskStorageReadOnly, never, SqlClient.SqlClient> =
+    Layer.effectContext(
+      Effect.gen(function* () {
+        const service = yield* TaskStorage.makeService
+        return Context.empty().pipe(
+          Context.add(TaskStorage, service),
+          Context.add(
+            TaskStorageReadOnly,
+            withReadOnly({
+              getTask: service.getTask,
+              listTasks: service.listTasks,
+              getTaskDeps: service.getTaskDeps,
+            } satisfies TaskStorageReadOnlyService),
+          ),
+        )
+      }),
+    )
+
+  /** Construct the underlying service value (used by `Live`). */
+  static makeService: Effect.Effect<TaskStorageService, never, SqlClient.SqlClient> = Effect.gen(
+    function* () {
       const sql = yield* SqlClient.SqlClient
 
       // Extension-owned DDL — fatal if this fails
@@ -268,6 +326,6 @@ export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService
           Effect.mapError(mapError("Failed to get task deps")),
         ),
       } satisfies TaskStorageService
-    }),
+    },
   )
 }

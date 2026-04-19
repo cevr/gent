@@ -249,10 +249,17 @@ export { ProjectionError } from "../domain/projection.js"
 // extensions: `publish` / `send` / `ask` / `getActorStatuses` /
 // `terminateAll`. Producers (event-publisher, agent-loop, actor-process,
 // rpc-handlers) yield this Tag. Read-only consumers (projections) yield
-// `MachineExecute` instead — the read-only fence (gains the `ReadOnly`
-// brand in B11.4).
+// `MachineExecute` instead — the read-only fence carrying the `ReadOnly`
+// brand (B11.4).
 export { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 export { MachineExecute } from "../runtime/extensions/machine-execute.js"
+
+// `ReadOnly` brand — type-level fence. Author services that should only
+// be reachable from projections / read-intent capabilities by branding
+// their Tag's inner shape with `ReadOnly<MyServiceShape>`. Use
+// `withReadOnly(value)` to apply the brand at the Live layer construction
+// site. See `domain/read-only.ts` for usage.
+export { type ReadOnly, type ReadOnlyTag, withReadOnly } from "../domain/read-only.js"
 export type {
   QueryContribution,
   QueryContext,
