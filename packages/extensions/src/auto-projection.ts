@@ -4,20 +4,21 @@
  * Replaces the `WorkflowContribution.turn` prompt-projection path that was
  * deleted in C2 (UI-as-server-concern subtraction). The workflow still owns
  * the state machine; this projection reads its current snapshot via the
- * typed `AutoProtocol.GetSnapshot` reply (asked through `WorkflowRuntime`)
+ * typed `AutoProtocol.GetSnapshot` reply (executed through `MachineExecute`)
  * and turns it into a `PromptSection` for the system prompt.
  *
- * Read-only: only reaches the workflow through the request protocol's
- * read-shaped reply path. No service writes.
+ * Read-only: reaches the workflow through `MachineExecute` — the read-only
+ * call surface for projections. Writes (send/publish) live behind the
+ * ResourceHost-internal `MachineEngine` and are unreachable from here.
  */
 
 import { Effect } from "effect"
 import {
+  MachineExecute,
   type ProjectionContribution,
   type ProjectionContext,
   ProjectionError,
   type PromptSection,
-  WorkflowRuntime,
 } from "@gent/core/extensions/api"
 import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 
@@ -78,19 +79,19 @@ const buildPromptSection = (snapshot: AutoSnapshotReply): PromptSection | undefi
   }
 }
 
-export const AutoProjection: ProjectionContribution<AutoSnapshotReply, WorkflowRuntime> = {
+export const AutoProjection: ProjectionContribution<AutoSnapshotReply, MachineExecute> = {
   id: PROJECTION_ID,
   query: (ctx: ProjectionContext) =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
-      const snapshot = yield* runtime
-        .ask(ctx.sessionId, AutoProtocol.GetSnapshot(), ctx.branchId)
+      const machine = yield* MachineExecute
+      const snapshot = yield* machine
+        .execute(ctx.sessionId, AutoProtocol.GetSnapshot(), ctx.branchId)
         .pipe(
           Effect.catchEager((error) =>
             Effect.fail(
               new ProjectionError({
                 projectionId: PROJECTION_ID,
-                reason: `auto.GetSnapshot ask failed: ${String(error)}`,
+                reason: `auto.GetSnapshot execute failed: ${String(error)}`,
               }),
             ),
           ),

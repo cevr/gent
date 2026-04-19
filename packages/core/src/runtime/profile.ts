@@ -30,6 +30,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
+import { MachineExecute } from "./extensions/machine-execute.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
   buildResourceLayer,
@@ -246,6 +247,10 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
+  // Project the wide WorkflowRuntime onto the read-only `MachineExecute`
+  // surface for projection consumers. The wide Tag stays available during
+  // the B11.3 transition; B11.3c deletes it.
+  const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   const baseLayers = Layer.mergeAll(
     ExtensionRegistry.fromResolved(resolved),
@@ -254,6 +259,7 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
       externalDrivers: resolved.externalDrivers,
     }),
     extensionRuntimeLive,
+    machineExecuteLive,
     SubscriptionEngine.withSubscriptions(resourceSubscriptions),
   )
 

@@ -4,21 +4,22 @@
  * Replaces the actor-era `turn.project` path that was deleted in C2 — the
  * workflow no longer projects prompt/policy directly. The projection reads
  * the executor's current state via the typed `ExecutorProtocol.GetSnapshot`
- * reply (asked through `WorkflowRuntime`) and returns:
+ * reply (executed through `MachineExecute`) and returns:
  *   - executor-guidance prompt section (only when Ready and instructions present)
  *   - tool policy excluding `execute`/`resume` until Ready
  *
- * Read-only: only reaches the workflow through the request protocol's
- * read-shaped reply path. No service writes.
+ * Read-only: reaches the workflow through `MachineExecute` — the read-only
+ * call surface for projections. Writes (send/publish) live behind the
+ * ResourceHost-internal `MachineEngine` and are unreachable from here.
  */
 
 import { Effect } from "effect"
 import {
+  MachineExecute,
   type ProjectionContribution,
   type ProjectionContext,
   ProjectionError,
   type PromptSection,
-  WorkflowRuntime,
 } from "@gent/core/extensions/api"
 import { ExecutorProtocol, type ExecutorSnapshotReply } from "./protocol.js"
 
@@ -50,19 +51,19 @@ const buildPromptSection = (snapshot: ExecutorSnapshotReply): PromptSection | un
   }
 }
 
-export const ExecutorProjection: ProjectionContribution<ExecutorSnapshotReply, WorkflowRuntime> = {
+export const ExecutorProjection: ProjectionContribution<ExecutorSnapshotReply, MachineExecute> = {
   id: PROJECTION_ID,
   query: (ctx: ProjectionContext) =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
-      const snapshot = yield* runtime
-        .ask(ctx.sessionId, ExecutorProtocol.GetSnapshot(), ctx.branchId)
+      const machine = yield* MachineExecute
+      const snapshot = yield* machine
+        .execute(ctx.sessionId, ExecutorProtocol.GetSnapshot(), ctx.branchId)
         .pipe(
           Effect.catchEager((error) =>
             Effect.fail(
               new ProjectionError({
                 projectionId: PROJECTION_ID,
-                reason: `executor.GetSnapshot ask failed: ${String(error)}`,
+                reason: `executor.GetSnapshot execute failed: ${String(error)}`,
               }),
             ),
           ),

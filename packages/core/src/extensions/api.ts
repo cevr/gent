@@ -245,11 +245,14 @@ export type {
   AnyProjectionContribution,
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
-// `WorkflowRuntime` is exposed so projections (and other read-only consumers)
-// can `ask` workflow-bearing extensions through their typed protocol.
-// Projections may not call `send` on the runtime — enforced by lint rules
-// gating writes inside `R extends ReadOnly` projection requirements.
+// `WorkflowRuntime` is the legacy wide Tag exposing send/ask/publish for
+// machine-bearing extensions. Projections should consume `MachineExecute`
+// instead — the read-only fence (gains the `ReadOnly` brand in B11.4) and
+// the only Tag that survives the `WorkflowRuntime` deletion in B11.3c.
+// Both are re-exported during the transition; new code should use
+// `MachineExecute`.
 export { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
+export { MachineExecute } from "../runtime/extensions/machine-execute.js"
 export type {
   QueryContribution,
   QueryContext,
