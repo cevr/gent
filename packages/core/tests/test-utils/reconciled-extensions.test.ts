@@ -17,7 +17,7 @@ describe("reconcileTestExtensions", () => {
               contributions: {
                 capabilities: [
                   tool({
-                    name: "conflict",
+                    id: "conflict",
                     description: "tool a",
                     params: {} as never,
                     execute: () => undefined as never,
@@ -32,7 +32,7 @@ describe("reconcileTestExtensions", () => {
               contributions: {
                 capabilities: [
                   tool({
-                    name: "conflict",
+                    id: "conflict",
                     description: "tool b",
                     params: {} as never,
                     execute: () => undefined as never,

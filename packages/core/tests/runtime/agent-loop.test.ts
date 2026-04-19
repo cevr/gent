@@ -90,7 +90,10 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     createdAt: new Date(),
   })
 
-const makeLayer = (providerLayer: Layer.Layer<Provider>, tools: AnyToolDefinition[] = []) => {
+const makeLayer = (
+  providerLayer: Layer.Layer<Provider>,
+  tools: AnyCapabilityContribution[] = [],
+) => {
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
@@ -182,7 +185,7 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
 const makeLayerWithEvents = (
   providerLayer: Layer.Layer<Provider>,
   eventsRef: Ref.Ref<AgentEvent[]>,
-  tools: AnyToolDefinition[] = [],
+  tools: AnyCapabilityContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
@@ -1211,7 +1214,7 @@ describe("interaction", () => {
   }
 
   const makeInteractionRecordingLayer = (
-    tools: AnyToolDefinition[],
+    tools: AnyCapabilityContribution[],
     providerLayer?: Layer.Layer<Provider>,
   ) => {
     const recorderLayer = SequenceRecorder.Live

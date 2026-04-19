@@ -47,7 +47,7 @@ describe("extension activation isolation", () => {
         Effect.succeed({
           capabilities: [
             tool({
-              name: "good_tool",
+              id: "good_tool",
               description: "good",
               params: {} as never,
               execute: () => Effect.void,
@@ -120,7 +120,7 @@ describe("extension activation isolation", () => {
           makeLoaded("healthy-ext", {
             capabilities: [
               tool({
-                name: "healthy_tool",
+                id: "healthy_tool",
                 description: "healthy",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -130,7 +130,7 @@ describe("extension activation isolation", () => {
           makeLoaded("collider-a", {
             capabilities: [
               tool({
-                name: "shared_tool",
+                id: "shared_tool",
                 description: "a",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -140,7 +140,7 @@ describe("extension activation isolation", () => {
           makeLoaded("collider-b", {
             capabilities: [
               tool({
-                name: "shared_tool",
+                id: "shared_tool",
                 description: "b",
                 params: {} as never,
                 execute: () => Effect.void,
@@ -211,7 +211,7 @@ describe("extension activation isolation", () => {
         makeLoaded("legacy-tool", {
           capabilities: [
             tool({
-              name: "shared_name",
+              id: "shared_name",
               description: "legacy",
               params: {} as never,
               execute: () => Effect.void,
@@ -251,7 +251,7 @@ describe("extension activation isolation", () => {
         makeLoaded("legacy-tool", {
           capabilities: [
             tool({
-              name: "shared_name",
+              id: "shared_name",
               description: "legacy",
               params: {} as never,
               execute: () => Effect.void,
@@ -362,7 +362,7 @@ describe("extension activation isolation", () => {
           makeLoaded("healthy-ext", {
             capabilities: [
               tool({
-                name: "healthy_tool",
+                id: "healthy_tool",
                 description: "healthy",
                 params: {} as never,
                 execute: () => Effect.void,
