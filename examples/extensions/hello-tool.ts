@@ -4,10 +4,10 @@
  * Place in ~/.gent/extensions/ or .gent/extensions/
  */
 import { Effect, Schema } from "effect"
-import { defineExtension, defineTool, tool } from "@gent/core/extensions/api"
+import { defineExtension, tool } from "@gent/core/extensions/api"
 
-const HelloTool = defineTool({
-  name: "hello",
+const HelloTool = tool({
+  id: "hello",
   description: "Say hello to someone",
   params: Schema.Struct({
     name: Schema.String.annotate({ description: "Who to greet" }),
@@ -17,5 +17,5 @@ const HelloTool = defineTool({
 
 export default defineExtension({
   id: "hello-tool",
-  capabilities: [tool(HelloTool)],
+  capabilities: [HelloTool],
 })

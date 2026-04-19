@@ -6,11 +6,14 @@
  * IS the discrimination — no `_kind` field on leaves, no wrapper smart
  * constructors, no `filterByKind`.
  *
- * Smart constructors (`tool`, `query`, `mutation`, `agent`, etc.) lower
- * legacy domain shapes (`AnyToolDefinition`, `AnyQueryContribution`,
- * `AgentDefinition`, …) into the leaf type the bucket expects. They are
- * identity-or-near-identity functions that anchor the public API surface
- * and absorb any internal-shape changes.
+ * Capabilities (B11.5): authored exclusively through the typed factories
+ * `tool({...})` / `request({...})` / `action({...})` at
+ * `domain/capability/{tool,request,action}.ts`. The legacy lowering smart
+ * constructors `tool` / `query` / `mutation` were deleted in B11.5d.
+ *
+ * Pipeline / Subscription / Resource keep identity smart constructors
+ * (`pipeline`, `subscription`, `resource`) below — they exist to widen
+ * variance at the bucket boundary, not to lower a legacy shape.
  *
  * Codex BLOCK on C8 design: drivers split into `modelDrivers` and
  * `externalDrivers` — one untagged `drivers: []` would smuggle back the

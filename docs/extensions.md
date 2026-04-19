@@ -51,23 +51,32 @@ Both `~/.gent/disabled-extensions.json` (user-level) and
 ## defineExtension
 
 ```ts
-import { defineExtension, defineResource, toolContribution } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+
+const MyTool = tool({
+  id: "my-tool",
+  description: "...",
+  params: Schema.Struct({}),
+  execute: () => Effect.succeed(null),
+})
 
 export default defineExtension({
   id: "my-ext",
-  contributions: ({ ctx }) => [
+  capabilities: [MyTool],
+  resources: ({ ctx }) => [
     // ctx.cwd — project working directory
     // ctx.home — user home directory
     // ctx.fs / ctx.path / ctx.spawner — platform services
-    toolContribution(MyTool),
     defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
   ],
 })
 ```
 
-The factory runs at **setup time** (not import time), receives setup
-context, and returns either a `Contribution[]` or
-`Effect<Contribution[], ExtensionLoadError>` for async setup.
+> **B11.9 NOTE**: this doc is mid-rewrite. The Contribution Kinds table
+> below describes the pre-B11.5 `*Contribution(...)` smart-constructor
+> world; the current authoring API is the 3-factory shape — `tool({...})`,
+> `request({ intent: "read" | "write", ... })`, `action({...})`. Full
+> rewrite scheduled for B11.9.
 
 ## Contribution Kinds
 
@@ -96,11 +105,11 @@ collisions.
 ### Tool
 
 ```ts
-import { defineTool } from "@gent/core/extensions/api"
+import { defineExtension, tool } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
-const GreetTool = defineTool({
-  name: "greet",
+const GreetTool = tool({
+  id: "greet",
   description: "Say hello",
   params: Schema.Struct({
     name: Schema.String.annotate({ description: "Who to greet" }),
@@ -111,7 +120,7 @@ const GreetTool = defineTool({
 
 export default defineExtension({
   id: "greet-ext",
-  contributions: () => [toolContribution(GreetTool)],
+  capabilities: [GreetTool],
 })
 ```
 

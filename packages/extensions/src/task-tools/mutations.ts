@@ -2,10 +2,11 @@
  * Task-tools mutations — typed write Capabilities authored through the
  * `request({ intent: "write", ... })` factory (B11.5).
  *
- * Refs (`TaskCreateRef`, …) remain `MutationRef`-shaped during the
- * migration window; their `mutationId` matches the capability's `id`.
- * They migrate to `CapabilityRef` when the legacy `MutationRef` type
- * is deleted alongside `query()` / `mutation()` in B11.5d.
+ * Refs (`TaskCreateRef`, …) remain `MutationRef`-shaped values whose
+ * `mutationId` matches the capability's `id` — the routing key the
+ * dispatcher uses. They will migrate to `CapabilityRef` when the
+ * `ctx.extension.query/mutate` API collapses (deferred from B11.3d;
+ * tracked separately).
  *
  * @module
  */

@@ -7,11 +7,11 @@
  * compile here. `TaskService` is a wide read+write Tag; we yield
  * `TaskStorageReadOnly` (the branded sub-Tag from B11.4) instead.
  *
- * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) are still
- * exported as `QueryRef`-shaped values; their `queryId` matches the
- * capability's `id`, so routing through the bridge is
- * identity-preserving. They migrate to `CapabilityRef` when the legacy
- * `QueryRef` type is deleted alongside `query()` / `mutation()` in B11.5d.
+ * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) remain
+ * `QueryRef`-shaped values whose `queryId` matches the capability's
+ * `id` — that's the routing key the dispatcher uses. They will migrate
+ * to `CapabilityRef` when the `ctx.extension.query/mutate` API
+ * collapses (deferred from B11.3d; tracked separately).
  *
  * @module
  */
