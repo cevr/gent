@@ -458,8 +458,6 @@ const plugin: Plugin = {
           "packages/sdk/src/client.ts",
           "packages/sdk/src/local-supervisor.ts",
           "packages/sdk/src/supervisor.ts",
-          // TUI session-feed hook — fire-and-forget message refetch (C9 migrates)
-          "apps/tui/src/hooks/use-session-feed.ts",
         ]
         if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
 
@@ -471,8 +469,10 @@ const plugin: Plugin = {
         // them would force a much wider boundary refactor than this batch.
         const EFFECT_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
         // Instance methods on a `ManagedRuntime` / `Runtime` that exit via
-        // Promise — same boundary semantics as `Effect.runPromise`.
-        const RUNTIME_RUN_METHODS = new Set(["runPromise", "runPromiseWith"])
+        // Promise — same boundary semantics as `Effect.runPromise`. Effect's
+        // `ManagedRuntime` exposes `runPromise{,With,Exit}`; all three are
+        // the Promise edge.
+        const RUNTIME_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
 
         return {
           CallExpression(node) {

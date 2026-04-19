@@ -66,6 +66,13 @@ interface RuleCase {
   readonly rule: string
   readonly invalid: string
   readonly valid: string
+  /**
+   * Exact diagnostic count expected on the invalid fixture. When omitted,
+   * the test asserts `> 0`. Set this when the invalid fixture covers a
+   * specific enumerated set of cases — silently dropping a case on rule
+   * regression should fail the test, not pass it (counsel B11.2a).
+   */
+  readonly expectedCount?: number
 }
 
 const CASES: ReadonlyArray<RuleCase> = [
@@ -73,6 +80,8 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-runpromise-outside-boundary",
     invalid: "no-runpromise-outside-boundary.invalid.ts",
     valid: "no-runpromise-outside-boundary-boundary.ts",
+    // 3 Effect statics + 3 runtime instance + 3 nested member access
+    expectedCount: 9,
   },
   {
     rule: "gent/all-errors-are-tagged",
@@ -123,7 +132,11 @@ describe("custom lint rules", () => {
       // oxlint exits non-zero when violations are found
       expect(run.exitCode).not.toBe(0)
       const violations = countViolations(run.report, c.rule)
-      expect(violations).toBeGreaterThan(0)
+      if (c.expectedCount !== undefined) {
+        expect(violations).toBe(c.expectedCount)
+      } else {
+        expect(violations).toBeGreaterThan(0)
+      }
     }, 30_000)
 
     test(`${c.rule} does not fire on valid fixture`, async () => {

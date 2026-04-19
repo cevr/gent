@@ -18,7 +18,6 @@ import {
 } from "solid-js"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 import type { JSX as _JSX } from "@opentui/solid"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
@@ -37,7 +36,7 @@ import type {
   SnapshotSource,
 } from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader-boundary"
-import { runClientEffect } from "./context-boundary"
+import { loadDisabledExtensions } from "./context-boundary"
 import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
@@ -350,10 +349,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       const home = workspace.home
 
       // Read disabled extensions from user + project config (shared with server)
-      const disabledSet = await runClientEffect(
-        clientRuntime,
-        readDisabledExtensions({ home, cwd: workspace.cwd }),
-      )
+      const disabledSet = await loadDisabledExtensions(clientRuntime, {
+        home,
+        cwd: workspace.cwd,
+      })
 
       // Pre-register each builtin's snapshot source so refetch knows where to look.
       // Discovered (user/project) extensions register the same way inside the

@@ -24,6 +24,7 @@ import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { formatConnectionIssue } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
+import { backfillBranchMessages } from "./use-session-feed-boundary"
 import type { ClientContextValue } from "../client/context"
 
 // ── Types ──
@@ -435,17 +436,12 @@ export function useSessionFeed(
       case "MessageReceived":
         // User messages from other sources (interjections, multi-client) need fetching
         if (event.role === "user") {
-          void Effect.runPromise(
-            client.client.message.list({ branchId: event.branchId }).pipe(
-              Effect.tap((msgs) =>
-                Effect.sync(() => {
-                  if (currentKey !== key) return
-                  setStore("messages", buildMessages(msgs))
-                }),
-              ),
-              Effect.catchEager(() => Effect.void),
-            ),
-          )
+          backfillBranchMessages({
+            client: client.client,
+            branchId: event.branchId,
+            isCurrent: () => currentKey === key,
+            apply: (msgs) => setStore("messages", buildMessages(msgs)),
+          })
         }
         break
 
