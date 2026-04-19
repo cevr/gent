@@ -1,28 +1,43 @@
 /**
- * MachineEngine — internal substrate that drives `Resource.machine` actors.
+ * MachineEngine — substrate that drives `Resource.machine` actors.
  *
  * Owns per-session actor spawn, mailbox queues, supervised restart, and
- * the public `send` / `ask` / `publish` / `terminateAll` operations that
- * ResourceHost exposes via its returned shape.
+ * the `send` / `ask` / `publish` / `terminateAll` operations.
  *
- * Behaviorally identical to the legacy `WorkflowRuntime` Context.Service —
- * extracted here in B11.3a so that B11.3b can introduce `MachineExecute`
- * (a public read-only Tag for projections) atop the same engine, B11.3d
- * can rename the public `ask` method to `execute`, and B11.3c can delete
- * the `WorkflowRuntime` Tag entirely.
+ * Behaviorally identical to the legacy `WorkflowRuntime` Context.Service.
+ * Sequencing:
+ *   - B11.3a: extracted `makeMachineEngine` factory; `WorkflowRuntime`
+ *     remained the public Tag that delegated to it.
+ *   - B11.3b: introduced `MachineExecute` (read-only `execute<M>`) atop
+ *     the same engine for projections.
+ *   - B11.3c (this commit): promote `MachineEngine` to a public
+ *     Context.Service. `WorkflowRuntime` becomes a thin projection that
+ *     delegates to `MachineEngine` for the migration window. Producers
+ *     (event-publisher / agent-loop / rpc-handlers / actor-process) move
+ *     from `WorkflowRuntime` to `MachineEngine` over the next sub-commits.
+ *   - B11.3d: rename `MachineEngine.ask` → `MachineEngine.execute` (and
+ *     the matching `extension.ask` RPC).
+ *   - End of B11.3c: `WorkflowRuntime` Tag deleted.
  *
- * Internal mailbox-tag rename preserved from the move:
+ * Internal mailbox-tag rename preserved from the B11.3a move:
  *   `AskMailboxItem._tag = "ask"` → `ExecuteMailboxItem._tag = "execute"`
- *
- * NOTE: this module is internal to ResourceHost. It is not a Context.Service
- * — the public `WorkflowRuntime` Tag in `../workflow-runtime.ts` delegates
- * to `makeMachineEngine` for one commit (B11.3b/c sequence) per the in-wave
- * parallel-API exception.
  *
  * @module
  */
 
-import { Cause, Deferred, Effect, Queue, Ref, Schema, Scope, Semaphore } from "effect"
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Queue,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+} from "effect"
 import type { AgentEvent } from "../../../domain/event.js"
 import type { AnyResourceMachine } from "../../../domain/resource.js"
 import type {
@@ -935,3 +950,38 @@ export const makeMachineEngine = (
     } as MachineEngineService
     return { runtimeScope, service }
   })
+
+// ── Public Tag ──
+//
+// `MachineEngine` is the substrate-wide call surface for the machine engine:
+// `publish` / `send` / `ask` / `getActorStatuses` / `terminateAll`. Producers
+// yield this Tag (event-publisher, agent-loop, actor-process, rpc-handlers).
+// Read-only consumers (projections) yield `MachineExecute` instead.
+
+export class MachineEngine extends Context.Service<MachineEngine, MachineEngineService>()(
+  "@gent/core/src/runtime/extensions/resource-host/machine-engine/MachineEngine",
+) {
+  /**
+   * Build the layer for a fixed extension set. The returned layer owns a
+   * `runtimeScope` whose lifetime equals the layer's scope — when the layer
+   * is torn down, all spawned actors are stopped and mailbox queues are
+   * shut down.
+   */
+  static fromExtensions = (
+    extensions: ReadonlyArray<LoadedExtension>,
+  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl> =>
+    Layer.effect(
+      MachineEngine,
+      Effect.acquireRelease(makeMachineEngine(extensions), ({ runtimeScope }) =>
+        Scope.close(runtimeScope, Exit.void),
+      ).pipe(Effect.map(({ service }) => service)),
+    )
+
+  static Live = (
+    extensions: ReadonlyArray<LoadedExtension>,
+  ): Layer.Layer<MachineEngine, never, ExtensionTurnControl> =>
+    MachineEngine.fromExtensions(extensions)
+
+  static Test = (): Layer.Layer<MachineEngine> =>
+    MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Test()))
+}

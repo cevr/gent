@@ -32,7 +32,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "../../domain/extension-protocol.js"
-import { WorkflowRuntime, type WorkflowRuntimeService } from "./workflow-runtime.js"
+import { MachineEngine, type MachineEngineService } from "./resource-host/machine-engine.js"
 
 export interface MachineExecuteService {
   readonly execute: <M extends AnyExtensionRequestMessage>(
@@ -46,14 +46,16 @@ export class MachineExecute extends Context.Service<MachineExecute, MachineExecu
   "@gent/core/src/runtime/extensions/machine-execute/MachineExecute",
 ) {
   /**
-   * Live layer — projects `WorkflowRuntime.ask` onto the read-only
-   * `execute` surface. Requires `WorkflowRuntime` (provided alongside
+   * Live layer — projects `MachineEngine.ask` onto the read-only
+   * `execute` surface. Requires `MachineEngine` (provided alongside
    * by callers — see `runtime/profile.ts`).
+   *
+   * The `ask`→`execute` rename on `MachineEngine` lands in B11.3d.
    */
-  static Live: Layer.Layer<MachineExecute, never, WorkflowRuntime> = Layer.effect(
+  static Live: Layer.Layer<MachineExecute, never, MachineEngine> = Layer.effect(
     MachineExecute,
     Effect.gen(function* () {
-      const engine: WorkflowRuntimeService = yield* WorkflowRuntime
+      const engine: MachineEngineService = yield* MachineEngine
       return {
         execute: (sessionId, message, branchId) => engine.ask(sessionId, message, branchId),
       }

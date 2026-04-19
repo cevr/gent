@@ -245,14 +245,18 @@ export type {
   AnyProjectionContribution,
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
-// `WorkflowRuntime` is the legacy wide Tag exposing send/ask/publish for
-// machine-bearing extensions. Projections should consume `MachineExecute`
-// instead — the read-only fence (gains the `ReadOnly` brand in B11.4) and
-// the only Tag that survives the `WorkflowRuntime` deletion in B11.3c.
-// Both are re-exported during the transition; new code should use
-// `MachineExecute`.
-export { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
+// `MachineEngine` is the substrate's write surface for machine-bearing
+// extensions: `publish` / `send` / `ask` / `terminateAll`. Producers
+// (event-publisher, agent-loop, actor-process, rpc-handlers) yield this
+// Tag. Read-only consumers (projections) yield `MachineExecute` instead —
+// the read-only fence (gains the `ReadOnly` brand in B11.4).
+//
+// `WorkflowRuntime` is the legacy wide Tag retained as a thin projection
+// over `MachineEngine` for the B11.3c migration window. New code should
+// not import it; it is deleted at the end of B11.3c.
+export { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 export { MachineExecute } from "../runtime/extensions/machine-execute.js"
+export { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 export type {
   QueryContribution,
   QueryContext,
