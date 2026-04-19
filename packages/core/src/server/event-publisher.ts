@@ -6,7 +6,7 @@ import {
   getEventBranchId,
   getEventSessionId,
 } from "../domain/event.js"
-import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
+import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
@@ -20,7 +20,7 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
  * Pulse policy: `ExtensionStateChanged` is emitted for two distinct sources,
  * combined and deduped per (sessionId, branchId, extensionId):
  *   1. Workflow transitions — extensions whose machine actually transitioned
- *      in response to the published event (per `WorkflowRuntime.publish`).
+ *      in response to the published event (per `MachineEngine.publish`).
  *   2. `pulseTags` declarations — query-backed / projection-only extensions
  *      that declared which event tags invalidate their snapshot via the
  *      `pulseTags: [...]` bucket on `defineExtension`. These never have an
@@ -28,19 +28,19 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
  *
  * No blanket per-event-per-observable fan-out. Pulses are surgical.
  *
- * NOTE: Currently uses the server-wide WorkflowRuntime. In multi-cwd
+ * NOTE: Currently uses the server-wide MachineEngine. In multi-cwd
  * shared mode (future), this would need profile-aware routing via SessionProfileCache.
- * For V1 (one cwd per server), the server-wide runtime matches the active profile.
+ * For V1 (one cwd per server), the server-wide engine matches the active profile.
  */
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
   never,
-  BaseEventStore | WorkflowRuntime | ExtensionRegistry
+  BaseEventStore | MachineEngine | ExtensionRegistry
 > = Layer.effect(
   EventPublisher,
   Effect.gen(function* () {
     const baseEventStore = yield* BaseEventStore
-    const stateRuntime = yield* WorkflowRuntime
+    const stateRuntime = yield* MachineEngine
     const registry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined

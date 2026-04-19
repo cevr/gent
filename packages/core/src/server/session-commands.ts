@@ -16,7 +16,7 @@ import {
 import { Storage } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import { ActorProcess } from "../runtime/actor-process.js"
-import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
+import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -66,7 +66,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
-      const extensionStateRuntime = yield* WorkflowRuntime
+      const extensionStateRuntime = yield* MachineEngine
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,

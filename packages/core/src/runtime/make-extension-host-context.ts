@@ -12,7 +12,7 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import type { MutationRef } from "../domain/mutation.js"
 import type { QueryRef } from "../domain/query.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
-import type { WorkflowRuntimeService } from "./extensions/workflow-runtime.js"
+import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
 import type { PromptPresenterService } from "../domain/prompt-presenter.js"
@@ -33,7 +33,7 @@ import {
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
-  readonly extensionStateRuntime: WorkflowRuntimeService
+  readonly extensionStateRuntime: MachineEngineService
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService

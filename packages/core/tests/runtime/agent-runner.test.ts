@@ -24,9 +24,9 @@ import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
-  WorkflowRuntime,
-  type WorkflowRuntimeService,
-} from "@gent/core/runtime/extensions/workflow-runtime"
+  MachineEngine,
+  type MachineEngineService,
+} from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -57,7 +57,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
 
 const withEventPublisher = (
   baseEventStoreLayer: Layer.Layer<EventStore>,
-  stateRuntimeLayer: Layer.Layer<WorkflowRuntime> = WorkflowRuntime.Test(),
+  stateRuntimeLayer: Layer.Layer<MachineEngine> = MachineEngine.Test(),
 ) =>
   Layer.provide(
     EventPublisherLive,
@@ -552,7 +552,7 @@ describe("AgentRunner", () => {
     const storageLayer = Storage.TestWithSql()
     const baseEventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
     const publishedSessionIds: string[] = []
-    const stateRuntime: WorkflowRuntimeService = {
+    const stateRuntime: MachineEngineService = {
       publish: (_event, ctx) =>
         Effect.sync(() => {
           publishedSessionIds.push(ctx.sessionId)
@@ -569,7 +569,7 @@ describe("AgentRunner", () => {
       EventPublisherLive,
       Layer.mergeAll(
         baseEventStoreLayer,
-        Layer.succeed(WorkflowRuntime, stateRuntime),
+        Layer.succeed(MachineEngine, stateRuntime),
         testRegistryLayer,
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ),

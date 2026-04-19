@@ -246,10 +246,11 @@ export type {
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
 // `MachineEngine` is the substrate's write surface for machine-bearing
-// extensions: `publish` / `send` / `ask` / `terminateAll`. Producers
-// (event-publisher, agent-loop, actor-process, rpc-handlers) yield this
-// Tag. Read-only consumers (projections) yield `MachineExecute` instead —
-// the read-only fence (gains the `ReadOnly` brand in B11.4).
+// extensions: `publish` / `send` / `ask` / `getActorStatuses` /
+// `terminateAll`. Producers (event-publisher, agent-loop, actor-process,
+// rpc-handlers) yield this Tag. Read-only consumers (projections) yield
+// `MachineExecute` instead — the read-only fence (gains the `ReadOnly`
+// brand in B11.4).
 //
 // `WorkflowRuntime` is the legacy wide Tag retained as a thin projection
 // over `MachineEngine` for the B11.3c migration window. New code should
