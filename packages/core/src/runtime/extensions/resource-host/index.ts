@@ -13,8 +13,11 @@
  *   - C3.4 (here): `withLifecycle` weave consumes `Resource.start/stop`.
  *     Legacy `LifecycleContribution` + activation.ts lifecycle phase
  *     deleted.
- *   - C3.5: machine engine arrives + `Resource.machine`. Legacy
- *     workflow-runtime.ts deleted.
+ *   - C3.5: stub. workflow-runtime.ts retained as a Context.Service shim.
+ *   - B11.3a (this commit): MachineEngine extracted into
+ *     resource-host/machine-engine.ts; workflow-runtime.ts delegates.
+ *   - B11.3c (later): WorkflowRuntime Tag deleted; MachineEngine becomes
+ *     internal-only.
  *   - C3.6: bus-subscription / `ExtensionEventBus` deleted (only test
  *     callers remain by then).
  *
