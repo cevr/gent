@@ -14,27 +14,31 @@ describe("reconcileTestExtensions", () => {
               manifest: { id: "ext-a" },
               kind: "builtin",
               sourcePath: "test-a",
-              contributions: [
-                toolContribution({
-                  name: "conflict",
-                  description: "tool a",
-                  params: {} as never,
-                  execute: () => undefined as never,
-                }),
-              ],
+              contributions: {
+                capabilities: [
+                  toolContribution({
+                    name: "conflict",
+                    description: "tool a",
+                    params: {} as never,
+                    execute: () => undefined as never,
+                  }),
+                ],
+              },
             },
             {
               manifest: { id: "ext-b" },
               kind: "builtin",
               sourcePath: "test-b",
-              contributions: [
-                toolContribution({
-                  name: "conflict",
-                  description: "tool b",
-                  params: {} as never,
-                  execute: () => undefined as never,
-                }),
-              ],
+              contributions: {
+                capabilities: [
+                  toolContribution({
+                    name: "conflict",
+                    description: "tool b",
+                    params: {} as never,
+                    execute: () => undefined as never,
+                  }),
+                ],
+              },
             },
           ]),
         )

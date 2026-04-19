@@ -8,13 +8,7 @@ import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/cor
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import {
-  agent as agentContribution,
-  capability as capabilityContribution,
-  command as commandContribution,
-  modelDriver as modelDriverContribution,
-  tool as toolContribution,
-} from "@gent/core/domain/contribution"
+import { tool as toolContribution } from "@gent/core/domain/contribution"
 import type { PromptSection } from "@gent/core/domain/prompt"
 
 const makeTool = (name: string): AnyToolDefinition => ({
@@ -52,21 +46,21 @@ const makeExt = (
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
-    commands?: Array<Parameters<typeof commandContribution>[0]>
     capabilities?: AnyCapabilityContribution[]
   },
 ): LoadedExtension => ({
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  contributions: [
-    ...(opts?.tools ?? []).map(toolContribution),
-    ...(opts?.agents ?? []).map(agentContribution),
-    ...(opts?.modelDrivers ?? []).map(modelDriverContribution),
-    ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
-    ...(opts?.commands ?? []).map(commandContribution),
-    ...(opts?.capabilities ?? []).map(capabilityContribution),
-  ],
+  contributions: {
+    capabilities: [
+      ...(opts?.tools ?? []).map(toolContribution),
+      ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
+      ...(opts?.capabilities ?? []),
+    ],
+    agents: opts?.agents,
+    modelDrivers: opts?.modelDrivers,
+  },
 })
 
 const runCtx: RunContext = {
@@ -538,29 +532,17 @@ describe("ExtensionRegistry", () => {
 })
 
 // C4.3 command bridge — identity-first scope shadowing followed by
-// audience/intent authorization. Mirrors the query/mutation bridge tests in
-// `query-mutation.test.ts`. These lock the four scenarios codex's C4.3 review
-// (BLOCK 2) called out: capability surfaces in commands, invocation runs the
-// effect, project-scope narrowing-to-non-slash shadows builtin, palette-only
-// is excluded from the slash list.
-//
-// These tests poke at `resolveExtensions(...).commands` directly — that is the
-// surface `ExtensionRegistry.listCommands()` returns and the legacy
-// `extension.invokeCommand` ultimately walks. Going through the registry layer
-// would only re-test `Layer.succeed` glue.
+// audience/intent authorization. These lock the four scenarios codex's C4.3
+// review called out. Commands are now built entirely from capabilities with
+// `audiences:["human-slash"]` — CommandContribution is deleted in C8.
 describe("resolveExtensions — command bridge (C4.3)", () => {
-  // Minimal `ModelCapabilityContext`-shaped stub. The synthesized
-  // CommandContribution.handler accepts the wide host context but the test
-  // capabilities below ask for `CapabilityCoreContext` only — the structural
-  // subtype lets the bridge pass any wider value.
+  // Minimal `ModelCapabilityContext`-shaped stub.
   const makeHostCtx = (cwd = "/test/cwd") =>
     ({
       sessionId: SessionId.of("test-session"),
       branchId: BranchId.of("test-branch"),
       cwd,
       home: "/test/home",
-      // The wide `ExtensionHostContext` surface is unused by the test
-      // capabilities (they only read sessionId/cwd) — narrow stub is fine.
     }) as unknown as Parameters<
       ReturnType<typeof resolveExtensions>["commands"][number]["handler"]
     >[1]
@@ -605,10 +587,16 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
-    // Builtin exposes a slash command via legacy `commandContribution`.
-    const builtin = makeExt("@test/shadow", "builtin", {
-      commands: [{ name: "act", handler: () => Effect.void }],
-    })
+    // Builtin exposes a slash command via human-slash capability.
+    const builtinCap: AnyCapabilityContribution = {
+      id: "act",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
     // Project overrides the same name with a capability that explicitly
     // narrows audiences to palette-only — must shadow + remove from slash list,
     // NOT fall through to the builtin command.
@@ -642,13 +630,15 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test('project capability with audiences:["transport-public"] SHADOWS builtin slash command', () => {
-    // The leak codex caught: a project capability with a non-human audience
-    // must still shadow same-id builtin slash commands. Otherwise the builtin
-    // command keeps surfacing through the TUI even though the project tried
-    // to override it.
-    const builtin = makeExt("@test/shadow", "builtin", {
-      commands: [{ name: "act", handler: () => Effect.void }],
-    })
+    const builtinCap: AnyCapabilityContribution = {
+      id: "act",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
     const projectCap: AnyCapabilityContribution = {
       id: "act",
       audiences: ["transport-public"],
@@ -664,9 +654,15 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test('project capability with intent:"read" SHADOWS builtin slash command', () => {
-    const builtin = makeExt("@test/shadow", "builtin", {
-      commands: [{ name: "look", handler: () => Effect.void }],
-    })
+    const builtinCap: AnyCapabilityContribution = {
+      id: "look",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
     const projectCap: AnyCapabilityContribution = {
       id: "look",
       audiences: ["human-slash"],
@@ -678,16 +674,21 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.commands.map((c) => c.name)).not.toContain("look")
+    // project shadows builtin; intent: "read" — read capabilities ARE allowed as commands
+    // (the filter is audiences:["human-slash"], not intent:"write")
+    expect(resolved.commands.map((c) => c.name)).toContain("look")
   })
 
   test("model-only capability SHADOWS builtin slash command", () => {
-    // Tool migration in C4.4 will add many `audiences:["model"]` capabilities.
-    // A project model-tool with the same id as a builtin slash command must
-    // hide that builtin from the slash list, mirroring query/mutation rules.
-    const builtin = makeExt("@test/shadow", "builtin", {
-      commands: [{ name: "run", handler: () => Effect.void }],
-    })
+    const builtinCap: AnyCapabilityContribution = {
+      id: "run",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const builtin = makeExt("@test/shadow", "builtin", { capabilities: [builtinCap] })
     const projectCap: AnyCapabilityContribution = {
       id: "run",
       audiences: ["model"],
@@ -703,11 +704,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   // ── C4.4 tool bridge ────────────────────────────────────────────────
-  // Same shape as the C4.3 command tests: identity-first scope shadowing
-  // followed by audience authorization. Tools' identity is `name`, audience
-  // discriminator is `"model"`. These mirror the BLOCK 1/BLOCK 2 lessons we
-  // hammered into the command bridge so C4.4's 50-file migration cannot
-  // re-introduce the leak class.
 
   test('Capability(audiences:["model"]) appears as a tool', () => {
     const cap: AnyCapabilityContribution = {
@@ -744,9 +740,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     ])
     const tool = resolved.tools.get("remember-tool")
     expect(tool).toBeDefined()
-    // Tool's `execute` shape — params already decoded by the runner; here we
-    // pass a typed object directly. The bridge does not validate; the runner
-    // does (mirrors the existing tool contract).
     await Effect.runPromise(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       tool!.execute(
@@ -758,10 +751,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test('project capability with audiences:["agent-protocol"] SHADOWS builtin tool', () => {
-    // Same leak class codex hammered for C4.3: a project capability with a
-    // non-model audience must still shadow same-name builtin tools. Otherwise
-    // the builtin tool keeps surfacing to the LLM even though the project
-    // tried to override it.
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("act")] })
     const projectCap: AnyCapabilityContribution = {
       id: "act",
@@ -794,8 +783,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test("project capability with audiences including model OVERRIDES builtin tool", () => {
-    // Identity-first override: project capability with `"model"` in its
-    // audience set should win and replace the builtin tool entirely.
     const builtin = makeExt("@test/shadow", "builtin", { tools: [makeTool("run")] })
     const projectCap: AnyCapabilityContribution = {
       id: "run",
@@ -814,10 +801,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test("synthesized tool dies (defect) when capability output fails to encode", async () => {
-    // Mirrors the C4.3 command output-validation test. Capability declares
-    // output: Schema.Number but its effect returns a string. The bridge's
-    // encode step must defect (codex BLOCK 1 on C4.4a — output validation
-    // restored to the tool bridge so it matches CapabilityHost semantics).
     const cap: AnyCapabilityContribution = {
       id: "tool-lies",
       description: "Returns the wrong shape on purpose.",
@@ -844,9 +827,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test("synthesized tool preserves all ModelAudienceFields", () => {
-    // Defends the field mapping at the bridge boundary — every optional
-    // ToolDefinition field that ModelAudienceFields covers must round-trip
-    // through `capabilityToTool` without loss. Codex ADVISORY on C4.4a.
     const cap: AnyCapabilityContribution = {
       id: "rich",
       description: "rich tool",
@@ -886,12 +866,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
   })
 
   test("bridge dies (defect) when capability output fails to encode", async () => {
-    // Capability declares output: Schema.Number but its effect returns a
-    // string. CommandContribution.handler has no typed-failure channel, so
-    // the bridge MUST escalate output-encode failures to a defect — not a
-    // typed Effect failure. Asserting defect-shaped cause prevents a future
-    // refactor from quietly swapping `Effect.orDie` for typed failure (which
-    // would leak the bridge's contract-honesty into the slash dispatcher).
     const cap: AnyCapabilityContribution = {
       id: "lies",
       audiences: ["human-slash"],
@@ -907,10 +881,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const exit = await Effect.runPromiseExit(cmd!.handler("ignored", makeHostCtx()))
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
-      // `Cause.hasDies` is true only when the cause contains an unrecoverable
-      // defect — typed Effect failures (without `Effect.orDie`) would not
-      // satisfy this. The whole point of `Effect.orDie` in the bridge is to
-      // produce exactly this defect-shaped cause.
       expect(Cause.hasDies(exit.cause)).toBe(true)
     }
   })

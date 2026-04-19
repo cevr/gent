@@ -111,13 +111,15 @@ const makeExecutorExtension = (overrides?: {
     manifest: { id: EXECUTOR_EXTENSION_ID },
     kind: "builtin",
     sourcePath: "builtin",
-    contributions: [
-      defineResource({
-        scope: "process",
-        layer: Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never>,
-        machine: executorActor,
-      }),
-    ],
+    contributions: {
+      resources: [
+        defineResource({
+          scope: "process",
+          layer: Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never>,
+          machine: executorActor,
+        }),
+      ],
+    },
   }
 
   return { extension, layer: Layer.merge(sidecarLayer, bridgeLayer) as Layer.Layer<never> }

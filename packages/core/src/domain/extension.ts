@@ -7,8 +7,8 @@ import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata, MessagePart } from "./message"
 import type { AnyToolDefinition } from "./tool"
-import type { ExtensionHostContext } from "./extension-host-context"
-import type { Contribution } from "./contribution.js"
+import type { ExtensionContributions } from "./contribution.js"
+export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
 import type {
   AnyExtensionCommandMessage,
@@ -31,12 +31,13 @@ export interface LoadedExtension {
   readonly kind: ExtensionKind
   readonly sourcePath: string
   /**
-   * The flat contribution array produced by the extension's setup function.
+   * Typed contribution buckets produced by the extension's setup function.
    * Consumers (registries, workflow runtime, scheduler, projection registry,
-   * etc.) read this directly via the `extractX` helpers from `contribution.ts`
-   * instead of a pre-bucketed setup-bag.
+   * etc.) read each bucket directly — `contributions.capabilities`,
+   * `contributions.resources`, etc. The bucket name IS the discrimination;
+   * there is no `_kind` discriminator and no `filterByKind`.
    */
-  readonly contributions: ReadonlyArray<Contribution>
+  readonly contributions: ExtensionContributions
 }
 
 export type FailedExtensionPhase = "setup" | "validation" | "startup"
@@ -307,13 +308,10 @@ export interface ExtensionActorDefinition<
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any, any>
 
-// Command Contribution
-
-export interface CommandContribution {
-  readonly name: string
-  readonly description?: string
-  readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
-}
+// `CommandContribution` (server slash commands) was deleted in C8 — no
+// extension contributes one anymore (executor migrated to a Capability with
+// `audiences:["human-slash"]` in C4.3). The TUI's separate `_kind: "command"`
+// in `extension-client.ts` is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"
@@ -353,14 +351,14 @@ export interface ExtensionSetupContext {
 export interface GentExtension {
   readonly manifest: ExtensionManifest
   /**
-   * Returns the canonical `Contribution[]` for this extension. The runtime
-   * uploads this directly into `LoadedExtension.contributions`; consumers
-   * (registries, workflow runtime, scheduler, projections) read it via the
-   * `extractX` helpers from `domain/contribution.ts`.
+   * Returns the typed `ExtensionContributions` buckets for this extension.
+   * The runtime stores this directly on `LoadedExtension.contributions`;
+   * consumers read each bucket as a typed array. After C8 there is no flat
+   * `Contribution[]` and no `_kind` discriminator.
    */
   readonly setup: (
     ctx: ExtensionSetupContext,
-  ) => Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>
+  ) => Effect.Effect<ExtensionContributions, ExtensionLoadError>
 }
 
 // Pipeline / Subscription factories — see `pipeline.ts` and `subscription.ts`.

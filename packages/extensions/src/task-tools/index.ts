@@ -16,14 +16,7 @@
  * @module
  */
 import { Layer } from "effect"
-import {
-  capabilityContribution,
-  defineExtension,
-  defineResource,
-  projectionContribution,
-  pulseSubscriptionContribution,
-  toolContribution,
-} from "@gent/core/extensions/api"
+import { capability, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
@@ -45,34 +38,36 @@ export type { TaskEntry } from "./identity.js"
 
 export const TaskExtension = defineExtension({
   id: TASK_TOOLS_EXTENSION_ID,
-  contributions: () => [
-    toolContribution(TaskCreateTool),
-    toolContribution(TaskListTool),
-    toolContribution(TaskGetTool),
-    toolContribution(TaskUpdateTool),
+  capabilities: [
+    tool(TaskCreateTool),
+    tool(TaskListTool),
+    tool(TaskGetTool),
+    tool(TaskUpdateTool),
+    capability(TaskGetQuery),
+    capability(TaskListQuery),
+    capability(TaskGetDepsQuery),
+    capability(TaskCreateMutation),
+    capability(TaskUpdateMutation),
+    capability(TaskDeleteMutation),
+    capability(TaskAddDepMutation),
+    capability(TaskRemoveDepMutation),
+  ],
+  projections: [TaskProjection],
+  resources: [
     defineResource({
       scope: "process",
       layer: Layer.merge(TaskStorage.Live, TaskService.Live),
     }),
-    projectionContribution(TaskProjection),
-    capabilityContribution(TaskGetQuery),
-    capabilityContribution(TaskListQuery),
-    capabilityContribution(TaskGetDepsQuery),
-    capabilityContribution(TaskCreateMutation),
-    capabilityContribution(TaskUpdateMutation),
-    capabilityContribution(TaskDeleteMutation),
-    capabilityContribution(TaskAddDepMutation),
-    capabilityContribution(TaskRemoveDepMutation),
-    // Query-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
-    // for `@gent/task-tools` whenever any of these tags is published, so the
-    // TUI widget refetches `TaskListRef` on every relevant mutation.
-    pulseSubscriptionContribution([
-      "TaskCreated",
-      "TaskUpdated",
-      "TaskCompleted",
-      "TaskDeleted",
-      "TaskDependencyAdded",
-      "TaskDependencyRemoved",
-    ]),
+  ],
+  // Query-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
+  // for `@gent/task-tools` whenever any of these tags is published, so the
+  // TUI widget refetches `TaskListRef` on every relevant mutation.
+  pulseTags: [
+    "TaskCreated",
+    "TaskUpdated",
+    "TaskCompleted",
+    "TaskDeleted",
+    "TaskDependencyAdded",
+    "TaskDependencyRemoved",
   ],
 })

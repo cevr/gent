@@ -66,13 +66,15 @@ const counterExtension: LoadedExtension = {
   manifest: { id: EXTENSION_ID },
   kind: "builtin",
   sourcePath: "builtin",
-  contributions: [
-    defineResource({
-      scope: "process",
-      layer: Layer.empty as Layer.Layer<unknown>,
-      machine: counterActorWithProtocol,
-    }),
-  ],
+  contributions: {
+    resources: [
+      defineResource({
+        scope: "process",
+        layer: Layer.empty as Layer.Layer<unknown>,
+        machine: counterActorWithProtocol,
+      }),
+    ],
+  },
 }
 
 // ============================================================================

@@ -1,12 +1,12 @@
 /**
  * defineExtension regression locks.
  *
- * Locks the contract that the public `defineExtension({ id, contributions })` API
- * returns a flat `Contribution[]` from `setup()` that the runtime registry
- * consumes. Each contribution kind round-trips, lifecycle effects compose in
- * registration order, and the result wires into `ExtensionRegistry`.
+ * Locks the contract that the public `defineExtension` bucket API returns
+ * `ExtensionContributions` from `setup()` that the runtime registry consumes.
+ * Each contribution kind round-trips, lifecycle effects compose in registration
+ * order, and the result wires into `ExtensionRegistry`.
  *
- * Tied to planify Commit 1 — without this, `defineExtension` is a paper API.
+ * Tied to planify Commit 1 / C8 — without this, `defineExtension` is a paper API.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
@@ -14,31 +14,17 @@ import { Agents } from "@gent/extensions/all-agents"
 import {
   defineExtension,
   defineResource,
-  toolContribution,
-  agentContribution,
-  commandContribution,
-  pipelineContribution,
-  type Contribution,
+  tool,
+  definePipeline,
+  defineTool,
 } from "@gent/core/extensions/api"
-import {
-  extractAgents,
-  extractCapabilities,
-  extractCommands,
-  extractPipelines,
-  extractMachine,
-  extractResources,
-  extractExternalDrivers,
-  extractModelDrivers,
-} from "@gent/core/domain/contribution"
 import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
-import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
   ExtensionLoadError,
   type ExtensionSetupContext,
   type SystemPromptInput,
 } from "@gent/core/domain/extension"
-import { definePipeline } from "@gent/core/domain/pipeline"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { testSetupCtx } from "@gent/core/test-utils"
@@ -54,23 +40,20 @@ const stubHostCtx = {
 const setupOf = (ext: ReturnType<typeof defineExtension>) => ext.setup(testSetupCtx())
 
 describe("defineExtension", () => {
-  it.live("empty contribution array produces an empty contribution list", () =>
+  it.live("empty extension produces empty contribution buckets", () =>
     Effect.gen(function* () {
-      const ext = defineExtension({ id: "empty", contributions: () => [] })
+      const ext = defineExtension({ id: "empty" })
       const contributions = yield* setupOf(ext)
-      expect(contributions).toEqual([])
-      expect(extractCapabilities(contributions)).toEqual([])
-      expect(extractAgents(contributions)).toEqual([])
-      expect(extractModelDrivers(contributions)).toEqual([])
-      expect(extractResources(contributions)).toEqual([])
-      expect(extractMachine(contributions)).toBeUndefined()
-      expect(extractCommands(contributions)).toEqual([])
-      expect(extractExternalDrivers(contributions)).toEqual([])
-      expect(extractPipelines(contributions)).toEqual([])
+      expect(contributions.capabilities ?? []).toEqual([])
+      expect(contributions.agents ?? []).toEqual([])
+      expect(contributions.modelDrivers ?? []).toEqual([])
+      expect(contributions.resources ?? []).toEqual([])
+      expect(contributions.externalDrivers ?? []).toEqual([])
+      expect(contributions.pipelines ?? []).toEqual([])
     }),
   )
 
-  it.live("each kind round-trips into its corresponding extractor", () =>
+  it.live("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
       // C7: PermissionRule + PromptSection are now bundled on the Capability
       // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
@@ -85,15 +68,10 @@ describe("defineExtension", () => {
       const myLayer = Layer.empty
       const ext = defineExtension({
         id: "all-kinds",
-        contributions: () => [
-          toolContribution(myTool),
-          agentContribution(Agents.cowork),
-          commandContribution({
-            name: "test",
-            description: "test cmd",
-            handler: () => Effect.void,
-          }),
-          pipelineContribution(definePipeline("prompt.system", (i, next) => next(i))),
+        capabilities: [tool(myTool)],
+        agents: [Agents.cowork],
+        pipelines: [definePipeline("prompt.system", (i, next) => next(i))],
+        resources: [
           defineResource({
             scope: "process",
             layer: myLayer,
@@ -110,18 +88,15 @@ describe("defineExtension", () => {
       })
       const contributions = yield* setupOf(ext)
       // After C4.4, `tool(...)` lowers into a Capability(audiences:["model"]).
-      // C4.5 deleted the legacy `_kind: "tool"` extractor — tool-shaped entries
-      // surface only through `extractCapabilities(...)`.
-      const modelCaps = extractCapabilities(contributions).filter((c) =>
+      const modelCaps = (contributions.capabilities ?? []).filter((c) =>
         c.audiences.includes("model"),
       )
       expect(modelCaps[0]?.id).toBe("echo")
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
-      expect(extractAgents(contributions)[0]?.name).toBe("cowork")
-      expect(extractCommands(contributions)[0]?.name).toBe("test")
-      expect(extractPipelines(contributions)[0]?.hook).toBe("prompt.system")
-      const resources = extractResources(contributions)
+      expect((contributions.agents ?? [])[0]?.name).toBe("cowork")
+      expect((contributions.pipelines ?? [])[0]?.hook).toBe("prompt.system")
+      const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
       expect(resources[0]!.subscriptions?.[0]?.pattern).toBe("agent:*")
@@ -136,7 +111,7 @@ describe("defineExtension", () => {
         const append = (s: string) => Effect.sync(() => log.push(s))
         const ext = defineExtension({
           id: "lifecycle",
-          contributions: () => [
+          resources: [
             defineResource({
               scope: "process",
               layer: Layer.empty,
@@ -151,15 +126,16 @@ describe("defineExtension", () => {
             }),
           ],
         })
+        const contributions = yield* setupOf(ext)
         const loaded = {
           manifest: { id: ext.manifest.id },
           kind: "builtin" as const,
           sourcePath: "builtin",
-          contributions: yield* setupOf(ext),
+          contributions,
         }
         yield* Effect.scoped(
           Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([loaded as never], "process"))
+            yield* Layer.build(buildResourceLayer([loaded], "process"))
           }),
         )
         // Strict ordering — no sorting. Codex C3.4 review flagged that the
@@ -169,11 +145,11 @@ describe("defineExtension", () => {
       }),
   )
 
-  it.live("multiple Resource subscriptions and commands all accumulate", () =>
+  it.live("multiple Resource subscriptions accumulate", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "multi",
-        contributions: () => [
+        resources: [
           defineResource({
             scope: "process",
             layer: Layer.empty,
@@ -182,41 +158,45 @@ describe("defineExtension", () => {
               { pattern: "b:*", handler: () => Effect.void },
             ],
           }),
-          commandContribution({ name: "cmd1", handler: () => Effect.void }),
-          commandContribution({ name: "cmd2", handler: () => Effect.void }),
         ],
       })
       const contributions = yield* setupOf(ext)
-      const resources = extractResources(contributions)
+      const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(resources[0]!.subscriptions).toHaveLength(2)
-      expect(extractCommands(contributions).length).toBe(2)
     }),
   )
 
-  it.live("Effect-returning contributions factory is awaited", () =>
+  it.live("Effect-returning bucket factory is awaited", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "effectful",
-        contributions: () =>
+        capabilities: () =>
           Effect.gen(function* () {
             yield* Effect.void
             return [
-              commandContribution({ name: "from-effect", handler: () => Effect.void }),
-            ] satisfies ReadonlyArray<Contribution>
+              tool(
+                defineTool({
+                  name: "from-effect",
+                  description: "from effect",
+                  params: Schema.Struct({}),
+                  execute: () => Effect.void,
+                }),
+              ),
+            ]
           }),
       })
       const contributions = yield* setupOf(ext)
-      expect(extractCommands(contributions)[0]?.name).toBe("from-effect")
+      expect((contributions.capabilities ?? [])[0]?.id).toBe("from-effect")
     }),
   )
 
-  it.live("setup context is forwarded to the contributions factory", () =>
+  it.live("setup context is forwarded to per-bucket factory", () =>
     Effect.gen(function* () {
       let captured: ExtensionSetupContext | undefined
       const ext = defineExtension({
         id: "captures-ctx",
-        contributions: ({ ctx }) => {
+        capabilities: ({ ctx }) => {
           captured = ctx
           return []
         },
@@ -238,14 +218,12 @@ describe("defineExtension", () => {
       })
       const ext = defineExtension({
         id: "wired",
-        contributions: () => [
-          toolContribution(myTool),
-          pipelineContribution(
-            definePipeline(
-              "prompt.system",
-              (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-                next(input).pipe(Effect.map((s) => `${s}!!`)),
-            ),
+        capabilities: [tool(myTool)],
+        pipelines: [
+          definePipeline(
+            "prompt.system",
+            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
+              next(input).pipe(Effect.map((s) => `${s}!!`)),
           ),
         ],
       })
@@ -270,11 +248,11 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("contributions factory error becomes ExtensionLoadError", () =>
+  it.live("bucket factory error becomes ExtensionLoadError", () =>
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        contributions: () =>
+        capabilities: () =>
           Effect.fail(new ExtensionLoadError({ extensionId: "boom", message: "nope" })),
       })
       const exit = yield* Effect.exit(setupOf(ext))

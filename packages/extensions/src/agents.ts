@@ -1,4 +1,4 @@
-import { defineAgent, defineExtension, ModelId, agentContribution } from "@gent/core/extensions/api"
+import { defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
 
 const COWORK_PROMPT = `
 Cowork agent. Fast, practical, execute changes.
@@ -76,5 +76,5 @@ export const CoreAgents = [cowork, deepwork, explore, summarizer, title] as cons
 
 export const AgentsExtension = defineExtension({
   id: "@gent/agents",
-  contributions: () => CoreAgents.map((a) => agentContribution(a)),
+  agents: [...CoreAgents],
 })

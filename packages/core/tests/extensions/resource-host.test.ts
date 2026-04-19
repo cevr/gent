@@ -22,12 +22,11 @@ import {
   collectSubscriptions,
   buildResourceLayer,
 } from "@gent/core/runtime/extensions/resource-host"
-import type { ResourceBusEnvelope } from "@gent/core/domain/resource"
-import { defineResource, extractMachine } from "@gent/core/domain/contribution"
+import type { AnyResourceContribution, ResourceBusEnvelope } from "@gent/core/domain/resource"
+import { defineResource } from "@gent/core/domain/contribution"
 import { defineExtension } from "@gent/core/extensions/api"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import type { Contribution } from "@gent/core/domain/contribution"
 
 // ── SubscriptionEngine ──
 
@@ -166,13 +165,13 @@ const stubManifest = (id: string) => ({
 
 const makeStubExtension = (
   id: string,
-  contributions: ReadonlyArray<Contribution>,
+  resources: ReadonlyArray<AnyResourceContribution>,
 ): LoadedExtension =>
   ({
     manifest: stubManifest(id),
     kind: "builtin" as const,
     sourcePath: "builtin",
-    contributions,
+    contributions: { resources },
   }) as LoadedExtension
 
 describe("defineResource", () => {
@@ -182,7 +181,6 @@ describe("defineResource", () => {
       scope: "process",
       layer: layerA,
     })
-    expect(r._kind).toBe("resource")
     expect(r.scope).toBe("process")
     expect(r.tag).toBe(TestServiceA)
   })
@@ -193,7 +191,6 @@ describe("defineResource", () => {
       layer: Layer.merge(layerA, layerB),
     })
     expect(r.tag).toBeUndefined()
-    expect(r._kind).toBe("resource")
   })
 
   test("subscriptions field round-trips", () => {
@@ -244,15 +241,20 @@ describe("defineResource", () => {
     })
     expect(r.machine).toBe(stubMachine)
     const ext = makeStubExtension("ext-with-machine", [r])
-    const found = extractMachine(ext.contributions)
+    const found = (ext.contributions.resources ?? []).find(
+      (res) => res.machine !== undefined,
+    )?.machine
     expect(found).toBe(stubMachine)
   })
 
-  test("extractMachine returns undefined when no Resource declares a machine", () => {
+  test("no machine when no Resource declares a machine", () => {
     const ext = makeStubExtension("ext-no-machine", [
       defineResource({ scope: "process", layer: layerA }),
     ])
-    expect(extractMachine(ext.contributions)).toBeUndefined()
+    const found = (ext.contributions.resources ?? []).find(
+      (res) => res.machine !== undefined,
+    )?.machine
+    expect(found).toBeUndefined()
   })
 })
 
@@ -267,7 +269,7 @@ describe("defineExtension validation: Resource.machine constraints", () => {
   test("rejects extension with 2+ Resources declaring `machine` (codex BLOCK 1)", async () => {
     const ext = defineExtension({
       id: "@test/two-resource-machines",
-      contributions: () => [
+      resources: [
         defineResource({ scope: "process", layer: layerA, machine: stubMachine }),
         defineResource({ scope: "process", layer: layerB, machine: stubMachine }),
       ],
@@ -276,16 +278,14 @@ describe("defineExtension validation: Resource.machine constraints", () => {
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
       const message = String(exit.cause)
-      expect(message).toContain("at most one Resource with `machine`")
+      expect(message).toContain("at most one Resource may declare `machine`")
     }
   })
 
   test("rejects Resource.machine on session/branch scope until composers are wired (codex BLOCK 3)", async () => {
     const ext = defineExtension({
       id: "@test/session-scope-machine",
-      contributions: () => [
-        defineResource({ scope: "session", layer: layerA, machine: stubMachine }),
-      ],
+      resources: [defineResource({ scope: "session", layer: layerA, machine: stubMachine })],
     })
     const exit = await Effect.runPromiseExit(ext.setup(testSetupCtx()))
     expect(exit._tag).toBe("Failure")

@@ -1,7 +1,6 @@
 import { Clock, Effect, Layer, Redacted } from "effect"
 import {
   defineExtension,
-  modelDriverContribution,
   AuthMethod,
   type ModelDriverContribution,
   type ProviderAuthInfo,
@@ -128,7 +127,7 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
 
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
-  contributions: () => {
+  modelDrivers: () => {
     const env: AnthropicKeychainEnv = {
       betaFlags: readEnv("ANTHROPIC_BETA_FLAGS"),
       cliVersion: readEnv("ANTHROPIC_CLI_VERSION"),
@@ -210,6 +209,6 @@ export const AnthropicExtension = defineExtension({
       },
     }
 
-    return [modelDriverContribution(anthropicProvider)]
+    return [anthropicProvider]
   },
 })

@@ -1,24 +1,31 @@
 /**
- * Contribution union — the foundational data structure for extension authoring.
+ * Contribution buckets — typed sub-arrays for `defineExtension`.
  *
- * Every extension reduces to a flat array of `Contribution` values. This is the
- * canonical authoring shape — `defineExtension({ id, contributions })` lowers
- * the array into the runtime `ExtensionSetup` consumed by the registry.
+ * C8: the legacy `Contribution` discriminated union is gone. Extensions now
+ * declare their leaf values in homogeneously-typed buckets. The bucket name
+ * IS the discrimination — no `_kind` field on leaves, no wrapper smart
+ * constructors, no `filterByKind`.
  *
- * The discriminator is `_kind`. New kinds are added by extending the union, not
- * by adding fields to a setup bag.
+ * Smart constructors (`tool`, `query`, `mutation`, `agent`, etc.) lower
+ * legacy domain shapes (`AnyToolDefinition`, `AnyQueryContribution`,
+ * `AgentDefinition`, …) into the leaf type the bucket expects. They are
+ * identity-or-near-identity functions that anchor the public API surface
+ * and absorb any internal-shape changes.
+ *
+ * Codex BLOCK on C8 design: drivers split into `modelDrivers` and
+ * `externalDrivers` — one untagged `drivers: []` would smuggle back the
+ * ambiguity C7's correlated union fixed.
  *
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
 import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type { CommandContribution } from "./extension.js"
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyPipelineContribution, PipelineContribution, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
-import type { AnyResourceContribution, AnyResourceMachine } from "./resource.js"
+import type { AnyResourceContribution } from "./resource.js"
 import type {
   AnySubscriptionContribution,
   SubscriptionContribution,
@@ -27,136 +34,61 @@ import type {
 import type { AnyToolDefinition } from "./tool.js"
 import { Schema } from "effect"
 
-// ── Per-kind contribution shapes ──
-
-export interface AgentContribution {
-  readonly _kind: "agent"
-  readonly agent: AgentDefinition
-}
+// ── Typed buckets ──
 
 /**
- * Pipeline — transforming middleware with a real `next` and a meaningful
- * (non-void) return type. Six hooks: `prompt.system`, `tool.execute`,
- * `permission.check`, `context.messages`, `tool.result`, `message.input`.
+ * The set of buckets an extension may contribute to. Every field is optional;
+ * an extension that contributes nothing returns `{}`. Each bucket is
+ * homogeneously typed — there is no discriminator, the field name is the
+ * discrimination.
  *
- * Sister kind: `SubscriptionKindContribution` for void observers. C6 split
- * the legacy `Interceptor<I, O>` shape into Pipeline (transformer) +
- * Subscription (observer) — `Interceptor<I, void>` was a deceptive shape
- * where `next` was bookkeeping (codex C6 correction).
+ * Driver split: `modelDrivers` / `externalDrivers` are separate buckets. They
+ * share `id` (driver registry key) but nothing else, so a single `drivers`
+ * bucket would re-introduce the union-shape unsoundness C7's correlated
+ * `DriverKindContribution` fixed (codex BLOCK on C8 design).
  */
-export interface PipelineKindContribution {
-  readonly _kind: "pipeline"
-  readonly pipeline: AnyPipelineContribution
+export interface ExtensionContributions {
+  readonly resources?: ReadonlyArray<AnyResourceContribution>
+  readonly capabilities?: ReadonlyArray<AnyCapabilityContribution>
+  readonly agents?: ReadonlyArray<AgentDefinition>
+  readonly projections?: ReadonlyArray<AnyProjectionContribution>
+  readonly pipelines?: ReadonlyArray<AnyPipelineContribution>
+  readonly subscriptions?: ReadonlyArray<AnySubscriptionContribution>
+  readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
+  readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
+  /**
+   * Event tags that, when published, invalidate this extension's externally-
+   * observable state. The EventPublisher emits an `ExtensionStateChanged`
+   * pulse for this extension whenever a matching `AgentEvent._tag` lands.
+   *
+   * Used by query-backed / projection-only extensions whose state is event-
+   * driven but not held in a workflow actor (the workflow path emits pulses
+   * on actor transitions directly — see `WorkflowRuntime.publish`).
+   *
+   * Keep minimal — every tag translates to one pulse per matching event for
+   * this extension. Honest set: "events whose occurrence invalidates the
+   * extension's snapshot."
+   */
+  readonly pulseTags?: ReadonlyArray<string>
 }
-
-/**
- * Subscription — ordered void observer with declared failure policy. Three
- * hooks: `turn.before`, `turn.after`, `message.output`. Each subscription
- * declares `failureMode: "continue" | "isolate" | "halt"`.
- */
-export interface SubscriptionKindContribution {
-  readonly _kind: "subscription"
-  readonly subscription: AnySubscriptionContribution
-}
-
-export interface CommandKindContribution {
-  readonly _kind: "command"
-  readonly command: CommandContribution
-}
-
-/**
- * Unified Driver kind — `flavor` discriminates `"model"` vs `"external"`. Model
- * drivers are LLM providers (auth, listModels, resolveModel + Layer); external
- * drivers wrap a `TurnExecutor` that streams `TurnEvent`s. They share `id`
- * (driver registry key) but nothing else, so the inner `driver` is correlated
- * with the flavor (a project/user can't accidentally pair `flavor: "model"`
- * with an `ExternalDriverContribution`).
- *
- * Correlated union — codex ADVISORY on C7. Inner driver shapes have no
- * discriminator of their own, so the type-level pairing here is the only
- * thing keeping the cast in `extractModelDrivers` / `extractExternalDrivers`
- * honest.
- */
-export type DriverKindContribution =
-  | { readonly _kind: "driver"; readonly flavor: "model"; readonly driver: ModelDriverContribution }
-  | {
-      readonly _kind: "driver"
-      readonly flavor: "external"
-      readonly driver: ExternalDriverContribution
-    }
-
-export interface ProjectionKindContribution {
-  readonly _kind: "projection"
-  readonly projection: AnyProjectionContribution
-}
-
-/**
- * Capability — typed callable endpoint shared by tool/query/mutation/command
- * (collapsed under one ontology in C4). Smart constructors for the legacy
- * names continue to exist (`tool`, `query`, `mutation`, `command`); they will
- * progressively emit `CapabilityKindContribution` underneath as C4.2/3/4 land.
- *
- * Self-discrimination via `audiences` (who may invoke) + `intent` (read/write).
- */
-export interface CapabilityKindContribution {
-  readonly _kind: "capability"
-  readonly capability: AnyCapabilityContribution
-}
-
-/**
- * Declares that the contributing extension's externally-observable state
- * changes when any of these `AgentEvent._tag`s is published. The
- * EventPublisher emits an `ExtensionStateChanged` pulse for this extension
- * whenever a matching event lands. This is the bridge for query-backed /
- * projection-only extensions whose state is event-driven but not held in a
- * workflow actor (the workflow path emits pulses on actor transitions
- * directly — see `WorkflowRuntime.publish`).
- *
- * Keep `tags` minimal — every tag in the list translates to one pulse per
- * matching event for this extension. The honest set is "events whose
- * occurrence invalidates the extension's snapshot."
- */
-export interface PulseSubscriptionContribution {
-  readonly _kind: "pulse-subscription"
-  readonly tags: ReadonlyArray<string>
-}
-
-// ── Union ──
-
-export type Contribution =
-  | AgentContribution
-  | PipelineKindContribution
-  | SubscriptionKindContribution
-  | CommandKindContribution
-  | DriverKindContribution
-  | ProjectionKindContribution
-  | CapabilityKindContribution
-  | PulseSubscriptionContribution
-  | AnyResourceContribution
-
-export type ContributionKind = Contribution["_kind"]
 
 // ── Smart constructors ──
+//
+// These take the legacy domain shape (today: `AnyToolDefinition`,
+// `AnyQueryContribution`, etc.) and lower it to the leaf type the
+// corresponding bucket accepts. After C8 they are NOT wrappers — they
+// emit the bare leaf, not a `{_kind, ...}` wrapper.
 
 /**
- * C4.4 — `tool(...)` lowers into a `Capability(audiences:["model"])` rather
- * than the legacy `ToolContribution`. Authors continue to write
- * `defineTool({...})` and `toolContribution(myTool)`; the contribution kind
- * surfacing in `LoadedExtension.contributions` is now `"capability"`. The
- * registry's tool-bridge (`capabilityToTool`) re-projects it for `ToolRunner`
- * until C4.5 deletes the legacy `ToolDefinition` type entirely.
+ * Lower a `ToolDefinition` to a `Capability` with `audiences:["model"]`.
  *
- * Intent: all legacy tools lower as `intent: "write"`. Codex caught the
- * earlier `idempotent ⇒ "read"` derivation as a lie — `idempotent` is
+ * Intent: all legacy tools lower as `intent: "write"`. `idempotent` is
  * replay-safety (safe to re-run after restart), NOT the read/write
- * discriminator. Counterexample: `rename-session.ts` is `idempotent: true`
- * yet mutates session state via `ctx.session.renameCurrent(...)`. Tools
- * that are genuinely read-only should be authored as direct
- * `capabilityContribution(...)` with `intent: "read"` and a narrow context
- * (the lint rule fences write services on `R` of read capabilities).
- * `idempotent` flows through unchanged as model-audience metadata.
+ * discriminator (codex catch on C4.4 — `rename-session.ts` is `idempotent:
+ * true` yet mutates session state). Tools that are genuinely read-only
+ * should be authored as direct `capability(...)` with `intent: "read"`.
  */
-const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
+export const tool = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   id: t.name,
   description: t.description,
   audiences: ["model"],
@@ -182,72 +114,62 @@ const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   effect: t.execute as AnyCapabilityContribution["effect"],
 })
 
-export const tool = (t: AnyToolDefinition): CapabilityKindContribution => ({
-  _kind: "capability",
-  capability: toolToCapability(t),
-})
-
-export const agent = (a: AgentDefinition): AgentContribution => ({ _kind: "agent", agent: a })
+/**
+ * Identity smart constructor for an agent. After C8 the `agents` bucket
+ * accepts `AgentDefinition` directly; this exists for symmetry with the
+ * other smart constructors and to anchor the public-API surface.
+ */
+export const agent = (a: AgentDefinition): AgentDefinition => a
 
 /**
- * Smart constructor for the Pipeline primitive (transformer with `next`).
- * Six hooks; output type ≠ void. See `pipeline.ts` for the full key map.
- *
- * Generic over `K, E, R` so authors keep their typed handler shape; the
- * contribution's `R`/`E` is provided by the extension's Resource layer at
- * composition time, then erased into the union shape.
+ * Identity smart constructor for the Pipeline primitive. Generic over
+ * `<K, E, R>` so authors keep their typed handler shape; the leaf is
+ * widened to `AnyPipelineContribution` at the bucket boundary.
  */
 export const pipeline = <K extends PipelineKey, E, R>(
   p: PipelineContribution<K, E, R>,
-): PipelineKindContribution => ({
-  _kind: "pipeline",
+): AnyPipelineContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  pipeline: p as unknown as AnyPipelineContribution,
-})
+  p as unknown as AnyPipelineContribution
 
 /**
- * Smart constructor for the Subscription primitive (ordered void observer).
- * Three hooks: `turn.before`, `turn.after`, `message.output`. Each
- * subscription declares a `failureMode`.
+ * Identity smart constructor for the Subscription primitive. Generic over
+ * `<K, E, R>` so authors keep their typed handler shape; the leaf is
+ * widened to `AnySubscriptionContribution` at the bucket boundary.
  */
 export const subscription = <K extends SubscriptionKey, E, R>(
   s: SubscriptionContribution<K, E, R>,
-): SubscriptionKindContribution => ({
-  _kind: "subscription",
+): AnySubscriptionContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  subscription: s as unknown as AnySubscriptionContribution,
-})
-
-export const command = (c: CommandContribution): CommandKindContribution => ({
-  _kind: "command",
-  command: c,
-})
-
-export const modelDriver = (d: ModelDriverContribution): DriverKindContribution => ({
-  _kind: "driver",
-  flavor: "model",
-  driver: d,
-})
-
-export const externalDriver = (d: ExternalDriverContribution): DriverKindContribution => ({
-  _kind: "driver",
-  flavor: "external",
-  driver: d,
-})
-
-export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
-  _kind: "projection",
-  projection: p,
-})
+  s as unknown as AnySubscriptionContribution
 
 /**
- * Lower a `QueryContribution` to a `CapabilityContribution`. Queries are
- * read-only RPCs invoked by other extensions; the capability equivalent is
- * `audiences: ["agent-protocol"], intent: "read"`. Per the C4.5 deletion,
- * `query()` no longer emits a separate `_kind: "query"` contribution —
- * extension authors keep using `query(...)` and the lowering happens here.
+ * Identity smart constructor for a model driver. The bucket type
+ * (`modelDrivers: ReadonlyArray<ModelDriverContribution>`) is the
+ * discrimination — no flavor field needed.
  */
-const queryToCapability = (q: AnyQueryContribution): AnyCapabilityContribution => ({
+export const modelDriver = (d: ModelDriverContribution): ModelDriverContribution => d
+
+/**
+ * Identity smart constructor for an external driver. The bucket type
+ * (`externalDrivers: ReadonlyArray<ExternalDriverContribution>`) is the
+ * discrimination — no flavor field needed.
+ */
+export const externalDriver = (d: ExternalDriverContribution): ExternalDriverContribution => d
+
+/**
+ * Identity smart constructor for a projection. After C8 the `projections`
+ * bucket accepts `AnyProjectionContribution` directly.
+ */
+export const projection = (p: AnyProjectionContribution): AnyProjectionContribution => p
+
+/**
+ * Lower a `QueryContribution` to a `Capability` with
+ * `audiences:["agent-protocol"], intent:"read"`. Queries are read-only RPCs
+ * invoked by other extensions. Authors continue to call `query(...)`; the
+ * lowering happens here.
+ */
+export const query = (q: AnyQueryContribution): AnyCapabilityContribution => ({
   id: q.id,
   audiences: ["agent-protocol"],
   intent: "read",
@@ -262,12 +184,11 @@ const queryToCapability = (q: AnyQueryContribution): AnyCapabilityContribution =
 })
 
 /**
- * Lower a `MutationContribution` to a `CapabilityContribution`. Mutations
- * are write RPCs invoked by other extensions; the capability equivalent is
- * `audiences: ["agent-protocol"], intent: "write"`. Same pattern as
- * `queryToCapability`.
+ * Lower a `MutationContribution` to a `Capability` with
+ * `audiences:["agent-protocol"], intent:"write"`. Mutations are write RPCs
+ * invoked by other extensions.
  */
-const mutationToCapability = (m: AnyMutationContribution): AnyCapabilityContribution => ({
+export const mutation = (m: AnyMutationContribution): AnyCapabilityContribution => ({
   id: m.id,
   audiences: ["agent-protocol"],
   intent: "write",
@@ -279,120 +200,15 @@ const mutationToCapability = (m: AnyMutationContribution): AnyCapabilityContribu
   effect: m.handler as AnyCapabilityContribution["effect"],
 })
 
-export const query = (q: AnyQueryContribution): CapabilityKindContribution => ({
-  _kind: "capability",
-  capability: queryToCapability(q),
-})
-
-export const mutation = (m: AnyMutationContribution): CapabilityKindContribution => ({
-  _kind: "capability",
-  capability: mutationToCapability(m),
-})
-
 /**
- * Smart constructor for the new collapsed Capability primitive. During the
- * C4.2/3/4 migration this is exposed alongside the legacy `tool`/`query`/
- * `mutation`/`command` constructors; once those wrappers are deleted in C4.5
- * this becomes the only direct-use entry (extension authors continue to call
- * the domain-named smart constructors which lower to `capability(...)` under
- * the hood).
+ * Identity smart constructor for the collapsed Capability primitive.
+ * Direct-use entry for capabilities that don't fit the `tool`/`query`/
+ * `mutation` shape (e.g., `audiences:["transport-public"]`).
  */
-export const capability = (c: AnyCapabilityContribution): CapabilityKindContribution => ({
-  _kind: "capability",
-  capability: c,
-})
+export const capability = (c: AnyCapabilityContribution): AnyCapabilityContribution => c
 
-export const pulseSubscription = (tags: ReadonlyArray<string>): PulseSubscriptionContribution => ({
-  _kind: "pulse-subscription",
-  tags,
-})
-
-// `defineResource` is exported directly from `./resource.ts` — Resources
-// self-discriminate via `_kind: "resource"` on the contribution itself,
-// so there is no contribution-side wrapper smart constructor here.
+// `defineResource` and `defineLifecycleResource` are exported directly from
+// `./resource.ts` — they return Resource leaves that go straight into the
+// `resources` bucket. After C8 they no longer set a `_kind: "resource"`
+// field; the bucket IS the discrimination.
 export { defineResource, defineLifecycleResource } from "./resource.js"
-
-// ── Filters ──
-
-type ContributionByKind<K extends ContributionKind> = Extract<Contribution, { readonly _kind: K }>
-
-/** Return only contributions of the given kind. */
-export const filterByKind = <K extends ContributionKind>(
-  contributions: ReadonlyArray<Contribution>,
-  kind: K,
-): ReadonlyArray<ContributionByKind<K>> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  contributions.filter((c): c is ContributionByKind<K> => c._kind === kind)
-
-/** Find the (at most one) contribution of the given kind, or undefined. */
-export const findByKind = <K extends ContributionKind>(
-  contributions: ReadonlyArray<Contribution>,
-  kind: K,
-): ContributionByKind<K> | undefined =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  contributions.find((c): c is ContributionByKind<K> => c._kind === kind)
-
-/**
- * Per-kind extractors that pull the typed payload out of a contribution array.
- * These replace the legacy `ExtensionSetup` setup-bag — registries and runtime
- * code call these directly instead of reading `ext.setup.tools` etc.
- */
-export const extractAgents = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<AgentContribution["agent"]> => filterByKind(cs, "agent").map((c) => c.agent)
-
-export const extractPipelines = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<AnyPipelineContribution> => filterByKind(cs, "pipeline").map((c) => c.pipeline)
-
-export const extractSubscriptions = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<AnySubscriptionContribution> =>
-  filterByKind(cs, "subscription").map((c) => c.subscription)
-
-export const extractCommands = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<CommandKindContribution["command"]> =>
-  filterByKind(cs, "command").map((c) => c.command)
-
-export const extractModelDrivers = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<ModelDriverContribution> =>
-  filterByKind(cs, "driver")
-    .filter((c): c is Extract<DriverKindContribution, { flavor: "model" }> => c.flavor === "model")
-    .map((c) => c.driver)
-
-export const extractExternalDrivers = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<ExternalDriverContribution> =>
-  filterByKind(cs, "driver")
-    .filter(
-      (c): c is Extract<DriverKindContribution, { flavor: "external" }> => c.flavor === "external",
-    )
-    .map((c) => c.driver)
-
-export const extractProjections = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<ProjectionKindContribution["projection"]> =>
-  filterByKind(cs, "projection").map((c) => c.projection)
-
-export const extractCapabilities = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<CapabilityKindContribution["capability"]> =>
-  filterByKind(cs, "capability").map((c) => c.capability)
-
-export const extractPulseSubscriptions = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<PulseSubscriptionContribution> => filterByKind(cs, "pulse-subscription")
-
-export const extractResources = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<AnyResourceContribution> => filterByKind(cs, "resource")
-
-/**
- * Returns the machine declared by an extension's contributions — i.e., the
- * first `Resource` that declares a `machine`. Returns `undefined` if no
- * Resource carries a machine.
- */
-export const extractMachine = (cs: ReadonlyArray<Contribution>): AnyResourceMachine | undefined =>
-  extractResources(cs).find((r) => r.machine !== undefined)?.machine

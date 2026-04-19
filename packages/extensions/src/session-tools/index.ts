@@ -1,9 +1,4 @@
-import {
-  defineExtension,
-  definePipeline,
-  pipelineContribution,
-  toolContribution,
-} from "@gent/core/extensions/api"
+import { defineExtension, definePipeline, pipeline, tool } from "@gent/core/extensions/api"
 import { SearchSessionsTool } from "./search-sessions.js"
 import { ReadSessionTool } from "./read-session.js"
 import { RenameSessionTool } from "./rename-session.js"
@@ -14,11 +9,9 @@ Call rename_session with a specific 3-5 word lowercase title once you understand
 
 export const SessionToolsExtension = defineExtension({
   id: "@gent/session-tools",
-  contributions: () => [
-    toolContribution(SearchSessionsTool),
-    toolContribution(ReadSessionTool),
-    toolContribution(RenameSessionTool),
-    pipelineContribution(
+  capabilities: [tool(SearchSessionsTool), tool(ReadSessionTool), tool(RenameSessionTool)],
+  pipelines: [
+    pipeline(
       definePipeline("prompt.system", (input, next) =>
         input.interactive === false
           ? next(input)

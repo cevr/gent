@@ -14,7 +14,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import {
-  commandContribution,
   defineExtension,
   definePipeline,
   defineResource,
@@ -22,7 +21,7 @@ import {
   defineTool,
   pipelineContribution,
   subscriptionContribution,
-  toolContribution,
+  tool,
 } from "@gent/core/extensions/api"
 
 describe("Effect-purity locks (compile-time)", () => {
@@ -33,15 +32,6 @@ describe("Effect-purity locks (compile-time)", () => {
       params: Schema.Struct({}),
       // @ts-expect-error — async handler must not be assignable to Effect-returning execute
       execute: async () => "result",
-    })
-    expect(true).toBe(true)
-  })
-
-  test("commandContribution.handler MUST return Effect — async handler rejected", () => {
-    commandContribution({
-      name: "deploy",
-      // @ts-expect-error — async handler must not be assignable to Effect-returning handler
-      handler: async () => undefined,
     })
     expect(true).toBe(true)
   })
@@ -99,8 +89,8 @@ describe("Effect-purity locks (compile-time)", () => {
     // to a compile error, the surface has narrowed too far.
     const ext = defineExtension({
       id: "purity-positive",
-      contributions: () => [
-        toolContribution(
+      capabilities: [
+        tool(
           defineTool({
             name: "noop",
             description: "noop",
@@ -108,8 +98,9 @@ describe("Effect-purity locks (compile-time)", () => {
             execute: () => Effect.succeed("ok"),
           }),
         ),
-        pipelineContribution(definePipeline("prompt.system", (i, next) => next(i))),
-        commandContribution({ name: "ok", handler: () => Effect.void }),
+      ],
+      pipelines: [definePipeline("prompt.system", (i, next) => next(i))],
+      resources: [
         defineResource({
           scope: "process",
           layer: Layer.empty,

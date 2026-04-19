@@ -19,8 +19,8 @@ import {
   capability as capabilityContribution,
   defineResource,
   tool as toolContribution,
-  type Contribution,
 } from "@gent/core/domain/contribution"
+import type { ExtensionContributions } from "@gent/core/domain/contribution"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,
@@ -30,13 +30,13 @@ const fsLayer = Layer.mergeAll(
 
 const makeBuiltin = (
   id: string,
-  setup: () => Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>,
+  setup: () => Effect.Effect<ExtensionContributions, ExtensionLoadError>,
 ): GentExtension => ({
   manifest: { id },
   setup: () => setup(),
 })
 
-const makeLoaded = (id: string, contributions: ReadonlyArray<Contribution>): LoadedExtension => ({
+const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedExtension => ({
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
@@ -47,14 +47,16 @@ describe("extension activation isolation", () => {
   it.live("builtin setup failure is isolated instead of crashing activation", () =>
     Effect.gen(function* () {
       const good = makeBuiltin("good-ext", () =>
-        Effect.succeed([
-          toolContribution({
-            name: "good_tool",
-            description: "good",
-            params: {} as never,
-            execute: () => Effect.void,
-          }),
-        ]),
+        Effect.succeed({
+          capabilities: [
+            toolContribution({
+              name: "good_tool",
+              description: "good",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ],
+        }),
       )
       const bad = makeBuiltin("bad-ext", () =>
         Effect.sync(() => {
@@ -82,7 +84,7 @@ describe("extension activation isolation", () => {
       const result = yield* setupDiscoveredExtensions({
         extensions: [
           {
-            extension: makeBuiltin("good-ext", () => Effect.succeed([])),
+            extension: makeBuiltin("good-ext", () => Effect.succeed({})),
             kind: "user",
             sourcePath: "/tmp/good.ts",
           },
@@ -118,30 +120,36 @@ describe("extension activation isolation", () => {
     () =>
       Effect.gen(function* () {
         const result = yield* validateLoadedExtensions([
-          makeLoaded("healthy-ext", [
-            toolContribution({
-              name: "healthy_tool",
-              description: "healthy",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-          ]),
-          makeLoaded("collider-a", [
-            toolContribution({
-              name: "shared_tool",
-              description: "a",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-          ]),
-          makeLoaded("collider-b", [
-            toolContribution({
-              name: "shared_tool",
-              description: "b",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-          ]),
+          makeLoaded("healthy-ext", {
+            capabilities: [
+              toolContribution({
+                name: "healthy_tool",
+                description: "healthy",
+                params: {} as never,
+                execute: () => Effect.void,
+              }),
+            ],
+          }),
+          makeLoaded("collider-a", {
+            capabilities: [
+              toolContribution({
+                name: "shared_tool",
+                description: "a",
+                params: {} as never,
+                execute: () => Effect.void,
+              }),
+            ],
+          }),
+          makeLoaded("collider-b", {
+            capabilities: [
+              toolContribution({
+                name: "shared_tool",
+                description: "b",
+                params: {} as never,
+                execute: () => Effect.void,
+              }),
+            ],
+          }),
         ])
 
         expect(result.active.map((ext) => ext.manifest.id)).toEqual(["healthy-ext"])
@@ -163,28 +171,32 @@ describe("extension activation isolation", () => {
   it.live("validation catches same-scope capability/capability tool-name collision", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("collider-a", [
-          capabilityContribution({
-            id: "shared_cap",
-            description: "a",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
-        makeLoaded("collider-b", [
-          capabilityContribution({
-            id: "shared_cap",
-            description: "b",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("collider-a", {
+          capabilities: [
+            capabilityContribution({
+              id: "shared_cap",
+              description: "a",
+              audiences: ["model"],
+              intent: "write",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
+        makeLoaded("collider-b", {
+          capabilities: [
+            capabilityContribution({
+              id: "shared_cap",
+              description: "b",
+              audiences: ["model"],
+              intent: "write",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active).toEqual([])
@@ -199,25 +211,29 @@ describe("extension activation isolation", () => {
   it.live("validation catches same-scope tool/capability tool-name collision", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("legacy-tool", [
-          toolContribution({
-            name: "shared_name",
-            description: "legacy",
-            params: {} as never,
-            execute: () => Effect.void,
-          }),
-        ]),
-        makeLoaded("capability-tool", [
-          capabilityContribution({
-            id: "shared_name",
-            description: "capability",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("legacy-tool", {
+          capabilities: [
+            toolContribution({
+              name: "shared_name",
+              description: "legacy",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ],
+        }),
+        makeLoaded("capability-tool", {
+          capabilities: [
+            capabilityContribution({
+              id: "shared_name",
+              description: "capability",
+              audiences: ["model"],
+              intent: "write",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active).toEqual([])
@@ -235,24 +251,28 @@ describe("extension activation isolation", () => {
       // The tool list is "things audience-authorized as model"; cross-audience
       // sharing of an id is fine.
       const result = yield* validateLoadedExtensions([
-        makeLoaded("legacy-tool", [
-          toolContribution({
-            name: "shared_name",
-            description: "legacy",
-            params: {} as never,
-            execute: () => Effect.void,
-          }),
-        ]),
-        makeLoaded("rpc-only", [
-          capabilityContribution({
-            id: "shared_name",
-            audiences: ["agent-protocol"],
-            intent: "read",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("legacy-tool", {
+          capabilities: [
+            toolContribution({
+              name: "shared_name",
+              description: "legacy",
+              params: {} as never,
+              execute: () => Effect.void,
+            }),
+          ],
+        }),
+        makeLoaded("rpc-only", {
+          capabilities: [
+            capabilityContribution({
+              id: "shared_name",
+              audiences: ["agent-protocol"],
+              intent: "read",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
@@ -266,16 +286,18 @@ describe("extension activation isolation", () => {
   it.live("validation rejects model-audience capability with empty description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("missing-desc", [
-          capabilityContribution({
-            id: "describeless",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("missing-desc", {
+          capabilities: [
+            capabilityContribution({
+              id: "describeless",
+              audiences: ["model"],
+              intent: "write",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active).toEqual([])
@@ -289,17 +311,19 @@ describe("extension activation isolation", () => {
   it.live("validation rejects model-audience capability with whitespace-only description", () =>
     Effect.gen(function* () {
       const result = yield* validateLoadedExtensions([
-        makeLoaded("blank-desc", [
-          capabilityContribution({
-            id: "blanky",
-            description: "   \t\n",
-            audiences: ["model"],
-            intent: "write",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("blank-desc", {
+          capabilities: [
+            capabilityContribution({
+              id: "blanky",
+              description: "   \t\n",
+              audiences: ["model"],
+              intent: "write",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active).toEqual([])
@@ -313,16 +337,18 @@ describe("extension activation isolation", () => {
       // Non-model capabilities don't ship to the LLM, so empty description
       // is fine (the field is optional). Only `audiences:["model"]` requires.
       const result = yield* validateLoadedExtensions([
-        makeLoaded("rpc-no-desc", [
-          capabilityContribution({
-            id: "internal",
-            audiences: ["agent-protocol"],
-            intent: "read",
-            input: Schema.Unknown,
-            output: Schema.Unknown,
-            effect: () => Effect.succeed(undefined),
-          }),
-        ]),
+        makeLoaded("rpc-no-desc", {
+          capabilities: [
+            capabilityContribution({
+              id: "internal",
+              audiences: ["agent-protocol"],
+              intent: "read",
+              input: Schema.Unknown,
+              output: Schema.Unknown,
+              effect: () => Effect.succeed(undefined),
+            }),
+          ],
+        }),
       ])
 
       expect(result.active.map((ext) => ext.manifest.id)).toEqual(["rpc-no-desc"])
@@ -336,29 +362,33 @@ describe("extension activation isolation", () => {
 
       const result = yield* reconcileLoadedExtensions({
         extensions: [
-          makeLoaded("healthy-ext", [
-            toolContribution({
-              name: "healthy_tool",
-              description: "healthy",
-              params: {} as never,
-              execute: () => Effect.void,
-            }),
-            defineResource({
-              scope: "process",
-              layer: Layer.empty,
-              schedule: [
-                {
-                  id: "reflect",
-                  cron: "0 21 * * 1-5",
-                  target: {
-                    kind: "headless-agent",
-                    agent: "memory:reflect" as never,
-                    prompt: "Reflect.",
+          makeLoaded("healthy-ext", {
+            capabilities: [
+              toolContribution({
+                name: "healthy_tool",
+                description: "healthy",
+                params: {} as never,
+                execute: () => Effect.void,
+              }),
+            ],
+            resources: [
+              defineResource({
+                scope: "process",
+                layer: Layer.empty,
+                schedule: [
+                  {
+                    id: "reflect",
+                    cron: "0 21 * * 1-5",
+                    target: {
+                      kind: "headless-agent",
+                      agent: "memory:reflect" as never,
+                      prompt: "Reflect.",
+                    },
                   },
-                },
-              ],
-            }),
-          ]),
+                ],
+              }),
+            ],
+          }),
         ],
         failedExtensions: [
           {

@@ -29,7 +29,6 @@ import {
   type Audience,
 } from "@gent/core/domain/capability"
 import { compileCapabilities } from "@gent/core/runtime/extensions/capability-host"
-import { capability as capabilityContribution } from "@gent/core/domain/contribution"
 
 // CapabilityContext extends ExtensionHostContext (large RPC surface). Tests
 // for the skeleton don't exercise extension RPC; cast a minimal shape.
@@ -49,10 +48,10 @@ const extWith = (
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  contributions: (caps as ReadonlyArray<CapabilityContribution<never, never, never>>).map(
-    capabilityContribution,
-  ),
+  contributions: {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    capabilities: caps as ReadonlyArray<CapabilityContribution<never, never, never>>,
+  },
 })
 
 const echoCap = (

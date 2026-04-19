@@ -9,7 +9,6 @@ import {
 import { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
-import { extractPulseSubscriptions } from "../domain/contribution.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
 
 const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
@@ -22,10 +21,10 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
  * combined and deduped per (sessionId, branchId, extensionId):
  *   1. Workflow transitions — extensions whose machine actually transitioned
  *      in response to the published event (per `WorkflowRuntime.publish`).
- *   2. PulseSubscription contributions — query-backed / projection-only
- *      extensions that declared which event tags invalidate their snapshot
- *      via `pulseSubscriptionContribution([...])`. These never have an actor
- *      so without explicit declaration they would silently stale.
+ *   2. `pulseTags` declarations — query-backed / projection-only extensions
+ *      that declared which event tags invalidate their snapshot via the
+ *      `pulseTags: [...]` bucket on `defineExtension`. These never have an
+ *      actor, so without explicit declaration they would silently stale.
  *
  * No blanket per-event-per-observable fan-out. Pulses are surgical.
  *
@@ -46,20 +45,18 @@ export const EventPublisherLive: Layer.Layer<
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
-    // Pre-compute event-tag → extensionIds index from PulseSubscription
-    // contributions. Built once at startup; the loaded extension set is fixed
+    // Pre-compute event-tag → extensionIds index from `pulseTags` bucket
+    // declarations. Built once at startup; the loaded extension set is fixed
     // for the runtime lifetime.
     const pulseByTag = new Map<string, Set<string>>()
     {
       const resolved = registry.getResolved()
       for (const ext of resolved.extensions) {
-        const subs = extractPulseSubscriptions(ext.contributions)
-        for (const sub of subs) {
-          for (const tag of sub.tags) {
-            const set = pulseByTag.get(tag) ?? new Set<string>()
-            set.add(ext.manifest.id)
-            pulseByTag.set(tag, set)
-          }
+        const tags = ext.contributions.pulseTags ?? []
+        for (const tag of tags) {
+          const set = pulseByTag.get(tag) ?? new Set<string>()
+          set.add(ext.manifest.id)
+          pulseByTag.set(tag, set)
         }
       }
     }

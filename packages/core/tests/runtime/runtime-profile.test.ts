@@ -25,9 +25,9 @@ import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import {
   defineExtension,
   defineResource,
+  toolContribution,
   projectionContribution,
   ProjectionError,
-  toolContribution,
   defineTool,
   type ProjectionContribution,
 } from "@gent/core/extensions/api"
@@ -60,7 +60,7 @@ const sectionTool = defineTool({
 
 const sectionExtension = defineExtension({
   id: "@gent/test-runtime-profile",
-  contributions: () => [toolContribution(sectionTool)],
+  capabilities: [toolContribution(sectionTool)],
 })
 
 // Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection
@@ -87,10 +87,8 @@ const dynamicProjection: ProjectionContribution<string, FakeProvider> = {
 
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
-  contributions: () => [
-    defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive }),
-    projectionContribution(dynamicProjection),
-  ],
+  resources: [defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive })],
+  projections: [projectionContribution(dynamicProjection)],
 })
 
 describe("resolveRuntimeProfile", () => {

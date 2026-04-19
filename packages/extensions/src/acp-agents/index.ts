@@ -11,46 +11,45 @@
  * @module
  */
 import {
-  agentContribution,
   defineAgent,
   defineExtension,
   defineLifecycleResource,
   ExternalDriverRef,
-  externalDriverContribution,
 } from "@gent/core/extensions/api"
 import { ACP_AGENTS } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
 import { createAcpSessionManager } from "./session-manager.js"
 
+// Module-scope singleton — created once at extension setup, shared across
+// agents and externalDrivers factory calls.
+let _sharedManager: ReturnType<typeof createAcpSessionManager> | undefined
+const getManager = () => {
+  if (_sharedManager === undefined) _sharedManager = createAcpSessionManager()
+  return _sharedManager
+}
+
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
-  contributions: () => {
-    const manager = createAcpSessionManager()
-
-    return [
-      ...Object.entries(ACP_AGENTS).map(([name, config]) =>
-        agentContribution(
-          defineAgent({
-            name,
-            description: `${config.command} via ACP`,
-            driver: new ExternalDriverRef({ id: `acp-${name}` }),
-          }),
-        ),
-      ),
-      ...Object.entries(ACP_AGENTS).map(([name, config]) =>
-        externalDriverContribution({
-          id: `acp-${name}`,
-          executor: makeAcpTurnExecutor(config, manager),
-        }),
-      ),
-      // Per-process lifecycle-only Resource that owns the ACP session
-      // manager's disposal. The manager is closure-captured by the
-      // executors above; its `disposeAll()` runs as the Resource's `stop`
-      // finalizer at process-scope teardown. No service is contributed.
-      defineLifecycleResource({
-        scope: "process",
-        stop: manager.disposeAll(),
-      }),
-    ]
-  },
+  agents: Object.entries(ACP_AGENTS).map(([name, config]) =>
+    defineAgent({
+      name,
+      description: `${config.command} via ACP`,
+      driver: new ExternalDriverRef({ id: `acp-${name}` }),
+    }),
+  ),
+  externalDrivers: () =>
+    Object.entries(ACP_AGENTS).map(([name, config]) => ({
+      id: `acp-${name}`,
+      executor: makeAcpTurnExecutor(config, getManager()),
+    })),
+  // Per-process lifecycle-only Resource that owns the ACP session
+  // manager's disposal. The manager is accessed via getManager() by the
+  // executors above; its `disposeAll()` runs as the Resource's `stop`
+  // finalizer at process-scope teardown. No service is contributed.
+  resources: () => [
+    defineLifecycleResource({
+      scope: "process",
+      stop: getManager().disposeAll(),
+    }),
+  ],
 })

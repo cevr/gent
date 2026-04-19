@@ -23,7 +23,6 @@ import type {
   SubscriptionHandler,
   SubscriptionKey,
 } from "../../domain/subscription.js"
-import { extractSubscriptions } from "../../domain/contribution.js"
 
 interface RegisteredSubscription<K extends SubscriptionKey> {
   readonly extensionId: string
@@ -63,7 +62,7 @@ export const compileSubscriptions = (
 
   const registry = emptyRegistry()
   for (const ext of sorted) {
-    for (const contribution of extractSubscriptions(ext.contributions)) {
+    for (const contribution of ext.contributions.subscriptions ?? []) {
       const c = contribution as AnySubscriptionContribution
       registry[c.event].push({
         extensionId: ext.manifest.id,

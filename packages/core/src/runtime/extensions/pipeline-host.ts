@@ -21,7 +21,6 @@ import type {
   PipelineKey,
   PipelineOutput,
 } from "../../domain/pipeline.js"
-import { extractPipelines } from "../../domain/contribution.js"
 
 export interface CompiledPipelines {
   readonly runPipeline: <K extends PipelineKey>(
@@ -84,7 +83,7 @@ export const compilePipelines = (extensions: ReadonlyArray<LoadedExtension>): Co
 
   const chains = emptyChains()
   for (const ext of sorted) {
-    for (const contribution of extractPipelines(ext.contributions)) {
+    for (const contribution of ext.contributions.pipelines ?? []) {
       const c = contribution as AnyPipelineContribution
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       ;(chains[c.hook] as Array<unknown>).push(c.handler as unknown)

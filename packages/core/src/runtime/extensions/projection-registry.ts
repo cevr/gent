@@ -20,7 +20,6 @@
  */
 import { Effect } from "effect"
 import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
-import { extractProjections } from "../../domain/contribution.js"
 import type {
   AnyProjectionContribution,
   ProjectionContext,
@@ -72,8 +71,7 @@ const collectProjections = (
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredProjection[] = []
   for (const ext of sorted) {
-    const projections = extractProjections(ext.contributions)
-    for (const projection of projections) {
+    for (const projection of ext.contributions.projections ?? []) {
       if (projection === undefined) continue
       entries.push({ extensionId: ext.manifest.id, projection })
     }

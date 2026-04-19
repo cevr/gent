@@ -8,9 +8,8 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Stream } from "effect"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/extension"
 import type { TurnError, TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
-import { externalDriver as externalDriverContribution } from "@gent/core/domain/contribution"
 
 const noopExecutor: TurnExecutor = {
   executeTurn: () => Stream.empty,
@@ -31,7 +30,9 @@ const makeExt = (
   manifest: { id },
   kind: "builtin" as const,
   sourcePath: `/test/${id}`,
-  contributions: (externalDrivers ?? []).map(externalDriverContribution),
+  contributions: (externalDrivers !== undefined && externalDrivers.length > 0
+    ? { externalDrivers }
+    : {}) as ExtensionContributions,
 })
 
 describe("ExternalDriver registry", () => {

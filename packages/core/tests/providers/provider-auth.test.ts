@@ -8,7 +8,6 @@ import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ProviderAuth } from "@gent/core/providers/provider-auth"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { modelDriver as modelDriverContribution } from "@gent/core/domain/contribution"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 
 const pendingCallbacks = new Map<string, (code?: string) => string>()
@@ -55,7 +54,7 @@ const testResolved = resolveExtensions([
     manifest: { id: "test" },
     kind: "builtin",
     sourcePath: "test",
-    contributions: [modelDriverContribution(oauthProvider), modelDriverContribution(noopProvider)],
+    contributions: { modelDrivers: [oauthProvider, noopProvider] },
   } satisfies LoadedExtension,
 ])
 const testRegistry = ExtensionRegistry.fromResolved(testResolved)

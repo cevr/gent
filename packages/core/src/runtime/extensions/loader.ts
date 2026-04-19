@@ -3,24 +3,16 @@ import { Effect, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { ExtensionKind, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
-import {
-  type Contribution,
-  extractAgents,
-  extractCapabilities,
-  extractExternalDrivers,
-  extractModelDrivers,
-} from "../../domain/contribution.js"
+import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
+import type { ExtensionPackage } from "../../domain/extension-package.js"
 
-/** C7: Static prompt sections live on `Capability.prompt` (folded by the
+/** Static prompt sections live on `Capability.prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
  *  scope collision detection — same shape, same precedence rules as the
  *  legacy promptSection contribution. */
-const extractCapabilityPrompts = (cs: ReadonlyArray<Contribution>): ReadonlyArray<PromptSection> =>
-  extractCapabilities(cs)
-    .map((c) => c.prompt)
-    .filter((p): p is PromptSection => p !== undefined)
-import type { ExtensionPackage } from "../../domain/extension-package.js"
+const collectCapabilityPrompts = (cs: ExtensionContributions): ReadonlyArray<PromptSection> =>
+  (cs.capabilities ?? []).map((c) => c.prompt).filter((p): p is PromptSection => p !== undefined)
 
 // Discovery — scan directories for extension files
 
@@ -255,7 +247,7 @@ export const setupExtension = (
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const spawner = yield* ChildProcessSpawner
-    const contributions: ReadonlyArray<Contribution> = yield* extension
+    const contributions: ExtensionContributions = yield* extension
       .setup({
         cwd,
         source: sourcePath,
@@ -284,16 +276,16 @@ export const setupExtension = (
     }
   }).pipe(Effect.withSpan("ExtensionLoader.setupExtension"))
 
-/** Check same-scope collision for a keyed contribution. Returns error or undefined. */
+/** Check same-scope collision for a keyed bucket. Returns error or undefined. */
 const checkScopedCollision = <T>(
   extensions: ReadonlyArray<LoadedExtension>,
-  extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
+  pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
   getKey: (item: T) => string,
   label: string,
 ): ExtensionLoadError | undefined => {
   const byScope = new Map<string, Map<string, string>>()
   for (const ext of extensions) {
-    const items = extract(ext.contributions)
+    const items = pickItems(ext.contributions)
     const scope = ext.kind
     const scopeMap = byScope.get(scope) ?? new Map<string, string>()
     for (const item of items) {
@@ -335,10 +327,25 @@ export const validateExtensions = (
     // Tool collisions (now `Capability(audiences:["model"])`) are caught by
     // `collectScopedCollisions(extractModelToolIdentities, …)` in `activation.ts`.
     const checks = [
-      checkScopedCollision(extensions, extractAgents, (a) => a.name, "agent"),
-      checkScopedCollision(extensions, extractModelDrivers, (d) => d.id, "model driver"),
-      checkScopedCollision(extensions, extractExternalDrivers, (d) => d.id, "external driver"),
-      checkScopedCollision(extensions, extractCapabilityPrompts, (p) => p.id, "prompt section"),
+      checkScopedCollision(
+        extensions,
+        (cs) => cs.agents ?? [],
+        (a) => a.name,
+        "agent",
+      ),
+      checkScopedCollision(
+        extensions,
+        (cs) => cs.modelDrivers ?? [],
+        (d) => d.id,
+        "model driver",
+      ),
+      checkScopedCollision(
+        extensions,
+        (cs) => cs.externalDrivers ?? [],
+        (d) => d.id,
+        "external driver",
+      ),
+      checkScopedCollision(extensions, collectCapabilityPrompts, (p) => p.id, "prompt section"),
     ]
     for (const error of checks) {
       if (error !== undefined) return yield* error

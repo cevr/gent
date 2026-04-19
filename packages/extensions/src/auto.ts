@@ -21,10 +21,9 @@ import {
   defineResource,
   defineSubscription,
   isRecord,
-  pipelineContribution,
-  projectionContribution,
-  subscriptionContribution,
-  toolContribution,
+  pipeline,
+  subscription,
+  tool,
   type ResourceMachine,
   type ExtensionEffect,
   type ToolResultInput,
@@ -665,15 +664,15 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
-  contributions: ({ ctx }) => [
-    projectionContribution(AutoProjection),
-    toolContribution(AutoCheckpointTool),
-    pipelineContribution(definePipeline("tool.result", journalInterceptorImpl)),
-    subscriptionContribution(defineSubscription("turn.after", "isolate", autoHandoffImpl)),
-    // Single Resource carries the AutoJournal service layer AND the auto
-    // workflow machine. The machine declares `AutoJournal` in its `slots`
-    // requirements; the `layer` here provides it. C3.5b merge per the
-    // "Resource = layer + lifecycle + machine" design intent.
+  projections: [AutoProjection],
+  capabilities: [tool(AutoCheckpointTool)],
+  pipelines: [pipeline(definePipeline("tool.result", journalInterceptorImpl))],
+  subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
+  // Single Resource carries the AutoJournal service layer AND the auto
+  // workflow machine. The machine declares `AutoJournal` in its `slots`
+  // requirements; the `layer` here provides it. C3.5b merge per the
+  // "Resource = layer + lifecycle + machine" design intent.
+  resources: ({ ctx }) => [
     defineResource({
       tag: AutoJournal,
       scope: "process",

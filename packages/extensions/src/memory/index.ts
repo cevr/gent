@@ -19,12 +19,10 @@
 import { Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
-  agentContribution,
   AgentEvent,
   defineExtension,
   defineResource,
-  projectionContribution,
-  toolContribution,
+  tool,
   type AnyToolDefinition,
   type ReduceResult,
   type ResourceMachine,
@@ -151,13 +149,13 @@ const memoryWorkflow: ResourceMachine<
 
 export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
-  contributions: () => [
-    ...(MemoryTools as ReadonlyArray<AnyToolDefinition>).map(toolContribution),
-    ...MemoryAgents.map(agentContribution),
-    projectionContribution(MemoryVaultProjection),
-    // Single Resource carries the MemoryVault layer, the dream-promotion
-    // schedule, AND the session-memory machine. Per the C3.5 "Resource =
-    // layer + lifecycle + machine" merge.
+  capabilities: (MemoryTools as ReadonlyArray<AnyToolDefinition>).map(tool),
+  agents: [...MemoryAgents],
+  projections: [MemoryVaultProjection],
+  // Single Resource carries the MemoryVault layer, the dream-promotion
+  // schedule, AND the session-memory machine. Per the C3.5 "Resource =
+  // layer + lifecycle + machine" merge.
+  resources: [
     defineResource({
       scope: "process",
       layer: MemoryVaultLive(),

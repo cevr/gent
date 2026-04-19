@@ -27,12 +27,7 @@ import type {
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
-import {
-  type Contribution,
-  agent as agentContribution,
-  extractResources,
-  tool as toolContribution,
-} from "../domain/contribution.js"
+import { type ExtensionContributions, tool as toolContribution } from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -219,10 +214,12 @@ export interface ToolTestLayerConfig {
  * services (FileSystem, Path) should compose with BunServices.layer.
  */
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
-  const builtinContributions: ReadonlyArray<Contribution> = [
-    ...config.agents.map(agentContribution),
-    ...(config.tools ?? []).map(toolContribution),
-  ]
+  const builtinContributions: ExtensionContributions = {
+    agents: config.agents,
+    ...((config.tools ?? []).length > 0
+      ? { capabilities: (config.tools ?? []).map(toolContribution) }
+      : {}),
+  }
 
   const defaultRunner: AgentRunner = {
     run: () =>
@@ -290,7 +287,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
       const contributedLayers: Array<Layer.Layer<never, never, object>> = activeExtensions.flatMap(
         (ext) =>
-          extractResources(ext.contributions)
+          (ext.contributions.resources ?? [])
             .filter((r) => r.scope === "process")
             .map((r) => {
               // Resource layers carry their own R/E; harness boundary.

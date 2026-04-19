@@ -1,7 +1,6 @@
 import { Layer, Redacted } from "effect"
 import {
   defineExtension,
-  modelDriverContribution,
   AuthMethod,
   type ModelDriverContribution,
   type ProviderHints,
@@ -26,7 +25,7 @@ const buildConfig = (hints?: ProviderHints) => {
 
 export const MistralExtension = defineExtension({
   id: "@gent/provider-mistral",
-  contributions: () => {
+  modelDrivers: () => {
     const mistralProvider: ModelDriverContribution = {
       id: "mistral",
       name: "Mistral",
@@ -51,6 +50,6 @@ export const MistralExtension = defineExtension({
       },
     }
 
-    return [modelDriverContribution(mistralProvider)]
+    return [mistralProvider]
   },
 })

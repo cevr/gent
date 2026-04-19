@@ -1,7 +1,6 @@
 import { Effect, Layer, Redacted } from "effect"
 import {
   defineExtension,
-  modelDriverContribution,
   AuthOauth,
   AuthMethod,
   type ModelDriverContribution,
@@ -94,7 +93,7 @@ const buildOpenAiConfig = (hints?: ProviderHints) => {
 
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
-  contributions: () => {
+  modelDrivers: () => {
     // Pending OAuth callbacks keyed by authorizationId (closure state)
     const pendingCallbacks = new Map<string, OAuthCallback>()
     const openaiProvider: ModelDriverContribution = {
@@ -209,6 +208,6 @@ export const OpenAIExtension = defineExtension({
       },
     }
 
-    return [modelDriverContribution(openaiProvider)]
+    return [openaiProvider]
   },
 })

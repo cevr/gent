@@ -12,6 +12,7 @@ import {
   Context,
 } from "effect"
 import type { AgentEvent } from "../../domain/event.js"
+import type { AnyResourceMachine } from "../../domain/resource.js"
 import type {
   AnyExtensionActorDefinition,
   ExtensionActorStatusInfo,
@@ -33,7 +34,13 @@ import {
 import { CurrentExtensionSession, CurrentMailboxSession } from "./extension-actor-shared.js"
 import { spawnMachineExtensionRef } from "./spawn-machine-ref.js"
 import { ExtensionTurnControl } from "./turn-control.js"
-import { extractMachine } from "../../domain/contribution.js"
+/** Extract the (at most one) `Resource.machine` declared by an extension. */
+const extractMachine = (ext: LoadedExtension): AnyResourceMachine | undefined => {
+  for (const r of ext.contributions.resources ?? []) {
+    if (r.machine !== undefined) return r.machine
+  }
+  return undefined
+}
 
 interface ExtensionProtocolRegistry {
   readonly get: (extensionId: string, tag: string) => AnyExtensionMessageDefinition | undefined
@@ -127,9 +134,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
             // `ExtensionActorDefinition` — see resource.ts. Cast to the
             // runtime shape so existing actor-named code paths stay intact.
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const actor = extractMachine(ext.contributions) as
-              | AnyExtensionActorDefinition
-              | undefined
+            const actor = extractMachine(ext) as AnyExtensionActorDefinition | undefined
             if (actor !== undefined) {
               const spec = {
                 extensionId: ext.manifest.id,
@@ -155,7 +160,7 @@ export class WorkflowRuntime extends Context.Service<WorkflowRuntime, WorkflowRu
               extensionsWithActors: spawnSpecs.length,
               actorIds: spawnSpecs.map((s) => s.extensionId).join(", "),
               extensionsWithoutActors: extensions
-                .filter((ext) => extractMachine(ext.contributions) === undefined)
+                .filter((ext) => extractMachine(ext) === undefined)
                 .map((ext) => ext.manifest.id)
                 .join(", "),
             }),

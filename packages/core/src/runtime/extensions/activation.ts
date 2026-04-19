@@ -6,15 +6,14 @@ import type {
   FailedExtensionPhase,
   LoadedExtension,
 } from "../../domain/extension.js"
-import {
-  type Contribution,
-  extractAgents,
-  extractCapabilities,
-  extractExternalDrivers,
-  extractModelDrivers,
-  extractMachine,
-} from "../../domain/contribution.js"
+import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
+
+const hasMachine = (contribs: ExtensionContributions): boolean =>
+  (contribs.resources ?? []).some((r) => r.machine !== undefined)
+
+const modelToolCount = (contribs: ExtensionContributions): number =>
+  (contribs.capabilities ?? []).filter((c) => c.audiences.includes("model")).length
 import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
@@ -92,10 +91,8 @@ export const setupBuiltinExtensions = (params: {
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
             kind: "builtin",
-            hasMachine: extractMachine(exit.value.contributions) !== undefined,
-            tools: extractCapabilities(exit.value.contributions).filter((c) =>
-              c.audiences.includes("model"),
-            ).length,
+            hasMachine: hasMachine(exit.value.contributions),
+            tools: modelToolCount(exit.value.contributions),
           }),
         )
       } else {
@@ -152,10 +149,8 @@ export const setupDiscoveredExtensions = (params: {
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
             kind: discovered.kind,
-            hasMachine: extractMachine(exit.value.contributions) !== undefined,
-            tools: extractCapabilities(exit.value.contributions).filter((c) =>
-              c.audiences.includes("model"),
-            ).length,
+            hasMachine: hasMachine(exit.value.contributions),
+            tools: modelToolCount(exit.value.contributions),
           }),
         )
       } else {
@@ -230,7 +225,7 @@ export const collectValidationFailures = (
   }
 
   const collectScopedCollisions = <T>(
-    extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
+    pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
     getKey: (item: T) => string,
     label: string,
   ) => {
@@ -238,7 +233,7 @@ export const collectValidationFailures = (
     for (const ext of extensions) {
       const scopeMap = byScope.get(ext.kind) ?? new Map<string, LoadedExtension[]>()
       const seen = new Set<string>()
-      for (const item of extract(ext.contributions)) {
+      for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
         if (seen.has(key)) continue
         seen.add(key)
@@ -258,32 +253,43 @@ export const collectValidationFailures = (
     }
   }
 
-  // Tool collisions: same-scope same-id model-audience capabilities. After
-  // C4.5, every model tool is a `Capability(audiences:["model"])` — the
-  // legacy `_kind: "tool"` branch is gone, so identity is `cap.id`.
-  const extractModelToolIdentities = (cs: ReadonlyArray<Contribution>): ReadonlyArray<string> =>
-    extractCapabilities(cs)
-      .filter((cap) => cap.audiences.includes("model"))
-      .map((cap) => cap.id)
-  collectScopedCollisions(extractModelToolIdentities, (name) => name, "tool")
-  collectScopedCollisions(extractAgents, (agent) => agent.name, "agent")
-  collectScopedCollisions(extractModelDrivers, (driver) => driver.id, "model driver")
-  collectScopedCollisions(extractExternalDrivers, (driver) => driver.id, "external driver")
-  // C7: static prompt sections live on `Capability.prompt`. Collision check
+  // Tool collisions: same-scope same-id model-audience capabilities.
+  collectScopedCollisions(
+    (cs) => (cs.capabilities ?? []).filter((cap) => cap.audiences.includes("model")),
+    (cap) => cap.id,
+    "tool",
+  )
+  collectScopedCollisions(
+    (cs) => cs.agents ?? [],
+    (agent) => agent.name,
+    "agent",
+  )
+  collectScopedCollisions(
+    (cs) => cs.modelDrivers ?? [],
+    (driver) => driver.id,
+    "model driver",
+  )
+  collectScopedCollisions(
+    (cs) => cs.externalDrivers ?? [],
+    (driver) => driver.id,
+    "external driver",
+  )
+  // Static prompt sections live on `Capability.prompt`. Collision check
   // mirrors the legacy promptSection contribution's id-keyed dedup.
-  const extractCapabilityPrompts = (
-    cs: ReadonlyArray<Contribution>,
-  ): ReadonlyArray<PromptSection> =>
-    extractCapabilities(cs)
-      .map((c) => c.prompt)
-      .filter((p): p is PromptSection => p !== undefined)
-  collectScopedCollisions(extractCapabilityPrompts, (section) => section.id, "prompt section")
+  collectScopedCollisions(
+    (cs) =>
+      (cs.capabilities ?? [])
+        .map((c) => c.prompt)
+        .filter((p): p is PromptSection => p !== undefined),
+    (section) => section.id,
+    "prompt section",
+  )
 
   // Model-audience capabilities MUST declare a non-empty description — the
   // string is sent to the LLM as part of the tool schema, so empty/missing
   // becomes "why is the model dumb?" rot later. Codex ADVISORY on C4.4a.
   for (const ext of extensions) {
-    for (const cap of extractCapabilities(ext.contributions)) {
+    for (const cap of ext.contributions.capabilities ?? []) {
       if (!cap.audiences.includes("model")) continue
       const trimmed = (cap.description ?? "").trim()
       if (trimmed.length === 0) {
@@ -375,9 +381,7 @@ export const reconcileLoadedExtensions = (params: {
       groupScheduledJobFailures(scheduledJobFailures),
     )
 
-    const machineCount = activated.active.filter(
-      (ext) => extractMachine(ext.contributions) !== undefined,
-    ).length
+    const machineCount = activated.active.filter((ext) => hasMachine(ext.contributions)).length
     yield* Effect.logInfo("extension.reconciliation.summary").pipe(
       Effect.annotateLogs({
         active: activated.active.length,
@@ -385,7 +389,7 @@ export const reconcileLoadedExtensions = (params: {
         withMachines: machineCount,
         activeIds: activated.active.map((ext) => ext.manifest.id).join(", "),
         machineIds: activated.active
-          .filter((ext) => extractMachine(ext.contributions) !== undefined)
+          .filter((ext) => hasMachine(ext.contributions))
           .map((ext) => ext.manifest.id)
           .join(", "),
         ...(allFailed.length > 0

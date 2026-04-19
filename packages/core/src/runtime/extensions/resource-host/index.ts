@@ -30,7 +30,10 @@ import type {
   ResourceScope,
   ResourceSubscription,
 } from "../../../domain/resource.js"
-import { extractResources } from "../../../domain/contribution.js"
+// Inline reader — `LoadedExtension.contributions.resources` is the source of
+// truth after C8. Returns the raw bucket (or empty array for narrow consumers).
+const extractResources = (ext: LoadedExtension): ReadonlyArray<AnyResourceContribution> =>
+  ext.contributions.resources ?? []
 
 // ── Re-exports ──
 
@@ -67,7 +70,7 @@ export const collectSubscriptions = (
 ): ReadonlyArray<ResourceSubscription> => {
   const allowed = new Set(scopes)
   return extensions.flatMap((ext) =>
-    extractResources(ext.contributions)
+    extractResources(ext)
       .filter((r) => allowed.has(r.scope))
       .flatMap((r) => r.subscriptions ?? []),
   )
@@ -116,7 +119,7 @@ export const buildResourceLayer = (
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Layer.Layer<any> => {
   const resources = extensions.flatMap((ext) =>
-    extractResources(ext.contributions)
+    extractResources(ext)
       .filter((r) => r.scope === scope)
       .map((r) => ({ extensionId: ext.manifest.id, resource: r })),
   )

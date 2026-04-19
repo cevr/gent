@@ -1,11 +1,16 @@
 /**
  * Extension authoring API.
  *
- * Single entry point: `defineExtension({ id, contributions })`. The factory
- * receives the setup context and returns a flat `Contribution[]` (or an
- * Effect that yields one). Smart constructors (`toolContribution`,
- * `agentContribution`, `defineResource`, etc.) are re-exported from
- * `domain/contribution.js`.
+ * Single entry point: `defineExtension({ id, resources?, capabilities?, ... })`.
+ * The factory accepts typed sub-arrays (literal arrays OR `(ctx) => array` OR
+ * `(ctx) => Effect<array>` per bucket), validates them, and produces a
+ * `GentExtension` whose `setup()` returns `ExtensionContributions` buckets.
+ *
+ * After C8 there is no flat `Contribution[]`, no `_kind` discriminator, no
+ * `filterByKind`. The bucket name IS the discrimination — TypeScript catches
+ * a Projection placed in `capabilities` at the call site; runtime
+ * `validatePackageShape` adds field-local error messages for runtime-loaded
+ * (JS) extensions.
  *
  * Effect-native end-to-end: every contribution returns Effect. There are no
  * Promise edges in the contribution surface — gent is a library used inside
@@ -13,29 +18,44 @@
  *
  * @example
  * ```ts
- * import { Effect } from "effect"
- * import {
- *   defineExtension,
- *   defineResource,
- *   defineTool,
- *   toolContribution,
- * } from "@gent/core/extensions/api"
+ * import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
  *
  * export default defineExtension({
  *   id: "my-ext",
- *   contributions: () => [
- *     toolContribution(MyTool),
- *     defineResource({ scope: "process", layer: MyService.Live }),
- *   ],
+ *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
+ *   capabilities: [tool(MyTool)],
+ * })
+ * ```
+ *
+ * @example with ctx + Effect
+ * ```ts
+ * export default defineExtension({
+ *   id: "my-ext",
+ *   capabilities: ({ ctx }) =>
+ *     Effect.gen(function* () {
+ *       const skills = yield* loadSkills(ctx.cwd)
+ *       return [tool(SearchSkillsTool(skills))]
+ *     }),
  * })
  * ```
  *
  * @module
  */
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { ExtensionLoadError } from "../domain/extension.js"
-import type { GentExtension, ExtensionSetupContext } from "../domain/extension.js"
-import { type Contribution, filterByKind } from "../domain/contribution.js"
+import type {
+  GentExtension,
+  ExtensionSetupContext,
+  ExtensionManifest,
+} from "../domain/extension.js"
+import type { ExtensionContributions } from "../domain/contribution.js"
+import type { AgentDefinition } from "../domain/agent.js"
+import type { AnyCapabilityContribution } from "../domain/capability.js"
+import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
+import type { AnyPipelineContribution } from "../domain/pipeline.js"
+import type { AnyProjectionContribution } from "../domain/projection.js"
+import type { AnyResourceContribution } from "../domain/resource.js"
+import type { AnySubscriptionContribution } from "../domain/subscription.js"
 import type { AgentEvent } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
@@ -69,7 +89,6 @@ export {
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type TurnProjection,
-  type CommandContribution,
   type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -163,31 +182,36 @@ export {
   type ExtensionInput,
 } from "../domain/extension-package.js"
 export {
-  type Contribution,
-  type ContributionKind,
-  type AgentContribution,
-  type PipelineKindContribution,
-  type SubscriptionKindContribution,
-  type CommandKindContribution,
-  type DriverKindContribution,
-  type ProjectionKindContribution,
-  type CapabilityKindContribution,
-  filterByKind,
-  // smart constructors
+  type ExtensionContributions,
+  // Smart constructors — return bare leaf values; the bucket they're placed
+  // in is the discrimination (no `_kind` field).
+  tool,
+  agent,
+  pipeline,
+  subscription,
+  modelDriver,
+  externalDriver,
+  projection,
+  query,
+  mutation,
+  capability,
+  defineResource,
+  defineLifecycleResource,
+} from "../domain/contribution.js"
+// Legacy aliases — many existing call sites use the `*Contribution` suffix.
+// After C8 these are pure identity wrappers and could be dropped, but the
+// re-export keeps the diff focused on the structural change. C10 cleanup.
+export {
   tool as toolContribution,
   agent as agentContribution,
   pipeline as pipelineContribution,
   subscription as subscriptionContribution,
-  command as commandContribution,
   modelDriver as modelDriverContribution,
   externalDriver as externalDriverContribution,
   projection as projectionContribution,
-  pulseSubscription as pulseSubscriptionContribution,
   query as queryContribution,
   mutation as mutationContribution,
   capability as capabilityContribution,
-  defineResource,
-  defineLifecycleResource,
 } from "../domain/contribution.js"
 export {
   type PipelineContribution,
@@ -330,102 +354,258 @@ type LegacySimpleAgentRunEvent =
 
 type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 
-// ── Removed in C12 ──
-//
-// `ExtensionBuilder`, `extension(id, factory)`, `SimpleToolDef`/`SimpleAgentDef`,
-// and `ext.exec()` (`ExecError`/`ExecResult`) were the legacy fluent-builder
-// authoring surface. All builtin and example extensions now compose
-// `Contribution[]` arrays via `defineExtension({ id, contributions })`. The
-// pipeline / subscription compilation algorithms live in
-// `runtime/extensions/pipeline-host.ts` and `runtime/extensions/subscription-host.ts`
-// (the legacy `interceptor-registry.ts` died in C6); the
-// `runtime/extensions/hooks.ts` shell is gone.
-//
-// ── Removed in Phase 6 / B2 ──
-//
-// `LoweredBuckets`, `placeContribution`, `bucketsToSetup`, `lowerContributions`,
-// and the `ExtensionSetup` setup-bag interface are gone. The canonical
-// `Contribution[]` flows through `LoadedExtension.contributions` and every
-// registry/runtime consumer reads it directly via the `extractX` helpers in
-// `domain/contribution.ts`. There is one shape, one place, one source of truth.
-
 // ── Public API ──
 
 // ExtensionSetupContext re-exported from domain — single source of truth
 export type { ExtensionSetupContext } from "../domain/extension.js"
 
 /**
- * Define an extension as a flat array of contributions.
+ * Per-bucket spec accepted by `defineExtension`. Each bucket field can be:
+ *   - a literal array (90% of cases — the extension contributes a constant set)
+ *   - a `(args) => array` factory (when the bucket needs `ctx` but no Effect)
+ *   - a `(args) => Effect<array>` factory (when setup needs Effect-typed work)
  *
- * The canonical authoring shape — no fluent chain, no setup bag. The factory
- * receives the setup context and returns a `Contribution[]` (or an Effect
- * that yields one). Later scope wins per the registry's scope precedence rule.
+ * Codex C8 review: prefer literal arrays as default; the variance behind one
+ * helper (`resolveField`) keeps 26 of 30 builtin extensions ceremony-free
+ * while preserving Effect for the 4 that genuinely need it.
+ */
+export type FieldSpec<A> =
+  | ReadonlyArray<A>
+  | ((args: {
+      readonly ctx: ExtensionSetupContext
+    }) => ReadonlyArray<A> | Effect.Effect<ReadonlyArray<A>, ExtensionLoadError>)
+
+export interface DefineExtensionInput {
+  readonly id: string
+  readonly resources?: FieldSpec<AnyResourceContribution>
+  readonly capabilities?: FieldSpec<AnyCapabilityContribution>
+  readonly agents?: FieldSpec<AgentDefinition>
+  readonly projections?: FieldSpec<AnyProjectionContribution>
+  readonly pipelines?: FieldSpec<AnyPipelineContribution>
+  readonly subscriptions?: FieldSpec<AnySubscriptionContribution>
+  readonly modelDrivers?: FieldSpec<ModelDriverContribution>
+  readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
+  readonly pulseTags?: ReadonlyArray<string>
+}
+
+/**
+ * Resolve a single bucket field — accepts literal array, sync factory, or
+ * Effect-returning factory. Errors are annotated with the bucket name so
+ * the failure message points at the field, not "setup failed" (codex
+ * C8 finding 2).
+ */
+const resolveField = <A>(
+  manifest: ExtensionManifest,
+  field: string,
+  spec: FieldSpec<A> | undefined,
+  ctx: ExtensionSetupContext,
+): Effect.Effect<ReadonlyArray<A>, ExtensionLoadError> =>
+  Effect.gen(function* () {
+    if (spec === undefined) return []
+    if (Array.isArray(spec)) return spec
+    const result = yield* Effect.try({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      try: () => (spec as (args: { ctx: ExtensionSetupContext }) => unknown)({ ctx }),
+      catch: (cause) =>
+        new ExtensionLoadError({
+          extensionId: manifest.id,
+          message: `${field} factory threw: ${String(cause)}`,
+          cause,
+        }),
+    })
+    // Effect-typed factory: yield it AND seal its failure channel into
+    // ExtensionLoadError. Without this, an Effect-factory could escape its
+    // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
+    // be propagated raw — loader.ts only catches defects). Codex C8 BLOCK 1.
+    if (Effect.isEffect(result)) {
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS factory has erased E/R; mapError below re-seals into ExtensionLoadError, and Effect.isEffect proves the value is an Effect
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const erased = result as Effect.Effect<unknown, unknown>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — `erased` is intentionally typed `unknown,unknown`; sealed below converts the error channel to ExtensionLoadError via mapError
+      const sealed = erased.pipe(
+        Effect.mapError((cause) =>
+          Schema.is(ExtensionLoadError)(cause)
+            ? cause
+            : new ExtensionLoadError({
+                extensionId: manifest.id,
+                message: `${field} factory failed: ${String(cause)}`,
+                cause,
+              }),
+        ),
+      )
+      const value = yield* sealed
+      if (!Array.isArray(value)) {
+        return yield* new ExtensionLoadError({
+          extensionId: manifest.id,
+          message: `${field} factory must resolve to an array, got ${typeof value}`,
+        })
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      return value as ReadonlyArray<A>
+    }
+    // Sync factory: validate shape — a JS extension returning a single item
+    // (`capabilities: () => myCap`) would otherwise silently become "no items"
+    // because `undefined > 0` is false in the bucket-include check.
+    if (!Array.isArray(result)) {
+      return yield* new ExtensionLoadError({
+        extensionId: manifest.id,
+        message: `${field} factory must return an array, got ${typeof result}`,
+      })
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return result as ReadonlyArray<A>
+  })
+
+/**
+ * Cross-bucket validation — runs after every bucket's spec resolves. Codex
+ * C8 finding 4: field-local errors beat "_kind expected". The shape of the
+ * messages is `Extension "@x" <field>[<i>] invalid: <reason>`.
  *
- * Validates the single-machine constraint: an extension may declare at most
- * one `Resource` with a `machine`.
+ * Invariants enforced here:
+ *   - At most one Resource declares `machine` per extension. Without this,
+ *     the runtime silently picks by array order and drops the rest.
+ *   - Resource.machine must be process-scope until ephemeral composers wire
+ *     Resource layers (codex BLOCK 3 on C3.5a).
+ *   - Capability `audiences` must be non-empty.
+ *   - `audiences:["model"]` capabilities must have a non-empty description
+ *     (model-audience disclosure requirement; was activation.ts:282 check).
+ *   - Intra-extension capability/agent/driver id/name collisions are
+ *     surfaced (cross-extension collisions are scope-precedence's concern).
+ */
+const validateResources = (contribs: ExtensionContributions): string | undefined => {
+  const machineResources = (contribs.resources ?? []).filter((r) => r.machine !== undefined)
+  if (machineResources.length > 1) {
+    return `resources: at most one Resource may declare \`machine\` (found ${machineResources.length}); the runtime would silently pick the first by array order and drop the rest`
+  }
+  const sessionScopedMachine = machineResources.find((r) => r.scope !== "process")
+  if (sessionScopedMachine !== undefined) {
+    return `resources: Resource.machine on scope "${sessionScopedMachine.scope}" is not yet supported (only "process" until per-cwd / ephemeral composers wire Resource layers). Move the machine to a process-scope Resource.`
+  }
+  return undefined
+}
+
+const validateCapabilities = (contribs: ExtensionContributions): string | undefined => {
+  const capIds = new Map<string, number>()
+  for (const [i, cap] of (contribs.capabilities ?? []).entries()) {
+    if (cap.audiences === undefined || cap.audiences.length === 0) {
+      return `capabilities[${i}] (${cap.id ?? "<no id>"}): \`audiences\` must be a non-empty array`
+    }
+    if (
+      cap.audiences.includes("model") &&
+      (cap.description === undefined || cap.description === "")
+    ) {
+      return `capabilities[${i}] (${cap.id}): model-audience capability requires a non-empty \`description\` (the model sees it as the tool description)`
+    }
+    if (capIds.has(cap.id)) {
+      return `capabilities[${i}] (${cap.id}): duplicate id within extension (also at index ${capIds.get(cap.id)}); cross-extension collisions are resolved by scope precedence, but intra-extension collisions are an authoring bug`
+    }
+    capIds.set(cap.id, i)
+  }
+  return undefined
+}
+
+const validateAgents = (contribs: ExtensionContributions): string | undefined => {
+  const agentNames = new Map<string, number>()
+  for (const [i, a] of (contribs.agents ?? []).entries()) {
+    if (agentNames.has(a.name)) {
+      return `agents[${i}] (${a.name}): duplicate name within extension (also at index ${agentNames.get(a.name)})`
+    }
+    agentNames.set(a.name, i)
+  }
+  return undefined
+}
+
+const validateDriverIds = (contribs: ExtensionContributions): string | undefined => {
+  const allDriverIds = new Map<string, string>()
+  for (const [i, d] of (contribs.modelDrivers ?? []).entries()) {
+    if (allDriverIds.has(d.id)) {
+      return `modelDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`
+    }
+    allDriverIds.set(d.id, `modelDrivers[${i}]`)
+  }
+  for (const [i, d] of (contribs.externalDrivers ?? []).entries()) {
+    if (allDriverIds.has(d.id)) {
+      return `externalDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`
+    }
+    allDriverIds.set(d.id, `externalDrivers[${i}]`)
+  }
+  return undefined
+}
+
+const validatePackageShape = (
+  manifest: ExtensionManifest,
+  contribs: ExtensionContributions,
+): Effect.Effect<void, ExtensionLoadError> =>
+  Effect.gen(function* () {
+    const checks = [validateResources, validateCapabilities, validateAgents, validateDriverIds]
+    for (const check of checks) {
+      const message = check(contribs)
+      if (message !== undefined) {
+        return yield* new ExtensionLoadError({ extensionId: manifest.id, message })
+      }
+    }
+  })
+
+/**
+ * Define an extension as typed contribution buckets.
+ *
+ * Each bucket is optional and homogeneously typed. Buckets accept a literal
+ * array (most common), a `(ctx) => array` factory, or a `(ctx) => Effect<array>`
+ * factory. Errors during resolution are annotated with the bucket name.
+ *
+ * Cross-bucket validation runs after all buckets resolve — see
+ * `validatePackageShape` for the enforced invariants.
  *
  * @example
  * ```ts
- * import { defineExtension, defineResource, toolContribution } from "@gent/core/extensions/api"
+ * import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
  *
  * export const MyExt = defineExtension({
  *   id: "my-ext",
- *   contributions: ({ ctx }) => [
- *     defineResource({ scope: "process", layer: MyService.Live }),
- *     toolContribution(MyTool),
- *   ],
+ *   resources: [defineResource({ scope: "process", layer: MyService.Live })],
+ *   capabilities: [tool(MyTool)],
  * })
  * ```
  */
-export const defineExtension = (params: {
-  readonly id: string
-  readonly contributions: (args: {
-    readonly ctx: ExtensionSetupContext
-  }) => ReadonlyArray<Contribution> | Effect.Effect<ReadonlyArray<Contribution>, ExtensionLoadError>
-}): GentExtension => ({
-  manifest: { id: params.id },
-  setup: (ctx) =>
-    Effect.gen(function* () {
-      // Guard the synchronous factory call so author throws surface as typed
-      // ExtensionLoadError rather than fiber defects. Direct `ext.setup(...)`
-      // callers (tests, programmatic uses) get the same typed-failure shape
-      // as the loader's `setupExtension` defect-catching path.
-      const result = yield* Effect.try({
-        try: () => params.contributions({ ctx }),
-        catch: (cause) =>
-          new ExtensionLoadError({
-            extensionId: params.id,
-            message: `Contribution factory threw: ${String(cause)}`,
-            cause,
-          }),
-      })
-      const contribs: ReadonlyArray<Contribution> = Effect.isEffect(result) ? yield* result : result
-      const resourcesWithMachine = filterByKind(contribs, "resource").filter(
-        (r) => r.machine !== undefined,
-      )
-      // At most one machine per extension. Without this check the runtime
-      // silently picks the first Resource by array order and drops the second
-      // machine's protocols / mappers / effects on the floor.
-      if (resourcesWithMachine.length > 1) {
-        return yield* new ExtensionLoadError({
-          extensionId: params.id,
-          message: "extension may declare at most one Resource with `machine`",
-        })
-      }
-      // Codex BLOCK 3 on C3.5a: today only process-scope Resource layers flow
-      // into the layer composition root (`profile.ts > buildExtensionLayers`).
-      // A `Resource.machine` on a session/branch-scope Resource would have its
-      // services unavailable to the machine at spawn time. The plan's eventual
-      // resting place is session/branch scope, but until the per-cwd /
-      // ephemeral composers are wired (C3 successor work), constrain to
-      // process scope so the failure is at setup time, not at first transition.
-      const sessionScopedMachine = resourcesWithMachine.find((r) => r.scope !== "process")
-      if (sessionScopedMachine !== undefined) {
-        return yield* new ExtensionLoadError({
-          extensionId: params.id,
-          message: `Resource.machine on scope "${sessionScopedMachine.scope}" is not yet supported (only "process" until per-cwd / ephemeral composers wire Resource layers). Move the machine to a process-scope Resource, or wait for the C3 successor work.`,
-        })
-      }
-      return contribs
-    }),
-})
+export const defineExtension = (params: DefineExtensionInput): GentExtension => {
+  const manifest: ExtensionManifest = { id: params.id }
+  return {
+    manifest,
+    setup: (ctx) =>
+      Effect.gen(function* () {
+        const resources = yield* resolveField(manifest, "resources", params.resources, ctx)
+        const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
+        const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
+        const projections = yield* resolveField(manifest, "projections", params.projections, ctx)
+        const pipelines = yield* resolveField(manifest, "pipelines", params.pipelines, ctx)
+        const subscriptions = yield* resolveField(
+          manifest,
+          "subscriptions",
+          params.subscriptions,
+          ctx,
+        )
+        const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
+        const externalDrivers = yield* resolveField(
+          manifest,
+          "externalDrivers",
+          params.externalDrivers,
+          ctx,
+        )
+        const contribs: ExtensionContributions = {
+          ...(resources.length > 0 ? { resources } : {}),
+          ...(capabilities.length > 0 ? { capabilities } : {}),
+          ...(agents.length > 0 ? { agents } : {}),
+          ...(projections.length > 0 ? { projections } : {}),
+          ...(pipelines.length > 0 ? { pipelines } : {}),
+          ...(subscriptions.length > 0 ? { subscriptions } : {}),
+          ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
+          ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
+          ...(params.pulseTags !== undefined && params.pulseTags.length > 0
+            ? { pulseTags: params.pulseTags }
+            : {}),
+        }
+        yield* validatePackageShape(manifest, contribs)
+        return contribs
+      }),
+  }
+}

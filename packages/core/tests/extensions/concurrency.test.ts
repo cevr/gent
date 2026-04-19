@@ -42,13 +42,15 @@ describe("extension concurrency", () => {
       const extensions = [
         {
           manifest: { id: "counter", version: "1.0.0" },
-          contributions: [
-            defineResource({
-              scope: "process",
-              layer: Layer.empty as Layer.Layer<unknown>,
-              machine: wrappedActor,
-            }),
-          ],
+          contributions: {
+            resources: [
+              defineResource({
+                scope: "process",
+                layer: Layer.empty as Layer.Layer<unknown>,
+                machine: wrappedActor,
+              }),
+            ],
+          },
         },
       ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 
@@ -87,27 +89,29 @@ describe("extension concurrency", () => {
             manifest: { id: "ordered-restart", version: "1.0.0" },
             kind: "builtin" as const,
             sourcePath: "builtin",
-            contributions: [
-              defineResource({
-                scope: "process",
-                layer: Layer.empty as Layer.Layer<unknown>,
-                machine: reducerActor({
-                  id: "ordered-restart",
-                  initial: { delivered: [] as string[] },
-                  reduce: (state, event) => {
-                    if (first && event._tag === "SessionStarted") {
-                      first = false
-                      Effect.runSync(
-                        Deferred.succeed(firstDeliveryEntered, void 0).pipe(Effect.ignore),
-                      )
-                      throw new Error("first delivery boom")
-                    }
-                    delivered.push(event._tag)
-                    return { state: { delivered } }
-                  },
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: reducerActor({
+                    id: "ordered-restart",
+                    initial: { delivered: [] as string[] },
+                    reduce: (state, event) => {
+                      if (first && event._tag === "SessionStarted") {
+                        first = false
+                        Effect.runSync(
+                          Deferred.succeed(firstDeliveryEntered, void 0).pipe(Effect.ignore),
+                        )
+                        throw new Error("first delivery boom")
+                      }
+                      delivered.push(event._tag)
+                      return { state: { delivered } }
+                    },
+                  }),
                 }),
-              }),
-            ],
+              ],
+            },
           },
         ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
 

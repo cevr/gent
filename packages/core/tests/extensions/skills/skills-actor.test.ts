@@ -51,15 +51,18 @@ const setupSkillsExtension = Effect.provide(
     // are preserved.
     return {
       ...loaded,
-      contributions: loaded.contributions.map((c) =>
-        c._kind === "resource" && c.tag === Skills
-          ? defineResource({
-              ...c,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
-            })
-          : c,
-      ),
+      contributions: {
+        ...loaded.contributions,
+        resources: (loaded.contributions.resources ?? []).map((r) =>
+          r.tag === Skills
+            ? defineResource({
+                ...r,
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
+              })
+            : r,
+        ),
+      },
     } satisfies LoadedExtension
   }),
   BunServices.layer,

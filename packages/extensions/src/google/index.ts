@@ -1,7 +1,6 @@
 import { Layer, Redacted } from "effect"
 import {
   defineExtension,
-  modelDriverContribution,
   AuthMethod,
   type ModelDriverContribution,
   type ProviderHints,
@@ -26,7 +25,7 @@ const buildConfig = (hints?: ProviderHints) => {
 
 export const GoogleExtension = defineExtension({
   id: "@gent/provider-google",
-  contributions: () => {
+  modelDrivers: () => {
     const googleProvider: ModelDriverContribution = {
       id: "google",
       name: "Google",
@@ -51,6 +50,6 @@ export const GoogleExtension = defineExtension({
       },
     }
 
-    return [modelDriverContribution(googleProvider)]
+    return [googleProvider]
   },
 })

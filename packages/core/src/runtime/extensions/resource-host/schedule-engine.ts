@@ -20,8 +20,10 @@
 
 import { Cause, Effect, FileSystem, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
-import { extractResources } from "../../../domain/contribution.js"
-import type { ResourceSchedule } from "../../../domain/resource.js"
+import type { AnyResourceContribution, ResourceSchedule } from "../../../domain/resource.js"
+
+const extractResources = (ext: LoadedExtension): ReadonlyArray<AnyResourceContribution> =>
+  ext.contributions.resources ?? []
 
 export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
 
@@ -194,7 +196,7 @@ export const collectSchedules = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<{ readonly extensionId: string; readonly schedule: ResourceSchedule }> =>
   extensions.flatMap((ext) =>
-    extractResources(ext.contributions)
+    extractResources(ext)
       .filter((r) => r.scope === "process")
       .flatMap((r) =>
         (r.schedule ?? []).map((s) => ({ extensionId: ext.manifest.id, schedule: s })),

@@ -19,11 +19,7 @@ import type {
   TurnEvent,
   TurnExecutor,
 } from "@gent/core/domain/driver"
-import {
-  externalDriver as externalDriverContribution,
-  modelDriver as modelDriverContribution,
-  type Contribution,
-} from "@gent/core/domain/contribution"
+import type { ExtensionContributions } from "@gent/core/domain/contribution"
 
 const stubResolution = (): ProviderResolution => ({ layer: Layer.empty as never })
 
@@ -49,10 +45,10 @@ const makeExt = (
     readonly externalDrivers?: ReadonlyArray<{ id: string; executor: TurnExecutor }>
   },
 ): LoadedExtension => {
-  const contributions: Contribution[] = [
-    ...(opts.modelDrivers ?? []).map(modelDriverContribution),
-    ...(opts.externalDrivers ?? []).map(externalDriverContribution),
-  ]
+  const contributions: ExtensionContributions = {
+    ...(opts.modelDrivers !== undefined && { modelDrivers: opts.modelDrivers }),
+    ...(opts.externalDrivers !== undefined && { externalDrivers: opts.externalDrivers }),
+  }
   return {
     manifest: { id },
     kind,

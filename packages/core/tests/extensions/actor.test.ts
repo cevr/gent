@@ -191,13 +191,15 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "flaky-request" },
         kind: "builtin",
         sourcePath: "builtin",
-        contributions: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty as Layer.Layer<unknown>,
-            machine: { ...flaky, protocols: { Ping } },
-          }),
-        ],
+        contributions: {
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: { ...flaky, protocols: { Ping } },
+            }),
+          ],
+        },
       },
     ])
 
@@ -232,26 +234,28 @@ describe("WorkflowRuntime", () => {
         manifest: { id: "counter" },
         kind: "builtin",
         sourcePath: "builtin",
-        contributions: [
-          defineResource({
-            scope: "process",
-            layer: Layer.empty as Layer.Layer<unknown>,
-            machine: {
-              ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
-                id: "counter",
-                initial: { count: 0 },
-                stateSchema: Schema.Struct({ count: Schema.Number }),
-                reduce: (state) => ({ state }),
-                request: (state) =>
-                  Effect.succeed({
-                    state,
-                    reply: { count: "not-a-number" } as unknown,
-                  }),
-              }),
-              protocols: { GetCount },
-            },
-          }),
-        ],
+        contributions: {
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: {
+                ...reducerActor<{ count: number }, never, ReturnType<typeof GetCount>>({
+                  id: "counter",
+                  initial: { count: 0 },
+                  stateSchema: Schema.Struct({ count: Schema.Number }),
+                  reduce: (state) => ({ state }),
+                  request: (state) =>
+                    Effect.succeed({
+                      state,
+                      reply: { count: "not-a-number" } as unknown,
+                    }),
+                }),
+                protocols: { GetCount },
+              },
+            }),
+          ],
+        },
       },
     ])
 
@@ -309,19 +313,21 @@ describe("Resource.machine end-to-end", () => {
         manifest: { id: "resource-counter" },
         kind: "builtin",
         sourcePath: "builtin",
-        contributions: [
-          // No-service Resource carrying just the machine. WorkflowRuntime
-          // supervises the machine; the empty layer keeps the Resource shape
-          // valid without contributing any service tags. The explicit
-          // `<unknown, "process">` widening dodges `Layer<never,...>` →
-          // `AnyResourceContribution` variance traps.
-          defineResource<unknown, "process">({
-            scope: "process",
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            layer: Layer.empty as Layer.Layer<unknown>,
-            machine: counterMachine,
-          }),
-        ],
+        contributions: {
+          resources: [
+            // No-service Resource carrying just the machine. WorkflowRuntime
+            // supervises the machine; the empty layer keeps the Resource shape
+            // valid without contributing any service tags. The explicit
+            // `<unknown, "process">` widening dodges `Layer<never,...>` →
+            // `AnyResourceContribution` variance traps.
+            defineResource<unknown, "process">({
+              scope: "process",
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: counterMachine,
+            }),
+          ],
+        },
       } as LoadedExtension,
     ])
 
@@ -350,14 +356,16 @@ describe("Resource.machine end-to-end", () => {
           manifest: { id: "session-counter" },
           kind: "builtin",
           sourcePath: "builtin",
-          contributions: [
-            defineResource<unknown, "process">({
-              scope: "process",
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              layer: Layer.empty as Layer.Layer<unknown>,
-              machine: sessionCounter,
-            }),
-          ],
+          contributions: {
+            resources: [
+              defineResource<unknown, "process">({
+                scope: "process",
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                layer: Layer.empty as Layer.Layer<unknown>,
+                machine: sessionCounter,
+              }),
+            ],
+          },
         } as LoadedExtension,
       ])
 

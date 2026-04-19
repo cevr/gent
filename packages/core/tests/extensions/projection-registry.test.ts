@@ -21,7 +21,6 @@ import {
 } from "@gent/core/domain/projection"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileProjections } from "@gent/core/runtime/extensions/projection-registry"
-import { projection as projectionContribution } from "@gent/core/domain/contribution"
 
 const ext = (
   id: string,
@@ -31,7 +30,7 @@ const ext = (
   manifest: { id },
   kind,
   sourcePath: `/test/${id}`,
-  contributions: [...projections.map(projectionContribution)],
+  contributions: { projections },
 })
 
 const turnCtx: ExtensionTurnContext = {

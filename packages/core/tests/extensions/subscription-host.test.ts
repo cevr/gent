@@ -14,12 +14,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Data, Effect, Exit } from "effect"
 import { defineSubscription } from "@gent/core/domain/subscription"
-import type { LoadedExtension, TurnAfterInput } from "@gent/core/domain/extension"
+import type {
+  ExtensionContributions,
+  LoadedExtension,
+  TurnAfterInput,
+} from "@gent/core/domain/extension"
 import { compileSubscriptions } from "@gent/core/runtime/extensions/subscription-host"
-import {
-  subscription as subscriptionContribution,
-  type Contribution,
-} from "@gent/core/domain/contribution"
+import { subscription as subscriptionContribution } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
@@ -41,7 +42,7 @@ const stubEvent: TurnAfterInput = {
 const ext = (
   id: string,
   kind: "builtin" | "user" | "project",
-  contributions: ReadonlyArray<Contribution>,
+  contributions: ExtensionContributions,
 ): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
 
 class BoomError extends Data.TaggedError("@gent/core/tests/subscription-host/BoomError")<{
@@ -63,8 +64,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", [subscriptionContribution(failing)]),
-        ext("b", "builtin", [subscriptionContribution(after)]),
+        ext("a", "builtin", { subscriptions: [subscriptionContribution(failing)] }),
+        ext("b", "builtin", { subscriptions: [subscriptionContribution(after)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -87,8 +88,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", [subscriptionContribution(failing)]),
-        ext("b", "builtin", [subscriptionContribution(after)]),
+        ext("a", "builtin", { subscriptions: [subscriptionContribution(failing)] }),
+        ext("b", "builtin", { subscriptions: [subscriptionContribution(after)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -111,8 +112,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", [subscriptionContribution(halting)]),
-        ext("b", "builtin", [subscriptionContribution(afterHalt)]),
+        ext("a", "builtin", { subscriptions: [subscriptionContribution(halting)] }),
+        ext("b", "builtin", { subscriptions: [subscriptionContribution(afterHalt)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -137,9 +138,9 @@ describe("subscription host", () => {
 
       const compiled = compileSubscriptions([
         // pass out of order to prove sorting
-        ext("z-project", "project", [subscriptionContribution(make("project"))]),
-        ext("a-builtin", "builtin", [subscriptionContribution(make("builtin"))]),
-        ext("m-user", "user", [subscriptionContribution(make("user"))]),
+        ext("z-project", "project", { subscriptions: [subscriptionContribution(make("project"))] }),
+        ext("a-builtin", "builtin", { subscriptions: [subscriptionContribution(make("builtin"))] }),
+        ext("m-user", "user", { subscriptions: [subscriptionContribution(make("user"))] }),
       ])
 
       yield* compiled.emit("turn.after", stubEvent, stubCtx)

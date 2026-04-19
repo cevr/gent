@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import type { GentExtension } from "@gent/core/domain/extension"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
@@ -15,26 +15,43 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
-import { command as commandContribution } from "@gent/core/domain/contribution"
+import { capability } from "@gent/core/domain/contribution"
 import { toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []
 
+  // Slash commands are now Capabilities with `audiences:["human-slash"]`.
+  // The command's display description comes from `promptSnippet` (capabilities
+  // expose `promptSnippet` as the slash-command short description; `description`
+  // is reserved for the model-audience tool description).
   const TestCommandsExtension: GentExtension = {
     manifest: { id: "@test/commands" },
     setup: () =>
-      Effect.succeed([
-        commandContribution({
-          name: "greet",
-          description: "Say hello",
-          handler: (args: string, ctx: ExtensionHostContext) =>
-            Effect.sync(() => {
-              invoked.push({ args, sessionId: ctx.sessionId })
-            }),
-        }),
-        commandContribution({ name: "noop", handler: () => Effect.void }),
-      ]),
+      Effect.succeed({
+        capabilities: [
+          capability({
+            id: "greet",
+            audiences: ["human-slash"],
+            intent: "write",
+            promptSnippet: "Say hello",
+            input: Schema.String,
+            output: Schema.Void,
+            effect: (args: string, ctx: ExtensionHostContext) =>
+              Effect.sync(() => {
+                invoked.push({ args, sessionId: ctx.sessionId })
+              }),
+          }),
+          capability({
+            id: "noop",
+            audiences: ["human-slash"],
+            intent: "write",
+            input: Schema.String,
+            output: Schema.Void,
+            effect: () => Effect.void,
+          }),
+        ],
+      }),
   }
 
   const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(

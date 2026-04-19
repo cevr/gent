@@ -6,7 +6,6 @@
  */
 import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
-import { extractResources } from "@gent/core/domain/contribution"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
@@ -23,7 +22,7 @@ export const makeActorRuntimeLayer = (config: {
   const extLayers =
     config.extensionLayers ??
     config.extensions.flatMap((ext) =>
-      extractResources(ext.contributions)
+      (ext.contributions.resources ?? [])
         .filter((r) => r.scope === "process")
         .map(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion

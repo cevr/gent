@@ -14,7 +14,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { definePipeline } from "@gent/core/domain/pipeline"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
-import { pipeline as pipelineContribution, type Contribution } from "@gent/core/domain/contribution"
+import { pipeline as pipelineContribution } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -27,8 +27,13 @@ const stubCtx = {
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
-  contributions: ReadonlyArray<Contribution>,
-): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
+  pipelines: ReturnType<typeof pipelineContribution>[],
+): LoadedExtension => ({
+  manifest: { id },
+  kind,
+  sourcePath: `/test/${id}`,
+  contributions: { pipelines },
+})
 
 class CustomError extends Data.TaggedError("@gent/core/tests/pipeline-composition/CustomError")<{
   readonly reason: string

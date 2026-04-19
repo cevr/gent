@@ -17,7 +17,7 @@ import {
   defineExtension,
   defineLifecycleResource,
   defineTool,
-  toolContribution,
+  tool,
   type AnyResourceMachine,
   type ToolContext,
 } from "@gent/core/extensions/api"
@@ -299,16 +299,18 @@ const ArtifactClearTool = defineTool({
 
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
-  contributions: () => [
-    // No-service Resource carrying the machine. WorkflowRuntime supervises
-    // the machine; this extension contributes no service tag of its own.
+  // No-service Resource carrying the machine. WorkflowRuntime supervises
+  // the machine; this extension contributes no service tag of its own.
+  resources: [
     defineLifecycleResource({
       scope: "process",
       machine: artifactsMachineDef,
     }),
-    toolContribution(ArtifactSaveTool),
-    toolContribution(ArtifactReadTool),
-    toolContribution(ArtifactUpdateTool),
-    toolContribution(ArtifactClearTool),
+  ],
+  capabilities: [
+    tool(ArtifactSaveTool),
+    tool(ArtifactReadTool),
+    tool(ArtifactUpdateTool),
+    tool(ArtifactClearTool),
   ],
 })

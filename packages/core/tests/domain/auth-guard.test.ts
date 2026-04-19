@@ -11,10 +11,6 @@ import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import {
-  agent as agentContribution,
-  modelDriver as modelDriverContribution,
-} from "@gent/core/domain/contribution"
 import { Effect, Layer } from "effect"
 
 const testProviders: ModelDriverContribution[] = [
@@ -41,10 +37,10 @@ const testResolved = resolveExtensions([
     manifest: { id: "test-providers" },
     kind: "builtin",
     sourcePath: "test",
-    contributions: [
-      ...testProviders.map(modelDriverContribution),
-      ...testAgents.map(agentContribution),
-    ],
+    contributions: {
+      modelDrivers: testProviders,
+      agents: testAgents,
+    },
   } satisfies LoadedExtension,
 ])
 const testRegistryLayer = Layer.merge(
@@ -60,16 +56,16 @@ const helperResolved = resolveExtensions([
     manifest: { id: "test-providers" },
     kind: "builtin",
     sourcePath: "test",
-    contributions: [
-      ...testProviders.map(modelDriverContribution),
-      ...[
+    contributions: {
+      modelDrivers: testProviders,
+      agents: [
         ...testAgents,
         new AgentDefinition({
           name: "helper:google" as never,
           model: "google/gemini-2.5-flash" as never,
         }),
-      ].map(agentContribution),
-    ],
+      ],
+    },
   } satisfies LoadedExtension,
 ])
 const helperAgentRegistryLayer = Layer.merge(

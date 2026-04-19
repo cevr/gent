@@ -1,10 +1,4 @@
-import {
-  agentContribution,
-  defineAgent,
-  defineExtension,
-  ModelId,
-  toolContribution,
-} from "@gent/core/extensions/api"
+import { defineAgent, defineExtension, ModelId, tool } from "@gent/core/extensions/api"
 import { AuditTool } from "./audit-tool.js"
 
 const AUDITOR_PROMPT = `
@@ -25,5 +19,6 @@ export const auditor = defineAgent({
 
 export const AuditExtension = defineExtension({
   id: "@gent/audit",
-  contributions: () => [toolContribution(AuditTool), agentContribution(auditor)],
+  capabilities: [tool(AuditTool)],
+  agents: [auditor],
 })

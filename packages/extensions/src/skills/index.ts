@@ -3,9 +3,8 @@ import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
 import {
   defineExtension,
   defineResource,
-  projectionContribution,
   ProjectionError,
-  toolContribution,
+  tool,
   type ProjectionContribution,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
@@ -120,17 +119,16 @@ const SkillsProjection: ProjectionContribution<ReadonlyArray<Skill>, Skills> = {
 
 export const SkillsExtension = defineExtension({
   id: "@gent/skills",
-  contributions: ({ ctx }) => [
-    // Single Resource carries the Skills service layer AND the skills
-    // machine. Per the C3.5 "Resource = layer + machine" merge.
+  // Single Resource carries the Skills service layer AND the skills
+  // machine. Per the C3.5 "Resource = layer + machine" merge.
+  resources: ({ ctx }) => [
     defineResource({
       tag: Skills,
       scope: "process",
       layer: Skills.Live({ cwd: ctx.cwd, home: ctx.home }).pipe(Layer.orDie),
       machine: skillsActor,
     }),
-    toolContribution(SkillsTool),
-    toolContribution(SearchSkillsTool),
-    projectionContribution(SkillsProjection),
   ],
+  capabilities: [tool(SkillsTool), tool(SearchSkillsTool)],
+  projections: [SkillsProjection],
 })

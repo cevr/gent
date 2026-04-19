@@ -18,13 +18,15 @@ const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedEx
   manifest: { id },
   kind: "builtin",
   sourcePath: "builtin",
-  contributions: [
-    defineResource({
-      scope: "process",
-      layer: Layer.empty,
-      schedule: jobs,
-    }),
-  ],
+  contributions: {
+    resources: [
+      defineResource({
+        scope: "process",
+        layer: Layer.empty,
+        schedule: jobs,
+      }),
+    ],
+  },
 })
 
 describe("scheduled jobs", () => {
@@ -162,23 +164,25 @@ describe("scheduled jobs", () => {
       // Override the default makeLoaded process Resource with a session one
       const sessionLoaded: LoadedExtension = {
         ...sessionExt,
-        contributions: [
-          defineResource({
-            scope: "session",
-            layer: Layer.empty,
-            schedule: [
-              {
-                id: "session-only",
-                cron: "* * * * *",
-                target: {
-                  kind: "headless-agent",
-                  agent: "session-agent" as never,
-                  prompt: "session prompt",
+        contributions: {
+          resources: [
+            defineResource({
+              scope: "session",
+              layer: Layer.empty,
+              schedule: [
+                {
+                  id: "session-only",
+                  cron: "* * * * *",
+                  target: {
+                    kind: "headless-agent",
+                    agent: "session-agent" as never,
+                    prompt: "session prompt",
+                  },
                 },
-              },
-            ],
-          }),
-        ],
+              ],
+            }),
+          ],
+        },
       }
       const processExt = makeLoaded("@gent/test-process", [
         {

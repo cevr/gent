@@ -3,13 +3,7 @@
  */
 
 import { Effect, Layer, Schema } from "effect"
-import {
-  capabilityContribution,
-  defineExtension,
-  defineResource,
-  projectionContribution,
-  toolContribution,
-} from "@gent/core/extensions/api"
+import { capability, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import type { ModelCapabilityContext } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
@@ -24,16 +18,14 @@ export { EXECUTOR_EXTENSION_ID } from "./domain.js"
 
 export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
-  contributions: ({ ctx }) => [
-    projectionContribution(ExecutorProjection),
-    toolContribution(ExecuteTool),
-    toolContribution(ResumeTool),
+  projections: [ExecutorProjection],
+  capabilities: [
+    tool(ExecuteTool),
+    tool(ResumeTool),
     // Slash commands as capabilities — `audiences: ["human-slash"]` keeps
     // them surfaced in the slash dispatcher; `intent: "write"` reflects that
-    // they steer the executor sidecar lifecycle. The C4.3 bridge in
-    // registry.ts lowers these into CommandContribution shape so the legacy
-    // command list keeps working unchanged.
-    capabilityContribution({
+    // they steer the executor sidecar lifecycle.
+    capability({
       id: "executor-start",
       audiences: ["human-slash", "transport-public"],
       intent: "write",
@@ -43,7 +35,7 @@ export const ExecutorExtension = defineExtension({
       effect: (_args: string, extCtx: ModelCapabilityContext) =>
         extCtx.extension.send(ExecutorProtocol.Connect({ cwd: extCtx.cwd })).pipe(Effect.orDie),
     }),
-    capabilityContribution({
+    capability({
       id: "executor-stop",
       audiences: ["human-slash", "transport-public"],
       intent: "write",
@@ -53,8 +45,10 @@ export const ExecutorExtension = defineExtension({
       effect: (_args: string, extCtx: ModelCapabilityContext) =>
         extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
     }),
-    // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
-    // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.
+  ],
+  // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
+  // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.
+  resources: ({ ctx }) => [
     defineResource({
       scope: "process",
       layer: Layer.merge(ExecutorSidecar.Live(ctx.home), ExecutorMcpBridge.Live),

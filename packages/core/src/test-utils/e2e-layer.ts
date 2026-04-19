@@ -21,12 +21,7 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { LoadedExtension } from "../domain/extension.js"
-import {
-  type Contribution,
-  agent as agentContribution,
-  defineResource,
-  extractResources,
-} from "../domain/contribution.js"
+import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -82,8 +77,9 @@ export interface E2ELayerConfig {
  * - ExtensionTurnControl.Live — QueueFollowUp calls agentLoop.followUp()
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
-  // Resolve extensions
-  const builtinContributions: ReadonlyArray<Contribution> = config.agents.map(agentContribution)
+  // Resolve extensions — the test-agents pseudo-extension carries the test
+  // agents in its `agents` bucket.
+  const builtinContributions: ExtensionContributions = { agents: config.agents }
 
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -117,8 +113,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             // Resources, this helper silently drops the originals — fail
             // loudly so the test gets updated to provide a complete merged
             // override (or `layerOverrides` grows a per-resource API).
-            const existingProcessResources = ext.contributions.filter(
-              (c) => c._kind === "resource" && c.scope === "process",
+            const existingProcessResources = (ext.contributions.resources ?? []).filter(
+              (r) => r.scope === "process",
             )
             if (existingProcessResources.length > 1) {
               throw new Error(
@@ -136,12 +132,15 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
               layer: overrideLayer,
             })
-            const others = ext.contributions.filter(
-              (c) => !(c._kind === "resource" && c.scope === "process"),
+            const otherResources = (ext.contributions.resources ?? []).filter(
+              (r) => r.scope !== "process",
             )
             return {
               ...ext,
-              contributions: [...others, layerOverride],
+              contributions: {
+                ...ext.contributions,
+                resources: [...otherResources, layerOverride],
+              },
             }
           })
 
@@ -157,7 +156,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Extension layers may require SqlClient, so provide it via storageLayer.
       const storageLayer = Storage.MemoryWithSql()
       const extensionLayers: Layer.Layer<never>[] = resolved.extensions.flatMap((ext) =>
-        extractResources(ext.contributions)
+        (ext.contributions.resources ?? [])
           .filter((r) => r.scope === "process")
           .map((r) => {
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource layers carry their own R/E; consumers responsible for satisfying.

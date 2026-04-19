@@ -4,8 +4,8 @@ import {
   defineExtension,
   defineLifecycleResource,
   defineSubscription,
-  subscriptionContribution,
-  toolContribution,
+  subscription,
+  tool,
   type ExtensionHostContext,
   type Message,
   type ResourceMachine,
@@ -127,10 +127,10 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
-  contributions: () => [
-    toolContribution(HandoffTool),
-    subscriptionContribution(defineSubscription("turn.after", "isolate", autoHandoffImpl)),
-    // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
+  capabilities: [tool(HandoffTool)],
+  subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
+  // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
+  resources: [
     defineLifecycleResource({
       scope: "process",
       machine: cooldownWorkflow,

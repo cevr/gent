@@ -23,10 +23,7 @@ import {
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { defineTool, type AnyToolDefinition, type ToolContext } from "@gent/core/domain/tool"
-import {
-  agent as agentContribution,
-  tool as toolContribution,
-} from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/domain/contribution"
 import { Permission } from "@gent/core/domain/permission"
 import {
   BaseEventStore,
@@ -68,10 +65,10 @@ const makeExtRegistry = (tools: AnyToolDefinition[] = []) => {
       manifest: { id: "agents" },
       kind: "builtin" as const,
       sourcePath: "test",
-      contributions: [
-        ...Object.values(Agents).map(agentContribution),
-        ...tools.map(toolContribution),
-      ],
+      contributions: {
+        agents: Object.values(Agents),
+        capabilities: tools.map(tool),
+      },
     },
   ])
   return Layer.merge(
@@ -1499,10 +1496,10 @@ describe("recovery", () => {
         manifest: { id: "test-recovery" },
         kind: "builtin",
         sourcePath: "test",
-        contributions: [
-          ...Object.values(Agents).map(agentContribution),
-          toolContribution(idempotentTestTool),
-        ],
+        contributions: {
+          agents: Object.values(Agents),
+          capabilities: [tool(idempotentTestTool)],
+        },
       },
     ])
     const extensionLayer = Layer.merge(

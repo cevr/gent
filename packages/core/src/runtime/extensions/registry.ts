@@ -3,7 +3,6 @@ import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
-  CommandContribution,
   ExtensionStatusInfo,
   FailedExtension,
   TurnProjection,
@@ -15,19 +14,22 @@ import { type PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
-import {
-  type Contribution,
-  extractAgents,
-  extractCapabilities,
-  extractCommands,
-  extractExternalDrivers,
-  extractModelDrivers,
-} from "../../domain/contribution.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type CompiledPipelines, compilePipelines } from "./pipeline-host.js"
 import { type CompiledSubscriptions, compileSubscriptions } from "./subscription-host.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
+
+// SlashCommand — public-facing slash entry. Built from `Capability` winners
+// whose `audiences.includes("human-slash")`. Read- and write-intent both
+// surface as commands; the audience is the load-bearing filter. The legacy
+// server-side `CommandContribution` shape died in C8.
+export interface SlashCommand {
+  readonly name: string
+  readonly description?: string
+  readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
+}
 
 // Resolved snapshot — the immutable compiled state
 
@@ -37,7 +39,7 @@ export interface ResolvedExtensions {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
-  readonly commands: ReadonlyArray<CommandContribution>
+  readonly commands: ReadonlyArray<SlashCommand>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly pipelines: CompiledPipelines
   readonly subscriptions: CompiledSubscriptions
@@ -50,15 +52,16 @@ export interface ResolvedExtensions {
 
 type ScheduledJobFailureByExtension = ReadonlyMap<string, ReadonlyArray<ScheduledJobFailureInfo>>
 
-/** Compile a keyed contribution from sorted extensions. Later scope wins. */
-const compileContributions = <T>(
+/** Compile a keyed bucket from sorted extensions. Later scope wins. */
+const compileBucket = <T>(
   sorted: ReadonlyArray<LoadedExtension>,
-  extract: (contributions: ReadonlyArray<Contribution>) => ReadonlyArray<T>,
+  pickBucket: (ext: LoadedExtension) => ReadonlyArray<T> | undefined,
   getKey: (item: T) => string,
 ): Map<string, T> => {
   const result = new Map<string, T>()
   for (const ext of sorted) {
-    for (const item of extract(ext.contributions)) {
+    const items = pickBucket(ext) ?? []
+    for (const item of items) {
       const key = getKey(item)
       result.set(key, item)
     }
@@ -131,19 +134,13 @@ const capabilityToTool = (cap: AnyCapabilityContribution): AnyToolDefinition => 
 })
 
 /**
- * C4.3 bridge — lower a `Capability` with `intent: "write"` and
- * `audiences.includes("human-slash")` into a `CommandContribution` shape.
- * (Palette-only capabilities never reach this wrapper — the slash-list
- * compiler in `resolveExtensions` filters them out before lowering.) Args
- * (a string) are decoded through the capability's `input` schema (typically
- * `Schema.String`), and any `CapabilityError` is escalated to a defect —
+ * Lower a `Capability` with `intent: "write"` and
+ * `audiences.includes("human-slash")` into a `SlashCommand`. Args (a string)
+ * are decoded through the capability's `input` schema (typically
+ * `Schema.String`); any `CapabilityError` is escalated to a defect — slash
  * commands have no typed-failure channel today.
- *
- * The wrapper preserves the capability's `id` as the command `name`. This
- * bridge is scoped to C4.3-4 and deleted in C4.5 along with the
- * `CommandContribution` type.
  */
-const capabilityToCommand = (cap: AnyCapabilityContribution): CommandContribution => ({
+const capabilityToCommand = (cap: AnyCapabilityContribution): SlashCommand => ({
   name: cap.id,
   ...(cap.promptSnippet !== undefined ? { description: cap.promptSnippet } : {}),
   handler: (args, hostCtx) => {
@@ -199,7 +196,7 @@ export const resolveExtensions = (
   // override that narrows audiences correctly hides a shadowed builtin tool.
   const toolWinners = new Map<string, AnyCapabilityContribution>()
   for (const ext of sorted) {
-    for (const cap of extractCapabilities(ext.contributions)) {
+    for (const cap of ext.contributions.capabilities ?? []) {
       toolWinners.set(cap.id, cap)
     }
   }
@@ -210,9 +207,21 @@ export const resolveExtensions = (
     tools.set(name, capabilityToTool(cap))
   }
 
-  const agents = compileContributions(sorted, extractAgents, (a) => a.name)
-  const modelDrivers = compileContributions(sorted, extractModelDrivers, (d) => d.id)
-  const externalDrivers = compileContributions(sorted, extractExternalDrivers, (d) => d.id)
+  const agents = compileBucket(
+    sorted,
+    (e) => e.contributions.agents,
+    (a) => a.name,
+  )
+  const modelDrivers = compileBucket(
+    sorted,
+    (e) => e.contributions.modelDrivers,
+    (d) => d.id,
+  )
+  const externalDrivers = compileBucket(
+    sorted,
+    (e) => e.contributions.externalDrivers,
+    (d) => d.id,
+  )
 
   // Prompt sections from `Capability.prompt` are read off the WINNERS map,
   // not raw extractions. Otherwise a higher-scope capability shadowing a
@@ -226,46 +235,18 @@ export const resolveExtensions = (
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
-  // C4.3 command bridge — identity-first scope shadowing followed by
-  // audience/intent authorization, mirroring the query/mutation bridges
-  // (see `query-registry.ts:111` / `mutation-registry.ts:85`).
+  // Slash-command resolution — identity-first scope shadowing followed by
+  // audience-only authorization. C8: legacy server-side `CommandContribution`
+  // is gone; every slash command is a Capability with
+  // `audiences.includes("human-slash")` (read- and write-intent both surface).
+  // The candidate set is toolWinners (already scope-resolved); authorization
+  // is the second pass.
   //
-  // Commands' identity is `name` (flat). Both legacy `CommandContribution`s
-  // AND every `CapabilityContribution` enter the candidate map keyed by name
-  // REGARDLESS of audience or intent — pre-filtering would let a builtin
-  // slash command leak when a higher-scope capability with the same id but
-  // a non-slash audience or `intent: "read"` is registered.
-  //
-  // Since `sorted` walks builtin → user → project, later writes win
-  // (project shadows builtin). Authorization happens AFTER selection — a
-  // higher-scope override that doesn't satisfy `intent: "write"` +
-  // `audiences.includes("human-slash")` SHADOWS the lower-scope command and
-  // disappears from the slash list (codex BLOCK on C4.3 follow-up).
-  //
-  // `"human-palette"` is deliberately NOT slash-authorizable here — the legacy
-  // CommandContribution shape has no audience field, so the TUI surfaces every
-  // listed entry as both a slash AND a palette command. Including palette-only
-  // capabilities would accidentally make them slash-invokable. The
-  // palette-vs-slash split materializes when C4.5 routes commands through
-  // CapabilityHost directly.
-  type CommandCandidate =
-    | { readonly _source: "command"; readonly cmd: CommandContribution }
-    | { readonly _source: "capability"; readonly cap: AnyCapabilityContribution }
-
-  const commandWinners = new Map<string, CommandCandidate>()
-  for (const ext of sorted) {
-    for (const cmd of extractCommands(ext.contributions)) {
-      commandWinners.set(cmd.name, { _source: "command", cmd })
-    }
-    for (const cap of extractCapabilities(ext.contributions)) {
-      // Identity-first: ALL capabilities shadow same-name lower-scope entries
-      // by id, even if they will fail the slash authorization below. A
-      // project-scope capability with `audiences:["transport-public"]` or
-      // `intent:"read"` MUST shadow the builtin slash command — otherwise the
-      // builtin leaks. Authorization is the second step; selection is first.
-      commandWinners.set(cap.id, { _source: "capability", cap })
-    }
-  }
+  // `"human-palette"` is NOT slash-authorizable — palette-only capabilities
+  // surface in the command palette but not as slash commands. The
+  // palette-vs-slash split materializes when CapabilityHost takes over
+  // command dispatch entirely (C10).
+  const commandWinners = toolWinners
 
   // C7: permission rules collected from WINNERS, not raw extractions —
   // otherwise overriding `bash` without `permissionRules` would still inherit
@@ -275,14 +256,17 @@ export const resolveExtensions = (
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
   }
 
-  const isAuthorizedAsSlashCommand = (entry: CommandCandidate): boolean =>
-    entry._source === "command" ||
-    (entry.cap.intent === "write" && entry.cap.audiences.includes("human-slash"))
+  // Filter: any capability whose audiences include "human-slash" is a slash
+  // command — read-intent capabilities are allowed (they surface as commands
+  // even though they don't mutate state). Palette-only and model-only
+  // capabilities are excluded by virtue of NOT including "human-slash".
+  const isAuthorizedAsSlashCommand = (cap: AnyCapabilityContribution): boolean =>
+    cap.audiences.includes("human-slash")
 
-  const commands: CommandContribution[] = []
-  for (const entry of commandWinners.values()) {
-    if (!isAuthorizedAsSlashCommand(entry)) continue
-    commands.push(entry._source === "command" ? entry.cmd : capabilityToCommand(entry.cap))
+  const commands: SlashCommand[] = []
+  for (const cap of commandWinners.values()) {
+    if (!isAuthorizedAsSlashCommand(cap)) continue
+    commands.push(capabilityToCommand(cap))
   }
 
   const pipelines = compilePipelines(sorted)
@@ -417,7 +401,7 @@ export interface ExtensionRegistryService {
   ) => Effect.Effect<CompiledToolPolicy>
 
   // Command resolution
-  readonly listCommands: () => Effect.Effect<ReadonlyArray<CommandContribution>>
+  readonly listCommands: () => Effect.Effect<ReadonlyArray<SlashCommand>>
 
   // Agent resolution
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>

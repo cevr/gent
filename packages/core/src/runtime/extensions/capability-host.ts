@@ -29,7 +29,6 @@
  */
 import { Effect, Schema } from "effect"
 import type { LoadedExtension } from "../../domain/extension.js"
-import { extractCapabilities } from "../../domain/contribution.js"
 import {
   CapabilityError,
   CapabilityNotFoundError,
@@ -141,7 +140,7 @@ export const compileCapabilities = (
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredCapability[] = []
   for (const ext of sorted) {
-    for (const capability of extractCapabilities(ext.contributions)) {
+    for (const capability of ext.contributions.capabilities ?? []) {
       entries.push({ extensionId: ext.manifest.id, capability })
     }
   }

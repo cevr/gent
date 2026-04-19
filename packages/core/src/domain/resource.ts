@@ -202,7 +202,6 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  * the Resource provides; consumers depend on the tag, not on Resource.
  */
 export interface ResourceContribution<A, S extends ResourceScope, R = never, E = never> {
-  readonly _kind: "resource"
   /**
    * Optional canonical service tag. When present, consumers may depend on the
    * tag without knowing about Resource. The `start`/`stop`/`subscriptions`
@@ -268,7 +267,7 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> 
  */
 export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
   spec: ResourceSpec<A, S, R, E>,
-): ResourceContribution<A, S, R, E> => ({ _kind: "resource", ...spec })
+): ResourceContribution<A, S, R, E> => ({ ...spec })
 
 /**
  * Spec for {@link defineLifecycleResource} — a Resource that contributes no

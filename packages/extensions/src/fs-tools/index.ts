@@ -1,4 +1,4 @@
-import { defineExtension, toolContribution } from "@gent/core/extensions/api"
+import { defineExtension, tool } from "@gent/core/extensions/api"
 import { ReadTool } from "./read.js"
 import { WriteTool } from "./write.js"
 import { EditTool } from "./edit.js"
@@ -7,11 +7,5 @@ import { GrepTool } from "./grep.js"
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
-  contributions: () => [
-    toolContribution(ReadTool),
-    toolContribution(WriteTool),
-    toolContribution(EditTool),
-    toolContribution(GlobTool),
-    toolContribution(GrepTool),
-  ],
+  capabilities: [tool(ReadTool), tool(WriteTool), tool(EditTool), tool(GlobTool), tool(GrepTool)],
 })
