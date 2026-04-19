@@ -36,10 +36,14 @@ export const runSupervisorRestart = <R>(
  * `Effect`). The exit handler has nothing to catch a rejection, so we
  * collapse to `Exit` and discard. The caller — the OS process exit —
  * does not observe the result.
+ *
+ * Pinned to `Context.Context<never>` because the worker supervisor's
+ * captured services are explicitly `Effect.context<never>()` — there is
+ * no caller-provided service tail to thread through (counsel B11.2d).
  */
-export const runSupervisorCrashRestart = <A, E, R>(
-  services: Context.Context<R>,
-  restartInternal: Effect.Effect<A, E, R>,
+export const runSupervisorCrashRestart = <A, E>(
+  services: Context.Context<never>,
+  restartInternal: Effect.Effect<A, E, never>,
 ): void => {
   void Effect.runPromiseExit(Effect.provide(restartInternal, services))
 }
@@ -57,7 +61,7 @@ export const runSupervisorCrashRestart = <A, E, R>(
  * fail with `WorkerSupervisorError`; the rejection surfaces on the awaited
  * promise.
  */
-export const runSupervisorBackoffRestart = <E, R>(
-  services: Context.Context<R>,
-  effect: Effect.Effect<void, E, R>,
+export const runSupervisorBackoffRestart = <E>(
+  services: Context.Context<never>,
+  effect: Effect.Effect<void, E, never>,
 ): Promise<void> => Effect.runPromiseWith(services)(effect)
