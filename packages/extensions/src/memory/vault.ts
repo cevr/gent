@@ -11,6 +11,7 @@ import * as Fs from "node:fs" // eslint-disable-line -- vault needs direct fs ac
 import * as Path from "node:path" // eslint-disable-line -- vault needs direct path access
 import { createHash } from "node:crypto" // eslint-disable-line
 import { homedir } from "node:os" // eslint-disable-line
+import { type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -148,29 +149,53 @@ export const projectDisplayName = (key: string): string => {
 
 // ── Service interface ──
 
-export interface MemoryVault {
+/**
+ * Read-only slice of MemoryVault — vault path, listing, single-file
+ * read, and full-text search. Projections (and `request({ intent: "read" })`
+ * capabilities once B11.5 lands) yield `MemoryVaultReadOnly` (the branded
+ * Tag below) instead of `MemoryVault` so the type system blocks
+ * accidental writes (`write`/`remove`/`ensureDirs`/`rebuildIndex`) in
+ * read contexts.
+ *
+ * The Live/Test layers for `MemoryVault` provide BOTH this Tag and the
+ * write-capable `MemoryVault` Tag from the same underlying service value.
+ */
+export interface MemoryVaultReadOnly {
   readonly vaultPath: string
   readonly list: (
     scope?: MemoryScope,
     project?: string,
   ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
   readonly read: (relativePath: string) => Effect.Effect<string>
+  readonly search: (
+    query: string,
+    scope?: MemoryScope,
+    project?: string,
+  ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
+}
+
+export interface MemoryVault extends MemoryVaultReadOnly {
   readonly write: (
     relativePath: string,
     frontmatter: MemoryFrontmatter,
     body: string,
   ) => Effect.Effect<void>
   readonly remove: (relativePath: string) => Effect.Effect<void>
-  readonly search: (
-    query: string,
-    scope?: MemoryScope,
-    project?: string,
-  ) => Effect.Effect<ReadonlyArray<MemoryEntry>>
   readonly ensureDirs: (project?: string) => Effect.Effect<void>
   readonly rebuildIndex: (scope?: MemoryScope, project?: string) => Effect.Effect<void>
 }
 
 export const MemoryVault = Context.Service<MemoryVault>("@gent/memory/vault")
+
+/**
+ * Read-only branded Tag onto the MemoryVault substrate. Projections
+ * and read-intent request capabilities yield this instead of
+ * `MemoryVault`. Provided alongside `MemoryVault` by `Live`/`Test`.
+ */
+export const MemoryVaultReadOnly = Context.Service<ReadOnly<MemoryVaultReadOnly>>(
+  "@gent/memory/vault/MemoryVaultReadOnly",
+)
+export type MemoryVaultReadOnlyTag = typeof MemoryVaultReadOnly
 
 // ── Implementation ──
 
@@ -401,7 +426,31 @@ export const makeMemoryVault = (vaultPath: string): MemoryVault => {
 
 const DEFAULT_VAULT_PATH = Path.join(homedir(), ".gent", "memory")
 
-export const Live = (path?: string) =>
-  Layer.succeed(MemoryVault, makeMemoryVault(path ?? DEFAULT_VAULT_PATH))
+/**
+ * Provide BOTH `MemoryVault` (write surface) and `MemoryVaultReadOnly`
+ * (read-only branded Tag) from the same underlying service value. The
+ * read-only Tag is a structurally narrower projection that downstream
+ * projections and read-intent capabilities can yield without picking
+ * up the write methods.
+ */
+const layerFor = (vault: MemoryVault) =>
+  Layer.effectContext(
+    Effect.succeed(
+      Context.empty().pipe(
+        Context.add(MemoryVault, vault),
+        Context.add(
+          MemoryVaultReadOnly,
+          withReadOnly({
+            vaultPath: vault.vaultPath,
+            list: vault.list,
+            read: vault.read,
+            search: vault.search,
+          } satisfies MemoryVaultReadOnly),
+        ),
+      ),
+    ),
+  )
 
-export const Test = (tmpDir: string) => Layer.succeed(MemoryVault, makeMemoryVault(tmpDir))
+export const Live = (path?: string) => layerFor(makeMemoryVault(path ?? DEFAULT_VAULT_PATH))
+
+export const Test = (tmpDir: string) => layerFor(makeMemoryVault(tmpDir))
