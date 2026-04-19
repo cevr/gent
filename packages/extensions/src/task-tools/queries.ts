@@ -2,7 +2,7 @@
  * Task-tools queries — typed read-only Capabilities (C4.2 migration).
  *
  * Authored as `CapabilityContribution`s with `intent: "read"` and
- * `audiences: ["agent-protocol"]`. The legacy `compileQueries` dispatcher
+ * `audiences: ["agent-protocol", "transport-public"]`. The legacy `compileQueries` dispatcher
  * lowers them into `QueryContribution`-shaped entries so existing callers
  * (`ctx.extension.query(ref, input)`) keep working unchanged.
  *
@@ -36,7 +36,7 @@ export const TaskGetQuery: CapabilityContribution<
   TaskService
 > = {
   id: "task.get",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskGetInput,
   output: TaskGetOutput,
@@ -76,7 +76,7 @@ export const TaskListQuery: CapabilityContribution<
   TaskService
 > = {
   id: "task.list",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskListInput,
   output: TaskListOutput,
@@ -117,7 +117,7 @@ export const TaskGetDepsQuery: CapabilityContribution<
   TaskService
 > = {
   id: "task.getDeps",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskGetDepsInput,
   output: TaskGetDepsOutput,

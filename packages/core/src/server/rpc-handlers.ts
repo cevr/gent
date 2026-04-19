@@ -338,7 +338,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           return yield* queries
             .run(extensionId, queryId, input, {
               sessionId: SessionId.of(sessionId),
-              branchId: branchId !== undefined ? BranchId.of(branchId) : undefined,
+              branchId: BranchId.of(branchId),
               cwd: platform.cwd,
               home: platform.home,
             })
@@ -362,7 +362,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           return yield* mutations
             .run(extensionId, mutationId, input, {
               sessionId: SessionId.of(sessionId),
-              branchId: branchId !== undefined ? BranchId.of(branchId) : undefined,
+              branchId: BranchId.of(branchId),
               cwd: platform.cwd,
               home: platform.home,
             })

@@ -45,10 +45,15 @@ export class QueryNotFoundError extends Schema.TaggedErrorClass<QueryNotFoundErr
  *
  *  Read-only by design — no mutation/control surfaces here. Query authors
  *  needing to write state should be authoring a `MutationContribution` instead.
+ *
+ *  `branchId` is required: every query call site is branch-scoped (the
+ *  transport-level `extension.query` rejects callers without `branchId`),
+ *  and the C4.2 capability bridge relies on this required-at-the-boundary
+ *  shape so the cast to `CapabilityCoreContext` is sound.
  */
 export interface QueryContext {
   readonly sessionId: SessionId
-  readonly branchId?: BranchId
+  readonly branchId: BranchId
   /** Process working directory (host cwd). */
   readonly cwd: string
   /** User home directory. */

@@ -39,6 +39,7 @@ import { compileMutations } from "@gent/core/runtime/extensions/mutation-registr
 import {
   query as queryContribution,
   mutation as mutationContribution,
+  capability as capabilityContribution,
 } from "@gent/core/domain/contribution"
 
 const ctx: QueryContext & MutationContext = {
@@ -249,6 +250,116 @@ describe("query-mutation registries", () => {
       const error = yield* compiled.run("@v", "boom", {}, ctx).pipe(Effect.flip)
       expect(error).toBeInstanceOf(MutationError)
       expect((error as MutationError).reason).toContain("handler defect")
+    }),
+  )
+
+  // ── C4.2 capability bridge — locks scope-shadow + audience/intent semantics ──
+
+  it.live("bridge: read+agent-protocol Capability dispatches through compileQueries.run", () =>
+    Effect.gen(function* () {
+      const cap = capabilityContribution({
+        id: "cap.read",
+        audiences: ["agent-protocol"],
+        intent: "read",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input: { value: string }) => Effect.succeed({ value: input.value }),
+      }).capability
+      const ext: LoadedExtension = {
+        manifest: { id: "@b" },
+        kind: "builtin",
+        sourcePath: "/test/@b",
+        contributions: [capabilityContribution(cap)],
+      }
+      const compiled = compileQueries([ext])
+      const result = yield* compiled.run("@b", "cap.read", { value: "hi" }, ctx)
+      expect(result).toEqual({ value: "hi" })
+    }),
+  )
+
+  it.live(
+    "bridge: project-scope Capability narrows audience away — model invocation through query() misses",
+    () =>
+      Effect.gen(function* () {
+        // Builtin: legacy QueryContribution registered the regular way.
+        const builtin: QueryContribution<{ value: string }, { value: string }, never> = {
+          id: "shared.id",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          handler: (input) => Effect.succeed({ value: `builtin:${input.value}` }),
+        }
+        // Project: capability with the same id but audiences DON'T include
+        // "agent-protocol" — so when invoked through `compileQueries.run`,
+        // identity-first resolution finds the project entry, then the
+        // authorization check misses (audience mismatch). MUST NOT fall
+        // through to the builtin entry.
+        const projectCap = capabilityContribution({
+          id: "shared.id",
+          audiences: ["transport-public"],
+          intent: "read",
+          input: Schema.Struct({ value: Schema.String }),
+          output: Schema.Struct({ value: Schema.String }),
+          effect: () => Effect.succeed({ value: "project-only" }),
+        }).capability
+        const builtinExt: LoadedExtension = {
+          manifest: { id: "@x" },
+          kind: "builtin",
+          sourcePath: "/test/@x",
+          contributions: [queryContribution(builtin)],
+        }
+        const projectExt: LoadedExtension = {
+          manifest: { id: "@x" },
+          kind: "project",
+          sourcePath: "/test/@x",
+          contributions: [capabilityContribution(projectCap)],
+        }
+        const compiled = compileQueries([builtinExt, projectExt])
+        const error = yield* compiled.run("@x", "shared.id", { value: "x" }, ctx).pipe(Effect.flip)
+        expect(error).toBeInstanceOf(QueryNotFoundError)
+      }),
+  )
+
+  it.live("bridge: write+agent-protocol Capability dispatches through compileMutations.run", () =>
+    Effect.gen(function* () {
+      const cap = capabilityContribution({
+        id: "cap.write",
+        audiences: ["agent-protocol"],
+        intent: "write",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input: { value: string }) => Effect.succeed({ value: `wrote:${input.value}` }),
+      }).capability
+      const ext: LoadedExtension = {
+        manifest: { id: "@b" },
+        kind: "builtin",
+        sourcePath: "/test/@b",
+        contributions: [capabilityContribution(cap)],
+      }
+      const compiled = compileMutations([ext])
+      const result = yield* compiled.run("@b", "cap.write", { value: "hi" }, ctx)
+      expect(result).toEqual({ value: "wrote:hi" })
+    }),
+  )
+
+  it.live("bridge: a read Capability is invisible to mutate() even at the same id", () =>
+    Effect.gen(function* () {
+      const readCap = capabilityContribution({
+        id: "shared.id",
+        audiences: ["agent-protocol"],
+        intent: "read",
+        input: Schema.Struct({}),
+        output: Schema.Struct({ ok: Schema.Boolean }),
+        effect: () => Effect.succeed({ ok: true }),
+      }).capability
+      const ext: LoadedExtension = {
+        manifest: { id: "@b" },
+        kind: "builtin",
+        sourcePath: "/test/@b",
+        contributions: [capabilityContribution(readCap)],
+      }
+      const compiled = compileMutations([ext])
+      const error = yield* compiled.run("@b", "shared.id", {}, ctx).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(MutationNotFoundError)
     }),
   )
 })

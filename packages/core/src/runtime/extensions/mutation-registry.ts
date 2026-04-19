@@ -25,10 +25,26 @@ import {
 } from "../../domain/mutation.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
-interface RegisteredMutation {
+/** Legacy `MutationContribution` source — handler invoked directly. */
+interface RegisteredLegacyMutation {
+  readonly _source: "mutation"
   readonly extensionId: string
   readonly mutation: AnyMutationContribution
 }
+
+/**
+ * `CapabilityContribution` source. Eligibility for `mutate()` dispatch is
+ * decided AFTER identity-first scope resolution by checking
+ * `intent === "write"` AND `audiences.includes("agent-protocol")`. Mirrors
+ * the query-registry bridge — see that file for the full rationale.
+ */
+interface RegisteredCapabilityEntry {
+  readonly _source: "capability"
+  readonly extensionId: string
+  readonly capability: AnyCapabilityContribution
+}
+
+type RegisteredMutation = RegisteredLegacyMutation | RegisteredCapabilityEntry
 
 export interface CompiledMutations {
   readonly entries: ReadonlyArray<RegisteredMutation>
@@ -49,51 +65,27 @@ const sortedExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-/**
- * C4.2 bridge — lower a `Capability` whose `intent: "write"` includes the
- * `"agent-protocol"` audience into a `MutationContribution`-shaped adapter
- * so the legacy `compileMutations` dispatch path keeps working while
- * extensions migrate. Mirrors the bridge in `query-registry.ts`. Deleted in
- * C4.5 along with the legacy MutationContribution type.
- */
-const capabilityToMutation = (cap: AnyCapabilityContribution): AnyMutationContribution => ({
-  id: cap.id,
-  input: cap.input,
-  output: cap.output,
-  handler: (input, ctx) => {
-    // See `query-registry.capabilityToQuery` for the rationale on this cast —
-    // the bridged ctx satisfies CapabilityCoreContext at every real call site.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const wideCtx = ctx as unknown as Parameters<typeof cap.effect>[1]
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
-    return cap.effect(input, wideCtx).pipe(
-      Effect.catchTag("@gent/core/src/domain/capability/CapabilityError", (e) =>
-        Effect.fail(
-          new MutationError({
-            extensionId: e.extensionId,
-            mutationId: e.capabilityId,
-            reason: e.reason,
-          }),
-        ),
-      ),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    ) as ReturnType<AnyMutationContribution["handler"]>
-  },
-})
+const entryId = (entry: RegisteredMutation): string =>
+  entry._source === "mutation" ? entry.mutation.id : entry.capability.id
 
+/**
+ * C4.2 bridge — see `query-registry.ts` for full design notes. Identity-first
+ * scope resolution + audience/intent authorization on the winner; capabilities
+ * that don't match `intent: "write"` + `audiences.includes("agent-protocol")`
+ * still SHADOW lower-scope entries with the same `(extensionId, id)`.
+ */
 /** Compile registered mutations into a dispatcher. */
 export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): CompiledMutations => {
   const sorted = sortedExtensions(extensions)
   const entries: RegisteredMutation[] = []
   for (const ext of sorted) {
     for (const mutation of extractMutations(ext.contributions)) {
-      entries.push({ extensionId: ext.manifest.id, mutation })
+      entries.push({ _source: "mutation", extensionId: ext.manifest.id, mutation })
     }
-    // Bridge: write+agent-protocol capabilities show up here as mutations.
+    // Bridge: ALL capabilities enter the entry list so identity-first scope
+    // shadowing applies. Audience/intent authorization happens at lookup.
     for (const capability of extractCapabilities(ext.contributions)) {
-      if (capability.intent !== "write") continue
-      if (!capability.audiences.includes("agent-protocol")) continue
-      entries.push({ extensionId: ext.manifest.id, mutation: capabilityToMutation(capability) })
+      entries.push({ _source: "capability", extensionId: ext.manifest.id, capability })
     }
   }
 
@@ -103,12 +95,19 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
       if (
         candidate !== undefined &&
         candidate.extensionId === extensionId &&
-        candidate.mutation.id === mutationId
+        entryId(candidate) === mutationId
       ) {
         return candidate
       }
     }
     return undefined
+  }
+
+  const isAuthorizedAsMutation = (entry: RegisteredMutation): boolean => {
+    if (entry._source === "mutation") return true
+    return (
+      entry.capability.intent === "write" && entry.capability.audiences.includes("agent-protocol")
+    )
   }
 
   const run: CompiledMutations["run"] = (extensionId, mutationId, input, ctx) =>
@@ -117,10 +116,19 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
       if (entry === undefined) {
         return yield* new MutationNotFoundError({ extensionId, mutationId })
       }
+      // Identity-first hit, but the highest-scope entry isn't authorized as a
+      // mutation call (capability with wrong intent or missing audience).
+      // Treat as not-found — must NOT fall through to a lower-scope entry.
+      if (!isAuthorizedAsMutation(entry)) {
+        return yield* new MutationNotFoundError({ extensionId, mutationId })
+      }
+      const inputSchema =
+        entry._source === "mutation" ? entry.mutation.input : entry.capability.input
+      const outputSchema =
+        entry._source === "mutation" ? entry.mutation.output : entry.capability.output
+
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const decodedInput = yield* Schema.decodeUnknownEffect(entry.mutation.input as Schema.Any)(
-        input,
-      ).pipe(
+      const decodedInput = yield* Schema.decodeUnknownEffect(inputSchema as Schema.Any)(input).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
             new MutationError({
@@ -131,12 +139,36 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
           ),
         ),
       )
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — mutation R/E erased at registry boundary
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const handlerEffect = entry.mutation.handler(decodedInput, ctx) as Effect.Effect<
-        unknown,
-        MutationError
-      >
+      const handlerEffect: Effect.Effect<unknown, MutationError> =
+        entry._source === "mutation"
+          ? // @effect-diagnostics-next-line anyUnknownInErrorContext:off — mutation R/E erased at registry boundary
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            (entry.mutation.handler(decodedInput, ctx) as Effect.Effect<unknown, MutationError>)
+          : // Bridge: invoke the capability's effect, translating
+            // CapabilityError → MutationError. See query-registry's bridge
+            // for the full rationale on the ctx widening.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            (entry.capability
+              .effect(
+                decodedInput,
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                ctx as unknown as Parameters<typeof entry.capability.effect>[1],
+              )
+              .pipe(
+                Effect.catchTag(
+                  "@gent/core/src/domain/capability/CapabilityError",
+                  (e: { extensionId: string; capabilityId: string; reason: string }) =>
+                    Effect.fail(
+                      new MutationError({
+                        extensionId: e.extensionId,
+                        mutationId: e.capabilityId,
+                        reason: e.reason,
+                      }),
+                    ),
+                ),
+                // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              ) as Effect.Effect<unknown, MutationError>)
       const output = yield* handlerEffect.pipe(
         Effect.catchDefect((defect) =>
           Effect.fail(
@@ -148,10 +180,8 @@ export const compileMutations = (extensions: ReadonlyArray<LoadedExtension>): Co
           ),
         ),
       )
-      // Validate output shape — handler returns typed (decoded) form; encode
-      // confirms it matches the schema contract. Return the original typed value.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      yield* Schema.encodeUnknownEffect(entry.mutation.output as Schema.Any)(output).pipe(
+      yield* Schema.encodeUnknownEffect(outputSchema as Schema.Any)(output).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
             new MutationError({

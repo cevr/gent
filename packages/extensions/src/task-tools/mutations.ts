@@ -2,7 +2,7 @@
  * Task-tools mutations — typed write Capabilities (C4.2 migration).
  *
  * Authored as `CapabilityContribution`s with `intent: "write"` and
- * `audiences: ["agent-protocol"]`. The legacy `compileMutations` dispatcher
+ * `audiences: ["agent-protocol", "transport-public"]`. The legacy `compileMutations` dispatcher
  * lowers them into `MutationContribution`-shaped entries so existing callers
  * (`ctx.extension.mutate(ref, input)`) keep working unchanged.
  *
@@ -44,7 +44,7 @@ export const TaskCreateMutation: CapabilityContribution<
   TaskService | EventPublisher
 > = {
   id: "task.create",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskCreateInput,
   output: TaskCreateOutput,
@@ -94,7 +94,7 @@ export const TaskUpdateMutation: CapabilityContribution<
   TaskService | EventPublisher
 > = {
   id: "task.update",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskUpdateInput,
   output: TaskUpdateOutput,
@@ -129,7 +129,7 @@ export const TaskDeleteMutation: CapabilityContribution<
   TaskService | EventPublisher
 > = {
   id: "task.delete",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskDeleteInput,
   output: TaskDeleteOutput,
@@ -163,7 +163,7 @@ export const TaskAddDepMutation: CapabilityContribution<
   TaskService
 > = {
   id: "task.addDep",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskAddDepInput,
   output: TaskAddDepOutput,
@@ -204,7 +204,7 @@ export const TaskRemoveDepMutation: CapabilityContribution<
   TaskService
 > = {
   id: "task.removeDep",
-  audiences: ["agent-protocol"],
+  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskRemoveDepInput,
   output: TaskRemoveDepOutput,

@@ -337,14 +337,21 @@ export const AskExtensionMessageInput = Schema.Struct({
 export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
 
 /** Input shape for `extension.query` and `extension.mutate` transport RPCs.
- *  `extensionId` + (`queryId` | `mutationId`) route to the registered contribution;
- *  `input` is decoded by the contribution's input schema at the registry boundary. */
+ *  `extensionId` + (`queryId` | `mutationId`) route to the registered
+ *  contribution; `input` is decoded by the contribution's input schema at
+ *  the registry boundary.
+ *
+ *  `branchId` is required so the C4.2 capability bridge can pass a
+ *  fully-populated `CapabilityCoreContext` to the underlying handler
+ *  without an `unknown` cast (codex BLOCK on C4.2). Callers that previously
+ *  omitted it must now pass the active session's current branch.
+ */
 export const QueryExtensionInput = Schema.Struct({
   sessionId: SessionId,
   extensionId: Schema.String,
   queryId: Schema.String,
   input: Schema.Unknown,
-  branchId: Schema.optional(BranchId),
+  branchId: BranchId,
 })
 export type QueryExtensionInput = typeof QueryExtensionInput.Type
 
@@ -353,7 +360,7 @@ export const MutateExtensionInput = Schema.Struct({
   extensionId: Schema.String,
   mutationId: Schema.String,
   input: Schema.Unknown,
-  branchId: Schema.optional(BranchId),
+  branchId: BranchId,
 })
 export type MutateExtensionInput = typeof MutateExtensionInput.Type
 

@@ -39,10 +39,16 @@ export class MutationNotFoundError extends Schema.TaggedErrorClass<MutationNotFo
   },
 ) {}
 
-/** Context handed to a mutation's `handler` Effect. */
+/** Context handed to a mutation's `handler` Effect.
+ *
+ *  `branchId` is required: every mutation call site is branch-scoped (the
+ *  transport-level `extension.mutate` rejects callers without `branchId`),
+ *  and the C4.2 capability bridge relies on this required-at-the-boundary
+ *  shape so the cast to `CapabilityCoreContext` is sound.
+ */
 export interface MutationContext {
   readonly sessionId: SessionId
-  readonly branchId?: BranchId
+  readonly branchId: BranchId
   /** Process working directory (host cwd). */
   readonly cwd: string
   /** User home directory. */

@@ -57,12 +57,13 @@ export function BackgroundTasksDialog(props: {
   })
 
   const stopTask = (taskId: TaskId) => {
-    const sid = clientCtx.session()?.sessionId
-    if (sid === undefined) return
+    const session = clientCtx.session()
+    if (session === undefined || session === null) return
     cast(
       clientCtx.client.extension
         .mutate({
-          sessionId: sid,
+          sessionId: session.sessionId,
+          branchId: session.branchId,
           extensionId: TaskUpdateRef.extensionId,
           mutationId: TaskUpdateRef.mutationId,
           input: { taskId, status: "stopped" },
