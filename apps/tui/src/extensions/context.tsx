@@ -385,6 +385,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           projectDir: `${workspace.cwd}/.gent/extensions`,
           disabled: [...disabledSet],
           onModuleLoaded: registerExtensionModule,
+          runtime: platformRuntime,
         },
         makeCtx,
         _asyncFs,

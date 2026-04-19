@@ -6,16 +6,38 @@
  * are discovered via filesystem scan and dynamic import().
  */
 
+import { Effect, type ManagedRuntime } from "effect"
 import type {
   ExtensionClientModule,
   ExtensionClientContext,
+  ClientContribution,
 } from "@gent/core/domain/extension-client.js"
+import type { ClientDeps } from "@gent/core/domain/client-effect.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
   type LoadedTuiExtension,
   type ResolvedTuiExtensions,
 } from "./resolve"
+
+/**
+ * Bridge legacy and Effect-typed `setup` shapes (C9.1). Detects whether the
+ * module's `setup` is a sync function (legacy: takes `ctx`, returns array)
+ * or an Effect value (new: reads `ClientDeps`, returns array). Both shapes
+ * produce `ReadonlyArray<ClientContribution>` — only the dependency channel
+ * differs.
+ */
+const invokeSetup = async (
+  ext: ExtensionClientModule,
+  ctx: ExtensionClientContext,
+  runtime: ManagedRuntime.ManagedRuntime<ClientDeps, never>,
+): Promise<ReadonlyArray<ClientContribution>> => {
+  const { setup } = ext
+  if (Effect.isEffect(setup)) {
+    return runtime.runPromise(setup)
+  }
+  return setup(ctx)
+}
 
 interface ImportedExtension {
   readonly module: ExtensionClientModule
@@ -64,6 +86,10 @@ export const loadTuiExtensions = async (
     /** Called once per discovered module (builtin or external) before setup runs.
      *  Lets the caller register snapshot sources, etc., before contributions execute. */
     readonly onModuleLoaded?: (module: ExtensionClientModule) => void
+    /** ManagedRuntime that satisfies `ClientDeps` — required for any extension
+     *  whose `setup` is an Effect (the new C9 shape). Legacy sync-function
+     *  setups don't touch the runtime. */
+    readonly runtime: ManagedRuntime.ManagedRuntime<ClientDeps, never>
   },
   makeCtx: (extensionId: string) => ExtensionClientContext,
   fs: ExtensionClientContext["fs"],
@@ -84,21 +110,25 @@ export const loadTuiExtensions = async (
   }
 
   // Builtins: pre-imported, just filter disabled and call setup()
-  const builtinLoaded: LoadedTuiExtension[] = (opts.builtins ?? [])
-    .filter((ext) => !disabledSet.has(ext.id))
-    .map((ext) => ({
-      id: ext.id,
-      kind: "builtin" as const,
-      filePath: `builtin:${ext.id}`,
-      contributions: ext.setup(makeCtx(ext.id)),
-    }))
+  const builtinLoaded: LoadedTuiExtension[] = await Promise.all(
+    (opts.builtins ?? [])
+      .filter((ext) => !disabledSet.has(ext.id))
+      .map(async (ext) => ({
+        id: ext.id,
+        kind: "builtin" as const,
+        filePath: `builtin:${ext.id}`,
+        contributions: await invokeSetup(ext, makeCtx(ext.id), opts.runtime),
+      })),
+  )
 
-  const externalLoaded: LoadedTuiExtension[] = enabled.map((ext) => ({
-    id: ext.module.id,
-    kind: ext.kind,
-    filePath: ext.filePath,
-    contributions: ext.module.setup(makeCtx(ext.module.id)),
-  }))
+  const externalLoaded: LoadedTuiExtension[] = await Promise.all(
+    enabled.map(async (ext) => ({
+      id: ext.module.id,
+      kind: ext.kind,
+      filePath: ext.filePath,
+      contributions: await invokeSetup(ext.module, makeCtx(ext.module.id), opts.runtime),
+    })),
+  )
 
   const resolved = resolveTuiExtensions([...builtinLoaded, ...externalLoaded])
 

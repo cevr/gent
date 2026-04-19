@@ -8,7 +8,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Effect, FileSystem, Layer, ManagedRuntime, Path, Schema } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
@@ -53,10 +53,23 @@ import {
 
 // C2-compat shim: production loadTuiExtensions now takes (opts, makeCtx, fs, path).
 // Tests still call with (opts, ctx); wrap to preserve the original convention.
+// C9.1: opts gained a required `runtime` field (ManagedRuntime<ClientDeps>).
+// The shim provides a default test runtime so existing call sites don't have
+// to thread one through; any builtin extension whose `setup` is an Effect
+// will be executed via this runtime.
+const _testRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
 const loadTuiExtensions = (
-  opts: Parameters<typeof _loadTuiExtensions>[0],
+  opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {
+    runtime?: Parameters<typeof _loadTuiExtensions>[0]["runtime"]
+  },
   ctx: ExtensionClientContext,
-): ReturnType<typeof _loadTuiExtensions> => _loadTuiExtensions(opts, () => ctx, ctx.fs, ctx.path)
+): ReturnType<typeof _loadTuiExtensions> =>
+  _loadTuiExtensions(
+    { ...opts, runtime: opts.runtime ?? _testRuntime },
+    () => ctx,
+    ctx.fs,
+    ctx.path,
+  )
 import { SessionUiState, transitionSessionUi } from "../src/routes/session-ui-state"
 import { defineExtensionPackage } from "@gent/core/domain/extension-package.js"
 import type { GentExtension } from "@gent/core/domain/extension.js"

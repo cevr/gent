@@ -28,6 +28,7 @@ import type {
   ExtractExtensionReply,
 } from "./extension-protocol.js"
 import type { QueryRef } from "./query.js"
+import type { ClientEffect } from "./client-effect.js"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -275,10 +276,29 @@ export interface ExtensionClientContext {
   }
 }
 
+/**
+ * A client extension's setup signature.
+ *
+ * Two shapes are accepted during the C9 transition:
+ *   - **Legacy** (Promise surface): `(ctx) => ReadonlyArray<ClientContribution>`.
+ *     Reads dependencies off the imperative `ExtensionClientContext` (with
+ *     `AsyncFileSystem`, Promise-typed `ask`, etc.). Sync only — async work
+ *     must happen inside contributions, not during setup.
+ *   - **Effect** (C9 target): `ClientEffect<ReadonlyArray<ClientContribution>>`.
+ *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`,
+ *     `ClientTransport`); errors flow on the typed `ClientSetupError` channel.
+ *
+ * The loader detects which shape was returned and dispatches accordingly.
+ * C9.2 migrates builtins to the Effect shape; C9.3 deletes the legacy one.
+ */
+export type ExtensionClientSetup<TComponent = unknown> =
+  | ((ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>)
+  | ClientEffect<ReadonlyArray<ClientContribution<TComponent>>>
+
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
 export interface ExtensionClientModule<TComponent = unknown> {
   readonly id: string
-  readonly setup: (ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>
+  readonly setup: ExtensionClientSetup<TComponent>
   /** Optional snapshot source published by the paired `defineExtensionPackage`.
    *  The TUI provider uses this to refetch on `ExtensionStateChanged` pulses
    *  and populate the cache that backs `ctx.getSnapshotRaw()`.
