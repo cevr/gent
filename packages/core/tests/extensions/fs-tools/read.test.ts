@@ -36,14 +36,14 @@ describe("ReadTool", () => {
       const testFile = `${tmpDir}/test.txt`
       yield* fs.writeFileString(testFile, "Hello, World!")
 
-      const result = yield* ReadTool.execute({ path: testFile }, ctx)
+      const result = yield* ReadTool.effect({ path: testFile }, ctx)
       expect(result.content).toBe("1\tHello, World!")
     }),
   )
 
   readTest("returns error for non-existent file", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.result(ReadTool.execute({ path: "/nonexistent/file.txt" }, ctx))
+      const result = yield* Effect.result(ReadTool.effect({ path: "/nonexistent/file.txt" }, ctx))
       expect(result._tag).toBe("Failure")
     }),
   )
@@ -53,7 +53,7 @@ describe("ReadTool", () => {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
 
-      const result = yield* Effect.result(ReadTool.execute({ path: tmpDir }, ctx))
+      const result = yield* Effect.result(ReadTool.effect({ path: tmpDir }, ctx))
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(result.failure.message).toContain("Cannot read directory")

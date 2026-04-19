@@ -1,14 +1,11 @@
 /**
- * Task-tools mutations — typed write Capabilities (C4.2 migration).
+ * Task-tools mutations — typed write Capabilities authored through the
+ * `request({ intent: "write", ... })` factory (B11.5).
  *
- * Authored as `CapabilityContribution`s with `intent: "write"` and
- * `audiences: ["agent-protocol", "transport-public"]`. The legacy `compileMutations` dispatcher
- * lowers them into `MutationContribution`-shaped entries so existing callers
- * (`ctx.extension.mutate(ref, input)`) keep working unchanged.
- *
- * Refs (`TaskCreateRef`, …) remain `MutationRef`-shaped during the C4.2-4
- * migration; their `mutationId` matches the capability's `id`. C4.5 swaps
- * them to `CapabilityRef` once the legacy types are deleted.
+ * Refs (`TaskCreateRef`, …) remain `MutationRef`-shaped during the
+ * migration window; their `mutationId` matches the capability's `id`.
+ * They migrate to `CapabilityRef` when the legacy `MutationRef` type
+ * is deleted alongside `query()` / `mutation()` in B11.5d.
  *
  * @module
  */
@@ -16,10 +13,10 @@ import { Effect, Schema } from "effect"
 import {
   AgentName,
   type CapabilityContribution,
-  type CapabilityCoreContext,
   CapabilityError,
   EventPublisher,
   type MutationRef,
+  request,
   Task,
   TaskId,
 } from "@gent/core/extensions/api"
@@ -38,17 +35,12 @@ export const TaskCreateInput = Schema.Struct({
 })
 export const TaskCreateOutput = Task
 
-export const TaskCreateMutation: CapabilityContribution<
-  typeof TaskCreateInput.Type,
-  typeof TaskCreateOutput.Type,
-  TaskService | EventPublisher
-> = {
+export const TaskCreateMutation = request({
   id: "task.create",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskCreateInput,
   output: TaskCreateOutput,
-  effect: (input, ctx: CapabilityCoreContext) =>
+  execute: (input, ctx) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       const eventPublisher = yield* EventPublisher
@@ -63,9 +55,20 @@ export const TaskCreateMutation: CapabilityContribution<
           cwd: input.cwd,
           metadata: input.metadata,
         })
-        .pipe(Effect.provideService(EventPublisher, eventPublisher))
+        .pipe(
+          Effect.provideService(EventPublisher, eventPublisher),
+          Effect.catchEager((e) =>
+            Effect.fail(
+              new CapabilityError({
+                extensionId: TASK_TOOLS_EXTENSION_ID,
+                capabilityId: "task.create",
+                reason: `TaskService.create failed: ${String(e)}`,
+              }),
+            ),
+          ),
+        )
     }),
-}
+})
 
 export const TaskCreateRef: MutationRef<typeof TaskCreateInput.Type, typeof TaskCreateOutput.Type> =
   {

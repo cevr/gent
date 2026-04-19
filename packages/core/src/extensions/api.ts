@@ -185,14 +185,35 @@ export {
   type ExtensionContributions,
   // Smart constructors — return bare leaf values; the bucket they're placed
   // in is the discrimination (no `_kind` field).
-  tool,
   pipeline,
   subscription,
+  // Legacy lowering smart constructors — kept alive during the B11.5
+  // migration window. `query` / `mutation` are deleted in B11.5d once
+  // the call graph migrates to the unified `request(...)` factory.
   query,
   mutation,
   defineResource,
   resource,
 } from "../domain/contribution.js"
+
+// B11.5 typed capability factories — `audiences[] + intent` flag matrix
+// is gone from the author surface. `CapabilityHost` dispatches by
+// factory-origin metadata baked into the lowering.
+//
+// `tool(...)` accepts BOTH the new shape (`{ id, ... }`) AND the legacy
+// `ToolDefinition` (from `defineTool({...})`) during the B11.5
+// migration window — overload-routed. The legacy branch + `defineTool`
+// + `ToolDefinition` interface are deleted in B11.5d.
+//
+// See `domain/capability/{tool,request,action}.ts` for the typed shapes.
+export { tool, type ToolInput } from "../domain/capability/tool.js"
+export {
+  request,
+  type ReadRequestInput,
+  type WriteRequestInput,
+  type RequestInput,
+} from "../domain/capability/request.js"
+export { action, type ActionInput, type ActionSurface } from "../domain/capability/action.js"
 export {
   type PipelineContribution,
   type AnyPipelineContribution,

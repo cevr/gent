@@ -1,5 +1,5 @@
 import { Effect, Schema, FileSystem, Path } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 // Read Tool Error
 
@@ -36,10 +36,12 @@ export const ReadResult = Schema.Struct({
   truncated: Schema.Boolean,
 })
 
-// Read Tool
+// Read Tool — authored through the typed `tool(...)` factory (B11.5).
+// `tool(...)` lowers directly to a Capability; the previous two-step
+// `tool(defineTool({...}))` pattern is gone.
 
-export const ReadTool = defineTool({
-  name: "read",
+export const ReadTool = tool({
+  id: "read",
   idempotent: true,
   description: "Read file contents. Returns numbered lines. Use offset/limit for large files.",
   promptSnippet: "Read file contents with line numbers",

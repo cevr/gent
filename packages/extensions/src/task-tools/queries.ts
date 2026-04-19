@@ -1,28 +1,23 @@
 /**
- * Task-tools queries — typed read-only Capabilities (C4.2 migration).
+ * Task-tools queries — typed read-only Capabilities authored through the
+ * `request({ intent: "read", ... })` factory (B11.5).
  *
- * Authored as `CapabilityContribution`s with `intent: "read"` and
- * `audiences: ["agent-protocol", "transport-public"]`. The legacy `compileQueries` dispatcher
- * lowers them into `QueryContribution`-shaped entries so existing callers
- * (`ctx.extension.query(ref, input)`) keep working unchanged.
+ * The factory's `intent: "read"` overload constrains the handler's R
+ * channel to `ReadOnlyTag`, so write-capable service Tags fail to
+ * compile here. `TaskService` is a wide read+write Tag; we yield
+ * `TaskStorageReadOnly` (the branded sub-Tag from B11.4) instead.
  *
- * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) are still exported as
- * `QueryRef`-shaped values; their `queryId` matches the capability's `id`,
- * so routing through the bridge is identity-preserving. C4.5 swaps them to
- * `CapabilityRef` once the legacy types are deleted.
+ * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) are still
+ * exported as `QueryRef`-shaped values; their `queryId` matches the
+ * capability's `id`, so routing through the bridge is
+ * identity-preserving. They migrate to `CapabilityRef` when the legacy
+ * `QueryRef` type is deleted alongside `query()` / `mutation()` in B11.5d.
  *
  * @module
  */
 import { Effect, Schema } from "effect"
-import {
-  type CapabilityContribution,
-  type CapabilityCoreContext,
-  CapabilityError,
-  type QueryRef,
-  Task,
-  TaskId,
-} from "@gent/core/extensions/api"
-import { TaskService } from "../task-tools-service.js"
+import { CapabilityError, type QueryRef, request, Task, TaskId } from "@gent/core/extensions/api"
+import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 
 // ── GetTask ──
@@ -30,33 +25,28 @@ import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 export const TaskGetInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetOutput = Schema.NullOr(Task)
 
-export const TaskGetQuery: CapabilityContribution<
-  typeof TaskGetInput.Type,
-  typeof TaskGetOutput.Type,
-  TaskService
-> = {
+export const TaskGetQuery = request({
   id: "task.get",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskGetInput,
   output: TaskGetOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
-      const taskService = yield* TaskService
-      const task = yield* taskService.get(input.taskId).pipe(
+      const storage = yield* TaskStorageReadOnly
+      const task = yield* storage.getTask(input.taskId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
             new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
               capabilityId: "task.get",
-              reason: `TaskService.get failed: ${String(e)}`,
+              reason: `TaskStorage.getTask failed: ${String(e)}`,
             }),
           ),
         ),
       )
       return task ?? null
     }),
-}
+})
 
 export const TaskGetRef: QueryRef<typeof TaskGetInput.Type, typeof TaskGetOutput.Type> = {
   extensionId: TASK_TOOLS_EXTENSION_ID,
@@ -70,34 +60,29 @@ export const TaskGetRef: QueryRef<typeof TaskGetInput.Type, typeof TaskGetOutput
 export const TaskListInput = Schema.Struct({})
 export const TaskListOutput = Schema.Array(Task)
 
-export const TaskListQuery: CapabilityContribution<
-  typeof TaskListInput.Type,
-  typeof TaskListOutput.Type,
-  TaskService
-> = {
+export const TaskListQuery = request({
   id: "task.list",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskListInput,
   output: TaskListOutput,
-  effect: (_input, ctx: CapabilityCoreContext) =>
+  // CapabilityCoreContext supplies sessionId + branchId; list scopes to
+  // the active session, narrowing to the active branch.
+  execute: (_input, ctx) =>
     Effect.gen(function* () {
-      const taskService = yield* TaskService
-      // CapabilityCoreContext supplies sessionId + branchId; list scopes to
-      // the active session, narrowing to the active branch.
-      return yield* taskService.list(ctx.sessionId, ctx.branchId).pipe(
+      const storage = yield* TaskStorageReadOnly
+      return yield* storage.listTasks(ctx.sessionId, ctx.branchId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
             new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
               capabilityId: "task.list",
-              reason: `TaskService.list failed: ${String(e)}`,
+              reason: `TaskStorage.listTasks failed: ${String(e)}`,
             }),
           ),
         ),
       )
     }),
-}
+})
 
 export const TaskListRef: QueryRef<typeof TaskListInput.Type, typeof TaskListOutput.Type> = {
   extensionId: TASK_TOOLS_EXTENSION_ID,
@@ -111,32 +96,27 @@ export const TaskListRef: QueryRef<typeof TaskListInput.Type, typeof TaskListOut
 export const TaskGetDepsInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetDepsOutput = Schema.Array(TaskId)
 
-export const TaskGetDepsQuery: CapabilityContribution<
-  typeof TaskGetDepsInput.Type,
-  typeof TaskGetDepsOutput.Type,
-  TaskService
-> = {
+export const TaskGetDepsQuery = request({
   id: "task.getDeps",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "read",
   input: TaskGetDepsInput,
   output: TaskGetDepsOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
-      const taskService = yield* TaskService
-      return yield* taskService.getDeps(input.taskId).pipe(
+      const storage = yield* TaskStorageReadOnly
+      return yield* storage.getTaskDeps(input.taskId).pipe(
         Effect.catchEager((e) =>
           Effect.fail(
             new CapabilityError({
               extensionId: TASK_TOOLS_EXTENSION_ID,
               capabilityId: "task.getDeps",
-              reason: `TaskService.getDeps failed: ${String(e)}`,
+              reason: `TaskStorage.getTaskDeps failed: ${String(e)}`,
             }),
           ),
         ),
       )
     }),
-}
+})
 
 export const TaskGetDepsRef: QueryRef<typeof TaskGetDepsInput.Type, typeof TaskGetDepsOutput.Type> =
   {

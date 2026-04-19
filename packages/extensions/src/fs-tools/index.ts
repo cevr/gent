@@ -7,5 +7,8 @@ import { GrepTool } from "./grep.js"
 
 export const FsToolsExtension = defineExtension({
   id: "@gent/fs-tools",
-  capabilities: [tool(ReadTool), tool(WriteTool), tool(EditTool), tool(GlobTool), tool(GrepTool)],
+  // ReadTool is already a Capability (authored via `tool(...)` directly,
+  // the new B11.5 shape); the other four still go through the legacy
+  // `tool(defineTool({...}))` double-wrap pending mass migration.
+  capabilities: [ReadTool, tool(WriteTool), tool(EditTool), tool(GlobTool), tool(GrepTool)],
 })
