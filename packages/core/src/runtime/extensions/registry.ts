@@ -143,18 +143,22 @@ export const resolveExtensions = (
   const promptSectionsMap = compileContributions(sorted, extractPromptSections, (p) => p.id)
 
   // C4.3 command bridge — identity-first scope shadowing followed by
-  // audience/intent authorization, mirroring the query/mutation bridges.
+  // audience/intent authorization, mirroring the query/mutation bridges
+  // (see `query-registry.ts:111` / `mutation-registry.ts:85`).
   //
   // Commands' identity is `name` (flat). Both legacy `CommandContribution`s
-  // AND every `CapabilityContribution` enter the candidate map keyed by name;
-  // since `sorted` walks builtin → user → project, later writes win
-  // (project shadows builtin). Authorization happens AFTER selection — a
-  // higher-scope override that doesn't match `intent: "write"` +
-  // `audiences.includes("human-slash")` SHADOWS the lower-scope command and
-  // disappears from the slash list (codex BLOCK on C4.3, mirrors the C4.1
-  // findEntry rule).
+  // AND every `CapabilityContribution` enter the candidate map keyed by name
+  // REGARDLESS of audience or intent — pre-filtering would let a builtin
+  // slash command leak when a higher-scope capability with the same id but
+  // a non-slash audience or `intent: "read"` is registered.
   //
-  // `"human-palette"` is deliberately NOT eligible here — the legacy
+  // Since `sorted` walks builtin → user → project, later writes win
+  // (project shadows builtin). Authorization happens AFTER selection — a
+  // higher-scope override that doesn't satisfy `intent: "write"` +
+  // `audiences.includes("human-slash")` SHADOWS the lower-scope command and
+  // disappears from the slash list (codex BLOCK on C4.3 follow-up).
+  //
+  // `"human-palette"` is deliberately NOT slash-authorizable here — the legacy
   // CommandContribution shape has no audience field, so the TUI surfaces every
   // listed entry as both a slash AND a palette command. Including palette-only
   // capabilities would accidentally make them slash-invokable. The
@@ -171,16 +175,12 @@ export const resolveExtensions = (
       commandWinners.set(cmd.name, { _source: "command", cmd })
     }
     for (const cap of extractCapabilities(ext.contributions)) {
-      // Only capabilities authorizable as a slash command are *candidates*.
-      // We still SHADOW: a project capability with `audiences:["human-palette"]`
-      // wins by identity over a builtin slash command of the same name and
-      // makes it disappear from the slash list (filtered out below).
-      if (
-        cap.intent === "write" &&
-        (cap.audiences.includes("human-slash") || cap.audiences.includes("human-palette"))
-      ) {
-        commandWinners.set(cap.id, { _source: "capability", cap })
-      }
+      // Identity-first: ALL capabilities shadow same-name lower-scope entries
+      // by id, even if they will fail the slash authorization below. A
+      // project-scope capability with `audiences:["transport-public"]` or
+      // `intent:"read"` MUST shadow the builtin slash command — otherwise the
+      // builtin leaks. Authorization is the second step; selection is first.
+      commandWinners.set(cap.id, { _source: "capability", cap })
     }
     for (const rule of extractPermissionRules(ext.contributions)) permissionRules.push(rule)
   }

@@ -656,4 +656,85 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     ])
     expect(resolved.commands.map((c) => c.name)).not.toContain("palette-only")
   })
+
+  test('project capability with audiences:["transport-public"] SHADOWS builtin slash command', () => {
+    // The leak codex caught: a project capability with a non-human audience
+    // must still shadow same-id builtin slash commands. Otherwise the builtin
+    // command keeps surfacing through the TUI even though the project tried
+    // to override it.
+    const builtin = makeExt("@test/shadow", "builtin", {
+      commands: [{ name: "act", handler: () => Effect.void }],
+    })
+    const projectCap: AnyCapabilityContribution = {
+      id: "act",
+      audiences: ["transport-public"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.commands.map((c) => c.name)).not.toContain("act")
+  })
+
+  test('project capability with intent:"read" SHADOWS builtin slash command', () => {
+    const builtin = makeExt("@test/shadow", "builtin", {
+      commands: [{ name: "look", handler: () => Effect.void }],
+    })
+    const projectCap: AnyCapabilityContribution = {
+      id: "look",
+      audiences: ["human-slash"],
+      intent: "read",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.commands.map((c) => c.name)).not.toContain("look")
+  })
+
+  test("model-only capability SHADOWS builtin slash command", () => {
+    // Tool migration in C4.4 will add many `audiences:["model"]` capabilities.
+    // A project model-tool with the same id as a builtin slash command must
+    // hide that builtin from the slash list, mirroring query/mutation rules.
+    const builtin = makeExt("@test/shadow", "builtin", {
+      commands: [{ name: "run", handler: () => Effect.void }],
+    })
+    const projectCap: AnyCapabilityContribution = {
+      id: "run",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Void,
+      effect: () => Effect.void,
+    }
+    const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
+
+    const resolved = resolveExtensions([builtin, project])
+    expect(resolved.commands.map((c) => c.name)).not.toContain("run")
+  })
+
+  test("bridge dies when capability output fails to encode", async () => {
+    // Capability declares output: Schema.Number but its effect returns a
+    // string. The bridge's encode step must defect — mirrors the
+    // query/mutation registries' output-validation tests.
+    const cap: AnyCapabilityContribution = {
+      id: "lies",
+      audiences: ["human-slash"],
+      intent: "write",
+      input: Schema.String,
+      output: Schema.Number,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      effect: () => Effect.succeed("not a number" as unknown as number),
+    }
+    const resolved = resolveExtensions([makeExt("@test/lies", "builtin", { capabilities: [cap] })])
+    const cmd = resolved.commands.find((c) => c.name === "lies")
+    expect(cmd).toBeDefined()
+    const exit = await Effect.runPromiseExit(cmd!.handler("ignored", makeHostCtx()))
+    expect(exit._tag).toBe("Failure")
+  })
 })
