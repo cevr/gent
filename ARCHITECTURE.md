@@ -250,7 +250,7 @@ Rules:
 Extension shape lives in:
 
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
-- `packages/core/src/domain/contribution.ts` — `Contribution` union (foundational data structure)
+- `packages/core/src/domain/contribution.ts` — `ExtensionContributions` typed-bucket carrier (six primitive sub-arrays)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
 - `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
 - `packages/core/src/runtime/extensions/pipeline-host.ts` — pipeline compilation (`compilePipelines`)
@@ -295,17 +295,19 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, contributions: ({ ctx }) => [...] })`. Contributions are a flat `Contribution[]` array built with smart constructors (`toolContribution`, `agentContribution`, `pipelineContribution`, `subscriptionContribution`, `projectionContribution`, `defineResource` / `defineLifecycleResource`, `permissionRuleContribution`, `commandContribution`, `queryContribution`, `mutationContribution`, `modelDriverContribution`, `externalDriverContribution`, `promptSectionContribution`).
+One authoring shape: `defineExtension({ id, resources?, capabilities?, projections?, pipelines?, subscriptions?, drivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches a Projection placed in `capabilities` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
-Internally `defineExtension` lowers the contribution array into `ExtensionSetup` for the runtime registry. The `Contribution` union (`packages/core/src/domain/contribution.ts`) is the foundational data structure — adding a new kind triggers a compile error in `placeContribution` until handled.
+There is no flat `Contribution[]` and no `_kind` discriminator. The C8 redesign collapsed 16 contribution kinds into the six-primitive set below. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
-- Stateless: tools, pipelines, subscriptions
-- Stateful: `defineResource({ scope, layer, machine, schedule?, subscriptions?, start?, stop? })` — long-lived state with explicit scope. The `machine` field carries an `effect-machine` machine + declared effects when the extension owns one. `defineLifecycleResource` is the no-service variant for Resources that contribute lifecycle / schedule / subscriptions / machine without a service tag.
-- `Projection` (`projectionContribution(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt`/`policy` projectors (UI deleted in C2; client widgets read state via transport queries). Lint rule `gent/no-projection-writes` enforces query purity. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
-- `Pipeline` (`pipelineContribution(definePipeline(hook, handler))`) — transforming middleware at six hooks (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
-- `Subscription` (`subscriptionContribution(defineSubscription(event, failureMode, handler))`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
-- `Query` / `Mutation` (`queryContribution(...)` / `mutationContribution(...)`) — typed RPC handlers invoked via `ctx.extension.query(ref, input)` / `ctx.extension.mutate(ref, input)` from tools or other extensions.
-- `ModelDriver` / `ExternalDriver` — LLM providers and out-of-process turn executors (e.g. ACP). See `packages/core/src/domain/driver.ts`.
+- **Resource** — `defineResource({ scope, layer?, machine?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Carries optional `effect-machine` machine + declared effects when the extension owns one. Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
+- **Capability** — `tool(...)` / `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` smart constructors lowering to a single `CapabilityContribution`. Discriminated by `audiences: ("model" | "agent-protocol" | "transport-public" | "human-palette" | "human-slash")[]` and `intent: "read" | "write"`. See `packages/core/src/domain/capability.ts` and `runtime/extensions/capability-host.ts`.
+- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors (agent-loop only; UI deleted in C2; client widgets read state via transport-public Capabilities). The `R` channel is fenced read-only by the `gent/no-projection-writes` lint rule. See `packages/core/src/domain/projection.ts` and `runtime/extensions/projection-registry.ts`.
+- **Pipeline** (`pipeline(definePipeline(hook, handler))`) — transforming middleware at five hooks (`tool.execute`, `tool.result`, `permission.check`, `context.messages`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
+- **Subscription** (`subscription(defineSubscription(event, failureMode, handler))`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
+- **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
+
+Other notes:
+
 - Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
@@ -325,18 +327,19 @@ Internally `defineExtension` lowers the contribution array into `ExtensionSetup`
 
 - Provided via `ext.layer(TaskService.Live)` — task runs resolve `SubagentRunnerService` lazily when needed
 - `task.list` RPC removed — TUI reads from `TaskProjection` (`packages/extensions/src/task-tools/projection.ts`), which queries `TaskStorage` on demand. The actor no longer mirrors task events; UI snapshot derivation lives in the projection.
-- task mutation flows through the extension boundary, not direct core wiring (the actor is currently a pure RPC dispatcher; Commit 4 will replace it with typed Mutation contributions)
+- task mutation flows through the extension boundary as typed Capability contributions (`intent: "write"`)
 - `task.output` RPC stays as thin lazy query (message summaries too heavy for snapshots)
 - Core `dependencies.ts` no longer imports or wires `TaskService` — it comes through the extension layer graph
-- Event-publisher evaluates registered projections after every event and emits `ExtensionUiSnapshot` for each ui-bearing projection — the snapshot pipeline is unified across actor and projection sources
+- Event-publisher evaluates registered projections (prompt + policy halves only — UI deleted in C2). Client widgets read state via `transport-public` Capabilities + typed events on the normal transport stream
 
 ### TUI Extensions
 
-- Builtins are individual `.client.ts` files in `apps/tui/src/extensions/builtins/`
+- Builtins are individual `.client.{ts,tsx}` files in `apps/tui/src/extensions/builtins/`
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
-- Loader accepts `disabled` list to filter extensions by id before `setup()` is called
-- `ExtensionClientContext` provides `sessionId`, `branchId`, `openOverlay`, `closeOverlay`
-- `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, `snapshots()` for widgets
+- Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup()` is called
+- Two `setup` shapes accepted: legacy sync `(ctx) => ClientContribution[]` and Effect-typed `Effect<ClientContribution[], E, R>`. Effect setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientSnapshots`. The legacy `AsyncFileSystem`/`Promise<reply>`-typed `ask`/`Promise`-typed autocomplete `items` were deleted in C9.3 — extensions reach those surfaces through Effect services
+- `ExtensionClientContext` (legacy ctx) provides `cwd`, `home`, `sessionId`, `branchId`, `openOverlay`, `closeOverlay`, `send`, `sendMessage`, `getSnapshotRaw`, `composerState`
+- `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, `snapshots()`, and `clientRuntime` for widgets
 - Widgets are zero-prop components that self-source from context hooks
 
 ### Extension State Runtime Lifecycle
