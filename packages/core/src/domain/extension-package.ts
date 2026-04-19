@@ -3,6 +3,7 @@ import type {
   ClientContribution,
   ExtensionClientContext,
   ExtensionClientModule,
+  ExtensionClientSetup,
 } from "./extension-client.js"
 import type { AnyExtensionRequestMessage, ExtractExtensionReply } from "./extension-protocol.js"
 import type { QueryRef } from "./query.js"
@@ -130,11 +131,34 @@ export function defineExtensionPackage(
 /**
  * Static factory for standalone TUI client modules (no server companion).
  * Use `package.tui(setup)` for paired modules instead.
+ *
+ * Accepts either:
+ *   - Legacy sync `(ctx) => Array` shape — receives `ExtensionClientContext`.
+ *   - Object form `{ setup: ClientEffect<Array, E, R> }` — Effect-typed
+ *     setup that yields its dependencies from the per-provider runtime
+ *     (`ClientDeps` floor + TUI services). The R channel widens beyond
+ *     `ClientDeps` whenever the extension yields TUI services like
+ *     `ClientWorkspace`, `ClientTransport`, etc.
  */
-const standaloneClientModule = <TComponent = unknown>(
+function standaloneClientModule<TComponent = unknown>(
   id: string,
   setup: (ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>,
-): ExtensionClientModule<TComponent> => ({ id, setup })
+): ExtensionClientModule<TComponent>
+function standaloneClientModule<TComponent = unknown, R = unknown>(
+  id: string,
+  spec: { readonly setup: ExtensionClientSetup<TComponent, R> },
+): ExtensionClientModule<TComponent, R>
+function standaloneClientModule<TComponent = unknown, R = unknown>(
+  id: string,
+  setupOrSpec:
+    | ((ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>)
+    | { readonly setup: ExtensionClientSetup<TComponent, R> },
+): ExtensionClientModule<TComponent> | ExtensionClientModule<TComponent, R> {
+  if (typeof setupOrSpec === "function") {
+    return { id, setup: setupOrSpec }
+  }
+  return { id, setup: setupOrSpec.setup }
+}
 
 // Attach as static method on the ExtensionPackage namespace
 export const ExtensionPackage = {

@@ -38,6 +38,12 @@ import type {
 } from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader"
 import { makeClientTransportLayer } from "./client-transport"
+import {
+  makeClientWorkspaceLayer,
+  makeClientShellLayer,
+  makeClientComposerLayer,
+  makeClientSnapshotsLayer,
+} from "./client-services"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
 
@@ -119,25 +125,6 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
   const clientCtx = useClient()
 
-  // C9.2: build a per-provider ManagedRuntime that augments the shared
-  // platform layer (FileSystem, Path) with `ClientTransport`. Effect-typed
-  // client extensions yield `ClientTransport` to reach the typed
-  // GentNamespacedClient + GentRuntime; the loader's `invokeSetup` runs
-  // them against this runtime.
-  const clientRuntime = ManagedRuntime.make(
-    Layer.merge(
-      Layer.merge(BunFileSystem.layer, BunServices.layer),
-      makeClientTransportLayer({
-        client: clientCtx.client,
-        runtime: clientCtx.runtime,
-        currentSession: () => {
-          const session = clientCtx.session()
-          if (session === null) return undefined
-          return { sessionId: session.sessionId, branchId: session.branchId }
-        },
-      }),
-    ),
-  )
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
@@ -189,6 +176,70 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const setComposerStateProvider = (provider: () => ComposerStateSnapshot) => {
     setComposerStateProviderSignal(() => provider)
   }
+
+  // C9.2/C9.3: build a per-provider ManagedRuntime that augments the shared
+  // platform layer (FileSystem, Path) with all the TUI client services
+  // Effect-typed extensions may yield: `ClientTransport` (typed RPC client),
+  // `ClientWorkspace` (cwd/home), `ClientShell` (send/sendMessage/overlays),
+  // `ClientComposer` (reactive composer state), `ClientSnapshots`
+  // (per-extension snapshot cache). The loader's `invokeSetup` runs each
+  // setup against this runtime.
+  const clientRuntime = ManagedRuntime.make(
+    Layer.mergeAll(
+      BunFileSystem.layer,
+      BunServices.layer,
+      makeClientTransportLayer({
+        client: clientCtx.client,
+        runtime: clientCtx.runtime,
+        currentSession: () => {
+          const session = clientCtx.session()
+          if (session === null) return undefined
+          return { sessionId: session.sessionId, branchId: session.branchId }
+        },
+      }),
+      makeClientWorkspaceLayer({
+        cwd: workspace.cwd,
+        home: workspace.home,
+      }),
+      makeClientShellLayer({
+        send: (message) => {
+          const session = clientCtx.session()
+          if (session === null) return
+          clientCtx.runtime.cast(
+            clientCtx.client.extension.send({
+              sessionId: session.sessionId,
+              message,
+              branchId: session.branchId,
+            }),
+          )
+        },
+        sendMessage: (content) => clientCtx.sendMessage(content),
+        openOverlay: (id) => overlayDispatch().open(id),
+        closeOverlay: () => overlayDispatch().close(),
+      }),
+      makeClientComposerLayer({
+        state: () => {
+          const provider = composerStateProvider()
+          if (provider === undefined) {
+            return {
+              draft: "",
+              mode: "editing" as const,
+              inputFocused: false,
+              autocompleteOpen: false,
+            }
+          }
+          return provider()
+        },
+      }),
+      makeClientSnapshotsLayer({
+        read: (extensionId) => {
+          const session = clientCtx.session()
+          if (session === null) return undefined
+          return snapshotCache().get(cacheKey(session.sessionId, session.branchId, extensionId))
+        },
+      }),
+    ),
+  )
 
   // Refetch a single extension's snapshot via the package's declared source.
   // Called once per `ExtensionStateChanged` pulse for that extension and on

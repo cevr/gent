@@ -14,6 +14,12 @@ import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader"
 import { decodeExtensionAskReply } from "../src/extensions/context"
+import {
+  makeClientWorkspaceLayer,
+  makeClientShellLayer,
+  makeClientComposerLayer,
+  makeClientSnapshotsLayer,
+} from "../src/extensions/client-services"
 // applyExtensionSnapshot is gone in C2 — provide a local stub so the legacy
 // "snapshot ordering" tests still load. TODO(c2): port to ExtensionStateChanged.
 const applyExtensionSnapshot = (
@@ -54,10 +60,32 @@ import {
 // C2-compat shim: production loadTuiExtensions now takes (opts, makeCtx, fs, path).
 // Tests still call with (opts, ctx); wrap to preserve the original convention.
 // C9.1: opts gained a required `runtime` field (ManagedRuntime<ClientDeps>).
-// The shim provides a default test runtime so existing call sites don't have
-// to thread one through; any builtin extension whose `setup` is an Effect
-// will be executed via this runtime.
-const _testRuntime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
+// C9.3: builtins (e.g. files.client.ts) now yield TUI services; the test
+// runtime must provide every service the production runtime provides so
+// builtin Effect setups resolve. Stub callbacks suffice — none are invoked
+// during pure load.
+const _testRuntime = ManagedRuntime.make(
+  Layer.mergeAll(
+    BunFileSystem.layer,
+    BunServices.layer,
+    makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
+    makeClientShellLayer({
+      send: () => {},
+      sendMessage: () => {},
+      openOverlay: () => {},
+      closeOverlay: () => {},
+    }),
+    makeClientComposerLayer({
+      state: () => ({
+        draft: "",
+        mode: "editing" as const,
+        inputFocused: false,
+        autocompleteOpen: false,
+      }),
+    }),
+    makeClientSnapshotsLayer({ read: () => undefined }),
+  ),
+)
 const loadTuiExtensions = (
   opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {
     runtime?: Parameters<typeof _loadTuiExtensions>[0]["runtime"]

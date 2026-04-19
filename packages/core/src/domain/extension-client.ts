@@ -245,6 +245,17 @@ export type AsyncFileSystem = {
     : FileSystem.FileSystem[K]
 }
 
+/** Overlay identifier (registered in `OverlayContribution`). */
+export type OverlayId = string
+
+/** Snapshot of the active composer at a point in time. */
+export interface ComposerState {
+  readonly draft: string
+  readonly mode: "editing" | "shell"
+  readonly inputFocused: boolean
+  readonly autocompleteOpen: boolean
+}
+
 /** Runtime API provided to extensions during setup */
 export interface ExtensionClientContext {
   /** Working directory for the current workspace */
@@ -276,12 +287,7 @@ export interface ExtensionClientContext {
   /** Send a user message to the active session */
   readonly sendMessage: (content: string) => void
   /** Reactive composer state */
-  readonly composerState: () => {
-    readonly draft: string
-    readonly mode: "editing" | "shell"
-    readonly inputFocused: boolean
-    readonly autocompleteOpen: boolean
-  }
+  readonly composerState: () => ComposerState
 }
 
 /**
