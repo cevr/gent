@@ -84,7 +84,7 @@ const taskFromRow = (row: TaskRow) =>
  *
  * The Live layer for `TaskStorage` provides BOTH this Tag and the
  * write-capable `TaskStorage` Tag from the same underlying state —
- * see `TaskStorageReadOnly.Live` below.
+ * see `TaskStorage.Live` below.
  */
 export interface TaskStorageReadOnlyService {
   readonly getTask: (id: TaskId) => Effect.Effect<Task | undefined, TaskStorageError>
@@ -127,44 +127,18 @@ export class TaskStorageReadOnly extends Context.Service<
   ReadOnly<TaskStorageReadOnlyService>
 >()("@gent/core/src/extensions/task-tools-storage/TaskStorageReadOnly") {}
 
-export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService>()(
-  "@gent/core/src/extensions/task-tools-storage/TaskStorage",
-) {
-  /**
-   * Runs its own DDL — only requires SqlClient, not host Storage.
-   *
-   * Provides BOTH `TaskStorage` (write surface) and `TaskStorageReadOnly`
-   * (read-only branded Tag) from the same underlying service value —
-   * the read-only Tag is a structurally narrower projection that
-   * downstream projections and read-intent capabilities can yield
-   * without picking up the write methods.
-   */
-  static Live: Layer.Layer<TaskStorage | TaskStorageReadOnly, never, SqlClient.SqlClient> =
-    Layer.effectContext(
-      Effect.gen(function* () {
-        const service = yield* TaskStorage.makeService
-        return Context.empty().pipe(
-          Context.add(TaskStorage, service),
-          Context.add(
-            TaskStorageReadOnly,
-            withReadOnly({
-              getTask: service.getTask,
-              listTasks: service.listTasks,
-              getTaskDeps: service.getTaskDeps,
-            } satisfies TaskStorageReadOnlyService),
-          ),
-        )
-      }),
-    )
+/**
+ * Construct the underlying TaskStorage service value. Module-local —
+ * `TaskStorage.Live` is the only consumer; the constructor itself is
+ * not part of the public surface.
+ */
+const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient.SqlClient> =
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
 
-  /** Construct the underlying service value (used by `Live`). */
-  static makeService: Effect.Effect<TaskStorageService, never, SqlClient.SqlClient> = Effect.gen(
-    function* () {
-      const sql = yield* SqlClient.SqlClient
-
-      // Extension-owned DDL — fatal if this fails
-      yield* Effect.all([
-        sql.unsafe(`
+    // Extension-owned DDL — fatal if this fails
+    yield* Effect.all([
+      sql.unsafe(`
           CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -182,7 +156,7 @@ export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
           )
         `),
-        sql.unsafe(`
+      sql.unsafe(`
           CREATE TABLE IF NOT EXISTS task_deps (
             task_id TEXT NOT NULL,
             blocked_by_id TEXT NOT NULL,
@@ -191,141 +165,170 @@ export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService
             FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
           )
         `),
-        sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`),
-        sql.unsafe(
-          `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
-        ),
-      ]).pipe(Effect.orDie)
+      sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`),
+      sql.unsafe(
+        `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
+      ),
+    ]).pipe(Effect.orDie)
 
-      return {
-        createTask: Effect.fn("TaskStorage.createTask")(
-          function* (task) {
-            const meta =
-              task.metadata === undefined
-                ? null
-                : yield* Effect.try({
-                    try: () => encodeMetadataJson(task.metadata),
-                    catch: () =>
-                      new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
-                  })
-            yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
-            return task
-          },
-          Effect.mapError(mapError("Failed to create task")),
-        ),
+    return {
+      createTask: Effect.fn("TaskStorage.createTask")(
+        function* (task) {
+          const meta =
+            task.metadata === undefined
+              ? null
+              : yield* Effect.try({
+                  try: () => encodeMetadataJson(task.metadata),
+                  catch: () =>
+                    new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
+                })
+          yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
+          return task
+        },
+        Effect.mapError(mapError("Failed to create task")),
+      ),
 
-        getTask: Effect.fn("TaskStorage.getTask")(
-          function* (id) {
-            const rows =
-              yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-            const row = rows[0]
-            if (row === undefined) return undefined
-            return taskFromRow(row)
-          },
-          Effect.mapError(mapError("Failed to get task")),
-        ),
+      getTask: Effect.fn("TaskStorage.getTask")(
+        function* (id) {
+          const rows =
+            yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
+          const row = rows[0]
+          if (row === undefined) return undefined
+          return taskFromRow(row)
+        },
+        Effect.mapError(mapError("Failed to get task")),
+      ),
 
-        listTasks: Effect.fn("TaskStorage.listTasks")(
-          function* (sessionId, branchId) {
-            const rows =
-              branchId !== undefined
-                ? yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
-                : yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} ORDER BY created_at ASC`
-            return rows.map(taskFromRow)
-          },
-          Effect.mapError(mapError("Failed to list tasks")),
-        ),
+      listTasks: Effect.fn("TaskStorage.listTasks")(
+        function* (sessionId, branchId) {
+          const rows =
+            branchId !== undefined
+              ? yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} AND branch_id = ${branchId} ORDER BY created_at ASC`
+              : yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE session_id = ${sessionId} ORDER BY created_at ASC`
+          return rows.map(taskFromRow)
+        },
+        Effect.mapError(mapError("Failed to list tasks")),
+      ),
 
-        updateTask: Effect.fn("TaskStorage.updateTask")(
-          function* (id, fields) {
-            const now = yield* Clock.currentTimeMillis
-            const VALID_STATUSES = new Set([
-              "pending",
-              "in_progress",
-              "completed",
-              "failed",
-              "stopped",
-            ])
-            if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
-              return yield* new TaskStorageError({
-                message: `Invalid task status: ${fields.status}`,
-              })
+      updateTask: Effect.fn("TaskStorage.updateTask")(
+        function* (id, fields) {
+          const now = yield* Clock.currentTimeMillis
+          const VALID_STATUSES = new Set([
+            "pending",
+            "in_progress",
+            "completed",
+            "failed",
+            "stopped",
+          ])
+          if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
+            return yield* new TaskStorageError({
+              message: `Invalid task status: ${fields.status}`,
+            })
+          }
+
+          const sets: string[] = ["updated_at = ?"]
+          const params: (string | number | null)[] = [now]
+
+          if (fields.status !== undefined) {
+            sets.push("status = ?")
+            params.push(fields.status)
+          }
+          if ("description" in fields) {
+            sets.push("description = ?")
+            params.push(fields.description ?? null)
+          }
+          if ("owner" in fields) {
+            sets.push("owner = ?")
+            params.push(fields.owner ?? null)
+          }
+          if ("metadata" in fields) {
+            sets.push("metadata = ?")
+            if (fields.metadata === null || fields.metadata === undefined) {
+              params.push(null)
+            } else {
+              params.push(
+                yield* Effect.try({
+                  try: () => encodeMetadataJson(fields.metadata),
+                  catch: () =>
+                    new TaskStorageError({ message: "Metadata is not JSON-serializable" }),
+                }),
+              )
             }
+          }
 
-            const sets: string[] = ["updated_at = ?"]
-            const params: (string | number | null)[] = [now]
+          params.push(id)
+          yield* sql.unsafe(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params)
 
-            if (fields.status !== undefined) {
-              sets.push("status = ?")
-              params.push(fields.status)
-            }
-            if ("description" in fields) {
-              sets.push("description = ?")
-              params.push(fields.description ?? null)
-            }
-            if ("owner" in fields) {
-              sets.push("owner = ?")
-              params.push(fields.owner ?? null)
-            }
-            if ("metadata" in fields) {
-              sets.push("metadata = ?")
-              if (fields.metadata === null || fields.metadata === undefined) {
-                params.push(null)
-              } else {
-                params.push(
-                  yield* Effect.try({
-                    try: () => encodeMetadataJson(fields.metadata),
-                    catch: () =>
-                      new TaskStorageError({ message: "Metadata is not JSON-serializable" }),
-                  }),
-                )
-              }
-            }
+          const rows =
+            yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
+          const row = rows[0]
+          if (row === undefined) return undefined
+          return taskFromRow(row)
+        },
+        Effect.mapError(mapError("Failed to update task")),
+      ),
 
-            params.push(id)
-            yield* sql.unsafe(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params)
+      deleteTask: Effect.fn("TaskStorage.deleteTask")(
+        function* (id) {
+          yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
+          yield* sql`DELETE FROM tasks WHERE id = ${id}`
+        },
+        Effect.mapError(mapError("Failed to delete task")),
+      ),
 
-            const rows =
-              yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-            const row = rows[0]
-            if (row === undefined) return undefined
-            return taskFromRow(row)
-          },
-          Effect.mapError(mapError("Failed to update task")),
+      addTaskDep: (taskId, blockedById) =>
+        sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
+          Effect.asVoid,
+          Effect.mapError(mapError("Failed to add task dep")),
+          Effect.withSpan("TaskStorage.addTaskDep"),
         ),
 
-        deleteTask: Effect.fn("TaskStorage.deleteTask")(
-          function* (id) {
-            yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
-            yield* sql`DELETE FROM tasks WHERE id = ${id}`
-          },
-          Effect.mapError(mapError("Failed to delete task")),
+      removeTaskDep: (taskId, blockedById) =>
+        sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`.pipe(
+          Effect.asVoid,
+          Effect.mapError(mapError("Failed to remove task dep")),
+          Effect.withSpan("TaskStorage.removeTaskDep"),
         ),
 
-        addTaskDep: (taskId, blockedById) =>
-          sql`INSERT OR IGNORE INTO task_deps (task_id, blocked_by_id) VALUES (${taskId}, ${blockedById})`.pipe(
-            Effect.asVoid,
-            Effect.mapError(mapError("Failed to add task dep")),
-            Effect.withSpan("TaskStorage.addTaskDep"),
+      getTaskDeps: Effect.fn("TaskStorage.getTaskDeps")(
+        function* (taskId) {
+          const rows = yield* sql<{
+            blocked_by_id: TaskId
+          }>`SELECT blocked_by_id FROM task_deps WHERE task_id = ${taskId}`
+          return rows.map((r) => r.blocked_by_id)
+        },
+        Effect.mapError(mapError("Failed to get task deps")),
+      ),
+    } satisfies TaskStorageService
+  })
+
+export class TaskStorage extends Context.Service<TaskStorage, TaskStorageService>()(
+  "@gent/core/src/extensions/task-tools-storage/TaskStorage",
+) {
+  /**
+   * Runs its own DDL — only requires SqlClient, not host Storage.
+   *
+   * Provides BOTH `TaskStorage` (write surface) and `TaskStorageReadOnly`
+   * (read-only branded Tag) from the same underlying service value —
+   * the read-only Tag is a structurally narrower projection that
+   * downstream projections and read-intent capabilities can yield
+   * without picking up the write methods.
+   */
+  static Live: Layer.Layer<TaskStorage | TaskStorageReadOnly, never, SqlClient.SqlClient> =
+    Layer.effectContext(
+      Effect.gen(function* () {
+        const service = yield* makeTaskStorageService
+        return Context.empty().pipe(
+          Context.add(TaskStorage, service),
+          Context.add(
+            TaskStorageReadOnly,
+            withReadOnly({
+              getTask: service.getTask,
+              listTasks: service.listTasks,
+              getTaskDeps: service.getTaskDeps,
+            } satisfies TaskStorageReadOnlyService),
           ),
-
-        removeTaskDep: (taskId, blockedById) =>
-          sql`DELETE FROM task_deps WHERE task_id = ${taskId} AND blocked_by_id = ${blockedById}`.pipe(
-            Effect.asVoid,
-            Effect.mapError(mapError("Failed to remove task dep")),
-            Effect.withSpan("TaskStorage.removeTaskDep"),
-          ),
-
-        getTaskDeps: Effect.fn("TaskStorage.getTaskDeps")(
-          function* (taskId) {
-            const rows = yield* sql<{
-              blocked_by_id: TaskId
-            }>`SELECT blocked_by_id FROM task_deps WHERE task_id = ${taskId}`
-            return rows.map((r) => r.blocked_by_id)
-          },
-          Effect.mapError(mapError("Failed to get task deps")),
-        ),
-      } satisfies TaskStorageService
-    },
-  )
+        )
+      }),
+    )
 }

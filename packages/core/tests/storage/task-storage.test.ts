@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { TaskStorage } from "@gent/extensions/task-tools-storage"
+import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
 import { Task } from "@gent/core/domain/task"
 import { SessionId, BranchId, TaskId } from "@gent/core/domain/ids"
@@ -169,5 +169,28 @@ describe("Task Dependencies", () => {
       yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
       const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps.length).toBe(1)
+    }))
+})
+
+describe("TaskStorageReadOnly", () => {
+  test("TaskStorage.Live provides the read-only Tag with working read methods", () =>
+    Effect.gen(function* () {
+      // Setup session/branch + write via the wide Tag, then read back through
+      // the read-only Tag — proves both Tags resolve to the same state.
+      yield* setup
+      const writer = yield* TaskStorage
+      yield* writer.createTask(makeTask("ro1", { description: "read-only proof" }))
+
+      const reader = yield* TaskStorageReadOnly
+      const got = yield* reader.getTask(TaskId.of("ro1"))
+      expect(got).toBeDefined()
+      expect(got!.description).toBe("read-only proof")
+
+      const listed = yield* reader.listTasks(SessionId.of("s1"))
+      expect(listed.some((t) => t.id === "ro1")).toBe(true)
+
+      // getTaskDeps reachable from the read-only surface
+      const deps = yield* reader.getTaskDeps(TaskId.of("ro1"))
+      expect(deps.length).toBe(0)
     }))
 })
