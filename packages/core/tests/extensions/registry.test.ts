@@ -829,6 +829,65 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     expect(resolved.tools.get("run")?.description).toBe("project run override")
   })
 
+  test("synthesized tool dies (defect) when capability output fails to encode", async () => {
+    // Mirrors the C4.3 command output-validation test. Capability declares
+    // output: Schema.Number but its effect returns a string. The bridge's
+    // encode step must defect (codex BLOCK 1 on C4.4a — output validation
+    // restored to the tool bridge so it matches CapabilityHost semantics).
+    const cap: AnyCapabilityContribution = {
+      id: "tool-lies",
+      description: "Returns the wrong shape on purpose.",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Unknown,
+      output: Schema.Number,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      effect: () => Effect.succeed("not a number" as unknown as number),
+    }
+    const resolved = resolveExtensions([
+      makeExt("@test/tool-lies", "builtin", { capabilities: [cap] }),
+    ])
+    const tool = resolved.tools.get("tool-lies")
+    expect(tool).toBeDefined()
+    const exit = await Effect.runPromiseExit(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      tool!.execute({}, makeHostCtx() as unknown as Parameters<typeof tool.execute>[1]),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.hasDies(exit.cause)).toBe(true)
+    }
+  })
+
+  test("synthesized tool preserves all ModelAudienceFields", () => {
+    // Defends the field mapping at the bridge boundary — every optional
+    // ToolDefinition field that ModelAudienceFields covers must round-trip
+    // through `capabilityToTool` without loss. Codex ADVISORY on C4.4a.
+    const cap: AnyCapabilityContribution = {
+      id: "rich",
+      description: "rich tool",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Unknown,
+      output: Schema.Unknown,
+      resources: ["fs:/tmp", "net:443"],
+      idempotent: true,
+      promptSnippet: "Snippet here.",
+      promptGuidelines: ["use carefully", "log result"],
+      interactive: true,
+      effect: () => Effect.succeed(undefined),
+    }
+    const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { capabilities: [cap] })])
+    const tool = resolved.tools.get("rich")
+    expect(tool).toBeDefined()
+    expect(tool?.description).toBe("rich tool")
+    expect(tool?.resources).toEqual(["fs:/tmp", "net:443"])
+    expect(tool?.idempotent).toBe(true)
+    expect(tool?.promptSnippet).toBe("Snippet here.")
+    expect(tool?.promptGuidelines).toEqual(["use carefully", "log result"])
+    expect(tool?.interactive).toBe(true)
+  })
+
   test("non-model capability does NOT appear as a tool", () => {
     const cap: AnyCapabilityContribution = {
       id: "rpc-only",

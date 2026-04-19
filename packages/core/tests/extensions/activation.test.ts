@@ -1,6 +1,6 @@
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer, Path } from "effect"
+import { Effect, Layer, Path, Schema } from "effect"
 import * as Fs from "node:fs"
 import * as NodePath from "node:path"
 import * as Os from "node:os"
@@ -16,6 +16,7 @@ import {
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
 import {
+  capability as capabilityContribution,
   defineResource,
   tool as toolContribution,
   type Contribution,
@@ -152,6 +153,181 @@ describe("extension activation isolation", () => {
         expect(result.failed.every((ext) => ext.phase === "validation")).toBe(true)
         expect(result.failed.every((ext) => ext.error.includes("shared_tool"))).toBe(true)
       }),
+  )
+
+  // C4.4 BLOCK: validation must catch capability/capability AND tool/capability
+  // collisions in addition to tool/tool. After the C4.4 tool bridge, a
+  // capability with `audiences:["model"]` becomes a tool by `cap.id` — the
+  // resolver overwrites silently in last-write-wins order without this check.
+
+  it.live("validation catches same-scope capability/capability tool-name collision", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("collider-a", [
+          capabilityContribution({
+            id: "shared_cap",
+            description: "a",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+        makeLoaded("collider-b", [
+          capabilityContribution({
+            id: "shared_cap",
+            description: "b",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
+        "collider-a",
+        "collider-b",
+      ])
+      expect(result.failed.every((ext) => ext.error.includes("shared_cap"))).toBe(true)
+    }),
+  )
+
+  it.live("validation catches same-scope tool/capability tool-name collision", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("legacy-tool", [
+          toolContribution({
+            name: "shared_name",
+            description: "legacy",
+            params: {} as never,
+            execute: () => Effect.void,
+          }),
+        ]),
+        makeLoaded("capability-tool", [
+          capabilityContribution({
+            id: "shared_name",
+            description: "capability",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
+        "capability-tool",
+        "legacy-tool",
+      ])
+    }),
+  )
+
+  it.live("validation does NOT collide capability(non-model) with same-name tool", () =>
+    Effect.gen(function* () {
+      // A capability that doesn't surface as a tool (no `model` audience)
+      // must NOT trigger a "tool" collision against a same-name legacy tool.
+      // The tool list is "things audience-authorized as model"; cross-audience
+      // sharing of an id is fine.
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("legacy-tool", [
+          toolContribution({
+            name: "shared_name",
+            description: "legacy",
+            params: {} as never,
+            execute: () => Effect.void,
+          }),
+        ]),
+        makeLoaded("rpc-only", [
+          capabilityContribution({
+            id: "shared_name",
+            audiences: ["agent-protocol"],
+            intent: "read",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
+        "legacy-tool",
+        "rpc-only",
+      ])
+      expect(result.failed).toEqual([])
+    }),
+  )
+
+  it.live("validation rejects model-audience capability with empty description", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("missing-desc", [
+          capabilityContribution({
+            id: "describeless",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe("missing-desc")
+      expect(result.failed[0]?.error).toContain("describeless")
+      expect(result.failed[0]?.error).toContain("description")
+    }),
+  )
+
+  it.live("validation rejects model-audience capability with whitespace-only description", () =>
+    Effect.gen(function* () {
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("blank-desc", [
+          capabilityContribution({
+            id: "blanky",
+            description: "   \t\n",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.manifest.id).toBe("blank-desc")
+    }),
+  )
+
+  it.live("validation accepts non-model capability without description", () =>
+    Effect.gen(function* () {
+      // Non-model capabilities don't ship to the LLM, so empty description
+      // is fine (the field is optional). Only `audiences:["model"]` requires.
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("rpc-no-desc", [
+          capabilityContribution({
+            id: "internal",
+            audiences: ["agent-protocol"],
+            intent: "read",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            effect: () => Effect.succeed(undefined),
+          }),
+        ]),
+      ])
+
+      expect(result.active.map((ext) => ext.manifest.id)).toEqual(["rpc-no-desc"])
+      expect(result.failed).toEqual([])
+    }),
   )
 
   it.live("reconciler owns startup and scheduler degradation in one result", () =>

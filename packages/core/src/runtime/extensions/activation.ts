@@ -9,6 +9,7 @@ import type {
 import {
   type Contribution,
   extractAgents,
+  extractCapabilities,
   extractExternalDrivers,
   extractModelDrivers,
   extractPromptSections,
@@ -254,11 +255,41 @@ export const collectValidationFailures = (
     }
   }
 
-  collectScopedCollisions(extractTools, (tool) => tool.name, "tool")
+  // C4.4 BLOCK on capability/tool collisions: same-scope same-name tools
+  // were caught before this batch by `collectScopedCollisions(extractTools, …)`.
+  // After the C4.4 tool bridge, a capability with `audiences:["model"]`
+  // surfaces as a tool by `cap.id`. So a same-scope collision is now any of
+  // these three pairs: tool/tool, capability/capability, tool/capability.
+  // The unified extractor below collects every "thing that lands in the
+  // tool list" as a single identity stream so all three pair types fail
+  // validation loudly at startup, not silently at runtime via last-write-wins.
+  const extractModelToolIdentities = (cs: ReadonlyArray<Contribution>): ReadonlyArray<string> => [
+    ...extractTools(cs).map((t) => t.name),
+    ...extractCapabilities(cs)
+      .filter((cap) => cap.audiences.includes("model"))
+      .map((cap) => cap.id),
+  ]
+  collectScopedCollisions(extractModelToolIdentities, (name) => name, "tool")
   collectScopedCollisions(extractAgents, (agent) => agent.name, "agent")
   collectScopedCollisions(extractModelDrivers, (driver) => driver.id, "model driver")
   collectScopedCollisions(extractExternalDrivers, (driver) => driver.id, "external driver")
   collectScopedCollisions(extractPromptSections, (section) => section.id, "prompt section")
+
+  // Model-audience capabilities MUST declare a non-empty description — the
+  // string is sent to the LLM as part of the tool schema, so empty/missing
+  // becomes "why is the model dumb?" rot later. Codex ADVISORY on C4.4a.
+  for (const ext of extensions) {
+    for (const cap of extractCapabilities(ext.contributions)) {
+      if (!cap.audiences.includes("model")) continue
+      const trimmed = (cap.description ?? "").trim()
+      if (trimmed.length === 0) {
+        addFailure(
+          ext,
+          `Capability "${cap.id}" with audiences:["model"] is missing a non-empty description (the LLM tool schema requires one).`,
+        )
+      }
+    }
+  }
 
   return failures
 }

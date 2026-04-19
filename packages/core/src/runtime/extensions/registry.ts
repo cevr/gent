@@ -81,7 +81,9 @@ const compileContributions = <T>(
  *
  * Field mapping:
  *   `cap.id`               → `tool.name`
- *   `cap.description ?? ""` → `tool.description`
+ *   `cap.description ?? ""` → `tool.description` (lint enforces non-empty
+ *                             at construction time; this is a defense for
+ *                             the rare null escape)
  *   `cap.input`            → `tool.params`
  *   `cap.effect`           → `tool.execute` (CapabilityCoreContext is a
  *                             structural subtype of ToolContext, so any
@@ -91,10 +93,17 @@ const compileContributions = <T>(
  * `ModelAudienceFields` (`resources`, `idempotent`, `promptSnippet`,
  * `promptGuidelines`, `interactive`) flow through unchanged.
  *
- * Output validation lives in the ToolRunner today (the LLM consumes the
- * raw effect output as JSON), so this bridge does NOT encode through
- * `cap.output`. C4.5 will delete this wrapper along with the
- * `ToolDefinition` type once the runner consumes Capability directly.
+ * Output validation: the bridge encodes through `cap.output` after the
+ * effect runs. CapabilityContribution's contract is "input/output validated
+ * at the host boundary" (see `capability-host.ts:184`); the legacy
+ * ToolRunner only validates input. We restore the missing half here so
+ * Capability semantics hold even when tools dispatch through ToolRunner
+ * instead of CapabilityHost (codex BLOCK 1 on C4.4a). Misshape coerces
+ * to defect — ToolRunner has no typed-failure channel that maps to schema
+ * violations.
+ *
+ * C4.5 deletes this wrapper along with the `ToolDefinition` type once
+ * the runner consumes Capability directly.
  */
 const capabilityToTool = (cap: AnyCapabilityContribution): AnyToolDefinition => ({
   name: cap.id,
@@ -107,9 +116,25 @@ const capabilityToTool = (cap: AnyCapabilityContribution): AnyToolDefinition => 
   ...(cap.promptGuidelines !== undefined ? { promptGuidelines: cap.promptGuidelines } : {}),
   ...(cap.interactive !== undefined ? { interactive: cap.interactive } : {}),
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at tool-bridge boundary
-  execute: (params, ctx) =>
+  execute: (params, ctx) => {
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at tool-bridge boundary
+    const wrapped = Effect.gen(function* () {
+      const output = yield* cap.effect(
+        params,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        ctx as Parameters<typeof cap.effect>[1],
+      )
+      // Validate output against the capability's declared schema. For tools
+      // whose output is `Schema.Unknown` this is a no-op; for any tool with
+      // a typed output schema it catches host-side misshape. Misshape →
+      // defect; ToolRunner has no typed channel for schema violations.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      yield* Schema.encodeUnknownEffect(cap.output as Schema.Any)(output).pipe(Effect.orDie)
+      return output
+    })
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    cap.effect(params, ctx as Parameters<typeof cap.effect>[1]),
+    return wrapped as ReturnType<AnyToolDefinition["execute"]>
+  },
 })
 
 /**
