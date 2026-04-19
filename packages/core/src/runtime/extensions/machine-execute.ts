@@ -4,19 +4,12 @@
  * Projections need to query a machine's current state via the typed
  * request/reply protocol but must NOT be able to send commands or
  * publish events. `MachineExecute` is the narrow Tag that exposes only
- * the read path (`execute<M>`, formerly `WorkflowRuntime.ask`); writes
- * stay on the internal `MachineEngine` consumed by ResourceHost.
+ * the read path (`execute<M>`); writes (`send`/`publish`/`terminateAll`)
+ * live on `MachineEngine`, the substrate's wide write surface.
  *
- * Why a separate Tag (vs reusing `WorkflowRuntime`):
- *
- * - **Read-only fence**: B11.4 brands `MachineExecute` with the
- *   `ReadOnly` tag so projection R-channels enforce read-only at the
- *   type level. `WorkflowRuntime` exposes `send` + `publish` and can't
- *   honestly carry the brand.
- * - **Substrate cleanup**: B11.3c deletes the public `WorkflowRuntime`
- *   Tag entirely. After this commit the machine read path lives behind
- *   `MachineExecute` (public) and the write path behind `MachineEngine`
- *   (ResourceHost-internal). No mixed-intent surface.
+ * B11.4 brands `MachineExecute` with the `ReadOnly` tag so projection
+ * R-channels enforce read-only at the type level — `MachineEngine`
+ * exposes `send` + `publish` and can't honestly carry the brand.
  *
  * Until B11.3d renames the underlying `MachineEngine.ask` method to
  * `execute`, this Tag's `execute` simply delegates to `engine.ask` —

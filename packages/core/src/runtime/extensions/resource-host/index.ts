@@ -14,10 +14,13 @@
  *     Legacy `LifecycleContribution` + activation.ts lifecycle phase
  *     deleted.
  *   - C3.5: stub. workflow-runtime.ts retained as a Context.Service shim.
- *   - B11.3a (this commit): MachineEngine extracted into
+ *   - B11.3a: MachineEngine extracted into
  *     resource-host/machine-engine.ts; workflow-runtime.ts delegates.
- *   - B11.3c (later): WorkflowRuntime Tag deleted; MachineEngine becomes
- *     internal-only.
+ *   - B11.3c: MachineEngine promoted to a public Context.Service; the
+ *     WorkflowRuntime Tag projects onto it for one wave.
+ *   - B11.3c (this commit, end-of-wave): WorkflowRuntime Tag deleted.
+ *     MachineEngine is the substrate write surface; MachineExecute is
+ *     the read-only call surface for projections.
  *   - C3.6: bus-subscription / `ExtensionEventBus` deleted (only test
  *     callers remain by then).
  *

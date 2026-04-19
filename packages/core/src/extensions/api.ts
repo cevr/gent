@@ -251,13 +251,8 @@ export { ProjectionError } from "../domain/projection.js"
 // rpc-handlers) yield this Tag. Read-only consumers (projections) yield
 // `MachineExecute` instead — the read-only fence (gains the `ReadOnly`
 // brand in B11.4).
-//
-// `WorkflowRuntime` is the legacy wide Tag retained as a thin projection
-// over `MachineEngine` for the B11.3c migration window. New code should
-// not import it; it is deleted at the end of B11.3c.
 export { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 export { MachineExecute } from "../runtime/extensions/machine-execute.js"
-export { WorkflowRuntime } from "../runtime/extensions/workflow-runtime.js"
 export type {
   QueryContribution,
   QueryContext,

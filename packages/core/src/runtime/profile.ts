@@ -29,7 +29,7 @@ import { type PromptSection } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
-import { WorkflowRuntime } from "./extensions/workflow-runtime.js"
+import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { MachineExecute } from "./extensions/machine-execute.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import {
@@ -244,12 +244,12 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
   // for `Resource.subscriptions`.
   const resourceSubscriptions = collectSubscriptions(resolved.extensions)
 
-  const extensionRuntimeLive = WorkflowRuntime.Live(resolved.extensions).pipe(
+  const extensionRuntimeLive = MachineEngine.Live(resolved.extensions).pipe(
     Layer.provideMerge(ExtensionTurnControl.Live),
   )
-  // Project the wide WorkflowRuntime onto the read-only `MachineExecute`
-  // surface for projection consumers. The wide Tag stays available during
-  // the B11.3 transition; B11.3c deletes it.
+  // Project `MachineEngine` onto the read-only `MachineExecute` surface
+  // for projection consumers. `MachineExecute` carries the `ReadOnly`
+  // brand so projections can't accidentally yield write-capable Tags.
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
   const baseLayers = Layer.mergeAll(

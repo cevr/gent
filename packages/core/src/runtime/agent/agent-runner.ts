@@ -467,7 +467,7 @@ const buildEphemeralLayer = (params: {
 
   // EventPublisher reaches into bus + state runtime + registry so extension
   // subscriptions fire on local events. Parent first so locally-built
-  // `WorkflowRuntime`, `SubscriptionEngine`, registry win — otherwise the
+  // `MachineEngine`, `SubscriptionEngine`, registry win — otherwise the
   // child silently uses the parent's state runtime and child events leak
   // into parent reduction.
   const eventPublisherLayer = Layer.provide(

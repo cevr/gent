@@ -300,7 +300,7 @@ const ArtifactClearTool = defineTool({
 
 export const ArtifactsExtension = defineExtension({
   id: ARTIFACTS_EXTENSION_ID,
-  // No-service Resource carrying the machine. WorkflowRuntime supervises
+  // No-service Resource carrying the machine. MachineEngine supervises
   // the machine; this extension contributes no service tag of its own.
   resources: [
     resource(

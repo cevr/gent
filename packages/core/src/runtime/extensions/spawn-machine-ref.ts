@@ -127,7 +127,7 @@ export const spawnMachineExtensionRef = <
 
       // Provide a dedicated ActorScope so Machine.spawn attaches cleanup to it.
       // Extension actors are long-lived and managed explicitly by
-      // WorkflowRuntime.terminateAll.
+      // MachineEngine.terminateAll.
       const actorScope = yield* Scope.make()
       const machineRef = yield* Machine.spawn(actor.machine, {
         id: `${extensionId}-${ctx.sessionId}`,

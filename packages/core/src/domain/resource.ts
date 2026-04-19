@@ -191,10 +191,9 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  *   `SubscriptionEngine` (channel-based exact / `<prefix>:*` wildcard).
  * - `schedule` — periodic jobs reconciled at host startup. Replaces the
  *   legacy `JobContribution` + `scheduler.ts` reconciliation pair.
- * - `machine` — optional state machine + mappers + declared effects. The
- *   host (today: `WorkflowRuntime`, soon: a Resource-machine engine inside
- *   `resource-host/`) supervises one actor per session per Resource that
- *   declares `machine`.
+ * - `machine` — optional state machine + mappers + declared effects.
+ *   `MachineEngine` (resource-host/machine-engine.ts) supervises one
+ *   actor per session per Resource that declares `machine`.
  *
  * Authors typically create a Resource through the smart constructor
  * `defineResource(...)`. The `tag` is the canonical entry into the service

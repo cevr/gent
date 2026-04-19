@@ -2,22 +2,19 @@
  * MachineEngine — substrate that drives `Resource.machine` actors.
  *
  * Owns per-session actor spawn, mailbox queues, supervised restart, and
- * the `send` / `ask` / `publish` / `terminateAll` operations.
+ * the `send` / `ask` / `publish` / `getActorStatuses` / `terminateAll`
+ * operations. Producers yield this Tag; read-only consumers (projections)
+ * yield `MachineExecute` instead — the read-only call surface that
+ * gains the `ReadOnly` brand in B11.4.
  *
- * Behaviorally identical to the legacy `WorkflowRuntime` Context.Service.
  * Sequencing:
- *   - B11.3a: extracted `makeMachineEngine` factory; `WorkflowRuntime`
- *     remained the public Tag that delegated to it.
+ *   - B11.3a: extracted `makeMachineEngine` factory.
  *   - B11.3b: introduced `MachineExecute` (read-only `execute<M>`) atop
  *     the same engine for projections.
- *   - B11.3c (this commit): promote `MachineEngine` to a public
- *     Context.Service. `WorkflowRuntime` becomes a thin projection that
- *     delegates to `MachineEngine` for the migration window. Producers
- *     (event-publisher / agent-loop / rpc-handlers / actor-process) move
- *     from `WorkflowRuntime` to `MachineEngine` over the next sub-commits.
+ *   - B11.3c: promoted `MachineEngine` to a public Context.Service;
+ *     migrated all producers; deleted the legacy `WorkflowRuntime` Tag.
  *   - B11.3d: rename `MachineEngine.ask` → `MachineEngine.execute` (and
  *     the matching `extension.ask` RPC).
- *   - End of B11.3c: `WorkflowRuntime` Tag deleted.
  *
  * Internal mailbox-tag rename preserved from the B11.3a move:
  *   `AskMailboxItem._tag = "ask"` → `ExecuteMailboxItem._tag = "execute"`
@@ -450,7 +447,7 @@ export const makeMachineEngine = (
       sessionId: SessionId,
       branchId?: BranchId,
     ): Effect.Effect<ActorEntry[]> =>
-      Effect.withSpan("WorkflowRuntime.spawnWorkflows")(
+      Effect.withSpan("MachineEngine.spawnWorkflows")(
         Effect.gen(function* () {
           const result = yield* spawnSemaphore.withPermits(1)(
             Effect.gen(function* () {
@@ -831,7 +828,7 @@ export const makeMachineEngine = (
 
     const service = {
       publish: (event, ctx) =>
-        Effect.withSpan("WorkflowRuntime.publish", {
+        Effect.withSpan("MachineEngine.publish", {
           attributes: { "extension.event": event._tag },
         })(
           Effect.gen(function* () {
@@ -861,7 +858,7 @@ export const makeMachineEngine = (
         ),
 
       send: (sessionId, message, branchId) =>
-        Effect.withSpan("WorkflowRuntime.send", {
+        Effect.withSpan("MachineEngine.send", {
           attributes: {
             "extension.id": message.extensionId,
             "extension.message": message._tag,
@@ -887,7 +884,7 @@ export const makeMachineEngine = (
         message: M,
         branchId?: BranchId,
       ) =>
-        Effect.withSpan("WorkflowRuntime.ask", {
+        Effect.withSpan("MachineEngine.ask", {
           attributes: {
             "extension.id": message.extensionId,
             "extension.message": message._tag,
@@ -918,7 +915,7 @@ export const makeMachineEngine = (
         }),
 
       terminateAll: (sessionId) =>
-        Effect.withSpan("WorkflowRuntime.terminateAll")(
+        Effect.withSpan("MachineEngine.terminateAll")(
           Effect.gen(function* () {
             const slot = (yield* Ref.get(actorsRef)).get(sessionId)
             if (slot !== undefined && slot._tag === "ready") {

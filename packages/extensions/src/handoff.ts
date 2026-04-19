@@ -130,7 +130,7 @@ export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   capabilities: [tool(HandoffTool)],
   subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
-  // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
+  // Cooldown machine — process-scope, no service, supervised by MachineEngine.
   resources: [
     resource(
       defineResource({

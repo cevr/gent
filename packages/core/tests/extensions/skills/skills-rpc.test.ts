@@ -3,7 +3,7 @@
  * RPC path with per-request scopes, matching production behavior.
  *
  * Unlike skills-actor.test.ts (which bypasses RPC), this test goes through
- * Gent.test → RpcServer → extension.ask → WorkflowRuntime.
+ * Gent.test → RpcServer → extension.ask → MachineEngine.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
