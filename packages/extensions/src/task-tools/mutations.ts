@@ -12,7 +12,6 @@
 import { Effect, Schema } from "effect"
 import {
   AgentName,
-  type CapabilityContribution,
   CapabilityError,
   EventPublisher,
   type MutationRef,
@@ -91,17 +90,12 @@ export const TaskUpdateInput = Schema.Struct({
 })
 export const TaskUpdateOutput = Schema.NullOr(Task)
 
-export const TaskUpdateMutation: CapabilityContribution<
-  typeof TaskUpdateInput.Type,
-  typeof TaskUpdateOutput.Type,
-  TaskService | EventPublisher
-> = {
+export const TaskUpdateMutation = request({
   id: "task.update",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskUpdateInput,
   output: TaskUpdateOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       const eventPublisher = yield* EventPublisher
@@ -111,7 +105,7 @@ export const TaskUpdateMutation: CapabilityContribution<
         .pipe(Effect.orDie, Effect.provideService(EventPublisher, eventPublisher))
       return result ?? null
     }),
-}
+})
 
 export const TaskUpdateRef: MutationRef<typeof TaskUpdateInput.Type, typeof TaskUpdateOutput.Type> =
   {
@@ -126,17 +120,12 @@ export const TaskUpdateRef: MutationRef<typeof TaskUpdateInput.Type, typeof Task
 export const TaskDeleteInput = Schema.Struct({ taskId: TaskId })
 export const TaskDeleteOutput = Schema.Null
 
-export const TaskDeleteMutation: CapabilityContribution<
-  typeof TaskDeleteInput.Type,
-  typeof TaskDeleteOutput.Type,
-  TaskService | EventPublisher
-> = {
+export const TaskDeleteMutation = request({
   id: "task.delete",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskDeleteInput,
   output: TaskDeleteOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       const eventPublisher = yield* EventPublisher
@@ -145,7 +134,7 @@ export const TaskDeleteMutation: CapabilityContribution<
         .pipe(Effect.provideService(EventPublisher, eventPublisher))
       return null
     }),
-}
+})
 
 export const TaskDeleteRef: MutationRef<typeof TaskDeleteInput.Type, typeof TaskDeleteOutput.Type> =
   {
@@ -160,17 +149,12 @@ export const TaskDeleteRef: MutationRef<typeof TaskDeleteInput.Type, typeof Task
 export const TaskAddDepInput = Schema.Struct({ taskId: TaskId, blockedById: TaskId })
 export const TaskAddDepOutput = Schema.Null
 
-export const TaskAddDepMutation: CapabilityContribution<
-  typeof TaskAddDepInput.Type,
-  typeof TaskAddDepOutput.Type,
-  TaskService
-> = {
+export const TaskAddDepMutation = request({
   id: "task.addDep",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskAddDepInput,
   output: TaskAddDepOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       yield* taskService.addDep(input.taskId, input.blockedById).pipe(
@@ -186,7 +170,7 @@ export const TaskAddDepMutation: CapabilityContribution<
       )
       return null
     }),
-}
+})
 
 export const TaskAddDepRef: MutationRef<typeof TaskAddDepInput.Type, typeof TaskAddDepOutput.Type> =
   {
@@ -201,17 +185,12 @@ export const TaskAddDepRef: MutationRef<typeof TaskAddDepInput.Type, typeof Task
 export const TaskRemoveDepInput = Schema.Struct({ taskId: TaskId, blockedById: TaskId })
 export const TaskRemoveDepOutput = Schema.Null
 
-export const TaskRemoveDepMutation: CapabilityContribution<
-  typeof TaskRemoveDepInput.Type,
-  typeof TaskRemoveDepOutput.Type,
-  TaskService
-> = {
+export const TaskRemoveDepMutation = request({
   id: "task.removeDep",
-  audiences: ["agent-protocol", "transport-public"],
   intent: "write",
   input: TaskRemoveDepInput,
   output: TaskRemoveDepOutput,
-  effect: (input) =>
+  execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
       yield* taskService.removeDep(input.taskId, input.blockedById).pipe(
@@ -227,7 +206,7 @@ export const TaskRemoveDepMutation: CapabilityContribution<
       )
       return null
     }),
-}
+})
 
 export const TaskRemoveDepRef: MutationRef<
   typeof TaskRemoveDepInput.Type,
