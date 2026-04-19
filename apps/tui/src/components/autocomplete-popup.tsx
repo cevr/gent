@@ -9,7 +9,6 @@
 import { createSignal, createMemo, createResource, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -21,6 +20,7 @@ import type {
   AutocompleteItem,
 } from "@gent/core/domain/extension-client.js"
 import type { AutocompleteState } from "./composer-interaction-state"
+import { runAutocompleteItems } from "./autocomplete-popup-boundary"
 
 export type { AutocompleteState }
 
@@ -45,21 +45,9 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   )
 
   // C9.3: items() returns sync array OR Effect (Promise variant deleted).
-  // Effect is run through `extensionUI.clientRuntime.runPromise` so the
-  // result behaves identically to a sync resolution from the resource's
-  // POV. Errors are normalized to an empty array per contribution and
-  // logged once.
-  const runItems = (
-    c: AutocompleteContribution,
-    filter: string,
-  ): Promise<readonly AutocompleteItem[]> => {
-    const out = c.items(filter)
-    if (Effect.isEffect(out)) {
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — adapter boundary; AutocompleteContribution.items intentionally accepts any-typed Effects so contribution authors don't have to spell their full E/R union, and the popup normalizes failures to []
-      return extensionUI.clientRuntime.runPromise(out)
-    }
-    return Promise.resolve(out)
-  }
+  // Effect is run through `runAutocompleteItems` (boundary helper) so the
+  // result behaves identically to a sync resolution from the resource's POV.
+  // Errors are normalized to an empty array per contribution and logged once.
 
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
@@ -68,7 +56,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       setSelectedIndex(0)
       const results = await Promise.all(
         contributions().map((c) =>
-          runItems(c, filter).catch((err) => {
+          runAutocompleteItems(c, filter, extensionUI.clientRuntime).catch((err) => {
             log.error("autocomplete.contribution.failed", {
               prefix: c.prefix,
               error: err instanceof Error ? err.message : String(err),

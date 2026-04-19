@@ -37,6 +37,7 @@ import type {
   SnapshotSource,
 } from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader-boundary"
+import { runClientEffect } from "./context-boundary"
 import { makeClientTransportLayer } from "./client-transport"
 import {
   makeClientWorkspaceLayer,
@@ -349,7 +350,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       const home = workspace.home
 
       // Read disabled extensions from user + project config (shared with server)
-      const disabledSet = await clientRuntime.runPromise(
+      const disabledSet = await runClientEffect(
+        clientRuntime,
         readDisabledExtensions({ home, cwd: workspace.cwd }),
       )
 

@@ -5,7 +5,7 @@
 
 import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
-import { removeFile } from "../platform/fs-runtime"
+import { removeFile } from "../platform/fs-runtime-boundary"
 import { joinPath } from "../platform/path-runtime"
 
 export function resolveEditor(visual: string | undefined, editor: string | undefined): string {

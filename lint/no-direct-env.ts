@@ -463,16 +463,59 @@ const plugin: Plugin = {
         ]
         if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
 
+        // Effect static methods that exit the Effect world via Promise/fiber
+        // — the boundary contract treats these as edges that must live in
+        // `*-boundary.ts`. `runSync`/`runFork`/`runForkWith` are NOT in this
+        // set: they're Effect-internal (no Promise edge) and used heavily by
+        // Solid signal lanes, PubSub.unbounded eager-build, etc. — adding
+        // them would force a much wider boundary refactor than this batch.
+        const EFFECT_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
+        // Instance methods on a `ManagedRuntime` / `Runtime` that exit via
+        // Promise — same boundary semantics as `Effect.runPromise`.
+        const RUNTIME_RUN_METHODS = new Set(["runPromise", "runPromiseWith"])
+
         return {
           CallExpression(node) {
             if (node.callee.type !== "MemberExpression") return
             const obj = node.callee.object
             const prop = node.callee.property
-            if (obj.type !== "Identifier" || obj.name !== "Effect") return
             if (prop.type !== "Identifier") return
-            if (prop.name !== "runPromise" && prop.name !== "runPromiseWith") return
+
+            // Static `Effect.runPromise(...)` / `runPromiseWith` / `runPromiseExit`.
+            if (obj.type === "Identifier" && obj.name === "Effect") {
+              if (!EFFECT_RUN_METHODS.has(prop.name)) return
+              context.report({
+                message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Wrap the Effect with \`sdkBoundary("label", effect)\` and call it from a boundary module.`,
+                node,
+              })
+              return
+            }
+
+            // Instance-method `<obj>.runPromise(...)` / `runPromiseWith(...)`
+            // calls. Flags when the object identifier (or, for nested chains,
+            // the immediate object's rightmost identifier) names a runtime —
+            // `runtime`, `clientRuntime`, `serverRuntime`, or ends in
+            // `Runtime`. Catches both `runtime.runPromise(...)` and
+            // `extensionUI.clientRuntime.runPromise(...)`.
+            if (!RUNTIME_RUN_METHODS.has(prop.name)) return
+            // Resolve the rightmost identifier of the object expression — this
+            // handles both `runtime.runPromise(...)` (Identifier object) and
+            // `extensionUI.clientRuntime.runPromise(...)` (nested member chain).
+            let runtimeName: string | undefined
+            if (obj.type === "Identifier") {
+              runtimeName = obj.name
+            } else if (obj.type === "MemberExpression" && obj.property.type === "Identifier") {
+              runtimeName = obj.property.name
+            }
+            if (runtimeName === undefined) return
+            const isRuntimeName =
+              runtimeName === "runtime" ||
+              runtimeName === "clientRuntime" ||
+              runtimeName === "serverRuntime" ||
+              /Runtime$/.test(runtimeName)
+            if (!isRuntimeName) return
             context.report({
-              message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Wrap the Effect with \`sdkBoundary("label", effect)\` and call it from a boundary module.`,
+              message: `\`${runtimeName}.${prop.name}\` is a runtime-instance Promise edge — it may only be called inside a \`*-boundary.ts\` file or via \`runSdkBoundary(boundary)\`. Move the call into a boundary module.`,
               node,
             })
           },

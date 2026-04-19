@@ -8,7 +8,7 @@
 import { createSignal } from "solid-js"
 import { isRecord } from "@gent/core/domain/guards.js"
 import { homedir } from "os"
-import { makeDirectory, writeFileString } from "../platform/fs-runtime"
+import { makeDirectory, writeFileString } from "../platform/fs-runtime-boundary"
 import { joinPath } from "../platform/path-runtime"
 
 const MAX_ENTRIES = 100
