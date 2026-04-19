@@ -8,7 +8,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -95,7 +95,7 @@ const makeLayer = (providerLayer: Layer.Layer<Provider>, tools: AnyToolDefinitio
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
-    WorkflowRuntime.Test(),
+    MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     EventStore.Test(),
@@ -117,7 +117,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(),
-    WorkflowRuntime.Test(),
+    MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ToolRunner.Test(),
@@ -142,7 +142,7 @@ const makeLiveToolLayer = (
     Storage.TestWithSql(),
     providerLayer,
     extRegistry,
-    WorkflowRuntime.Test(),
+    MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     EventStore.Test(),
@@ -188,7 +188,7 @@ const makeLayerWithEvents = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
-    WorkflowRuntime.Test(),
+    MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     makeCountingEventStore(eventsRef),
@@ -317,7 +317,7 @@ describe("streaming", () => {
       slowStorage,
       providerLayer,
       makeExtRegistry(),
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
@@ -721,13 +721,13 @@ describe("streaming", () => {
       Permission.Test(),
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       BunServices.layer,
@@ -1220,7 +1220,7 @@ describe("interaction", () => {
       Storage.TestWithSql(),
       providerLayer ?? makeInteractionProviderLayer(),
       makeExtRegistry(tools),
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ApprovalService.Test(),
@@ -1337,7 +1337,7 @@ describe("interaction", () => {
         generate: () => Effect.succeed("test"),
       }),
       makeExtRegistry(),
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       EventStore.Test(),
@@ -1538,7 +1538,7 @@ describe("recovery", () => {
       storageLayer,
       eventStoreLayer,
       extensionLayer,
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       providerLayer,

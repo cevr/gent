@@ -8,7 +8,7 @@ import { Deferred, Effect, Layer } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -52,15 +52,15 @@ describe("extension concurrency", () => {
             ],
           },
         },
-      ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
+      ] as Parameters<typeof MachineEngine.fromExtensions>[0]
 
       const layer = Layer.provide(
-        WorkflowRuntime.fromExtensions(extensions),
+        MachineEngine.fromExtensions(extensions),
         ExtensionTurnControl.Test(),
       )
 
       return Effect.gen(function* () {
-        const runtime = yield* WorkflowRuntime
+        const runtime = yield* MachineEngine
         const event = new SessionStarted({ sessionId, branchId })
         const ctx = { sessionId, branchId }
 
@@ -113,11 +113,11 @@ describe("extension concurrency", () => {
               ],
             },
           },
-        ] as Parameters<typeof WorkflowRuntime.fromExtensions>[0]
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
 
         const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
         const baseLayer = Layer.mergeAll(
-          WorkflowRuntime.fromExtensions(extensions).pipe(
+          MachineEngine.fromExtensions(extensions).pipe(
             Layer.provideMerge(ExtensionTurnControl.Test()),
           ),
           EventStore.Memory,
@@ -128,7 +128,7 @@ describe("extension concurrency", () => {
 
         yield* Effect.gen(function* () {
           const publisher = yield* EventPublisher
-          const runtime = yield* WorkflowRuntime
+          const runtime = yield* MachineEngine
 
           yield* Effect.all(
             [

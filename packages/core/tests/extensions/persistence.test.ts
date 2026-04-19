@@ -3,7 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "@gent/core/domain/extension"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
@@ -56,7 +56,7 @@ describe("Extension state persistence", () => {
     const layer = makeLayer([ext])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const storage = yield* Storage
 
       // Trigger state change + Persist effect
@@ -81,14 +81,14 @@ describe("Extension state persistence", () => {
   })
 
   // TODO(c2): "state hydrated on actor init for resumed session" — removed.
-  // Rewrite to read state via WorkflowRuntime.ask(GetSnapshot) once the new
+  // Rewrite to read state via MachineEngine.ask(GetSnapshot) once the new
   // snapshot-readback path is wired into the reducerActor helper.
 
   it.live("durability updates existing state on subsequent transitions", () => {
     const layer = makeLayer([makeCounterExtension()])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const storage = yield* Storage
 
       // Two turns → two Persist effects
@@ -132,7 +132,7 @@ describe("Extension state persistence", () => {
     const layer = makeLayer([nonPersistent])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const storage = yield* Storage
 
       yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
@@ -243,7 +243,7 @@ describe("Persistence edge cases", () => {
         version: 5,
       })
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
 
       // Actor should init with fallback to initial state, not crash
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
@@ -294,7 +294,7 @@ describe("Persistence edge cases", () => {
         version: 3,
       })
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
 
       // Init should survive
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {

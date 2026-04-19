@@ -7,7 +7,7 @@
 import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
@@ -31,7 +31,7 @@ export const makeActorRuntimeLayer = (config: {
     )
 
   return Layer.mergeAll(
-    WorkflowRuntime.Live(config.extensions).pipe(Layer.provideMerge(turnControl)),
+    MachineEngine.Live(config.extensions).pipe(Layer.provideMerge(turnControl)),
     EventStore.Memory,
     turnControl,
     ...extLayers,

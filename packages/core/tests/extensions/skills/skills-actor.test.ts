@@ -1,6 +1,6 @@
 /**
  * Actor runtime test: exercises SkillsExtension through direct
- * WorkflowRuntime.ask (bypasses RPC per-request scopes).
+ * MachineEngine.ask (bypasses RPC per-request scopes).
  * For RPC acceptance coverage, see skills-rpc.test.ts.
  */
 import { describe, it, expect } from "effect-bun-test"
@@ -8,7 +8,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
@@ -68,14 +68,14 @@ const setupSkillsExtension = Effect.provide(
   BunServices.layer,
 )
 
-describe("SkillsExtension actor via WorkflowRuntime", () => {
+describe("SkillsExtension actor via MachineEngine", () => {
   it.live("ListSkills returns skills from the Skills service", () =>
     Effect.gen(function* () {
       const ext = yield* setupSkillsExtension
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* WorkflowRuntime
+        const runtime = yield* MachineEngine
         const reply = yield* runtime.ask(sessionId, SkillsProtocol.ListSkills(), branchId)
 
         expect(Array.isArray(reply)).toBe(true)
@@ -93,7 +93,7 @@ describe("SkillsExtension actor via WorkflowRuntime", () => {
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* WorkflowRuntime
+        const runtime = yield* MachineEngine
         const reply = yield* runtime.ask(
           sessionId,
           SkillsProtocol.GetSkillContent({ name: "react" }),
@@ -113,7 +113,7 @@ describe("SkillsExtension actor via WorkflowRuntime", () => {
       const layer = makeSkillsRuntimeLayer([ext])
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* WorkflowRuntime
+        const runtime = yield* MachineEngine
         const reply = yield* runtime.ask(
           sessionId,
           SkillsProtocol.GetSkillContent({ name: "nonexistent" }),

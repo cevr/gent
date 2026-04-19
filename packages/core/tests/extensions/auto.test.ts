@@ -14,7 +14,7 @@ import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
 import { testSetupCtx } from "@gent/core/test-utils"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
@@ -32,12 +32,12 @@ const autoExtension: LoadedExtension = {
 
 const makeLayer = () =>
   Layer.mergeAll(
-    WorkflowRuntime.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
+    MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     EventStore.Memory,
     Storage.Test(),
   )
 
-const getSnapshot = (runtime: WorkflowRuntime) =>
+const getSnapshot = (runtime: MachineEngine) =>
   Effect.gen(function* () {
     const model = (yield* runtime.ask(
       sessionId,
@@ -48,7 +48,7 @@ const getSnapshot = (runtime: WorkflowRuntime) =>
   })
 
 const sendAuto = (
-  runtime: WorkflowRuntime,
+  runtime: MachineEngine,
   intent:
     | { readonly _tag: "StartAuto"; readonly goal: string; readonly maxIterations?: number }
     | { readonly _tag: "CancelAuto" }
@@ -94,7 +94,7 @@ const turnCompleted = () => new TurnCompleted({ sessionId, branchId, durationMs:
 describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -145,7 +145,7 @@ describe("Auto runtime integration", () => {
 
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -164,7 +164,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -180,7 +180,7 @@ describe("Auto runtime integration", () => {
 
   it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -202,7 +202,7 @@ describe("Auto runtime integration", () => {
 
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -230,7 +230,7 @@ describe("Auto runtime integration", () => {
 
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -252,7 +252,7 @@ describe("Auto runtime integration", () => {
 
   it.live("unrelated tool does not advance the loop", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -281,7 +281,7 @@ describe("Auto runtime integration", () => {
 
   it.live("review while Working is ignored (must checkpoint first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -301,7 +301,7 @@ describe("Auto runtime integration", () => {
 
   it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -330,7 +330,7 @@ describe("Auto runtime integration", () => {
 
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -377,7 +377,7 @@ describe("Auto runtime integration", () => {
         version: 5,
       })
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -398,7 +398,7 @@ describe("Auto runtime integration", () => {
 
   it.live("AutoProjection injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
       yield* sendAuto(runtime, { _tag: "StartAuto", goal: "research caching strategies" })
       yield* runtime.publish(
@@ -455,13 +455,13 @@ describe("Auto JSONL replay via onInit", () => {
 
   const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
     Layer.mergeAll(
-      WorkflowRuntime.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
+      MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
       EventStore.Memory,
       Storage.Test(),
       mockJournal(rows, originSessionId),
     )
 
-  const getAutoSnapshot = (runtime: WorkflowRuntime) =>
+  const getAutoSnapshot = (runtime: MachineEngine) =>
     Effect.gen(function* () {
       const model = (yield* runtime.ask(
         childId,
@@ -482,7 +482,7 @@ describe("Auto JSONL replay via onInit", () => {
         new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
       )
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
@@ -527,7 +527,7 @@ describe("Auto JSONL replay via onInit", () => {
       const now = new Date()
       yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId: parentId, branchId }), {
         sessionId: parentId,
         branchId,
@@ -567,7 +567,7 @@ describe("Auto JSONL replay via onInit", () => {
         }),
       )
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
@@ -596,7 +596,7 @@ describe("Auto JSONL replay via onInit", () => {
         new Session({ id: childId, parentSessionId: parentId, createdAt: now, updatedAt: now }),
       )
 
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,

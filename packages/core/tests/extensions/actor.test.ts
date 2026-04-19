@@ -4,7 +4,7 @@ import { ExtensionMessage, ExtensionProtocolError } from "@gent/core/domain/exte
 import { SessionStarted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension } from "@gent/core/domain/extension"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { spawnMachineExtensionRef } from "@gent/core/runtime/extensions/spawn-machine-ref"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { defineResource } from "@gent/core/domain/contribution"
@@ -156,10 +156,10 @@ describe("spawnMachineExtensionRef", () => {
 })
 
 // ============================================================================
-// WorkflowRuntime — supervisor behavior (UI snapshot tests removed in C2)
+// MachineEngine — supervisor behavior (UI snapshot tests removed in C2)
 // ============================================================================
 
-describe("WorkflowRuntime", () => {
+describe("MachineEngine", () => {
   it.live("ask failure restarts once and retries", () => {
     const Ping = ExtensionMessage.reply(
       "flaky-request",
@@ -204,7 +204,7 @@ describe("WorkflowRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const reply = yield* runtime.ask(sessionId, Ping({}), branchId)
       const statuses = yield* runtime.getActorStatuses(sessionId)
 
@@ -260,7 +260,7 @@ describe("WorkflowRuntime", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const exit = yield* runtime.ask(sessionId, GetCount(), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -276,7 +276,7 @@ describe("WorkflowRuntime", () => {
 })
 
 // ============================================================================
-// Resource.machine — end-to-end via WorkflowRuntime (C3.5a integration test)
+// Resource.machine — end-to-end via MachineEngine (C3.5a integration test)
 //
 // Codex C3.5a BLOCK 2 — the Resource.machine path needs an integration test
 // that drives a real `effect-machine` machine through the runtime, not just
@@ -315,7 +315,7 @@ describe("Resource.machine end-to-end", () => {
         sourcePath: "builtin",
         contributions: {
           resources: [
-            // No-service Resource carrying just the machine. WorkflowRuntime
+            // No-service Resource carrying just the machine. MachineEngine
             // supervises the machine; the empty layer keeps the Resource shape
             // valid without contributing any service tags. The explicit
             // `<unknown, "process">` widening dodges `Layer<never,...>` →
@@ -332,7 +332,7 @@ describe("Resource.machine end-to-end", () => {
     ])
 
     return Effect.gen(function* () {
-      const runtime = yield* WorkflowRuntime
+      const runtime = yield* MachineEngine
       const reply = yield* runtime.ask(sessionId, Increment({ delta: 3 }), branchId)
       expect(reply).toEqual({ count: 3 })
 
@@ -370,7 +370,7 @@ describe("Resource.machine end-to-end", () => {
       ])
 
       return Effect.gen(function* () {
-        const runtime = yield* WorkflowRuntime
+        const runtime = yield* MachineEngine
         const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
           sessionId,
           branchId,

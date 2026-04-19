@@ -8,7 +8,7 @@ import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
 } from "@gent/core/runtime/make-extension-host-context"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
@@ -76,7 +76,7 @@ describe("extension command RPCs", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* ExtensionRegistry
-        const stateRuntime = yield* WorkflowRuntime
+        const stateRuntime = yield* MachineEngine
         const platform = yield* RuntimePlatform
         const eventPublisher = yield* EventPublisher
         const approval = yield* ApprovalService

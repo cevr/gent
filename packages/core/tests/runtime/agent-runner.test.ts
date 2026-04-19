@@ -556,12 +556,10 @@ describe("AgentRunner", () => {
       publish: (_event, ctx) =>
         Effect.sync(() => {
           publishedSessionIds.push(ctx.sessionId)
-          return false
+          return [] as ReadonlyArray<string>
         }),
-      deriveAll: () => Effect.succeed([]),
       send: () => Effect.void,
       ask: () => Effect.die("not used"),
-      getUiSnapshots: () => Effect.succeed([]),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     }

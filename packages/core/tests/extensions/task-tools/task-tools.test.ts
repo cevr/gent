@@ -15,7 +15,7 @@ import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/exte
 import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type { QueryRef } from "@gent/core/domain/query"
 import type { MutationRef } from "@gent/core/domain/mutation"
@@ -34,7 +34,7 @@ const mockRunnerSuccess = {
 }
 
 const makeCtx = Effect.gen(function* () {
-  const runtime = yield* WorkflowRuntime
+  const runtime = yield* MachineEngine
   const registry = yield* ExtensionRegistry
   const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
   const query = <I, O>(ref: QueryRef<I, O>, input: I) => {

@@ -4,7 +4,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { tool } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/extension"
-import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
@@ -47,7 +47,7 @@ describe("ActorProcess", () => {
       Storage.Test(),
       agentLoopLayer,
       extRegistry,
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
       ToolRunner.Test(),
@@ -184,7 +184,7 @@ describe("ActorProcess", () => {
       Storage.Test(),
       agentLoopLayer,
       extRegistry2,
-      WorkflowRuntime.Test(),
+      MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
       toolRunnerLayer,
