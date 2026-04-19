@@ -99,10 +99,9 @@ export const collectSubscriptions = (
  *      half-initialized state — the bug pattern codex flagged in the
  *      pre-fix C3.4 review.
  *
- *    Per-Resource failure isolation matches the pre-C3.4
- *    `activateLoadedExtensions` behavior; failing-start does not bring
- *    down the host. Surfacing failed-start to extension health is a
- *    follow-up (memory: project_resource_lifecycle_health_surface).
+ *    Per-Resource failure isolation: failing-start does not bring down
+ *    the host. Surfacing failed-start to extension health is a follow-up
+ *    (memory: project_resource_lifecycle_health_surface).
  *
  * The lifecycle layer is provided to the merged service layer via
  * `Layer.provideMerge`, so lifecycle effects observe the services they own

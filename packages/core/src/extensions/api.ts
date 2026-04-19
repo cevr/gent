@@ -294,67 +294,6 @@ export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
 
-// ── Simple Event (curated subset of AgentEvent for external authors) ──
-
-export type SimpleEventType =
-  // Session lifecycle
-  | "session-started"
-  | "session-name-updated"
-  | "session-settings-updated"
-  // Messages
-  | "message-received"
-  // Streaming
-  | "stream-started"
-  | "stream-chunk"
-  | "stream-ended"
-  // Turn lifecycle
-  | "turn-completed"
-  | "turn-recovery-applied"
-  // Tool calls
-  | "tool-call-started"
-  | "tool-call-succeeded"
-  | "tool-call-failed"
-  // Agent lifecycle
-  | "agent-switched"
-  | "agent-restarted"
-  // Subagent lifecycle
-  | "subagent-spawned"
-  | "subagent-succeeded"
-  | "subagent-failed"
-  // Tasks
-  | "task-created"
-  | "task-updated"
-  | "task-completed"
-  | "task-failed"
-  | "task-stopped"
-  | "task-deleted"
-  // Branching
-  | "branch-created"
-  | "branch-switched"
-  // Questions
-  | "questions-asked"
-  // Errors
-  | "error-occurred"
-
-export interface SimpleEvent {
-  readonly type: SimpleEventType
-  readonly _tag: string
-  readonly raw: SimpleEventRaw
-}
-
-type LegacySimpleAgentRunEvent =
-  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunSpawned" }>, "_tag"> & {
-      readonly _tag: "SubagentSpawned"
-    })
-  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunSucceeded" }>, "_tag"> & {
-      readonly _tag: "SubagentSucceeded"
-    })
-  | (Omit<Extract<AgentEvent, { readonly _tag: "AgentRunFailed" }>, "_tag"> & {
-      readonly _tag: "SubagentFailed"
-    })
-
-type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
-
 // ── Public API ──
 
 // ExtensionSetupContext re-exported from domain — single source of truth

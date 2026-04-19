@@ -34,8 +34,6 @@ export {
   DEFAULT_RETRY_CONFIG,
   isRetryable,
   getRetryAfter,
-  getRetryDelay,
-  makeRetrySchedule,
   withRetry,
 } from "./retry.js"
 

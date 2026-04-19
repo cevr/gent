@@ -437,7 +437,7 @@ const collectStreamResponse = (params: {
     }
   })
 
-export const persistAssistantTurn = (params: {
+const persistAssistantTurn = (params: {
   storage: StorageService
   publishEvent: PublishEvent
   sessionId: SessionId
@@ -588,7 +588,7 @@ const executeToolCalls = (params: {
     { concurrency: Math.max(1, DEFAULTS.toolConcurrency) },
   )
 
-export const resolveTurnPhase = (params: {
+const resolveTurnPhase = (params: {
   message: Message
   agentOverride?: AgentNameType
   runSpec?: RunSpec
@@ -720,7 +720,7 @@ const dispatchExternalTurn = (params: {
  * Tool events (tool-started/completed/failed) are observability only — they do NOT
  * populate draft.toolCalls, preventing executeToolsPhase from re-executing them.
  */
-export const collectExternalTurn = (params: {
+const collectExternalTurn = (params: {
   executor: TurnExecutor
   resolved: ResolvedTurn & { agent: AgentDefinition; tools: ReadonlyArray<AnyToolDefinition> }
   publishEvent: PublishEvent
@@ -944,7 +944,7 @@ const makeStreamResolved = (
   ...(resolved.driver !== undefined ? { driver: resolved.driver } : {}),
 })
 
-export const streamTurnPhase = (params: {
+const streamTurnPhase = (params: {
   messageId: MessageId
   step: number
   resolved: ResolvedTurn
@@ -1100,7 +1100,7 @@ export const streamTurnPhase = (params: {
     return collected
   })
 
-export const executeToolsPhase = (params: {
+const executeToolsPhase = (params: {
   messageId: MessageId
   step: number
   draft: AssistantDraft
@@ -1221,7 +1221,7 @@ export const invokeToolPhase = (params: {
       .pipe(Effect.orDie)
   })
 
-export const finalizeTurnPhase = (params: {
+const finalizeTurnPhase = (params: {
   storage: StorageService
   publishEvent: PublishEvent
   sessionId: SessionId

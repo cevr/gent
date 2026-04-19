@@ -324,21 +324,6 @@ export const validateLoadedExtensions = (
     return { active, failed }
   })
 
-/**
- * Pass-through after C3.4: lifecycle is no longer a separate phase.
- * `Resource.start` / `Resource.stop` are woven into each Resource's layer
- * by `withLifecycle` in `resource-host/index.ts`; failures surface at
- * layer-build time inside the surrounding scope.
- *
- * Kept as a thin pass-through so downstream call sites (and the
- * `ExtensionActivationResult` shape) don't need to change in the same
- * commit. Will be inlined or deleted in C10 (final subtraction).
- */
-export const activateLoadedExtensions = (
-  extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<ExtensionActivationResult> =>
-  Effect.succeed({ active: [...extensions], failed: [] })
-
 const groupScheduledJobFailures = (
   failures: ReadonlyArray<SchedulerFailure>,
 ): ReadonlyMap<string, ReadonlyArray<{ jobId: string; error: string }>> => {
@@ -365,7 +350,10 @@ export const reconcileLoadedExtensions = (params: {
 > =>
   Effect.gen(function* () {
     const validated = yield* validateLoadedExtensions(params.extensions)
-    const activated = yield* activateLoadedExtensions(validated.active)
+    // Lifecycle is structural: `Resource.start`/`stop` are woven into each
+    // Resource's layer by `withLifecycle` in `resource-host/index.ts`, so
+    // activation is identity over `validated.active`.
+    const activated: ExtensionActivationResult = { active: [...validated.active], failed: [] }
     const scheduledJobFailures = yield* reconcileScheduledJobs({
       extensions: activated.active,
       home: params.home,

@@ -101,9 +101,11 @@ export const getRetryAfter = (error: unknown): number | undefined => {
   return undefined
 }
 
-// Calculate delay for attempt
+// Calculate delay for attempt — private. `withRetry` is the only consumer;
+// unit coverage flows through `withRetry({ onRetry })` reporting the
+// computed delay (see retry-progress test).
 
-export const getRetryDelay = (
+const getRetryDelay = (
   attempt: number,
   error: unknown,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
@@ -118,13 +120,6 @@ export const getRetryDelay = (
   const delay = config["initialDelay"] * Math.pow(config["backoffFactor"], attempt)
   return Math.min(delay, config["maxDelay"])
 }
-
-// Create retry schedule for Effect
-
-export const makeRetrySchedule = (config: RetryConfig = DEFAULT_RETRY_CONFIG) =>
-  Schedule.exponential(Duration.millis(config["initialDelay"]), config["backoffFactor"]).pipe(
-    Schedule.both(Schedule.recurs(config["maxAttempts"] - 1)),
-  )
 
 export interface RetryAttemptInfo {
   readonly attempt: number

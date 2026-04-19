@@ -211,9 +211,6 @@ export const interactionRendererContribution = <
   component,
 })
 
-/** Backwards-compatible alias for the old `defineInteractionRenderer` factory. */
-export const defineInteractionRenderer = interactionRendererContribution
-
 /**
  * Build a composer-surface contribution. The component must be a function
  * accepting `ComposerSurfaceProps` — core owns this prop shape.
