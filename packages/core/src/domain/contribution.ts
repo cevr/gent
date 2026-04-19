@@ -141,17 +141,21 @@ export type ContributionKind = Contribution["_kind"]
  * registry's tool-bridge (`capabilityToTool`) re-projects it for `ToolRunner`
  * until C4.5 deletes the legacy `ToolDefinition` type entirely.
  *
- * Intent derivation: tools today don't carry a read/write declaration. We
- * default to `intent: "write"` because LLM-invoked tools usually mutate
- * something; tools that opt into `idempotent: true` flip to `intent: "read"`
- * (idempotent ⇒ replayable ⇒ read-shaped — this matches the existing
- * registry-level lint rule that forbids write services in read-only handlers).
+ * Intent: all legacy tools lower as `intent: "write"`. Codex caught the
+ * earlier `idempotent ⇒ "read"` derivation as a lie — `idempotent` is
+ * replay-safety (safe to re-run after restart), NOT the read/write
+ * discriminator. Counterexample: `rename-session.ts` is `idempotent: true`
+ * yet mutates session state via `ctx.session.renameCurrent(...)`. Tools
+ * that are genuinely read-only should be authored as direct
+ * `capabilityContribution(...)` with `intent: "read"` and a narrow context
+ * (the lint rule fences write services on `R` of read capabilities).
+ * `idempotent` flows through unchanged as model-audience metadata.
  */
 const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   id: t.name,
   description: t.description,
   audiences: ["model"],
-  intent: t.idempotent === true ? "read" : "write",
+  intent: "write",
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   input: t.params as Schema.Schema<unknown>,
   // ToolRunner consumes raw JSON output; the bridge encodes through
