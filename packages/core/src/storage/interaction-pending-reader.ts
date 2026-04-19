@@ -19,6 +19,7 @@
 
 import { Context, Effect, Layer } from "effect"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
+import { type ReadOnly, withReadOnly } from "../domain/read-only.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import { InteractionStorage } from "./interaction-storage.js"
 import type { StorageError } from "./sqlite-storage.js"
@@ -41,15 +42,22 @@ export interface InteractionPendingReaderService {
   }) => Effect.Effect<ReadonlyArray<PendingInteraction>, StorageError>
 }
 
+/**
+ * `InteractionPendingReader` carries the `ReadOnly` brand — the surface
+ * is structurally read-only by construction (only `listPending` is
+ * exposed; writes live on `InteractionStorage`). The brand makes the
+ * read-only contract checkable at the type level for projection and
+ * read-intent capability R-channels (B11.4).
+ */
 export class InteractionPendingReader extends Context.Service<
   InteractionPendingReader,
-  InteractionPendingReaderService
+  ReadOnly<InteractionPendingReaderService>
 >()("@gent/core/src/storage/interaction-pending-reader/InteractionPendingReader") {
   static Live: Layer.Layer<InteractionPendingReader, never, InteractionStorage> = Layer.effect(
     InteractionPendingReader,
     Effect.gen(function* () {
       const storage = yield* InteractionStorage
-      return {
+      return withReadOnly({
         listPending: (scope) =>
           Effect.gen(function* () {
             const records = yield* storage.listPending(scope)
@@ -71,7 +79,7 @@ export class InteractionPendingReader extends Context.Service<
             }
             return out
           }),
-      }
+      } satisfies InteractionPendingReaderService)
     }),
   )
 }

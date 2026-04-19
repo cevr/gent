@@ -1,5 +1,6 @@
 import type { PlatformError } from "effect"
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // Skill Schema
 
@@ -15,16 +16,23 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 }) {}
 
 // Skills Service Interface
+//
+// `Skills` is a read-only surface — it exposes the loaded skill set
+// (`list` / `get`) but no reload/refresh path. Skill loading runs once
+// in the Live layer's setup; if a runtime reload becomes a real need
+// later it should arrive as an admin `request` capability or a fresh
+// resource start, not a method on the read interface (B11.4).
 
 export interface SkillsService {
   readonly list: () => Effect.Effect<ReadonlyArray<Skill>>
   readonly get: (name: string, level?: SkillLevel) => Effect.Effect<Skill | undefined>
-  readonly reload: () => Effect.Effect<void, PlatformError.PlatformError>
 }
 
-// Skills Service Tag
+// Skills Service Tag — branded `ReadOnly` so projection R-channels
+// and `request({ intent: "read" })` capabilities can yield it without
+// the type fence flagging a write capability.
 
-export class Skills extends Context.Service<Skills, SkillsService>()(
+export class Skills extends Context.Service<Skills, ReadOnly<SkillsService>>()(
   "@gent/core/src/extensions/skills/skills",
 ) {
   static Live = (options: {
@@ -157,21 +165,22 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
         // Initial load
         yield* Ref.set(skillsRef, yield* loadAllSkills)
 
-        return {
+        return withReadOnly({
           list: () => Ref.get(skillsRef),
           get: (name, level) =>
             Ref.get(skillsRef).pipe(Effect.map((skills) => resolveSkillName(skills, name, level))),
-          reload: () => loadAllSkills.pipe(Effect.flatMap((loaded) => Ref.set(skillsRef, loaded))),
-        }
+        } satisfies SkillsService)
       }),
     )
 
   static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
-    Layer.succeed(Skills, {
-      list: () => Effect.succeed(testSkills),
-      get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
-      reload: () => Effect.void as Effect.Effect<void, PlatformError.PlatformError>,
-    })
+    Layer.succeed(
+      Skills,
+      withReadOnly({
+        list: () => Effect.succeed(testSkills),
+        get: (name, level) => Effect.succeed(resolveSkillName([...testSkills], name, level)),
+      } satisfies SkillsService),
+    )
 }
 
 // Resolve a skill name with optional level qualifier
