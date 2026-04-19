@@ -11,6 +11,7 @@ import {
   createSignal,
   createEffect,
   createMemo,
+  onCleanup,
   onMount,
   type Accessor,
   type JSX,
@@ -225,6 +226,13 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       }),
     ),
   )
+
+  // Dispose the per-provider runtime on unmount so layer finalizers run and
+  // any in-flight Effects are interrupted. Without this, provider remount
+  // and shutdown leak runtime resources (counsel C9.3 finding 3).
+  onCleanup(() => {
+    void clientRuntime.dispose()
+  })
 
   // Refetch a single extension's snapshot via the package's declared source.
   // Called once per `ExtensionStateChanged` pulse for that extension and on

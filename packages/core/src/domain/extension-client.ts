@@ -139,17 +139,17 @@ export interface AutocompleteContribution {
   readonly _kind: "autocomplete"
   readonly prefix: string
   readonly title: string
-  /** Fetch items for the given filter. Sync, Promise, or Effect.
+  /** Fetch items for the given filter. Sync OR Effect (no Promise).
    *  - Sync: returned array used directly.
-   *  - Promise: awaited.
-   *  - Effect: run via the popup's `runtime.runFork(...)` adapter. R may be
-   *    any subset of services the TUI shell's `clientRuntime` provides
-   *    (FileSystem | Path | ClientTransport).
+   *  - Effect: run through the TUI shell's `clientRuntime`. R may be any
+   *    subset of services the runtime provides (FileSystem | Path |
+   *    ClientTransport | ClientWorkspace | ...).
    *  The popup wraps in `createResource` — undefined while loading, items
-   *  when resolved. */
+   *  when resolved. C9.3 deleted the Promise variant per
+   *  `migrate-callers-then-delete-legacy-apis`; async work goes through
+   *  Effect now. */
   readonly items: (filter: string) =>
     | ReadonlyArray<AutocompleteItem>
-    | Promise<ReadonlyArray<AutocompleteItem>>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     | Effect.Effect<ReadonlyArray<AutocompleteItem>, any, any>
   /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */

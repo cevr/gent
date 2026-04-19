@@ -44,10 +44,11 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
   )
 
-  // C9.2: items() may return sync array, Promise, or Effect. Effect is run
-  // through `extensionUI.clientRuntime.runPromise` so the result behaves
-  // identically to a Promise from the resource's POV. Errors are normalized
-  // to an empty array per contribution and logged once.
+  // C9.3: items() returns sync array OR Effect (Promise variant deleted).
+  // Effect is run through `extensionUI.clientRuntime.runPromise` so the
+  // result behaves identically to a sync resolution from the resource's
+  // POV. Errors are normalized to an empty array per contribution and
+  // logged once.
   const runItems = (
     c: AutocompleteContribution,
     filter: string,
