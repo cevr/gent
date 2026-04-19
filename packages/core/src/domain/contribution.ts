@@ -180,7 +180,6 @@ const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   // which structurally extends ToolContext (the wider one). Tools'
   // `execute(params, ctx: ToolContext)` therefore satisfies the capability
   // signature at the contravariant arg.
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at the tool→capability boundary
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   effect: t.execute as AnyCapabilityContribution["effect"],
 })

@@ -61,7 +61,7 @@ const cooldownWorkflow: ResourceMachine<typeof CooldownState.Type, typeof Cooldo
   protocols: HandoffProtocol,
 }
 
-// ── Interceptor: turn.after — auto-handoff at context-fill threshold ──
+// ── Subscription: turn.after — auto-handoff at context-fill threshold ──
 
 const summarizeRecentMessages = (messages: ReadonlyArray<Message>) => {
   const recentText = messages

@@ -353,7 +353,7 @@ const afterTransition = (
       (before._tag === "Working" && before.iteration !== after.iteration)
     if (isNewEntry) {
       if (after.iteration === 1) {
-        // Kickoff — journal start is handled by tool.result interceptor
+        // Kickoff — journal start is handled by tool.result pipeline
         effects.push({
           _tag: "QueueFollowUp",
           content: `Begin: ${after.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`,
@@ -553,7 +553,7 @@ const autoWorkflow: ResourceMachine<
   protocols: AutoProtocol,
 }
 
-// ── tool.result interceptor — JSONL append on checkpoint/review ──
+// ── tool.result pipeline — JSONL append on checkpoint/review ──
 //
 // Reads the workflow snapshot via `AutoProtocol.GetSnapshot` typed reply
 // instead of the actor-era `getUiSnapshot` self-read — workflows have no

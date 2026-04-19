@@ -341,8 +341,10 @@ type SimpleEventRaw = AgentEvent | LegacySimpleAgentRunEvent
 // and `ext.exec()` (`ExecError`/`ExecResult`) were the legacy fluent-builder
 // authoring surface. All builtin and example extensions now compose
 // `Contribution[]` arrays via `defineExtension({ id, contributions })`. The
-// interceptor compilation algorithm moved to `runtime/extensions/interceptor-registry.ts`;
-// the `runtime/extensions/hooks.ts` shell is gone.
+// pipeline / subscription compilation algorithms live in
+// `runtime/extensions/pipeline-host.ts` and `runtime/extensions/subscription-host.ts`
+// (the legacy `interceptor-registry.ts` died in C6); the
+// `runtime/extensions/hooks.ts` shell is gone.
 //
 // ── Removed in Phase 6 / B2 ──
 //
