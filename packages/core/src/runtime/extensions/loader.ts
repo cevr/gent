@@ -6,10 +6,20 @@ import { ExtensionLoadError } from "../../domain/extension.js"
 import {
   type Contribution,
   extractAgents,
+  extractCapabilities,
   extractExternalDrivers,
   extractModelDrivers,
-  extractPromptSections,
 } from "../../domain/contribution.js"
+import type { PromptSection } from "../../domain/prompt.js"
+
+/** C7: Static prompt sections live on `Capability.prompt` (folded by the
+ *  `tool()` smart constructor or declared directly). Surface them here for
+ *  scope collision detection — same shape, same precedence rules as the
+ *  legacy promptSection contribution. */
+const extractCapabilityPrompts = (cs: ReadonlyArray<Contribution>): ReadonlyArray<PromptSection> =>
+  extractCapabilities(cs)
+    .map((c) => c.prompt)
+    .filter((p): p is PromptSection => p !== undefined)
 import type { ExtensionPackage } from "../../domain/extension-package.js"
 
 // Discovery — scan directories for extension files
@@ -328,7 +338,7 @@ export const validateExtensions = (
       checkScopedCollision(extensions, extractAgents, (a) => a.name, "agent"),
       checkScopedCollision(extensions, extractModelDrivers, (d) => d.id, "model driver"),
       checkScopedCollision(extensions, extractExternalDrivers, (d) => d.id, "external driver"),
-      checkScopedCollision(extensions, extractPromptSections, (p) => p.id, "prompt section"),
+      checkScopedCollision(extensions, extractCapabilityPrompts, (p) => p.id, "prompt section"),
     ]
     for (const error of checks) {
       if (error !== undefined) return yield* error

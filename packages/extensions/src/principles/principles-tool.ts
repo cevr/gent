@@ -8,6 +8,13 @@ export const PrinciplesParams = Schema.Struct({
   }),
 })
 
+const PRINCIPLES_LIST = `## Principles
+
+The following principles govern architectural and implementation decisions.
+Use the \`principles\` tool to read specific principles before making decisions.
+
+${PRINCIPLE_NAMES.map((name) => `- ${name}`).join("\n")}`
+
 export const PrinciplesTool = defineTool({
   name: "principles",
   description:
@@ -17,6 +24,7 @@ export const PrinciplesTool = defineTool({
     "Read principles before architectural decisions, plan creation, or code review",
     "Reference specific principle names when justifying design choices",
   ],
+  prompt: { id: "principles", content: PRINCIPLES_LIST, priority: 55 },
   params: PrinciplesParams,
   execute: (params) =>
     Effect.sync(() => {

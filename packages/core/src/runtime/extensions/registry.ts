@@ -11,11 +11,7 @@ import type {
   RunContext,
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
-import {
-  isDynamicPromptSection,
-  type PromptSection,
-  type PromptSectionInput,
-} from "../../domain/prompt.js"
+import { type PromptSection } from "../../domain/prompt.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
@@ -26,8 +22,6 @@ import {
   extractCommands,
   extractExternalDrivers,
   extractModelDrivers,
-  extractPermissionRules,
-  extractPromptSections,
 } from "../../domain/contribution.js"
 import { type CompiledPipelines, compilePipelines } from "./pipeline-host.js"
 import { type CompiledSubscriptions, compileSubscriptions } from "./subscription-host.js"
@@ -42,7 +36,7 @@ export interface ResolvedExtensions {
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
-  readonly promptSections: ReadonlyMap<string, PromptSectionInput>
+  readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly commands: ReadonlyArray<CommandContribution>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly pipelines: CompiledPipelines
@@ -220,8 +214,19 @@ export const resolveExtensions = (
   const modelDrivers = compileContributions(sorted, extractModelDrivers, (d) => d.id)
   const externalDrivers = compileContributions(sorted, extractExternalDrivers, (d) => d.id)
 
-  // Prompt sections: last scope wins by section id
-  const promptSectionsMap = compileContributions(sorted, extractPromptSections, (p) => p.id)
+  // Prompt sections come from two sources after C7:
+  //   1. Static `Capability.prompt` — bundled with the Capability that owns it
+  //      (renders whenever the Capability is loaded; no audience filter).
+  //   2. (Dynamic content lives on `Projection.prompt(value)` — assembled at
+  //      turn time, not here.)
+  // Last scope wins by section id, identical to the legacy promptSection
+  // contribution semantics.
+  const promptSectionsMap = new Map<string, PromptSection>()
+  for (const ext of sorted) {
+    for (const cap of extractCapabilities(ext.contributions)) {
+      if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
+    }
+  }
 
   // C4.3 command bridge — identity-first scope shadowing followed by
   // audience/intent authorization, mirroring the query/mutation bridges
@@ -262,8 +267,9 @@ export const resolveExtensions = (
       // `intent:"read"` MUST shadow the builtin slash command — otherwise the
       // builtin leaks. Authorization is the second step; selection is first.
       commandWinners.set(cap.id, { _source: "capability", cap })
+      // C7: permission rules are now bundled on the Capability they gate.
+      if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
     }
-    for (const rule of extractPermissionRules(ext.contributions)) permissionRules.push(rule)
   }
 
   const isAuthorizedAsSlashCommand = (entry: CommandCandidate): boolean =>
@@ -480,16 +486,10 @@ export class ExtensionRegistry extends Context.Service<
             "No modeled agents registered — dual-model workflows require at least one agent with a model",
           )
         }),
-      listPromptSections: () =>
-        Effect.forEach([...resolved.promptSections.values()], (section) =>
-          isDynamicPromptSection(section)
-            ? Effect.map(section.resolve, (content) => ({
-                id: section.id,
-                content,
-                priority: section.priority,
-              }))
-            : Effect.succeed(section),
-        ),
+      // C7: dynamic prompt sections live on `Projection.prompt(value)`. The
+      // sections here come from `Capability.prompt`, all static. No more
+      // per-section Effect resolution — return the array directly.
+      listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       pipelines: resolved.pipelines,

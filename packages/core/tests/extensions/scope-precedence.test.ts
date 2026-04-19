@@ -20,7 +20,6 @@ import { defineTool } from "@gent/core/domain/tool"
 import {
   agent as agentContribution,
   pipeline as pipelineContribution,
-  promptSection as promptSectionContribution,
   tool as toolContribution,
   type Contribution,
 } from "@gent/core/domain/contribution"
@@ -77,13 +76,25 @@ describe("scope precedence", () => {
       return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
     })
 
-    it.live("prompt section by id: project shadows builtin", () => {
-      const builtinSection = { id: "rules", content: "builtin rules", priority: 50 }
-      const projectSection = { id: "rules", content: "project rules", priority: 50 }
+    it.live("prompt section by id (Capability.prompt): project shadows builtin", () => {
+      const builtinTool = defineTool({
+        name: "carrier-builtin",
+        description: "carrier",
+        params: Schema.Struct({}),
+        prompt: { id: "rules", content: "builtin rules", priority: 50 },
+        execute: () => Effect.succeed("ok"),
+      })
+      const projectTool = defineTool({
+        name: "carrier-project",
+        description: "carrier",
+        params: Schema.Struct({}),
+        prompt: { id: "rules", content: "project rules", priority: 50 },
+        execute: () => Effect.succeed("ok"),
+      })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", [promptSectionContribution(builtinSection)]),
-        ext("b", "project", [promptSectionContribution(projectSection)]),
+        ext("a", "builtin", [toolContribution(builtinTool)]),
+        ext("b", "project", [toolContribution(projectTool)]),
       ])
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),

@@ -42,6 +42,8 @@
 import { type Effect, Schema } from "effect"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId, ToolCallId } from "./ids.js"
+import type { PermissionRule } from "./permission.js"
+import type { PromptSection } from "./prompt.js"
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
 export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
@@ -173,6 +175,16 @@ export interface CapabilityContribution<
    *  when the audience does not require output validation (e.g., the LLM
    *  consumes raw tool output). */
   readonly output: Schema.Schema<Output>
+  /** Static system-prompt section bundled with this Capability. Rendered
+   *  whenever the Capability is loaded (no audience filter). For dynamic
+   *  prompt fragments (resolved per-turn from services), use a `Projection`
+   *  with `prompt:`. */
+  readonly prompt?: PromptSection
+  /** Permission rules bundled with this Capability — typically used by tools
+   *  whose execution should be gated by allow/deny patterns (e.g., `bash`).
+   *  Rules cross-reference the Capability by `tool:` field; bundling them on
+   *  the Capability keeps the rule and the Capability colocated. */
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
   /** The Capability's effect. */
   readonly effect: (input: Input, ctx: CapabilityContext) => Effect.Effect<Output, E, R>
 }

@@ -14,8 +14,6 @@ import type { AgentDefinition } from "./agent.js"
 import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { CommandContribution } from "./extension.js"
-import type { PermissionRule } from "./permission.js"
-import type { DynamicPromptSection, PromptSection, PromptSectionInput } from "./prompt.js"
 import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyPipelineContribution, PipelineContribution, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
@@ -66,24 +64,17 @@ export interface CommandKindContribution {
   readonly command: CommandContribution
 }
 
-export interface ModelDriverKindContribution {
-  readonly _kind: "model-driver"
-  readonly driver: ModelDriverContribution
-}
-
-export interface ExternalDriverKindContribution {
-  readonly _kind: "external-driver"
-  readonly driver: ExternalDriverContribution
-}
-
-export interface PermissionRuleContribution {
-  readonly _kind: "permission-rule"
-  readonly rule: PermissionRule
-}
-
-export interface PromptSectionContribution {
-  readonly _kind: "prompt-section"
-  readonly section: PromptSectionInput
+/**
+ * Unified Driver kind — `flavor` discriminates `"model"` vs `"external"`. Model
+ * drivers are LLM providers (auth, listModels, resolveModel + Layer); external
+ * drivers wrap a `TurnExecutor` that streams `TurnEvent`s. They share `id`
+ * (driver registry key) but nothing else, so the inner `driver` is a tagged
+ * union, not a polymorphic shape.
+ */
+export interface DriverKindContribution {
+  readonly _kind: "driver"
+  readonly flavor: "model" | "external"
+  readonly driver: ModelDriverContribution | ExternalDriverContribution
 }
 
 export interface ProjectionKindContribution {
@@ -129,10 +120,7 @@ export type Contribution =
   | PipelineKindContribution
   | SubscriptionKindContribution
   | CommandKindContribution
-  | ModelDriverKindContribution
-  | ExternalDriverKindContribution
-  | PermissionRuleContribution
-  | PromptSectionContribution
+  | DriverKindContribution
   | ProjectionKindContribution
   | CapabilityKindContribution
   | PulseSubscriptionContribution
@@ -176,6 +164,8 @@ const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   ...(t.promptSnippet !== undefined ? { promptSnippet: t.promptSnippet } : {}),
   ...(t.promptGuidelines !== undefined ? { promptGuidelines: t.promptGuidelines } : {}),
   ...(t.interactive !== undefined ? { interactive: t.interactive } : {}),
+  ...(t.permissionRules !== undefined ? { permissionRules: t.permissionRules } : {}),
+  ...(t.prompt !== undefined ? { prompt: t.prompt } : {}),
   // The capability boundary types `effect`'s ctx as ModelCapabilityContext,
   // which structurally extends ToolContext (the wider one). Tools'
   // `execute(params, ctx: ToolContext)` therefore satisfies the capability
@@ -225,34 +215,16 @@ export const command = (c: CommandContribution): CommandKindContribution => ({
   command: c,
 })
 
-export const modelDriver = (d: ModelDriverContribution): ModelDriverKindContribution => ({
-  _kind: "model-driver",
+export const modelDriver = (d: ModelDriverContribution): DriverKindContribution => ({
+  _kind: "driver",
+  flavor: "model",
   driver: d,
 })
 
-export const externalDriver = (d: ExternalDriverContribution): ExternalDriverKindContribution => ({
-  _kind: "external-driver",
+export const externalDriver = (d: ExternalDriverContribution): DriverKindContribution => ({
+  _kind: "driver",
+  flavor: "external",
   driver: d,
-})
-
-export const permissionRule = (r: PermissionRule): PermissionRuleContribution => ({
-  _kind: "permission-rule",
-  rule: r,
-})
-
-/**
- * Smart constructor accepts either a static `PromptSection` or a
- * `DynamicPromptSection<R>` for any `R`. The extension's `layerContribution`
- * is responsible for providing `R` at the runtime boundary; the contribution
- * itself stores the section with `R` erased to `never`, mirroring the legacy
- * builder's behavior.
- */
-export const promptSection = <R = never>(
-  s: PromptSection | DynamicPromptSection<R>,
-): PromptSectionContribution => ({
-  _kind: "prompt-section",
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  section: s as PromptSectionInput,
 })
 
 export const projection = (p: AnyProjectionContribution): ProjectionKindContribution => ({
@@ -375,25 +347,21 @@ export const extractCommands = (
 ): ReadonlyArray<CommandKindContribution["command"]> =>
   filterByKind(cs, "command").map((c) => c.command)
 
-export const extractPromptSections = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<PromptSectionContribution["section"]> =>
-  filterByKind(cs, "prompt-section").map((c) => c.section)
-
-export const extractPermissionRules = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<PermissionRuleContribution["rule"]> =>
-  filterByKind(cs, "permission-rule").map((c) => c.rule)
-
 export const extractModelDrivers = (
   cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<ModelDriverKindContribution["driver"]> =>
-  filterByKind(cs, "model-driver").map((c) => c.driver)
+): ReadonlyArray<ModelDriverContribution> =>
+  filterByKind(cs, "driver")
+    .filter((c) => c.flavor === "model")
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    .map((c) => c.driver as ModelDriverContribution)
 
 export const extractExternalDrivers = (
   cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<ExternalDriverKindContribution["driver"]> =>
-  filterByKind(cs, "external-driver").map((c) => c.driver)
+): ReadonlyArray<ExternalDriverContribution> =>
+  filterByKind(cs, "driver")
+    .filter((c) => c.flavor === "external")
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    .map((c) => c.driver as ExternalDriverContribution)
 
 export const extractProjections = (
   cs: ReadonlyArray<Contribution>,

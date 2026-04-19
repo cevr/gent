@@ -4,7 +4,6 @@ import { AgentDefinition } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
-import type { PromptSectionInput } from "@gent/core/domain/prompt"
 import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -14,9 +13,9 @@ import {
   capability as capabilityContribution,
   command as commandContribution,
   modelDriver as modelDriverContribution,
-  promptSection as promptSectionContribution,
   tool as toolContribution,
 } from "@gent/core/domain/contribution"
+import type { PromptSection } from "@gent/core/domain/prompt"
 
 const makeTool = (name: string): AnyToolDefinition => ({
   name,
@@ -34,6 +33,17 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
   resolveModel: (modelName) => ({ modelId: `${providerId}/${modelName}` }),
 })
 
+// C7: static prompt sections live on `Capability.prompt`. Build a synthetic
+// no-op tool to carry each section through the pipeline.
+const promptSectionAsToolContribution = (section: PromptSection) =>
+  toolContribution({
+    name: `section-carrier-${section.id}`,
+    description: `carrier for ${section.id}`,
+    params: Schema.Struct({}) as never,
+    prompt: section,
+    execute: () => Effect.void,
+  } as AnyToolDefinition)
+
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
@@ -41,7 +51,7 @@ const makeExt = (
     tools?: AnyToolDefinition[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
-    promptSections?: PromptSectionInput[]
+    promptSections?: PromptSection[]
     commands?: Array<Parameters<typeof commandContribution>[0]>
     capabilities?: AnyCapabilityContribution[]
   },
@@ -53,7 +63,7 @@ const makeExt = (
     ...(opts?.tools ?? []).map(toolContribution),
     ...(opts?.agents ?? []).map(agentContribution),
     ...(opts?.modelDrivers ?? []).map(modelDriverContribution),
-    ...(opts?.promptSections ?? []).map(promptSectionContribution),
+    ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
     ...(opts?.commands ?? []).map(commandContribution),
     ...(opts?.capabilities ?? []).map(capabilityContribution),
   ],
@@ -521,36 +531,10 @@ describe("ExtensionRegistry", () => {
     expect(sections[0]?.priority).toBe(50)
   })
 
-  test("dynamic prompt sections are resolved", async () => {
-    const registry = await buildRegistry([
-      makeExt("@gent/test", "builtin", {
-        promptSections: [
-          { id: "dynamic", priority: 80, resolve: Effect.succeed("Dynamic content") },
-        ],
-      }),
-    ])
-    const sections = await Effect.runPromise(registry.listPromptSections())
-    expect(sections.length).toBe(1)
-    expect(sections[0]?.id).toBe("dynamic")
-    expect(sections[0]?.content).toBe("Dynamic content")
-    expect(sections[0]?.priority).toBe(80)
-  })
-
-  test("mixed static and dynamic sections", async () => {
-    const registry = await buildRegistry([
-      makeExt("@gent/test", "builtin", {
-        promptSections: [
-          { id: "static", content: "Static", priority: 10 },
-          { id: "dynamic", priority: 20, resolve: Effect.succeed("Resolved") },
-        ],
-      }),
-    ])
-    const sections = await Effect.runPromise(registry.listPromptSections())
-    expect(sections.length).toBe(2)
-    const ids = sections.map((s) => s.id)
-    expect(ids).toContain("static")
-    expect(ids).toContain("dynamic")
-  })
+  // C7 dropped: dynamic prompt sections were `DynamicPromptSection.resolve`.
+  // After C7 dynamic content lives on `Projection.prompt(value)` and is
+  // assembled per-turn by ProjectionRegistry, not by `listPromptSections`
+  // (which only sees static sections from `Capability.prompt`).
 })
 
 // C4.3 command bridge — identity-first scope shadowing followed by

@@ -25,11 +25,7 @@
 
 import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import type { ExtensionInput } from "../domain/extension-package.js"
-import {
-  type PromptSection,
-  type PromptSectionInput,
-  isDynamicPromptSection,
-} from "../domain/prompt.js"
+import { type PromptSection } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -82,14 +78,15 @@ export interface RuntimeProfileInputs {
  * runtime so that dynamic resolvers like `Skills`'s prompt section can read their
  * required services.
  *
- * Use `compileBaseSections(profile)` to get the merged static section array
- * (resolves dynamic sections via the surrounding Effect runtime).
+ * Use `compileBaseSections(profile)` to get the merged static section array.
+ * (Dynamic sections — formerly `DynamicPromptSection.resolve` — are now
+ * `Projection.prompt(value)` and assembled per-turn, not here.)
  */
 export interface RuntimeProfile {
   readonly cwd: string
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
-  readonly extensionSectionInputs: ReadonlyArray<PromptSectionInput>
+  readonly extensionSectionInputs: ReadonlyArray<PromptSection>
   readonly instructions: string
   readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
 }
@@ -192,11 +189,8 @@ export const resolveRuntimeProfile = (
     })
 
     // Extension prompt sections come pre-merged in scope-precedence order from
-    // `resolveExtensions` (project > user > builtin, matching the registry's
-    // `listPromptSections` output). Keep them as `PromptSectionInput` (possibly
-    // dynamic) — resolution happens later inside the extension-services runtime
-    // so dynamic sections like `Skills`'s prompt can read services from their
-    // own `setup.layer`.
+    // `resolveExtensions` (project > user > builtin). All static now —
+    // `Capability.prompt`. Dynamic sections live on `Projection.prompt`.
     const extensionSectionInputs = [...reconciled.resolved.promptSections.values()]
 
     return {
@@ -221,23 +215,11 @@ export const resolveRuntimeProfile = (
 export const compileBaseSections = (
   profile: RuntimeProfile,
 ): Effect.Effect<ReadonlyArray<PromptSection>, never, never> =>
-  Effect.gen(function* () {
-    const resolved = yield* Effect.forEach(profile.extensionSectionInputs, (section) =>
-      isDynamicPromptSection(section)
-        ? Effect.map(
-            section.resolve,
-            (content): PromptSection => ({
-              id: section.id,
-              content,
-              priority: section.priority,
-            }),
-          )
-        : Effect.succeed(section),
-    )
+  Effect.sync(() => {
     const sectionMap = new Map(profile.coreSections.map((s) => [s.id, s]))
-    for (const s of resolved) sectionMap.set(s.id, s)
+    for (const s of profile.extensionSectionInputs) sectionMap.set(s.id, s)
     return [...sectionMap.values()]
-  }) as Effect.Effect<ReadonlyArray<PromptSection>, never, never>
+  })
 
 /**
  * Build the extension-side layers (registry, state runtime, pub/sub

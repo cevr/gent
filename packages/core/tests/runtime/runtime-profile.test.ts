@@ -20,12 +20,16 @@
  * profile, or extension event subscriptions silently disappear in shared mode.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Context, Effect, Layer, Path } from "effect"
+import { Context, Effect, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner } from "@effect/platform-bun"
 import {
   defineExtension,
   defineResource,
-  promptSectionContribution,
+  projectionContribution,
+  ProjectionError,
+  toolContribution,
+  defineTool,
+  type ProjectionContribution,
 } from "@gent/core/extensions/api"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import {
@@ -44,39 +48,48 @@ const fsLayer = Layer.mergeAll(
 
 const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test())
 
-const sectionExtension = defineExtension({
-  id: "@gent/test-runtime-profile",
-  contributions: () => [
-    promptSectionContribution({
-      id: "rp-test-section",
-      content: "rp test content",
-      priority: 50,
-    }),
-  ],
+// C7: static prompt sections live on `Capability.prompt`. The tool here is a
+// no-op carrier — its only purpose is to bring the prompt section into scope.
+const sectionTool = defineTool({
+  name: "rp-test-tool",
+  description: "carrier for rp-test-section",
+  params: S.Struct({}),
+  prompt: { id: "rp-test-section", content: "rp test content", priority: 50 },
+  execute: () => Effect.succeed("ok"),
 })
 
-// Dynamic prompt section that yields a service contributed by `setup.layer`.
-// Mirrors the Skills extension shape (the bug class C7 has to handle): the
-// section's resolve Effect yields a service that only exists once the
-// extension layer is built.
+const sectionExtension = defineExtension({
+  id: "@gent/test-runtime-profile",
+  contributions: () => [toolContribution(sectionTool)],
+})
+
+// Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection
+// whose `query` Effect yields a service from the extension's Resource layer.
 class FakeProvider extends Context.Service<FakeProvider, { readonly text: () => string }>()(
   "@gent/test/runtime-profile/FakeProvider",
 ) {}
 
 const fakeProviderLive = Layer.succeed(FakeProvider, { text: () => "dynamic-from-service" })
 
+const dynamicProjection: ProjectionContribution<string, FakeProvider> = {
+  id: "rp-dynamic-section",
+  query: () =>
+    Effect.gen(function* () {
+      const fp = yield* FakeProvider
+      return fp.text()
+    }).pipe(
+      Effect.catchEager((e) =>
+        Effect.fail(new ProjectionError({ projectionId: "rp-dynamic-section", reason: String(e) })),
+      ),
+    ),
+  prompt: (content) => [{ id: "rp-dynamic-section", priority: 60, content }],
+}
+
 const dynamicExtension = defineExtension({
   id: "@gent/test-runtime-profile-dynamic",
   contributions: () => [
     defineResource({ tag: FakeProvider, scope: "process", layer: fakeProviderLive }),
-    promptSectionContribution({
-      id: "rp-dynamic-section",
-      priority: 60,
-      resolve: Effect.gen(function* () {
-        const fp = yield* FakeProvider
-        return fp.text()
-      }),
-    }),
+    projectionContribution(dynamicProjection),
   ],
 })
 
@@ -144,35 +157,28 @@ describe("resolveRuntimeProfile", () => {
     ).pipe(Effect.provide(sharedLayer)),
   )
 
-  it.live(
-    "compileBaseSections resolves dynamic sections that yield services from setup.layer",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const profile = yield* resolveRuntimeProfile({
-            cwd: "/tmp",
-            home: "/tmp",
-            platform: "darwin",
-            extensions: [dynamicExtension],
-          })
-
-          // Build the same layer shape the server / per-cwd cache produce.
-          const layer = buildExtensionLayers(profile.resolved).pipe(
-            Layer.provide(ExtensionTurnControl.Live),
-          )
-          const ctx = yield* Layer.build(layer)
-
-          // Compile sections inside the built-layer's context — exactly the
-          // pattern dependencies.ts and session-profile.ts use.
-          const sections = yield* compileBaseSections(profile).pipe(
-            // @effect-diagnostics-next-line strictEffectProvide:off
-            Effect.provide(Layer.succeedContext(ctx)),
-          )
-
-          const dyn = sections.find((s) => s.id === "rp-dynamic-section")
-          expect(dyn?.content).toBe("dynamic-from-service")
-        }),
-      ).pipe(Effect.provide(sharedLayer)),
+  // C7 dropped this test: dynamic prompt sections were `DynamicPromptSection`,
+  // resolved by `compileBaseSections`. After C7 dynamic content lives on
+  // `Projection.prompt(value)` and is assembled per-turn by ProjectionRegistry,
+  // not by `compileBaseSections` (which only sees static sections). The
+  // equivalent service-yielding-projection behavior is exercised by
+  // `tests/extensions/projection-registry.test.ts`.
+  it.live("dynamicExtension resolves through ResolvedExtensions (smoke)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const profile = yield* resolveRuntimeProfile({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [dynamicExtension],
+        })
+        // Projection contributes through the projection registry, not
+        // compileBaseSections; assert the extension was wired in.
+        expect(profile.resolved.extensions.map((e) => e.manifest.id)).toContain(
+          "@gent/test-runtime-profile-dynamic",
+        )
+      }),
+    ).pipe(Effect.provide(sharedLayer)),
   )
 
   it.live("server-style + per-cwd-style assemblies produce equivalent registry + sections", () =>

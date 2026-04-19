@@ -1,6 +1,8 @@
 import type { Effect, Schema } from "effect"
 import type { ToolCallId } from "./ids"
 import type { ExtensionHostContext } from "./extension-host-context"
+import type { PermissionRule } from "./permission"
+import type { PromptSection } from "./prompt"
 
 // Tool Definition
 
@@ -33,6 +35,13 @@ export interface ToolDefinition<
   /** If true, tool requires an interactive session (human at the terminal).
    *  Filtered out in headless mode and subagent contexts. */
   readonly interactive?: boolean
+  /** Permission allow/deny rules gating execution. Folded into
+   *  `Capability.permissionRules` by the `tool()` smart constructor. */
+  readonly permissionRules?: ReadonlyArray<PermissionRule>
+  /** Static system-prompt section bundled with this tool. Folded into
+   *  `Capability.prompt` by the `tool()` smart constructor. For dynamic
+   *  prompt fragments, use a `Projection` with `prompt:`. */
+  readonly prompt?: PromptSection
   readonly params: Params
   readonly execute: (
     params: Schema.Schema.Type<Params>,

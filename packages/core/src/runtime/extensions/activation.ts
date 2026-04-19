@@ -12,9 +12,9 @@ import {
   extractCapabilities,
   extractExternalDrivers,
   extractModelDrivers,
-  extractPromptSections,
   extractMachine,
 } from "../../domain/contribution.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
@@ -269,7 +269,15 @@ export const collectValidationFailures = (
   collectScopedCollisions(extractAgents, (agent) => agent.name, "agent")
   collectScopedCollisions(extractModelDrivers, (driver) => driver.id, "model driver")
   collectScopedCollisions(extractExternalDrivers, (driver) => driver.id, "external driver")
-  collectScopedCollisions(extractPromptSections, (section) => section.id, "prompt section")
+  // C7: static prompt sections live on `Capability.prompt`. Collision check
+  // mirrors the legacy promptSection contribution's id-keyed dedup.
+  const extractCapabilityPrompts = (
+    cs: ReadonlyArray<Contribution>,
+  ): ReadonlyArray<PromptSection> =>
+    extractCapabilities(cs)
+      .map((c) => c.prompt)
+      .filter((p): p is PromptSection => p !== undefined)
+  collectScopedCollisions(extractCapabilityPrompts, (section) => section.id, "prompt section")
 
   // Model-audience capabilities MUST declare a non-empty description — the
   // string is sent to the LLM as part of the tool schema, so empty/missing

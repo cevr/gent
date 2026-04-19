@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool, OutputBuffer, saveFullOutput } from "@gent/core/extensions/api"
+import { defineTool, OutputBuffer, PermissionRule, saveFullOutput } from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
 
 // Bash Tool Error
@@ -108,6 +108,14 @@ export const BashTool = defineTool({
   promptGuidelines: [
     "Use for git, npm, and system commands — not file reads or searches",
     "Never use cat/head/tail/grep/find/ls when dedicated tools exist",
+  ],
+  permissionRules: [
+    new PermissionRule({
+      tool: "bash",
+      pattern: "git\\s+(add\\s+[-.]|push\\s+--force|reset\\s+--hard|clean\\s+-f)",
+      action: "deny",
+    }),
+    new PermissionRule({ tool: "bash", pattern: "rm\\s+-rf\\s+/", action: "deny" }),
   ],
   params: BashParams,
   execute: Effect.fn("BashTool.execute")(function* (params, ctx) {

@@ -16,8 +16,6 @@ import {
   defineResource,
   toolContribution,
   agentContribution,
-  permissionRuleContribution,
-  promptSectionContribution,
   commandContribution,
   pipelineContribution,
   type Contribution,
@@ -27,8 +25,6 @@ import {
   extractCapabilities,
   extractCommands,
   extractPipelines,
-  extractPermissionRules,
-  extractPromptSections,
   extractMachine,
   extractResources,
   extractExternalDrivers,
@@ -69,8 +65,6 @@ describe("defineExtension", () => {
       expect(extractResources(contributions)).toEqual([])
       expect(extractMachine(contributions)).toBeUndefined()
       expect(extractCommands(contributions)).toEqual([])
-      expect(extractPermissionRules(contributions)).toEqual([])
-      expect(extractPromptSections(contributions)).toEqual([])
       expect(extractExternalDrivers(contributions)).toEqual([])
       expect(extractPipelines(contributions)).toEqual([])
     }),
@@ -78,10 +72,14 @@ describe("defineExtension", () => {
 
   it.live("each kind round-trips into its corresponding extractor", () =>
     Effect.gen(function* () {
+      // C7: PermissionRule + PromptSection are now bundled on the Capability
+      // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
       const myTool = defineTool({
         name: "echo",
         description: "echo",
         params: Schema.Struct({}),
+        permissionRules: [new PermissionRule({ tool: "echo", action: "allow" })],
+        prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
       const myLayer = Layer.empty
@@ -90,8 +88,6 @@ describe("defineExtension", () => {
         contributions: () => [
           toolContribution(myTool),
           agentContribution(Agents.cowork),
-          permissionRuleContribution(new PermissionRule({ tool: "echo", action: "allow" })),
-          promptSectionContribution({ id: "rules", content: "rule one", priority: 50 }),
           commandContribution({
             name: "test",
             description: "test cmd",
@@ -120,9 +116,9 @@ describe("defineExtension", () => {
         c.audiences.includes("model"),
       )
       expect(modelCaps[0]?.id).toBe("echo")
+      expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
+      expect(modelCaps[0]?.prompt?.id).toBe("rules")
       expect(extractAgents(contributions)[0]?.name).toBe("cowork")
-      expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
-      expect(extractPromptSections(contributions)[0]?.id).toBe("rules")
       expect(extractCommands(contributions)[0]?.name).toBe("test")
       expect(extractPipelines(contributions)[0]?.hook).toBe("prompt.system")
       const resources = extractResources(contributions)

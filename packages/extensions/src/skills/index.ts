@@ -3,11 +3,13 @@ import { Machine, State as MState, Event as MEvent, Slot } from "effect-machine"
 import {
   defineExtension,
   defineResource,
-  promptSectionContribution,
+  projectionContribution,
+  ProjectionError,
   toolContribution,
+  type ProjectionContribution,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
-import { Skills, formatSkillsForPrompt } from "./skills.js"
+import { Skills, formatSkillsForPrompt, type Skill } from "./skills.js"
 import { SkillsTool } from "./skills-tool.js"
 import { SearchSkillsTool } from "./search-skills.js"
 import { SkillsProtocol, SkillEntry } from "./protocol.js"
@@ -94,6 +96,26 @@ const skillsActor: ResourceMachine<
   protocols: SkillsProtocol,
 }
 
+// ── Projection (dynamic prompt section, was promptSectionContribution.resolve) ──
+
+const SkillsProjection: ProjectionContribution<ReadonlyArray<Skill>, Skills> = {
+  id: "skills",
+  query: () =>
+    Effect.gen(function* () {
+      const skills = yield* Skills
+      return yield* skills
+        .list()
+        .pipe(
+          Effect.catchEager((e) =>
+            Effect.fail(new ProjectionError({ projectionId: "skills", reason: String(e) })),
+          ),
+        )
+    }),
+  prompt: (allSkills) => [
+    { id: "skills", priority: 80, content: formatSkillsForPrompt(allSkills) },
+  ],
+}
+
 // ── Extension ──
 
 export const SkillsExtension = defineExtension({
@@ -109,14 +131,6 @@ export const SkillsExtension = defineExtension({
     }),
     toolContribution(SkillsTool),
     toolContribution(SearchSkillsTool),
-    promptSectionContribution({
-      id: "skills",
-      priority: 80,
-      resolve: Effect.gen(function* () {
-        const skills = yield* Skills
-        const allSkills = yield* skills.list()
-        return formatSkillsForPrompt(allSkills)
-      }),
-    }),
+    projectionContribution(SkillsProjection),
   ],
 })

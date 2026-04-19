@@ -100,7 +100,7 @@ export {
   type AnyExtensionRequestMessage,
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
-export type { PromptSection, PromptSectionInput, DynamicPromptSection } from "../domain/prompt.js"
+export type { PromptSection } from "../domain/prompt.js"
 export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
 export {
   TurnError,
@@ -169,10 +169,7 @@ export {
   type PipelineKindContribution,
   type SubscriptionKindContribution,
   type CommandKindContribution,
-  type ModelDriverKindContribution,
-  type ExternalDriverKindContribution,
-  type PermissionRuleContribution,
-  type PromptSectionContribution,
+  type DriverKindContribution,
   type ProjectionKindContribution,
   type CapabilityKindContribution,
   filterByKind,
@@ -184,8 +181,6 @@ export {
   command as commandContribution,
   modelDriver as modelDriverContribution,
   externalDriver as externalDriverContribution,
-  permissionRule as permissionRuleContribution,
-  promptSection as promptSectionContribution,
   projection as projectionContribution,
   pulseSubscription as pulseSubscriptionContribution,
   query as queryContribution,
