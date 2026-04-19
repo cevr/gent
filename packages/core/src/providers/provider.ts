@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId } from "../domain/ids.js"
+import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
 import type { ProviderAuthInfo, ProviderHints } from "../domain/driver.js"
 import {
@@ -128,32 +129,38 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 
 // ── Stream Chunk Types ──
 
-export class TextChunk extends Schema.TaggedClass<TextChunk>()("TextChunk", {
-  text: Schema.String,
-}) {}
+export const StreamChunk = TaggedEnumClass("StreamChunk", {
+  TextChunk: {
+    text: Schema.String,
+  },
+  ToolCallChunk: {
+    toolCallId: ToolCallId,
+    toolName: Schema.String,
+    input: Schema.Unknown,
+  },
+  ReasoningChunk: {
+    text: Schema.String,
+  },
+  FinishChunk: {
+    finishReason: Schema.String,
+    usage: Schema.optional(
+      Schema.Struct({
+        inputTokens: Schema.Number,
+        outputTokens: Schema.Number,
+      }),
+    ),
+  },
+})
+export type StreamChunk = Schema.Schema.Type<typeof StreamChunk>
 
-export class ToolCallChunk extends Schema.TaggedClass<ToolCallChunk>()("ToolCallChunk", {
-  toolCallId: ToolCallId,
-  toolName: Schema.String,
-  input: Schema.Unknown,
-}) {}
-
-export class ReasoningChunk extends Schema.TaggedClass<ReasoningChunk>()("ReasoningChunk", {
-  text: Schema.String,
-}) {}
-
-export class FinishChunk extends Schema.TaggedClass<FinishChunk>()("FinishChunk", {
-  finishReason: Schema.String,
-  usage: Schema.optional(
-    Schema.Struct({
-      inputTokens: Schema.Number,
-      outputTokens: Schema.Number,
-    }),
-  ),
-}) {}
-
-export const StreamChunk = Schema.Union([TextChunk, ToolCallChunk, ReasoningChunk, FinishChunk])
-export type StreamChunk = typeof StreamChunk.Type
+export const TextChunk = StreamChunk.TextChunk
+export type TextChunk = (typeof StreamChunk)["TextChunk"]["Type"]
+export const ToolCallChunk = StreamChunk.ToolCallChunk
+export type ToolCallChunk = (typeof StreamChunk)["ToolCallChunk"]["Type"]
+export const ReasoningChunk = StreamChunk.ReasoningChunk
+export type ReasoningChunk = (typeof StreamChunk)["ReasoningChunk"]["Type"]
+export const FinishChunk = StreamChunk.FinishChunk
+export type FinishChunk = (typeof StreamChunk)["FinishChunk"]["Type"]
 
 // ── Provider Request ──
 

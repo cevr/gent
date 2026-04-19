@@ -3,6 +3,7 @@ import type * as EffectNs from "effect/Effect"
 import { ToolCallId } from "./ids.js"
 import type { BranchId, SessionId } from "./ids.js"
 import { ModelId } from "./model"
+import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Agent definitions
 
@@ -29,19 +30,25 @@ export type AgentPersistence = typeof AgentPersistence.Type
 // `{ _tag: "external", id }` to route through an `ExternalDriverContribution`
 // (e.g. ACP agents) instead of a model provider.
 
-export class ModelDriverRef extends Schema.TaggedClass<ModelDriverRef>()("model", {
-  /** Optional model-driver id override. When omitted, the loop derives it from
-   *  the agent's model id segment. */
-  id: Schema.optional(Schema.String),
-}) {}
+export const DriverRef = TaggedEnumClass("DriverRef", {
+  model: {
+    /** Optional model-driver id override. When omitted, the loop derives it
+     *  from the agent's model id segment. */
+    id: Schema.optional(Schema.String),
+  },
+  external: {
+    /** External driver id — must match a registered
+     *  `ExternalDriverContribution.id`. */
+    id: Schema.String,
+  },
+})
+export type DriverRef = Schema.Schema.Type<typeof DriverRef>
 
-export class ExternalDriverRef extends Schema.TaggedClass<ExternalDriverRef>()("external", {
-  /** External driver id — must match a registered `ExternalDriverContribution.id`. */
-  id: Schema.String,
-}) {}
-
-export const DriverRef = Schema.Union([ModelDriverRef, ExternalDriverRef])
-export type DriverRef = typeof DriverRef.Type
+// Per-variant aliases — same class identity, convenience names.
+export const ModelDriverRef = DriverRef.model
+export type ModelDriverRef = (typeof DriverRef)["model"]["Type"]
+export const ExternalDriverRef = DriverRef.external
+export type ExternalDriverRef = (typeof DriverRef)["external"]["Type"]
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName

@@ -1,23 +1,30 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { AuthStorage } from "./auth-storage"
+import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
-// Auth info
+// Auth info — `_tag` is the substrate discriminator; the legacy `type:`
+// payload field is preserved on each variant for backward compatibility
+// with auth files written before the substrate migration.
 
-export class AuthApi extends Schema.TaggedClass<AuthApi>()("AuthApi", {
-  type: Schema.Literal("api"),
-  key: Schema.String,
-}) {}
+export const AuthInfo = TaggedEnumClass("AuthInfo", {
+  AuthApi: {
+    type: Schema.Literal("api"),
+    key: Schema.String,
+  },
+  AuthOauth: {
+    type: Schema.Literal("oauth"),
+    access: Schema.String,
+    refresh: Schema.String,
+    expires: Schema.Number,
+    accountId: Schema.optional(Schema.String),
+  },
+})
+export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
 
-export class AuthOauth extends Schema.TaggedClass<AuthOauth>()("AuthOauth", {
-  type: Schema.Literal("oauth"),
-  access: Schema.String,
-  refresh: Schema.String,
-  expires: Schema.Number,
-  accountId: Schema.optional(Schema.String),
-}) {}
-
-export const AuthInfo = Schema.Union([AuthApi, AuthOauth])
-export type AuthInfo = typeof AuthInfo.Type
+export const AuthApi = AuthInfo.AuthApi
+export type AuthApi = (typeof AuthInfo)["AuthApi"]["Type"]
+export const AuthOauth = AuthInfo.AuthOauth
+export type AuthOauth = (typeof AuthInfo)["AuthOauth"]["Type"]
 
 export const AuthType = Schema.Literals(["api", "oauth"])
 export type AuthType = typeof AuthType.Type
