@@ -165,11 +165,12 @@ Builtins are individual `.client.{ts,tsx}` files in `src/extensions/builtins/`:
 | `builtins/skills.client.ts`       | `@gent/skills-ui`         | `$` autocomplete: skills popup                 |
 | `builtins/files.client.ts`        | `@gent/files-ui`          | `@` autocomplete: file search popup            |
 
-Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader.ts` → `resolve.ts`
+Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → `loader-boundary.ts` → `resolve.ts`
 
 - Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
-- User/project extensions discovered via filesystem scan (`discovery.ts`)
-- `loader.ts` accepts `disabled` list — skips `setup()` for disabled extensions
+- User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
+- `loader-boundary.ts` accepts `disabled` list — skips `setup()` for disabled extensions
+- Loader supports two setup shapes (legacy sync `(ctx) => Array`, Effect-typed `Effect<Array, E, R>`); Effect setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientSnapshots`
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - `useExtensionUI()` provides `sessionId()`, `branchId()`, `snapshots()`
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
