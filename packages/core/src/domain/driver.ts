@@ -36,6 +36,7 @@ import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
 import type { AnyToolDefinition } from "./tool.js"
+import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Note: TurnExecutor is defined below alongside the driver primitives — no
 // external import of `TurnExecutor` is needed.
@@ -170,50 +171,62 @@ export interface ModelDriverContribution {
 // driver primitive. Pre-C9 they were a parallel `domain/turn-executor.ts`
 // primitive — collapsed into the driver module to remove the parallel API.
 
-export class TextDelta extends Schema.TaggedClass<TextDelta>()("text-delta", {
-  text: Schema.String,
-}) {}
-
-export class ReasoningDelta extends Schema.TaggedClass<ReasoningDelta>()("reasoning-delta", {
-  text: Schema.String,
-}) {}
-
-export class ToolStarted extends Schema.TaggedClass<ToolStarted>()("tool-started", {
-  toolCallId: Schema.String,
-  toolName: Schema.String,
-  input: Schema.optional(Schema.Unknown),
-}) {}
-
-export class ToolCompleted extends Schema.TaggedClass<ToolCompleted>()("tool-completed", {
-  toolCallId: Schema.String,
-  output: Schema.optional(Schema.Unknown),
-}) {}
-
-export class ToolFailed extends Schema.TaggedClass<ToolFailed>()("tool-failed", {
-  toolCallId: Schema.String,
-  error: Schema.String,
-}) {}
-
 export const TurnEventUsage = Schema.Struct({
   inputTokens: Schema.optional(Schema.Number),
   outputTokens: Schema.optional(Schema.Number),
 })
 export type TurnEventUsage = typeof TurnEventUsage.Type
 
-export class Finished extends Schema.TaggedClass<Finished>()("finished", {
-  stopReason: Schema.String,
-  usage: Schema.optional(TurnEventUsage),
-}) {}
+/**
+ * `TurnEvent` — what an external driver streams back per turn.
+ *
+ * Authored via `TaggedEnumClass` (S0 substrate). Validates the factory's
+ * handling of non-identifier tag names (kebab-case): variants are accessed
+ * as `TurnEvent["text-delta"]` rather than `TurnEvent.textDelta`. Pattern
+ * matching via `_tag === "text-delta"` or `Match.tag` works unchanged.
+ */
+export const TurnEvent = TaggedEnumClass("TurnEvent", {
+  "text-delta": {
+    text: Schema.String,
+  },
+  "reasoning-delta": {
+    text: Schema.String,
+  },
+  "tool-started": {
+    toolCallId: Schema.String,
+    toolName: Schema.String,
+    input: Schema.optional(Schema.Unknown),
+  },
+  "tool-completed": {
+    toolCallId: Schema.String,
+    output: Schema.optional(Schema.Unknown),
+  },
+  "tool-failed": {
+    toolCallId: Schema.String,
+    error: Schema.String,
+  },
+  finished: {
+    stopReason: Schema.String,
+    usage: Schema.optional(TurnEventUsage),
+  },
+})
+export type TurnEvent = Schema.Schema.Type<typeof TurnEvent>
 
-export const TurnEvent = Schema.Union([
-  TextDelta,
-  ReasoningDelta,
-  ToolStarted,
-  ToolCompleted,
-  ToolFailed,
-  Finished,
-])
-export type TurnEvent = typeof TurnEvent.Type
+// Per-variant re-exports — same class identity as `TurnEvent["text-delta"]`,
+// exposed at module scope for ergonomic imports. The kebab-case wire tags
+// stay; the JS-friendly names below are the natural identifier form.
+export const TextDelta = TurnEvent["text-delta"]
+export type TextDelta = (typeof TurnEvent)["text-delta"]["Type"]
+export const ReasoningDelta = TurnEvent["reasoning-delta"]
+export type ReasoningDelta = (typeof TurnEvent)["reasoning-delta"]["Type"]
+export const ToolStarted = TurnEvent["tool-started"]
+export type ToolStarted = (typeof TurnEvent)["tool-started"]["Type"]
+export const ToolCompleted = TurnEvent["tool-completed"]
+export type ToolCompleted = (typeof TurnEvent)["tool-completed"]["Type"]
+export const ToolFailed = TurnEvent["tool-failed"]
+export type ToolFailed = (typeof TurnEvent)["tool-failed"]["Type"]
+export const Finished = TurnEvent.finished
+export type Finished = (typeof TurnEvent)["finished"]["Type"]
 
 /** Failure raised by an external driver while streaming a turn. */
 export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {
