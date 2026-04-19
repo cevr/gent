@@ -21,6 +21,7 @@ import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
 import type { AnyResourceContribution, AnyResourceMachine } from "./resource.js"
 import type { AnyToolDefinition } from "./tool.js"
+import { Schema } from "effect"
 
 // ── Per-kind contribution shapes ──
 
@@ -132,7 +133,49 @@ export type ContributionKind = Contribution["_kind"]
 
 // ── Smart constructors ──
 
-export const tool = (t: AnyToolDefinition): ToolContribution => ({ _kind: "tool", tool: t })
+/**
+ * C4.4 — `tool(...)` lowers into a `Capability(audiences:["model"])` rather
+ * than the legacy `ToolContribution`. Authors continue to write
+ * `defineTool({...})` and `toolContribution(myTool)`; the contribution kind
+ * surfacing in `LoadedExtension.contributions` is now `"capability"`. The
+ * registry's tool-bridge (`capabilityToTool`) re-projects it for `ToolRunner`
+ * until C4.5 deletes the legacy `ToolDefinition` type entirely.
+ *
+ * Intent derivation: tools today don't carry a read/write declaration. We
+ * default to `intent: "write"` because LLM-invoked tools usually mutate
+ * something; tools that opt into `idempotent: true` flip to `intent: "read"`
+ * (idempotent ⇒ replayable ⇒ read-shaped — this matches the existing
+ * registry-level lint rule that forbids write services in read-only handlers).
+ */
+const toolToCapability = (t: AnyToolDefinition): AnyCapabilityContribution => ({
+  id: t.name,
+  description: t.description,
+  audiences: ["model"],
+  intent: t.idempotent === true ? "read" : "write",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  input: t.params as Schema.Schema<unknown>,
+  // ToolRunner consumes raw JSON output; the bridge encodes through
+  // `Schema.Unknown` (no-op). Tools that need typed-output validation
+  // should declare a Capability directly with a non-Unknown `output`.
+  output: Schema.Unknown,
+  ...(t.resources !== undefined ? { resources: t.resources } : {}),
+  ...(t.idempotent !== undefined ? { idempotent: t.idempotent } : {}),
+  ...(t.promptSnippet !== undefined ? { promptSnippet: t.promptSnippet } : {}),
+  ...(t.promptGuidelines !== undefined ? { promptGuidelines: t.promptGuidelines } : {}),
+  ...(t.interactive !== undefined ? { interactive: t.interactive } : {}),
+  // The capability boundary types `effect`'s ctx as ModelCapabilityContext,
+  // which structurally extends ToolContext (the wider one). Tools'
+  // `execute(params, ctx: ToolContext)` therefore satisfies the capability
+  // signature at the contravariant arg.
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at the tool→capability boundary
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  effect: t.execute as AnyCapabilityContribution["effect"],
+})
+
+export const tool = (t: AnyToolDefinition): CapabilityKindContribution => ({
+  _kind: "capability",
+  capability: toolToCapability(t),
+})
 
 export const agent = (a: AgentDefinition): AgentContribution => ({ _kind: "agent", agent: a })
 
