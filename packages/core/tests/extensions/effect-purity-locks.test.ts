@@ -19,7 +19,10 @@ import {
   defineResource,
   defineSubscription,
   defineTool,
+  pipeline,
   pipelineContribution,
+  resource,
+  subscription,
   subscriptionContribution,
   tool,
 } from "@gent/core/extensions/api"
@@ -99,22 +102,25 @@ describe("Effect-purity locks (compile-time)", () => {
           }),
         ),
       ],
-      pipelines: [definePipeline("prompt.system", (i, next) => next(i))],
+      pipelines: [pipeline(definePipeline("prompt.system", (i, next) => next(i)))],
+      subscriptions: [subscription(defineSubscription("turn.after", "isolate", () => Effect.void))],
       resources: [
-        defineResource({
-          scope: "process",
-          layer: Layer.empty,
-          start: Effect.void,
-          stop: Effect.void,
-          subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
-          schedule: [
-            {
-              id: "j",
-              cron: "0 0 * * *",
-              target: { kind: "headless-agent", agent: "cowork" as never, prompt: "hi" },
-            },
-          ],
-        }),
+        resource(
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            start: Effect.void,
+            stop: Effect.void,
+            subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
+            schedule: [
+              {
+                id: "j",
+                cron: "0 0 * * *",
+                target: { kind: "headless-agent", agent: "cowork" as never, prompt: "hi" },
+              },
+            ],
+          }),
+        ),
       ],
     })
     expect(ext.manifest.id).toBe("purity-positive")

@@ -197,6 +197,7 @@ export {
   capability,
   defineResource,
   defineLifecycleResource,
+  resource,
 } from "../domain/contribution.js"
 // Legacy aliases — many existing call sites use the `*Contribution` suffix.
 // After C8 these are pure identity wrappers and could be dropped, but the

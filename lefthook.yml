@@ -6,6 +6,8 @@ pre-commit:
       stage_fixed: true
     - name: typecheck
       run: bun run typecheck
+    - name: typecheck:locks
+      run: bun run typecheck:locks
     - name: build
       run: bun run build
     - name: test

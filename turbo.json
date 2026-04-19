@@ -13,6 +13,20 @@
       ],
       "outputs": []
     },
+    "typecheck:locks": {
+      "dependsOn": ["^typecheck"],
+      "inputs": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tests/**/*.ts",
+        "tests/**/*.tsx",
+        "tsconfig.json",
+        "tsconfig.locks.json",
+        "../../tsconfig.lsp.json",
+        "package.json"
+      ],
+      "outputs": []
+    },
     "build": {
       "dependsOn": ["^build"],
       "inputs": [

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.lsp.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "tests/runtime/scope-brands.test.ts",
+    "tests/extensions/effect-purity-locks.test.ts"
+  ]
+}

@@ -25,7 +25,7 @@ import type { AnyMutationContribution } from "./mutation.js"
 import type { AnyPipelineContribution, PipelineContribution, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyQueryContribution } from "./query.js"
-import type { AnyResourceContribution } from "./resource.js"
+import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
 import type {
   AnySubscriptionContribution,
   SubscriptionContribution,
@@ -212,3 +212,18 @@ export const capability = (c: AnyCapabilityContribution): AnyCapabilityContribut
 // `resources` bucket. After C8 they no longer set a `_kind: "resource"`
 // field; the bucket IS the discrimination.
 export { defineResource, defineLifecycleResource } from "./resource.js"
+
+/**
+ * Identity smart constructor for the Resource primitive. Generic over
+ * `<A, S, R, E>` so authors keep their typed Resource shape; the leaf is
+ * widened to `AnyResourceContribution` at the bucket boundary. Mirrors
+ * {@link pipeline} and {@link subscription} — the same variance hole that
+ * forces those wideners forces this one too: `Layer.Layer<A, E, R>` has a
+ * contravariant `R` channel, so a narrowly-typed `Layer<never, never, ...>`
+ * is not assignable to `Layer<any, any, any>` without an identity widener.
+ */
+export const resource = <A, S extends ResourceScope, R, E>(
+  r: ResourceContribution<A, S, R, E>,
+): AnyResourceContribution =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  r as unknown as AnyResourceContribution
