@@ -446,12 +446,7 @@ const plugin: Plugin = {
         // `Effect.runPromise` with a closed-over `R = never` Effect. Migration
         // tracked in the v2 redesign plan; remove from this list when the file
         // is renamed or split into a `*-boundary.ts`.
-        const KNOWN_BOUNDARY_FILES = [
-          // SDK client and supervisor — Promise-returning public API
-          "packages/sdk/src/client.ts",
-          "packages/sdk/src/local-supervisor.ts",
-          "packages/sdk/src/supervisor.ts",
-        ]
+        const KNOWN_BOUNDARY_FILES = []
         if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
 
         // Effect static methods that exit the Effect world via Promise/fiber
@@ -634,6 +629,8 @@ const plugin: Plugin = {
     "no-r-equals-never-comment": {
       create(context) {
         const filename = context.filename
+        // Allow inside any *-boundary.ts file (the convention for SDK edges)
+        if (/-boundary\.ts$/.test(filename)) return {}
         // Allow the lint plugin file itself (rule definition references the matched pattern in messages)
         if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
         // Allow the SdkBoundary domain module itself (its docstring describes the migration target)
@@ -641,20 +638,11 @@ const plugin: Plugin = {
         // Allow tests
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
-        // Known SDK boundaries pending migration to *-boundary.ts file naming —
-        // same allow-list as no-runpromise-outside-boundary. Each entry is removed
-        // as the file migrates to the *-boundary.ts pattern.
-        const KNOWN_BOUNDARY_FILES = [
-          "packages/extensions/src/anthropic/index.ts",
-          "packages/extensions/src/anthropic/oauth.ts",
-          "packages/extensions/src/openai/index.ts",
-          "packages/extensions/src/acp-agents/executor.ts",
-          "packages/sdk/src/client.ts",
-          "packages/sdk/src/local-supervisor.ts",
-          "packages/sdk/src/supervisor.ts",
-          "apps/tui/src/hooks/use-session-feed.ts",
-        ]
-        if (KNOWN_BOUNDARY_FILES.some((f) => filename.endsWith(f))) return {}
+        // The SDK-boundary allow-list previously sat here as well. After B11.2
+        // every Promise edge lives behind a `*-boundary.ts` file (caught by
+        // the `-boundary.ts$` allow above), so the list is empty. New
+        // boundary helpers should follow the same convention rather than
+        // re-introduce an allow-list.
         return {
           Program(node) {
             // Comments live on `sourceCode.getAllComments()` in the oxlint plugin
@@ -831,14 +819,6 @@ const plugin: Plugin = {
           "packages/extensions/src/librarian/git-reader.ts",
           // Optional native filesystem indexer: same fallback rationale as above.
           "packages/core/src/runtime/file-index/native-adapter.ts",
-          // SHORT-TERM exception: lazy import to break a circular dependency
-          // between `runtime/` and `server/` (this file lives in `runtime/`
-          // but needs `SessionCommands` from `server/`, and
-          // `server/session-commands.ts` already imports `runtime/`).
-          // FOLLOW-UP: extract the deletion contract behind a runtime/domain
-          // service so this can become a static import. Allow-list entry
-          // documents the debt — remove it when the cycle is broken.
-          "packages/core/src/runtime/make-extension-host-context.ts",
         ]
         if (DYNAMIC_IMPORT_ALLOWED.some((f) => filename.endsWith(f))) return {}
 

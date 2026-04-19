@@ -22,6 +22,7 @@ import type { StorageService } from "../storage/sqlite-storage.js"
 import type { SearchStorageService } from "../storage/search-storage.js"
 import { Message, Session, Branch } from "../domain/message.js"
 import type { EventPublisherService } from "../domain/event-publisher.js"
+import { SessionDeleter } from "../domain/session-deleter.js"
 import { estimateContextPercent } from "./context-estimation.js"
 import {
   SessionNameUpdated,
@@ -335,13 +336,12 @@ export const makeExtensionHostContext = (
         if (sessionId === runInfo.sessionId) {
           return yield* Effect.die("Cannot delete the current session from within it")
         }
-        // Prefer SessionCommands for full cleanup (terminate actors, events, etc.)
-        const { SessionCommands } = yield* Effect.promise(
-          () => import("../server/session-commands.js"),
-        )
-        const cmds = yield* Effect.serviceOption(SessionCommands)
-        if (cmds._tag === "Some") {
-          yield* cmds.value.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void))
+        // Prefer SessionDeleter (server-tier cleanup: terminate actors,
+        // events, etc.); fall back to bare storage deletion when the
+        // server is absent (e.g., headless or test contexts).
+        const deleter = yield* Effect.serviceOption(SessionDeleter)
+        if (deleter._tag === "Some") {
+          yield* deleter.value.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void))
         } else {
           yield* deps.storage.deleteSession(sessionId)
         }

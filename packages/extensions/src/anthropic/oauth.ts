@@ -422,7 +422,7 @@ export const createAnthropicKeychainFetch = (
     }
 
     // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-returning
-    // function (typeof fetch). Promise edge lives in `runtime-boundary.ts`.
+    // function (typeof fetch). Promise edge lives in `fetch-boundary.ts`.
     return runAnthropicFetcher(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
   }
   return Object.assign(fetcher, {

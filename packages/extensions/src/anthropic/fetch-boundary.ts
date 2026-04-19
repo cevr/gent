@@ -14,6 +14,6 @@
 import { Effect } from "effect"
 
 /** Run an Anthropic-fetcher Effect and surface its `Promise<Response>`. */
-export const runAnthropicFetcher = <E>(
-  effect: Effect.Effect<Response, E, never>,
+export const runAnthropicFetcher = (
+  effect: Effect.Effect<Response, never, never>,
 ): Promise<Response> => Effect.runPromise(effect)

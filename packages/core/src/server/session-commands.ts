@@ -1,6 +1,7 @@
 import { DateTime, Effect, Layer, Context, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { SessionDeleter } from "../domain/session-deleter.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../runtime/agent/agent-loop.js"
@@ -373,6 +374,27 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           },
         ),
       } satisfies SessionCommandsService
+    }),
+  )
+
+  /**
+   * Domain-tier deleter Layer — projects `SessionCommands.deleteSession`
+   * onto the `SessionDeleter` Tag so the runtime can call into the
+   * destructive cleanup path without importing `server/`. See
+   * `domain/session-deleter.ts` for the inversion rationale.
+   */
+  static SessionDeleterLive = Layer.effect(
+    SessionDeleter,
+    Effect.gen(function* () {
+      const cmds = yield* SessionCommands
+      return {
+        // SessionDeleter is the domain-tier interface — failures swallowed
+        // here so callers (extension host context) don't need to know the
+        // server-tier error channel. The runtime caller catches its own
+        // error tail via `Effect.catchEager` regardless.
+        deleteSession: (sessionId) =>
+          cmds.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void)),
+      }
     }),
   )
 }

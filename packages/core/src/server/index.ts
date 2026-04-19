@@ -8,6 +8,10 @@ import { SessionSubscriptions } from "./session-subscriptions.js"
 const BaseAppServicesLive = Layer.mergeAll(
   SessionQueries.Live,
   SessionCommands.Live,
+  // Project SessionCommands.deleteSession onto the domain-tier SessionDeleter
+  // Tag so the runtime's extension host context can call into destructive
+  // cleanup without importing from `server/`.
+  SessionCommands.SessionDeleterLive.pipe(Layer.provideMerge(SessionCommands.Live)),
   SessionEvents.Live,
 )
 const SubscriptionServicesLive = SessionSubscriptions.Live.pipe(

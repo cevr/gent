@@ -7,6 +7,7 @@ import {
   type GentLifecycle,
 } from "@gent/core/server/transport-contract.js"
 import { makeNamespacedClient, type GentNamespacedClient } from "./namespaced-client.js"
+import { runSupervisorRestart } from "./supervisor-boundary.js"
 
 type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
@@ -173,9 +174,7 @@ export const startLocalSupervisor = <E, R>(
 
       const restart = transitionLock.withPermits(1)(
         Effect.promise(() =>
-          Effect.runPromiseWith(supervisorServices)(
-            restartInternal.pipe(Effect.provideService(Scope.Scope, supervisorScope)),
-          ),
+          runSupervisorRestart(supervisorServices, supervisorScope, restartInternal),
         ),
       )
 

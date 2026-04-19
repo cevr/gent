@@ -189,17 +189,11 @@ export function extractToolCallsWithResults(
 // ---------------------------------------------------------------------------
 // Internal: build runtime from captured services + lifecycle
 // ---------------------------------------------------------------------------
+//
+// `makeRuntime` lives in `runtime-boundary.ts` — that module owns the
+// Effect→Promise edge for `GentRuntime.run`.
 
-function makeRuntime(services: Context.Context<unknown>, lifecycle: GentLifecycle): GentRuntime {
-  return {
-    cast: (effect) => {
-      Effect.runForkWith(services)(effect)
-    },
-    fork: (effect) => Effect.runForkWith(services)(effect),
-    run: (effect) => Effect.runPromiseWith(services)(effect),
-    lifecycle,
-  }
-}
+import { makeGentRuntime as makeRuntime } from "./runtime-boundary.js"
 
 // ---------------------------------------------------------------------------
 // Static lifecycle for non-supervised connections

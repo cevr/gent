@@ -1,6 +1,7 @@
 import { Clock, Effect, Schema, type Scope } from "effect"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
+import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
 
 export class WorkerSupervisorError extends Schema.TaggedErrorClass<WorkerSupervisorError>()(
   "@gent/sdk/WorkerSupervisorError",
@@ -383,8 +384,12 @@ export const startWorkerSupervisor = (
             return
           }
 
-          void Effect.runPromiseExit(
-            restartInternal({ exitCode: launched.proc.exitCode, previousPid: launched.proc.pid }),
+          runSupervisorCrashRestart(
+            supervisorServices,
+            restartInternal({
+              exitCode: launched.proc.exitCode,
+              previousPid: launched.proc.pid,
+            }),
           )
         })
       })
@@ -443,7 +448,8 @@ export const startWorkerSupervisor = (
           ? Math.min(BACKOFF_BASE_MS * 2 ** (restartTimestamps.length - 1), BACKOFF_MAX_MS)
           : 0
 
-        restartPromise = Effect.runPromiseWith(supervisorServices)(
+        restartPromise = runSupervisorBackoffRestart(
+          supervisorServices,
           Effect.gen(function* () {
             yield* Effect.sleep(`${backoffMs} millis`)
             const proc = current
