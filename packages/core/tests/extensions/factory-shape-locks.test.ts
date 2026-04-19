@@ -13,7 +13,16 @@
 
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Schema } from "effect"
-import { action, type ReadOnly, ReadOnlyBrand, request, tool } from "@gent/core/extensions/api"
+import {
+  action,
+  type ReadOnly,
+  ReadOnlyBrand,
+  type ReadRequestInput,
+  request,
+  tool,
+  type ToolInput,
+  type WriteRequestInput,
+} from "@gent/core/extensions/api"
 
 // A representative WRITE-capable service tag (no `ReadOnly` brand).
 class WriteCapableService extends Context.Service<
@@ -50,31 +59,32 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("tool({...}) rejects `surface` field (action-only)", () => {
-    // Overload resolution fails: new `ToolInput` doesn't accept
-    // `surface` (action-only field), and legacy `ToolDefinition`
-    // requires `name` not `id`. So neither matches.
-    tool({
-      // @ts-expect-error
+    // Pin the type via `satisfies ToolInput` so neither tsc nor tsgo
+    // falls through to the legacy `ToolDefinition` overload. The
+    // excess-property error then lands at the offending field for both
+    // compilers (TS2353).
+    const _badInput = {
       id: "bad-tool",
       description: "x",
       params: NoInput,
+      // @ts-expect-error — `surface` is an action-only field
       surface: "slash",
       execute: () => Effect.succeed("x"),
-    })
+    } satisfies ToolInput
+    void _badInput
     expect(true).toBe(true)
   })
 
   test("tool({...}) rejects `intent` field (request-only)", () => {
-    // Overload resolution fails: new `ToolInput` doesn't accept
-    // `intent` (request-only field).
-    tool({
-      // @ts-expect-error
+    const _badInput = {
       id: "bad-tool",
       description: "x",
       params: NoInput,
+      // @ts-expect-error — `intent` is a request-only field
       intent: "read",
       execute: () => Effect.succeed("x"),
-    })
+    } satisfies ToolInput
+    void _badInput
     expect(true).toBe(true)
   })
 
@@ -95,22 +105,24 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("request({ intent: 'read' }) rejects write-capable Tag in R", () => {
-    // Write-capable Tag fails the `R extends ReadOnlyTag` constraint on
-    // the read overload; overload resolution falls through to the write
-    // overload which expects `intent: "write"`, hence the literal mismatch.
-    request({
+    // Pin to ReadRequestInput so overload resolution doesn't fall
+    // through to the write overload. The R-channel constraint then
+    // fails at the execute property because WriteCapableService lacks
+    // ReadOnlyBrand.
+    const _badInput = {
       id: "bad-read",
-      // @ts-expect-error
-      intent: "read",
+      intent: "read" as const,
       input: NoInput,
       output: StringOutput,
       execute: () =>
+        // @ts-expect-error — WriteCapableService lacks ReadOnlyBrand
         Effect.gen(function* () {
           const svc = yield* WriteCapableService
           yield* svc.write()
           return "x"
         }),
-    })
+    } satisfies ReadRequestInput<unknown, string, never>
+    void _badInput
     expect(true).toBe(true)
   })
 
@@ -132,15 +144,16 @@ describe("Capability factory-shape locks (compile-time)", () => {
   })
 
   test("request({...}) rejects `params` field (tool-only)", () => {
-    request({
+    const _badInput = {
       id: "bad-request",
-      intent: "write",
+      intent: "write" as const,
       // @ts-expect-error — `params` belongs to tool(), not request()
       params: NoInput,
       input: NoInput,
       output: StringOutput,
       execute: () => Effect.succeed("x"),
-    })
+    } satisfies WriteRequestInput<unknown, string, never>
+    void _badInput
     expect(true).toBe(true)
   })
 

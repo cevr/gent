@@ -206,12 +206,11 @@ export {
 // + `ToolDefinition` interface are deleted in B11.5d.
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
-export { tool, type ToolInput } from "../domain/capability/tool.js"
+export { tool, type ToolCapabilityContext, type ToolInput } from "../domain/capability/tool.js"
 export {
   request,
   type ReadRequestInput,
   type WriteRequestInput,
-  type RequestInput,
 } from "../domain/capability/request.js"
 export { action, type ActionInput, type ActionSurface } from "../domain/capability/action.js"
 export {

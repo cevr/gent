@@ -3,8 +3,7 @@
  */
 
 import { Effect, Layer, Schema } from "effect"
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
-import type { ModelCapabilityContext } from "@gent/core/extensions/api"
+import { action, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
@@ -22,29 +21,34 @@ export const ExecutorExtension = defineExtension({
   capabilities: [
     tool(ExecuteTool),
     tool(ResumeTool),
-    // Slash commands as capabilities — `audiences: ["human-slash"]` keeps
-    // them surfaced in the slash dispatcher; `intent: "write"` reflects that
-    // they steer the executor sidecar lifecycle.
-    {
+    // Slash commands authored through the `action()` factory.
+    // `surface: "slash"` derives `audiences: ["human-slash"]`, and
+    // `public: true` adds `"transport-public"` so non-TUI clients
+    // (SDK, future web UI) can also invoke them.
+    action({
       id: "executor-start",
-      audiences: ["human-slash", "transport-public"],
-      intent: "write",
+      name: "Executor: Start",
+      description: "Connect to the configured Executor endpoint.",
+      surface: "slash",
+      public: true,
       promptSnippet: "Connect to the configured Executor endpoint.",
       input: Schema.String,
       output: Schema.Void,
-      effect: (_args: string, extCtx: ModelCapabilityContext) =>
+      execute: (_args, extCtx) =>
         extCtx.extension.send(ExecutorProtocol.Connect({ cwd: extCtx.cwd })).pipe(Effect.orDie),
-    },
-    {
+    }),
+    action({
       id: "executor-stop",
-      audiences: ["human-slash", "transport-public"],
-      intent: "write",
+      name: "Executor: Stop",
+      description: "Disconnect from the Executor sidecar.",
+      surface: "slash",
+      public: true,
       promptSnippet: "Disconnect from the Executor sidecar.",
       input: Schema.String,
       output: Schema.Void,
-      effect: (_args: string, extCtx: ModelCapabilityContext) =>
+      execute: (_args, extCtx) =>
         extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
-    },
+    }),
   ],
   // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
   // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.

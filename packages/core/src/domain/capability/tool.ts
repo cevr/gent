@@ -23,9 +23,19 @@
 
 import { type Effect, Schema } from "effect"
 import type { AnyCapabilityContribution, ModelCapabilityContext } from "../capability.js"
+import type { ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
 import type { AnyToolDefinition } from "../tool.js"
+
+/** Context passed to `tool({...}).execute`. Same shape as the wide
+ *  `ModelCapabilityContext` but with `toolCallId` narrowed to required.
+ *  Tools are always invoked from the agent loop with a real call id;
+ *  the optional shape on `CapabilityCoreContext` only exists for the
+ *  audience-neutral case where no tool call is in flight. */
+export interface ToolCapabilityContext extends ModelCapabilityContext {
+  readonly toolCallId: ToolCallId
+}
 
 /** Author-facing input to `tool(...)`. Mirrors the LLM-tool fields without
  *  the `audiences[]` / `intent` flag matrix.
@@ -71,11 +81,12 @@ export interface ToolInput<
   /** Static system-prompt section bundled with this tool. For dynamic
    *  prompt fragments (resolved per-turn from services), use a `Projection`. */
   readonly prompt?: PromptSection
-  /** The tool body. Receives decoded `params` and a `ModelCapabilityContext`
-   *  (the wide host context — subagents, interaction, turn-control all reachable). */
+  /** The tool body. Receives decoded `params` and a `ToolCapabilityContext`
+   *  (the wide host context — subagents, interaction, turn-control all reachable —
+   *  with `toolCallId` narrowed to required). */
   readonly execute: (
     params: Schema.Schema.Type<Params>,
-    ctx: ModelCapabilityContext,
+    ctx: ToolCapabilityContext,
   ) => Effect.Effect<Result, Error, Deps>
 }
 

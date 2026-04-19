@@ -71,14 +71,9 @@ export interface WriteRequestInput<Input = unknown, Output = unknown, R = never>
   ) => Effect.Effect<Output, CapabilityError, R>
 }
 
-/** Discriminated union over the two intents. The `intent` field drives
- *  which branch (and which R constraint) applies. */
-export type RequestInput<Input = unknown, Output = unknown, R = never> =
-  | (R extends ReadOnlyTag ? ReadRequestInput<Input, Output, R> : never)
-  | WriteRequestInput<Input, Output, R>
-
 /**
- * Lower a `RequestInput` to an `AnyCapabilityContribution` with
+ * Lower a `ReadRequestInput | WriteRequestInput` to an
+ * `AnyCapabilityContribution` with
  * `audiences: ["agent-protocol", "transport-public"]` and the chosen
  * `intent`. The author never sees those fields.
  *
