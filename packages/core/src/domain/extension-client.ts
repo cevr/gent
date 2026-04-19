@@ -285,8 +285,10 @@ export interface ExtensionClientContext {
  *     `AsyncFileSystem`, Promise-typed `ask`, etc.). Sync only — async work
  *     must happen inside contributions, not during setup.
  *   - **Effect** (C9 target): `ClientEffect<ReadonlyArray<ClientContribution>>`.
- *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`,
- *     `ClientTransport`); errors flow on the typed `ClientSetupError` channel.
+ *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`;
+ *     `ClientTransport` joins the union in C9.2 once the TUI shell
+ *     publishes the typed re-export). Errors flow on the typed
+ *     `ClientSetupError` channel.
  *
  * The loader detects which shape was returned and dispatches accordingly.
  * C9.2 migrates builtins to the Effect shape; C9.3 deletes the legacy one.

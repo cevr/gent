@@ -6,7 +6,9 @@
  * based on `Effect.isEffect` and that an Effect-typed setup whose deps are
  * `FileSystem | Path` resolves through the platform runtime.
  */
-import { describe, test, expect } from "bun:test"
+import { describe, test, expect, beforeAll, afterAll } from "bun:test"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { makeAsyncFs } from "@gent/core/runtime/platform-proxy"
@@ -113,5 +115,57 @@ describe("loadTuiExtensions setup-shape bridge (C9.1)", () => {
       pathSvc,
     )
     expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+  })
+
+  // C9.1 codex BLOCK 1 lock — discovered (not pre-imported) modules with an
+  // Effect-valued `setup` must pass `importExtension`'s shape validator. The
+  // bridge in `invokeSetup` is only reachable if the validator accepts the
+  // value; rejecting non-functions silently dropped the entire discovered
+  // population for the new shape.
+  describe("discovered Effect-setup modules", () => {
+    const tmpRoot = join(import.meta.dir, ".tmp-c9-1-discovery")
+    const userDir = join(tmpRoot, "user")
+    const projectDir = join(tmpRoot, "project")
+
+    beforeAll(() => {
+      rmSync(tmpRoot, { recursive: true, force: true })
+      mkdirSync(userDir, { recursive: true })
+      mkdirSync(projectDir, { recursive: true })
+      // Effect-valued `setup` — exactly the shape C9.1 promises will work.
+      writeFileSync(
+        join(userDir, "discovered.client.ts"),
+        `
+import { Effect } from "effect"
+import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
+
+export default {
+  id: "@test/discovered-effect",
+  setup: Effect.gen(function* () {
+    return [
+      autocompleteContribution({
+        prefix: "#",
+        title: "discovered",
+        items: () => [{ id: "z", label: "z" }],
+      }),
+    ]
+  }),
+}
+`.trim(),
+      )
+    })
+
+    afterAll(() => {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    })
+
+    test("imports + runs an Effect-valued setup discovered from userDir", async () => {
+      const result = await loadTuiExtensions(
+        { userDir, projectDir, runtime },
+        noopCtx,
+        asyncFs,
+        pathSvc,
+      )
+      expect(result.autocompleteItems.map((c) => c.prefix)).toContain("#")
+    })
   })
 })

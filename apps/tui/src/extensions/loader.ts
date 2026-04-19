@@ -54,8 +54,19 @@ const importExtension = async (
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const clientModule = (mod.default ?? mod) as ExtensionClientModule
 
-    if (typeof clientModule.setup !== "function" || typeof clientModule.id !== "string") {
-      console.log(`[tui-ext] Skipping ${entry.filePath}: missing id or setup function`)
+    if (typeof clientModule.id !== "string") {
+      console.log(`[tui-ext] Skipping ${entry.filePath}: missing id`)
+      return undefined
+    }
+    // C9.1: `setup` may be either a sync `(ctx) => Array` (legacy) or an
+    // Effect value (`ClientEffect<Array>` — the new shape). The bridge in
+    // `invokeSetup` dispatches via `Effect.isEffect`, so we accept both
+    // forms here. Rejecting only-functions would silently drop discovered
+    // user/project modules using the new shape (codex C9.1 BLOCK 1).
+    if (typeof clientModule.setup !== "function" && !Effect.isEffect(clientModule.setup)) {
+      console.log(
+        `[tui-ext] Skipping ${entry.filePath}: setup must be a function or an Effect value`,
+      )
       return undefined
     }
 
