@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
@@ -718,10 +718,13 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     expect(resolved.commands.map((c) => c.name)).not.toContain("run")
   })
 
-  test("bridge dies when capability output fails to encode", async () => {
+  test("bridge dies (defect) when capability output fails to encode", async () => {
     // Capability declares output: Schema.Number but its effect returns a
-    // string. The bridge's encode step must defect — mirrors the
-    // query/mutation registries' output-validation tests.
+    // string. CommandContribution.handler has no typed-failure channel, so
+    // the bridge MUST escalate output-encode failures to a defect — not a
+    // typed Effect failure. Asserting defect-shaped cause prevents a future
+    // refactor from quietly swapping `Effect.orDie` for typed failure (which
+    // would leak the bridge's contract-honesty into the slash dispatcher).
     const cap: AnyCapabilityContribution = {
       id: "lies",
       audiences: ["human-slash"],
@@ -735,6 +738,13 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const cmd = resolved.commands.find((c) => c.name === "lies")
     expect(cmd).toBeDefined()
     const exit = await Effect.runPromiseExit(cmd!.handler("ignored", makeHostCtx()))
-    expect(exit._tag).toBe("Failure")
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      // `Cause.hasDies` is true only when the cause contains an unrecoverable
+      // defect — typed Effect failures (without `Effect.orDie`) would not
+      // satisfy this. The whole point of `Effect.orDie` in the bridge is to
+      // produce exactly this defect-shaped cause.
+      expect(Cause.hasDies(exit.cause)).toBe(true)
+    }
   })
 })

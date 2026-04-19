@@ -74,12 +74,13 @@ const compileContributions = <T>(
 }
 
 /**
- * C4.3 bridge — lower a `Capability` whose `audiences` includes a human-facing
- * surface ("human-slash"/"human-palette") with `intent: "write"` into a
- * `CommandContribution` shape. Args (a string) are decoded through the
- * capability's `input` schema (typically `Schema.String`), and any
- * `CapabilityError` is escalated to a defect — commands have no typed-failure
- * channel today.
+ * C4.3 bridge — lower a `Capability` with `intent: "write"` and
+ * `audiences.includes("human-slash")` into a `CommandContribution` shape.
+ * (Palette-only capabilities never reach this wrapper — the slash-list
+ * compiler in `resolveExtensions` filters them out before lowering.) Args
+ * (a string) are decoded through the capability's `input` schema (typically
+ * `Schema.String`), and any `CapabilityError` is escalated to a defect —
+ * commands have no typed-failure channel today.
  *
  * The wrapper preserves the capability's `id` as the command `name`. This
  * bridge is scoped to C4.3-4 and deleted in C4.5 along with the
