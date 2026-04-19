@@ -336,12 +336,19 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
           const capabilities = activeRegistry.getResolved().capabilities
           return yield* capabilities
-            .run(extensionId, queryId, "agent-protocol", input, {
-              sessionId: SessionId.of(sessionId),
-              branchId: BranchId.of(branchId),
-              cwd: platform.cwd,
-              home: platform.home,
-            })
+            .run(
+              extensionId,
+              queryId,
+              "agent-protocol",
+              input,
+              {
+                sessionId: SessionId.of(sessionId),
+                branchId: BranchId.of(branchId),
+                cwd: platform.cwd,
+                home: platform.home,
+              },
+              { intent: "read" },
+            )
             .pipe(
               Effect.mapError(
                 (e) =>
@@ -360,12 +367,19 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
           const capabilities = activeRegistry.getResolved().capabilities
           return yield* capabilities
-            .run(extensionId, mutationId, "agent-protocol", input, {
-              sessionId: SessionId.of(sessionId),
-              branchId: BranchId.of(branchId),
-              cwd: platform.cwd,
-              home: platform.home,
-            })
+            .run(
+              extensionId,
+              mutationId,
+              "agent-protocol",
+              input,
+              {
+                sessionId: SessionId.of(sessionId),
+                branchId: BranchId.of(branchId),
+                cwd: platform.cwd,
+                home: platform.home,
+              },
+              { intent: "write" },
+            )
             .pipe(
               Effect.mapError(
                 (e) =>

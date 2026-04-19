@@ -9,8 +9,9 @@ import { DateTime, Effect } from "effect"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import type { MutationRef, MutationError, MutationNotFoundError } from "../domain/mutation.js"
-import type { QueryRef, QueryError, QueryNotFoundError } from "../domain/query.js"
+import type { MutationRef } from "../domain/mutation.js"
+import type { QueryRef } from "../domain/query.js"
+import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 import type { WorkflowRuntimeService } from "./extensions/workflow-runtime.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
@@ -127,19 +128,18 @@ export const makeExtensionHostContext = (
         cwd: deps.platform.cwd,
         home: deps.platform.home,
       }
-      // Capability-host returns Effect<unknown, CapabilityError | CapabilityNotFoundError>;
-      // the public `query()` surface is typed via QueryRef and predates the
-      // capability collapse. Two-step cast (`unknown` first) preserves the
-      // typed-error contract for callers without forcing them to learn the
-      // capability error shapes.
+      // Cast narrows `unknown` output to the typed `O`; the host validated
+      // it via `ref.output` (== `capability.output`) at the boundary.
+      // Error channel is `CapabilityError | CapabilityNotFoundError` and
+      // surfaces as such on the public `extension.query` API (no translation
+      // layer; codex HIGH on C4.5 — the prior cast lied about the runtime
+      // tag). The `intent: "read"` option gates the dispatch — a same-id
+      // write capability is invisible to `query()`.
+      const e = capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctx, {
+        intent: "read",
+      })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return capabilities.run(
-        ref.extensionId,
-        ref.queryId,
-        "agent-protocol",
-        input,
-        ctx,
-      ) as unknown as Effect.Effect<O, QueryError | QueryNotFoundError>
+      return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
     },
     mutate: <I, O>(ref: MutationRef<I, O>, input: I) => {
       const capabilities = deps.extensionRegistry.getResolved().capabilities
@@ -149,14 +149,11 @@ export const makeExtensionHostContext = (
         cwd: deps.platform.cwd,
         home: deps.platform.home,
       }
+      const e = capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctx, {
+        intent: "write",
+      })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return capabilities.run(
-        ref.extensionId,
-        ref.mutationId,
-        "agent-protocol",
-        input,
-        ctx,
-      ) as unknown as Effect.Effect<O, MutationError | MutationNotFoundError>
+      return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
     },
   },
 

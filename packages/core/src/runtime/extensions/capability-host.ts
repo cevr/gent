@@ -37,6 +37,7 @@ import {
   type Audience,
   type CapabilityContext,
   type CapabilityCoreContext,
+  type Intent,
 } from "../../domain/capability.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
@@ -45,14 +46,64 @@ interface RegisteredCapability {
   readonly capability: AnyCapabilityContribution
 }
 
+/** Wide-only keys present on `ModelCapabilityContext` (extends
+ *  `ExtensionHostContext`) but absent from `CapabilityCoreContext`. A handler
+ *  authored against the wide shape that reaches for any of these on a narrow
+ *  ctx is the bug class codex flagged on C4.5. */
+const WIDE_ONLY_CTX_KEYS = new Set<string>([
+  "extension",
+  "extensions",
+  "agent",
+  "session",
+  "interaction",
+  "tools",
+  "modality",
+])
+
+/** Wrap a narrow `CapabilityCoreContext` so a handler that mistakenly reads
+ *  a wide-only key (e.g., `ctx.extension`) gets a clear, well-located error
+ *  instead of a `Cannot read properties of undefined` runtime crash. The
+ *  proxy is transparent for keys that genuinely exist on the narrow ctx. */
+const narrowCtxGuard = (
+  ctx: CapabilityCoreContext,
+  extensionId: string,
+  capabilityId: string,
+): CapabilityContext =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  new Proxy(ctx as object, {
+    get(target, prop, receiver) {
+      if (typeof prop === "string" && WIDE_ONLY_CTX_KEYS.has(prop)) {
+        throw new Error(
+          `Capability ${extensionId}/${capabilityId} (non-"model" audience) tried to access wide-context key "${prop}" — non-model dispatch passes a CapabilityCoreContext that does not include this key. Author the handler against CapabilityCoreContext or add "model" to the audiences list.`,
+        )
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  }) as CapabilityContext
+
+/** Per-call options for `CompiledCapabilities.run`. */
+export interface CapabilityRunOptions {
+  /** If supplied, the resolved Capability MUST also have a matching `intent`
+   *  — otherwise the call rejects with `CapabilityNotFoundError`. Pass
+   *  `undefined` ONLY when the caller genuinely accepts both intents (e.g.,
+   *  an internal admin path); typical callers pass `"read"` or `"write"` to
+   *  prevent a same-id write capability from being invoked through a
+   *  read-only entry point and vice versa (codex HIGH on C4.5: dropping the
+   *  intent gate let `query()` invoke a write capability and `mutate()`
+   *  invoke a read capability if their ids matched). */
+  readonly intent?: Intent
+}
+
 export interface CompiledCapabilities {
   readonly entries: ReadonlyArray<RegisteredCapability>
-  /** Run a Capability by `(extensionId, capabilityId)` from a given audience.
+  /** Run a Capability by `(extensionId, capabilityId)` from a given audience
+   *  (and optionally a required intent).
    *
    *  Validates input + output via Schema. Rejects with
-   *  `CapabilityNotFoundError` when the Capability is not registered OR
-   *  when the registered Capability does not include the requested
-   *  audience. */
+   *  `CapabilityNotFoundError` when the Capability is not registered, the
+   *  registered Capability does not include the requested audience, or — when
+   *  `options.intent` is supplied — the registered Capability's `intent` does
+   *  not match. */
   readonly run: (
     extensionId: string,
     capabilityId: string,
@@ -66,6 +117,7 @@ export interface CompiledCapabilities {
     // the type level — calls into model-only surfaces (e.g.
     // `ctx.interaction.approve`) on a narrow ctx fail to compile.
     ctx: CapabilityContext | CapabilityCoreContext,
+    options?: CapabilityRunOptions,
   ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
   /** List Capabilities filtered to those that include `audience`. Used by
    *  surface-specific renderers (e.g., the tool-runner enumerates
@@ -121,15 +173,24 @@ export const compileCapabilities = (
     return undefined
   }
 
-  /** Identity-resolve, then check audience authorization on the winner. */
+  /** Identity-resolve, then check audience + (optional) intent authorization
+   *  on the winner. Identity-first per the C4.1 codex BLOCK: a higher-scope
+   *  registration shadows lower-scope same-id contributions even when the
+   *  higher entry fails authorization — otherwise a project override could
+   *  narrow audiences/intent but the lower-scope contribution would still
+   *  leak through. */
   const findEntry = (
     extensionId: string,
     capabilityId: string,
     audience: Audience,
+    requiredIntent: Intent | undefined,
   ): RegisteredCapability | undefined => {
     const winner = resolveByIdentity(extensionId, capabilityId)
     if (winner === undefined) return undefined
-    return winner.capability.audiences.includes(audience) ? winner : undefined
+    if (!winner.capability.audiences.includes(audience)) return undefined
+    if (requiredIntent !== undefined && winner.capability.intent !== requiredIntent)
+      return undefined
+    return winner
   }
 
   /**
@@ -149,12 +210,33 @@ export const compileCapabilities = (
     return Array.from(winners.values()).filter((e) => e.capability.audiences.includes(audience))
   }
 
-  const run: CompiledCapabilities["run"] = (extensionId, capabilityId, audience, input, ctx) =>
+  const run: CompiledCapabilities["run"] = (
+    extensionId,
+    capabilityId,
+    audience,
+    input,
+    ctx,
+    options,
+  ) =>
     Effect.gen(function* () {
-      const entry = findEntry(extensionId, capabilityId, audience)
+      const entry = findEntry(extensionId, capabilityId, audience, options?.intent)
       if (entry === undefined) {
         return yield* new CapabilityNotFoundError({ extensionId, capabilityId })
       }
+      // Codex MEDIUM on C4.5: handlers' ctx parameter is typed `CapabilityContext`
+      // (alias for the wide `ModelCapabilityContext`), so a handler authored
+      // for the wide shape can be invoked with a narrow `CapabilityCoreContext`
+      // by an `agent-protocol` RPC and crash on `ctx.extension`/`ctx.session`/etc.
+      // A proper fix is to split capability shapes (model vs non-model) at the
+      // type level — out of scope for this commit. Defensive runtime guard:
+      // when the dispatch ctx lacks the wide-only `extension` key, intercept
+      // access to wide-only keys and surface a clear, well-located error
+      // instead of a "Cannot read properties of undefined" runtime crash.
+      const isNarrow =
+        !("extension" in ctx) || (ctx as { extension?: unknown }).extension === undefined
+      const handlerCtx: CapabilityContext = isNarrow
+        ? narrowCtxGuard(ctx, extensionId, capabilityId)
+        : (ctx as CapabilityContext)
       // Decode input — caller-supplied, validated at the boundary.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       const decodedInput = yield* Schema.decodeUnknownEffect(entry.capability.input as Schema.Any)(
@@ -171,20 +253,32 @@ export const compileCapabilities = (
         ),
       )
       // Run effect — R is provided by the extension's contributed Layer at
-      // composition time; the host treats it as already-provided.
-      // The ctx widens up to ModelCapabilityContext for handlers that ask
-      // for the wider shape; narrow callers (agent-protocol RPCs that pass
-      // a CapabilityCoreContext) get a runtime ctx that's structurally
-      // narrower than the handler signature, which is fine if the handler
-      // only declares a CapabilityCoreContext. Handlers asking for the wide
-      // shape MUST be invoked with a wide ctx — enforced at the call site.
+      // composition time; the host treats it as already-provided. `handlerCtx`
+      // is the wide ctx for `audience: "model"` and a Proxy-guarded narrow
+      // ctx for non-model dispatch (the guard surfaces a clear error if a
+      // handler authored against the wide shape reaches for `ctx.extension`
+      // etc.); type-level enforcement is deferred to the C7/C8 capability
+      // surface reorganization.
+      //
+      // The handler-construction call itself can throw (the proxy guard
+      // throws synchronously when a property access happens during effect
+      // construction; `catchDefect` only sees runtime-side failures, not
+      // synchronous construction throws). Wrap the call in `Effect.try` to
+      // funnel both paths through the same `CapabilityError` translation.
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const handlerEffect = entry.capability.effect(
-        decodedInput,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        ctx as CapabilityContext,
-      ) as Effect.Effect<unknown, CapabilityError>
+      const handlerEffect = yield* Effect.try({
+        try: () => {
+          const e = entry.capability.effect(decodedInput, handlerCtx)
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          return e as Effect.Effect<unknown, CapabilityError>
+        },
+        catch: (e) =>
+          new CapabilityError({
+            extensionId,
+            capabilityId,
+            reason: `handler defect: ${String(e)}`,
+          }),
+      })
       const output = yield* handlerEffect.pipe(
         Effect.catchDefect((defect) =>
           Effect.fail(

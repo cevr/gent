@@ -26,8 +26,7 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/id
 import { Storage } from "@gent/core/storage/sqlite-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
-import type { QueryError, QueryNotFoundError } from "@gent/core/domain/query.js"
-import type { MutationError, MutationNotFoundError } from "@gent/core/domain/mutation.js"
+import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
 import {
   TaskCreateRef,
   TaskDeleteRef,
@@ -586,27 +585,23 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
     const runQuery = <T>(
       ref: { readonly extensionId: string; readonly queryId: string },
       input: unknown,
-    ): Effect.Effect<T, QueryError | QueryNotFoundError> =>
+    ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
+      const e = capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctx, {
+        intent: "read",
+      })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      capabilities.run(
-        ref.extensionId,
-        ref.queryId,
-        "agent-protocol",
-        input,
-        ctx,
-      ) as unknown as Effect.Effect<T, QueryError | QueryNotFoundError>
+      return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
+    }
     const runMutation = <T>(
       ref: { readonly extensionId: string; readonly mutationId: string },
       input: unknown,
-    ): Effect.Effect<T, MutationError | MutationNotFoundError> =>
+    ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
+      const e = capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctx, {
+        intent: "write",
+      })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      capabilities.run(
-        ref.extensionId,
-        ref.mutationId,
-        "agent-protocol",
-        input,
-        ctx,
-      ) as unknown as Effect.Effect<T, MutationError | MutationNotFoundError>
+      return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
+    }
 
     while (true) {
       const existing = yield* runQuery<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})

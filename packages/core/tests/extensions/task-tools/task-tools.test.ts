@@ -17,8 +17,9 @@ import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { WorkflowRuntime } from "@gent/core/runtime/extensions/workflow-runtime"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import type { QueryRef, QueryError, QueryNotFoundError } from "@gent/core/domain/query"
-import type { MutationRef, MutationError, MutationNotFoundError } from "@gent/core/domain/mutation"
+import type { QueryRef } from "@gent/core/domain/query"
+import type { MutationRef } from "@gent/core/domain/mutation"
+import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -36,28 +37,24 @@ const makeCtx = Effect.gen(function* () {
   const runtime = yield* WorkflowRuntime
   const registry = yield* ExtensionRegistry
   const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
-  const query = <I, O>(ref: QueryRef<I, O>, input: I) =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    registry
+  const query = <I, O>(ref: QueryRef<I, O>, input: I) => {
+    const e = registry
       .getResolved()
-      .capabilities.run(
-        ref.extensionId,
-        ref.queryId,
-        "agent-protocol",
-        input,
-        ctxBase,
-      ) as unknown as Effect.Effect<O, QueryError | QueryNotFoundError>
-  const mutate = <I, O>(ref: MutationRef<I, O>, input: I) =>
+      .capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctxBase, {
+        intent: "read",
+      })
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    registry
+    return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
+  }
+  const mutate = <I, O>(ref: MutationRef<I, O>, input: I) => {
+    const e = registry
       .getResolved()
-      .capabilities.run(
-        ref.extensionId,
-        ref.mutationId,
-        "agent-protocol",
-        input,
-        ctxBase,
-      ) as unknown as Effect.Effect<O, MutationError | MutationNotFoundError>
+      .capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctxBase, {
+        intent: "write",
+      })
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
+  }
   return testToolContext({
     sessionId: SessionId.of("s1"),
     branchId: "b1",

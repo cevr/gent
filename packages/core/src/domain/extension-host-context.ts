@@ -15,8 +15,9 @@ import type {
 } from "./interaction-request"
 import type { Branch, Message, MessageMetadata, Session } from "./message"
 import type { ModelId } from "./model"
-import type { MutationError, MutationNotFoundError, MutationRef } from "./mutation"
-import type { QueryError, QueryNotFoundError, QueryRef } from "./query"
+import type { MutationRef } from "./mutation"
+import type { QueryRef } from "./query"
+import type { CapabilityError, CapabilityNotFoundError } from "./capability"
 import type { SearchResult } from "../storage/search-storage"
 import type { StorageError } from "../storage/sqlite-storage"
 
@@ -61,25 +62,29 @@ export declare namespace ExtensionHostContext {
 
     /**
      * Typed read-only RPC into another extension. Routes by `(extensionId, queryId)`,
-     * decodes input via `ref.input` and output via `ref.output`. The contributing
-     * extension's `layer()` provides the handler's service requirements.
+     * decodes input via `ref.input` and output via `ref.output`. The capability
+     * host gates the call on `audience: "agent-protocol"` AND `intent: "read"`
+     * — a same-id write capability is invisible to `query()` (codex HIGH on
+     * C4.5: dropping the intent gate let `query()` invoke writes).
      *
-     * Replaces the untyped `ask()` channel for read operations.
+     * Returns capability-host errors directly — there is no `QueryError`
+     * translation layer (deleted in C4.5).
      */
     readonly query: <I, O>(
       ref: QueryRef<I, O>,
       input: I,
-    ) => Effect.Effect<O, QueryError | QueryNotFoundError>
+    ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
 
     /**
      * Typed write RPC into another extension. Same routing/decode rules as
      * `query()` — the distinction is intent: `mutate` is the explicit write
-     * surface; `query` is for reads (lint-enforced read-only handler).
+     * surface and is gated on `intent: "write"` (a read capability with the
+     * same id is invisible). Returns capability-host errors directly.
      */
     readonly mutate: <I, O>(
       ref: MutationRef<I, O>,
       input: I,
-    ) => Effect.Effect<O, MutationError | MutationNotFoundError>
+    ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
   }
 
   interface Agent {

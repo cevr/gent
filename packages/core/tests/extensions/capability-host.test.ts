@@ -261,6 +261,152 @@ describe("capability-host", () => {
     }),
   )
 
+  // ── intent gate (codex HIGH on C4.5) ──
+  // Replaces the deleted `query-mutation.test.ts` semantic lock: a same-id
+  // write capability must be invisible to a `{ intent: "read" }` dispatch
+  // (and vice versa) — otherwise `query()` could invoke a write capability
+  // and `mutate()` could invoke a read capability if their ids matched.
+
+  it.live("rejects with CapabilityNotFoundError when required intent does not match", () =>
+    Effect.gen(function* () {
+      // Write capability registered; read-intent dispatch must miss.
+      const writeCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
+        id: "write-op",
+        audiences: ["agent-protocol"],
+        intent: "write",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input) => Effect.succeed(input),
+      }
+      const compiled = compileCapabilities([extWith("@test/c", "builtin", [writeCap])])
+      const result = yield* compiled
+        .run("@test/c", "write-op", "agent-protocol", { value: "x" }, ctx, { intent: "read" })
+        .pipe(Effect.flip)
+      expect(result).toBeInstanceOf(CapabilityNotFoundError)
+    }),
+  )
+
+  it.live("matches when intent matches", () =>
+    Effect.gen(function* () {
+      const readCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
+        id: "read-op",
+        audiences: ["agent-protocol"],
+        intent: "read",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input) => Effect.succeed(input),
+      }
+      const compiled = compileCapabilities([extWith("@test/c", "builtin", [readCap])])
+      const result = yield* compiled.run(
+        "@test/c",
+        "read-op",
+        "agent-protocol",
+        { value: "x" },
+        ctx,
+        { intent: "read" },
+      )
+      expect(result).toEqual({ value: "x" })
+    }),
+  )
+
+  it.live("undefined intent option matches both intents", () =>
+    Effect.gen(function* () {
+      const writeCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
+        id: "write-op",
+        audiences: ["agent-protocol"],
+        intent: "write",
+        input: Schema.Struct({ value: Schema.String }),
+        output: Schema.Struct({ value: Schema.String }),
+        effect: (input) => Effect.succeed(input),
+      }
+      const compiled = compileCapabilities([extWith("@test/c", "builtin", [writeCap])])
+      // No `options.intent` — caller accepts either read or write.
+      const result = yield* compiled.run(
+        "@test/c",
+        "write-op",
+        "agent-protocol",
+        { value: "x" },
+        ctx,
+      )
+      expect(result).toEqual({ value: "x" })
+    }),
+  )
+
+  it.live("intent shadow: project read shadows builtin write of same id under read dispatch", () =>
+    Effect.gen(function* () {
+      // Identity-first scope precedence: a project-scope read capability with
+      // the same id MUST shadow the builtin write — and a `{ intent: "write" }`
+      // dispatch must NOT fall back to the builtin (codex C4.1 BLOCK pattern
+      // applied to intent: scope precedence selects identity, then audience
+      // and intent authorize the winner).
+      const writeCap: CapabilityContribution<unknown, unknown, never> = {
+        id: "thing",
+        audiences: ["agent-protocol"],
+        intent: "write",
+        input: Schema.Unknown,
+        output: Schema.Unknown,
+        effect: () => Effect.succeed("builtin-write"),
+      }
+      const readCap: CapabilityContribution<unknown, unknown, never> = {
+        id: "thing",
+        audiences: ["agent-protocol"],
+        intent: "read",
+        input: Schema.Unknown,
+        output: Schema.Unknown,
+        effect: () => Effect.succeed("project-read"),
+      }
+      const compiled = compileCapabilities([
+        extWith("@test/c", "builtin", [writeCap]),
+        extWith("@test/c", "project", [readCap]),
+      ])
+      // Read dispatch finds the project capability.
+      const readResult = yield* compiled.run("@test/c", "thing", "agent-protocol", null, ctx, {
+        intent: "read",
+      })
+      expect(readResult).toBe("project-read")
+      // Write dispatch must NOT silently fall back to the shadowed builtin.
+      const writeResult = yield* compiled
+        .run("@test/c", "thing", "agent-protocol", null, ctx, { intent: "write" })
+        .pipe(Effect.flip)
+      expect(writeResult).toBeInstanceOf(CapabilityNotFoundError)
+    }),
+  )
+
+  // ── narrow ctx guard (codex MEDIUM on C4.5) ──
+  // A handler authored against the wide `ModelCapabilityContext` that reaches
+  // for `ctx.extension` (etc.) must surface a clear error when invoked through
+  // a non-model dispatch with a narrow `CapabilityCoreContext` — not a
+  // "Cannot read properties of undefined" runtime crash.
+
+  it.live("non-model dispatch with narrow ctx throws clear error on wide-ctx access", () =>
+    Effect.gen(function* () {
+      const widePeekCap: CapabilityContribution<unknown, unknown, never> = {
+        id: "wide-peek",
+        audiences: ["agent-protocol"],
+        intent: "read",
+        input: Schema.Unknown,
+        output: Schema.Unknown,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        effect: (_, c) => Effect.succeed((c as { extension: { send: unknown } }).extension.send),
+      }
+      const compiled = compileCapabilities([extWith("@test/c", "builtin", [widePeekCap])])
+      // Narrow ctx — no `extension` field.
+      const narrowCtx = {
+        sessionId: "s",
+        branchId: "b",
+        cwd: "/tmp",
+        home: "/tmp",
+      } as const
+      const result = yield* compiled
+        .run("@test/c", "wide-peek", "agent-protocol", null, narrowCtx, { intent: "read" })
+        .pipe(Effect.flip)
+      // The defect propagates as a CapabilityError via `catchDefect`.
+      expect(result).toBeInstanceOf(CapabilityError)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      expect((result as CapabilityError).reason).toMatch(/wide-context key "extension"/)
+    }),
+  )
+
   it.live("listForAudience returns only Capabilities including that audience", () =>
     Effect.sync(() => {
       const compiled = compileCapabilities([
