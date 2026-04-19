@@ -339,7 +339,7 @@ Other notes:
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup()` is called
 - Two `setup` shapes accepted: legacy sync `(ctx) => ClientContribution[]` and Effect-typed `Effect<ClientContribution[], E, R>`. Effect setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientSnapshots`. The legacy `AsyncFileSystem`/`Promise<reply>`-typed `ask`/`Promise`-typed autocomplete `items` were deleted in C9.3 — extensions reach those surfaces through Effect services
 - `ExtensionClientContext` (legacy ctx) provides `cwd`, `home`, `sessionId`, `branchId`, `openOverlay`, `closeOverlay`, `send`, `sendMessage`, `getSnapshotRaw`, `composerState`
-- `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, `snapshots()`, and `clientRuntime` for widgets
+- `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets; per-extension snapshots are read via the `ClientSnapshots` service (Effect setups) or legacy `ctx.getSnapshotRaw()` (sync setups)
 - Widgets are zero-prop components that self-source from context hooks
 
 ### Extension State Runtime Lifecycle

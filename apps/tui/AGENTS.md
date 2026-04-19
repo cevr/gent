@@ -172,7 +172,7 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 - `loader-boundary.ts` accepts `disabled` list — skips `setup()` for disabled extensions
 - Loader supports two setup shapes (legacy sync `(ctx) => Array`, Effect-typed `Effect<Array, E, R>`); Effect setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientSnapshots`
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
-- `useExtensionUI()` provides `sessionId()`, `branchId()`, `snapshots()`
+- `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime` (per-extension snapshots come via `ClientSnapshots` service or legacy `ctx.getSnapshotRaw()`)
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `composerState` reactive signal available in `ExtensionClientContext`: `{ draft, mode, inputFocused, autocompleteOpen }`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
