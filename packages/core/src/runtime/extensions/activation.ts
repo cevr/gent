@@ -13,7 +13,6 @@ import {
   extractExternalDrivers,
   extractModelDrivers,
   extractPromptSections,
-  extractTools,
   extractMachine,
 } from "../../domain/contribution.js"
 import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
@@ -94,7 +93,9 @@ export const setupBuiltinExtensions = (params: {
             extensionId: extension.manifest.id,
             kind: "builtin",
             hasMachine: extractMachine(exit.value.contributions) !== undefined,
-            tools: extractTools(exit.value.contributions).length,
+            tools: extractCapabilities(exit.value.contributions).filter((c) =>
+              c.audiences.includes("model"),
+            ).length,
           }),
         )
       } else {
@@ -152,7 +153,9 @@ export const setupDiscoveredExtensions = (params: {
             extensionId: discovered.extension.manifest.id,
             kind: discovered.kind,
             hasMachine: extractMachine(exit.value.contributions) !== undefined,
-            tools: extractTools(exit.value.contributions).length,
+            tools: extractCapabilities(exit.value.contributions).filter((c) =>
+              c.audiences.includes("model"),
+            ).length,
           }),
         )
       } else {
@@ -255,20 +258,13 @@ export const collectValidationFailures = (
     }
   }
 
-  // C4.4 BLOCK on capability/tool collisions: same-scope same-name tools
-  // were caught before this batch by `collectScopedCollisions(extractTools, …)`.
-  // After the C4.4 tool bridge, a capability with `audiences:["model"]`
-  // surfaces as a tool by `cap.id`. So a same-scope collision is now any of
-  // these three pairs: tool/tool, capability/capability, tool/capability.
-  // The unified extractor below collects every "thing that lands in the
-  // tool list" as a single identity stream so all three pair types fail
-  // validation loudly at startup, not silently at runtime via last-write-wins.
-  const extractModelToolIdentities = (cs: ReadonlyArray<Contribution>): ReadonlyArray<string> => [
-    ...extractTools(cs).map((t) => t.name),
-    ...extractCapabilities(cs)
+  // Tool collisions: same-scope same-id model-audience capabilities. After
+  // C4.5, every model tool is a `Capability(audiences:["model"])` — the
+  // legacy `_kind: "tool"` branch is gone, so identity is `cap.id`.
+  const extractModelToolIdentities = (cs: ReadonlyArray<Contribution>): ReadonlyArray<string> =>
+    extractCapabilities(cs)
       .filter((cap) => cap.audiences.includes("model"))
-      .map((cap) => cap.id),
-  ]
+      .map((cap) => cap.id)
   collectScopedCollisions(extractModelToolIdentities, (name) => name, "tool")
   collectScopedCollisions(extractAgents, (agent) => agent.name, "agent")
   collectScopedCollisions(extractModelDrivers, (driver) => driver.id, "model driver")

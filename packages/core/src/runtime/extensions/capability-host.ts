@@ -36,6 +36,7 @@ import {
   type AnyCapabilityContribution,
   type Audience,
   type CapabilityContext,
+  type CapabilityCoreContext,
 } from "../../domain/capability.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
@@ -57,7 +58,14 @@ export interface CompiledCapabilities {
     capabilityId: string,
     audience: Audience,
     input: unknown,
-    ctx: CapabilityContext,
+    // Accept the narrow `CapabilityCoreContext` shape so RPC entry points
+    // (query/mutation via `agent-protocol` audience) can dispatch without
+    // assembling the full `ModelCapabilityContext` (which only makes sense
+    // for the model audience). Handlers that ask for the wider
+    // `ModelCapabilityContext` will get their structurally-narrower view at
+    // the type level — calls into model-only surfaces (e.g.
+    // `ctx.interaction.approve`) on a narrow ctx fail to compile.
+    ctx: CapabilityContext | CapabilityCoreContext,
   ) => Effect.Effect<unknown, CapabilityError | CapabilityNotFoundError>
   /** List Capabilities filtered to those that include `audience`. Used by
    *  surface-specific renderers (e.g., the tool-runner enumerates
@@ -164,12 +172,19 @@ export const compileCapabilities = (
       )
       // Run effect — R is provided by the extension's contributed Layer at
       // composition time; the host treats it as already-provided.
+      // The ctx widens up to ModelCapabilityContext for handlers that ask
+      // for the wider shape; narrow callers (agent-protocol RPCs that pass
+      // a CapabilityCoreContext) get a runtime ctx that's structurally
+      // narrower than the handler signature, which is fine if the handler
+      // only declares a CapabilityCoreContext. Handlers asking for the wide
+      // shape MUST be invoked with a wide ctx — enforced at the call site.
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const handlerEffect = entry.capability.effect(decodedInput, ctx) as Effect.Effect<
-        unknown,
-        CapabilityError
-      >
+      const handlerEffect = entry.capability.effect(
+        decodedInput,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        ctx as CapabilityContext,
+      ) as Effect.Effect<unknown, CapabilityError>
       const output = yield* handlerEffect.pipe(
         Effect.catchDefect((defect) =>
           Effect.fail(

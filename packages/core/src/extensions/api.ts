@@ -169,7 +169,6 @@ export {
 export {
   type Contribution,
   type ContributionKind,
-  type ToolContribution,
   type AgentContribution,
   type InterceptorContribution as InterceptorKindContribution,
   type CommandKindContribution,
@@ -178,8 +177,6 @@ export {
   type PermissionRuleContribution,
   type PromptSectionContribution,
   type ProjectionKindContribution,
-  type QueryKindContribution,
-  type MutationKindContribution,
   type CapabilityKindContribution,
   filterByKind,
   // smart constructors

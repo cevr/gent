@@ -575,8 +575,7 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
   Effect.gen(function* () {
     const registry = yield* ExtensionRegistry
     const platform = yield* RuntimePlatform
-    const queries = registry.getResolved().queries
-    const mutations = registry.getResolved().mutations
+    const capabilities = registry.getResolved().capabilities
     const ctx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -589,19 +588,25 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       input: unknown,
     ): Effect.Effect<T, QueryError | QueryNotFoundError> =>
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      queries.run(ref.extensionId, ref.queryId, input, ctx) as Effect.Effect<
-        T,
-        QueryError | QueryNotFoundError
-      >
+      capabilities.run(
+        ref.extensionId,
+        ref.queryId,
+        "agent-protocol",
+        input,
+        ctx,
+      ) as unknown as Effect.Effect<T, QueryError | QueryNotFoundError>
     const runMutation = <T>(
       ref: { readonly extensionId: string; readonly mutationId: string },
       input: unknown,
     ): Effect.Effect<T, MutationError | MutationNotFoundError> =>
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      mutations.run(ref.extensionId, ref.mutationId, input, ctx) as Effect.Effect<
-        T,
-        MutationError | MutationNotFoundError
-      >
+      capabilities.run(
+        ref.extensionId,
+        ref.mutationId,
+        "agent-protocol",
+        input,
+        ctx,
+      ) as unknown as Effect.Effect<T, MutationError | MutationNotFoundError>
 
     while (true) {
       const existing = yield* runQuery<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})

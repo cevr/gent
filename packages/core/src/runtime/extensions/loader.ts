@@ -9,7 +9,6 @@ import {
   extractExternalDrivers,
   extractModelDrivers,
   extractPromptSections,
-  extractTools,
 } from "../../domain/contribution.js"
 import type { ExtensionPackage } from "../../domain/extension-package.js"
 
@@ -322,9 +321,10 @@ export const validateExtensions = (
       idsByScope.set(ext.kind, ids)
     }
 
-    // Check keyed contributions — same key in same scope from different extensions is ambiguous
+    // Check keyed contributions — same key in same scope from different extensions is ambiguous.
+    // Tool collisions (now `Capability(audiences:["model"])`) are caught by
+    // `collectScopedCollisions(extractModelToolIdentities, …)` in `activation.ts`.
     const checks = [
-      checkScopedCollision(extensions, extractTools, (t) => t.name, "tool"),
       checkScopedCollision(extensions, extractAgents, (a) => a.name, "agent"),
       checkScopedCollision(extensions, extractModelDrivers, (d) => d.id, "model driver"),
       checkScopedCollision(extensions, extractExternalDrivers, (d) => d.id, "external driver"),

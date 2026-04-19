@@ -334,9 +334,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "extension.query": ({ sessionId, extensionId, queryId, input, branchId }) =>
         Effect.gen(function* () {
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
-          const queries = activeRegistry.getResolved().queries
-          return yield* queries
-            .run(extensionId, queryId, input, {
+          const capabilities = activeRegistry.getResolved().capabilities
+          return yield* capabilities
+            .run(extensionId, queryId, "agent-protocol", input, {
               sessionId: SessionId.of(sessionId),
               branchId: BranchId.of(branchId),
               cwd: platform.cwd,
@@ -358,9 +358,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "extension.mutate": ({ sessionId, extensionId, mutationId, input, branchId }) =>
         Effect.gen(function* () {
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
-          const mutations = activeRegistry.getResolved().mutations
-          return yield* mutations
-            .run(extensionId, mutationId, input, {
+          const capabilities = activeRegistry.getResolved().capabilities
+          return yield* capabilities
+            .run(extensionId, mutationId, "agent-protocol", input, {
               sessionId: SessionId.of(sessionId),
               branchId: BranchId.of(branchId),
               cwd: platform.cwd,

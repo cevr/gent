@@ -120,21 +120,29 @@ export const makeExtensionHostContext = (
     ask: (message, branchId) =>
       deps.extensionStateRuntime.ask(runInfo.sessionId, message, branchId ?? runInfo.branchId),
     query: <I, O>(ref: QueryRef<I, O>, input: I) => {
-      const queries = deps.extensionRegistry.getResolved().queries
+      const capabilities = deps.extensionRegistry.getResolved().capabilities
       const ctx = {
         sessionId: runInfo.sessionId,
         branchId: runInfo.branchId,
         cwd: deps.platform.cwd,
         home: deps.platform.home,
       }
+      // Capability-host returns Effect<unknown, CapabilityError | CapabilityNotFoundError>;
+      // the public `query()` surface is typed via QueryRef and predates the
+      // capability collapse. Two-step cast (`unknown` first) preserves the
+      // typed-error contract for callers without forcing them to learn the
+      // capability error shapes.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return queries.run(ref.extensionId, ref.queryId, input, ctx) as Effect.Effect<
-        O,
-        QueryError | QueryNotFoundError
-      >
+      return capabilities.run(
+        ref.extensionId,
+        ref.queryId,
+        "agent-protocol",
+        input,
+        ctx,
+      ) as unknown as Effect.Effect<O, QueryError | QueryNotFoundError>
     },
     mutate: <I, O>(ref: MutationRef<I, O>, input: I) => {
-      const mutations = deps.extensionRegistry.getResolved().mutations
+      const capabilities = deps.extensionRegistry.getResolved().capabilities
       const ctx = {
         sessionId: runInfo.sessionId,
         branchId: runInfo.branchId,
@@ -142,10 +150,13 @@ export const makeExtensionHostContext = (
         home: deps.platform.home,
       }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return mutations.run(ref.extensionId, ref.mutationId, input, ctx) as Effect.Effect<
-        O,
-        MutationError | MutationNotFoundError
-      >
+      return capabilities.run(
+        ref.extensionId,
+        ref.mutationId,
+        "agent-protocol",
+        input,
+        ctx,
+      ) as unknown as Effect.Effect<O, MutationError | MutationNotFoundError>
     },
   },
 

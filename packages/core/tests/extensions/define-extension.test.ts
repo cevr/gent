@@ -31,7 +31,6 @@ import {
   extractPromptSections,
   extractMachine,
   extractResources,
-  extractTools,
   extractExternalDrivers,
   extractModelDrivers,
 } from "@gent/core/domain/contribution"
@@ -64,7 +63,7 @@ describe("defineExtension", () => {
       const ext = defineExtension({ id: "empty", contributions: () => [] })
       const contributions = yield* setupOf(ext)
       expect(contributions).toEqual([])
-      expect(extractTools(contributions)).toEqual([])
+      expect(extractCapabilities(contributions)).toEqual([])
       expect(extractAgents(contributions)).toEqual([])
       expect(extractModelDrivers(contributions)).toEqual([])
       expect(extractResources(contributions)).toEqual([])
@@ -115,13 +114,12 @@ describe("defineExtension", () => {
       })
       const contributions = yield* setupOf(ext)
       // After C4.4, `tool(...)` lowers into a Capability(audiences:["model"]).
-      // The legacy `_kind: "tool"` extractor returns []; tool-shaped entries
-      // surface through `extractCapabilities(...)`.
+      // C4.5 deleted the legacy `_kind: "tool"` extractor — tool-shaped entries
+      // surface only through `extractCapabilities(...)`.
       const modelCaps = extractCapabilities(contributions).filter((c) =>
         c.audiences.includes("model"),
       )
       expect(modelCaps[0]?.id).toBe("echo")
-      expect(extractTools(contributions)).toEqual([])
       expect(extractAgents(contributions)[0]?.name).toBe("cowork")
       expect(extractPermissionRules(contributions)[0]?.tool).toBe("echo")
       expect(extractPromptSections(contributions)[0]?.id).toBe("rules")

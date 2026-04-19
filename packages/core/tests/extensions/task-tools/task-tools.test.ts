@@ -40,18 +40,24 @@ const makeCtx = Effect.gen(function* () {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     registry
       .getResolved()
-      .queries.run(ref.extensionId, ref.queryId, input, ctxBase) as Effect.Effect<
-      O,
-      QueryError | QueryNotFoundError
-    >
+      .capabilities.run(
+        ref.extensionId,
+        ref.queryId,
+        "agent-protocol",
+        input,
+        ctxBase,
+      ) as unknown as Effect.Effect<O, QueryError | QueryNotFoundError>
   const mutate = <I, O>(ref: MutationRef<I, O>, input: I) =>
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     registry
       .getResolved()
-      .mutations.run(ref.extensionId, ref.mutationId, input, ctxBase) as Effect.Effect<
-      O,
-      MutationError | MutationNotFoundError
-    >
+      .capabilities.run(
+        ref.extensionId,
+        ref.mutationId,
+        "agent-protocol",
+        input,
+        ctxBase,
+      ) as unknown as Effect.Effect<O, MutationError | MutationNotFoundError>
   return testToolContext({
     sessionId: SessionId.of("s1"),
     branchId: "b1",

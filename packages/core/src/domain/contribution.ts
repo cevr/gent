@@ -25,11 +25,6 @@ import { Schema } from "effect"
 
 // ── Per-kind contribution shapes ──
 
-export interface ToolContribution {
-  readonly _kind: "tool"
-  readonly tool: AnyToolDefinition
-}
-
 export interface AgentContribution {
   readonly _kind: "agent"
   readonly agent: AgentDefinition
@@ -70,16 +65,6 @@ export interface ProjectionKindContribution {
   readonly projection: AnyProjectionContribution
 }
 
-export interface QueryKindContribution {
-  readonly _kind: "query"
-  readonly query: AnyQueryContribution
-}
-
-export interface MutationKindContribution {
-  readonly _kind: "mutation"
-  readonly mutation: AnyMutationContribution
-}
-
 /**
  * Capability — typed callable endpoint shared by tool/query/mutation/command
  * (collapsed under one ontology in C4). Smart constructors for the legacy
@@ -114,7 +99,6 @@ export interface PulseSubscriptionContribution {
 // ── Union ──
 
 export type Contribution =
-  | ToolContribution
   | AgentContribution
   | InterceptorContribution
   | CommandKindContribution
@@ -123,8 +107,6 @@ export type Contribution =
   | PermissionRuleContribution
   | PromptSectionContribution
   | ProjectionKindContribution
-  | QueryKindContribution
-  | MutationKindContribution
   | CapabilityKindContribution
   | PulseSubscriptionContribution
   | AnyResourceContribution
@@ -227,14 +209,53 @@ export const projection = (p: AnyProjectionContribution): ProjectionKindContribu
   projection: p,
 })
 
-export const query = (q: AnyQueryContribution): QueryKindContribution => ({
-  _kind: "query",
-  query: q,
+/**
+ * Lower a `QueryContribution` to a `CapabilityContribution`. Queries are
+ * read-only RPCs invoked by other extensions; the capability equivalent is
+ * `audiences: ["agent-protocol"], intent: "read"`. Per the C4.5 deletion,
+ * `query()` no longer emits a separate `_kind: "query"` contribution —
+ * extension authors keep using `query(...)` and the lowering happens here.
+ */
+const queryToCapability = (q: AnyQueryContribution): AnyCapabilityContribution => ({
+  id: q.id,
+  audiences: ["agent-protocol"],
+  intent: "read",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  input: q.input as Schema.Schema<unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  output: q.output as Schema.Schema<unknown>,
+  // QueryContext is structurally a subset of CapabilityCoreContext; the
+  // handler-as-effect cast is sound at the boundary.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  effect: q.handler as AnyCapabilityContribution["effect"],
 })
 
-export const mutation = (m: AnyMutationContribution): MutationKindContribution => ({
-  _kind: "mutation",
-  mutation: m,
+/**
+ * Lower a `MutationContribution` to a `CapabilityContribution`. Mutations
+ * are write RPCs invoked by other extensions; the capability equivalent is
+ * `audiences: ["agent-protocol"], intent: "write"`. Same pattern as
+ * `queryToCapability`.
+ */
+const mutationToCapability = (m: AnyMutationContribution): AnyCapabilityContribution => ({
+  id: m.id,
+  audiences: ["agent-protocol"],
+  intent: "write",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  input: m.input as Schema.Schema<unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  output: m.output as Schema.Schema<unknown>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  effect: m.handler as AnyCapabilityContribution["effect"],
+})
+
+export const query = (q: AnyQueryContribution): CapabilityKindContribution => ({
+  _kind: "capability",
+  capability: queryToCapability(q),
+})
+
+export const mutation = (m: AnyMutationContribution): CapabilityKindContribution => ({
+  _kind: "capability",
+  capability: mutationToCapability(m),
 })
 
 /**
@@ -285,9 +306,6 @@ export const findByKind = <K extends ContributionKind>(
  * These replace the legacy `ExtensionSetup` setup-bag — registries and runtime
  * code call these directly instead of reading `ext.setup.tools` etc.
  */
-export const extractTools = (cs: ReadonlyArray<Contribution>): ReadonlyArray<AnyToolDefinition> =>
-  filterByKind(cs, "tool").map((c) => c.tool)
-
 export const extractAgents = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<AgentContribution["agent"]> => filterByKind(cs, "agent").map((c) => c.agent)
@@ -326,15 +344,6 @@ export const extractProjections = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<ProjectionKindContribution["projection"]> =>
   filterByKind(cs, "projection").map((c) => c.projection)
-
-export const extractQueries = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<QueryKindContribution["query"]> => filterByKind(cs, "query").map((c) => c.query)
-
-export const extractMutations = (
-  cs: ReadonlyArray<Contribution>,
-): ReadonlyArray<MutationKindContribution["mutation"]> =>
-  filterByKind(cs, "mutation").map((c) => c.mutation)
 
 export const extractCapabilities = (
   cs: ReadonlyArray<Contribution>,

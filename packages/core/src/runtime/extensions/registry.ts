@@ -28,12 +28,10 @@ import {
   extractModelDrivers,
   extractPermissionRules,
   extractPromptSections,
-  extractTools,
 } from "../../domain/contribution.js"
 import { type CompiledHookMap, compileInterceptors } from "./interceptor-registry.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
-import { compileQueries, type CompiledQueries } from "./query-registry.js"
-import { compileMutations, type CompiledMutations } from "./mutation-registry.js"
+import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
 
 // Resolved snapshot — the immutable compiled state
@@ -48,8 +46,7 @@ export interface ResolvedExtensions {
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly hooks: CompiledHookMap
   readonly projections: CompiledProjections
-  readonly queries: CompiledQueries
-  readonly mutations: CompiledMutations
+  readonly capabilities: CompiledCapabilities
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
@@ -199,38 +196,22 @@ export const resolveExtensions = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-  // C4.4 tool bridge — identity-first scope shadowing followed by audience
-  // authorization, mirroring C4.3 commands. Tools' identity is `name` (flat).
-  // Both legacy `ToolContribution`s AND every `CapabilityContribution` enter
-  // the candidate map keyed by name — pre-filtering by audience would let a
-  // builtin tool leak when a higher-scope capability with the same id but a
-  // non-model audience is registered. Authorization (`audiences.includes("model")`)
-  // happens AFTER selection. C4.5 deletes this bridge along with
-  // `ToolContribution` once `ToolRunner` consumes Capability directly.
-  type ToolCandidate =
-    | { readonly _source: "tool"; readonly tool: AnyToolDefinition }
-    | { readonly _source: "capability"; readonly cap: AnyCapabilityContribution }
-
-  const toolWinners = new Map<string, ToolCandidate>()
+  // Tool resolution — identity-first scope shadowing followed by audience
+  // authorization. Tools' identity is `cap.id` (flat). Every capability
+  // (regardless of audience) enters the candidate map; authorization
+  // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
+  // override that narrows audiences correctly hides a shadowed builtin tool.
+  const toolWinners = new Map<string, AnyCapabilityContribution>()
   for (const ext of sorted) {
-    for (const t of extractTools(ext.contributions)) {
-      toolWinners.set(t.name, { _source: "tool", tool: t })
-    }
     for (const cap of extractCapabilities(ext.contributions)) {
-      // Identity-first: ALL capabilities shadow same-name lower-scope tools by
-      // id. A project-scope capability with `audiences:["agent-protocol"]`
-      // MUST shadow the builtin tool — otherwise the builtin leaks.
-      toolWinners.set(cap.id, { _source: "capability", cap })
+      toolWinners.set(cap.id, cap)
     }
   }
 
-  const isAuthorizedAsTool = (entry: ToolCandidate): boolean =>
-    entry._source === "tool" || entry.cap.audiences.includes("model")
-
   const tools = new Map<string, AnyToolDefinition>()
-  for (const [name, entry] of toolWinners) {
-    if (!isAuthorizedAsTool(entry)) continue
-    tools.set(name, entry._source === "tool" ? entry.tool : capabilityToTool(entry.cap))
+  for (const [name, cap] of toolWinners) {
+    if (!cap.audiences.includes("model")) continue
+    tools.set(name, capabilityToTool(cap))
   }
 
   const agents = compileContributions(sorted, extractAgents, (a) => a.name)
@@ -295,8 +276,7 @@ export const resolveExtensions = (
 
   const hooks = compileInterceptors(sorted).chain
   const projections = compileProjections(sorted)
-  const queries = compileQueries(sorted)
-  const mutations = compileMutations(sorted)
+  const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
@@ -326,8 +306,7 @@ export const resolveExtensions = (
     permissionRules,
     hooks,
     projections,
-    queries,
-    mutations,
+    capabilities,
     extensions: sorted,
     failedExtensions: mergedFailures,
     extensionStatuses,
