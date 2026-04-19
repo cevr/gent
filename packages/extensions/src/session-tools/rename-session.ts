@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 export const RenameSessionParams = Schema.Struct({
   name: Schema.String.annotate({
@@ -7,8 +7,8 @@ export const RenameSessionParams = Schema.Struct({
   }),
 })
 
-export const RenameSessionTool = defineTool({
-  name: "rename_session",
+export const RenameSessionTool = tool({
+  id: "rename_session",
   resources: ["rename_session"],
   idempotent: true,
   description:

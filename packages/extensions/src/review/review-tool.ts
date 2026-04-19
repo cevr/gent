@@ -3,7 +3,7 @@ import {
   DEFAULT_AGENT_NAME,
   defineAgent,
   getDurableAgentRunSessionId,
-  defineTool,
+  tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -287,8 +287,8 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   }
 })
 
-export const ReviewTool = defineTool({
-  name: "review",
+export const ReviewTool = tool({
+  id: "review",
   resources: ["review"],
   description:
     "Run adversarial dual-model code review. Report mode returns findings. Fix mode runs one review+execute cycle. Use @gent/auto for iterative refinement.",

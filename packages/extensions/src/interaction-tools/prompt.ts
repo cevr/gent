@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 // Prompt Params — discriminated union on mode
 
@@ -56,8 +56,8 @@ const ReviewResult = Schema.Struct({
 
 export const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewResult])
 
-export const PromptTool = defineTool({
-  name: "prompt",
+export const PromptTool = tool({
+  id: "prompt",
   resources: ["prompt"],
   description:
     "Present content to the user for review, confirmation, or informational display. " +

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 // WebSearch Error
 
@@ -79,8 +79,8 @@ function extractResult(data: McpResponse): string | undefined {
 
 // WebSearch Tool
 
-export const WebSearchTool = defineTool({
-  name: "websearch",
+export const WebSearchTool = tool({
+  id: "websearch",
   idempotent: true,
   get description() {
     const year = new Date().getFullYear()

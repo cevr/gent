@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool, OutputBuffer, PermissionRule, saveFullOutput } from "@gent/core/extensions/api"
+import { tool, OutputBuffer, PermissionRule, saveFullOutput } from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
 
 // Bash Tool Error
@@ -99,8 +99,8 @@ function killGracefully(proc: { pid: number; kill: (signal?: number) => void }):
 
 // Bash Tool
 
-export const BashTool = defineTool({
-  name: "bash",
+export const BashTool = tool({
+  id: "bash",
   resources: ["bash"],
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops.",

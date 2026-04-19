@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 // Search Sessions Error
 
@@ -62,8 +62,8 @@ export function parseRelativeDate(s: string): number | undefined {
 
 // Search Sessions Tool
 
-export const SearchSessionsTool = defineTool({
-  name: "search_sessions",
+export const SearchSessionsTool = tool({
+  id: "search_sessions",
   idempotent: true,
   description:
     "Search past session content by keyword, file path, or date range. Returns session summaries with match excerpts.",

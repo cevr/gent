@@ -136,7 +136,7 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.execute(
+        EditTool.effect(
           { path: filePath, oldString: "hello world", newString: "hi there" },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),
@@ -159,7 +159,7 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.execute(
+        EditTool.effect(
           { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),
@@ -182,7 +182,7 @@ describe("EditTool execution", () => {
     try {
       const exit = await Effect.runPromise(
         Effect.exit(
-          EditTool.execute(
+          EditTool.effect(
             { path: filePath, oldString: "not here", newString: "replaced" },
             stubCtx,
           ).pipe(Effect.provide(editLayer)),
@@ -203,7 +203,7 @@ describe("EditTool execution", () => {
     try {
       const exit = await Effect.runPromise(
         Effect.exit(
-          EditTool.execute({ path: filePath, oldString: "foo", newString: "baz" }, stubCtx).pipe(
+          EditTool.effect({ path: filePath, oldString: "foo", newString: "baz" }, stubCtx).pipe(
             Effect.provide(editLayer),
           ),
         ),
@@ -222,7 +222,7 @@ describe("EditTool execution", () => {
 
     try {
       const result = await Effect.runPromise(
-        EditTool.execute(
+        EditTool.effect(
           { path: filePath, oldString: "line1\\nline2", newString: "merged" },
           stubCtx,
         ).pipe(Effect.provide(editLayer)),

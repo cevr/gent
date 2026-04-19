@@ -16,7 +16,6 @@ import {
   BranchId,
   defineExtension,
   defineResource,
-  defineTool,
   resource,
   tool,
   type AnyResourceMachine,
@@ -195,8 +194,8 @@ const artifactsMachineDef: AnyResourceMachine = {
 
 // ── Agent-facing tools ──
 
-const ArtifactSaveTool = defineTool({
-  name: "artifact_save",
+const ArtifactSaveTool = tool({
+  id: "artifact_save",
   description:
     "Save an artifact (plan, audit report, review, or any structured result). Upserts by sourceTool + branch.",
   params: Schema.Struct({
@@ -222,8 +221,8 @@ const ArtifactSaveTool = defineTool({
   }),
 })
 
-const ArtifactReadTool = defineTool({
-  name: "artifact_read",
+const ArtifactReadTool = tool({
+  id: "artifact_read",
   description: "Read the full content of an artifact by label/source or ID.",
   params: Schema.Struct({
     id: Schema.optional(Schema.String.annotate({ description: "Artifact ID (if known)" })),
@@ -242,8 +241,8 @@ const ArtifactReadTool = defineTool({
   }),
 })
 
-const ArtifactUpdateTool = defineTool({
-  name: "artifact_update",
+const ArtifactUpdateTool = tool({
+  id: "artifact_update",
   resources: ["artifact_update"],
   description:
     "Update an existing artifact. Supports content patches (find/replace), metadata updates, status changes, and label renames.",
@@ -284,8 +283,8 @@ const ArtifactUpdateTool = defineTool({
   }),
 })
 
-const ArtifactClearTool = defineTool({
-  name: "artifact_clear",
+const ArtifactClearTool = tool({
+  id: "artifact_clear",
   description: "Remove an artifact by ID.",
   params: Schema.Struct({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),
@@ -311,10 +310,5 @@ export const ArtifactsExtension = defineExtension({
       }),
     ),
   ],
-  capabilities: [
-    tool(ArtifactSaveTool),
-    tool(ArtifactReadTool),
-    tool(ArtifactUpdateTool),
-    tool(ArtifactClearTool),
-  ],
+  capabilities: [ArtifactSaveTool, ArtifactReadTool, ArtifactUpdateTool, ArtifactClearTool],
 })

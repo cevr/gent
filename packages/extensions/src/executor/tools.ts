@@ -9,7 +9,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineTool, type ToolContext } from "@gent/core/extensions/api"
+import { tool, type ToolContext } from "@gent/core/extensions/api"
 import { type ExecutorMcpToolResult, type ResumeAction, ExecutorMcpError } from "./domain.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
 import { ExecutorProtocol } from "./protocol.js"
@@ -39,8 +39,8 @@ const failIfError = (result: ExecutorMcpToolResult, phase: "execute" | "resume")
 
 // ── Execute Tool ──
 
-export const ExecuteTool = defineTool({
-  name: "execute",
+export const ExecuteTool = tool({
+  id: "execute",
   description: "Execute TypeScript in a sandboxed runtime with access to configured API tools.",
   promptSnippet: "Execute TypeScript in Executor's sandboxed runtime with configured API tools.",
   promptGuidelines: [
@@ -67,8 +67,8 @@ export const ExecuteTool = defineTool({
 
 // ── Resume Tool ──
 
-export const ResumeTool = defineTool({
-  name: "resume",
+export const ResumeTool = tool({
+  id: "resume",
   description: "Resume a paused Executor execution. Use the exact executionId returned by execute.",
   promptGuidelines: [
     "Use the exact executionId returned by execute.",

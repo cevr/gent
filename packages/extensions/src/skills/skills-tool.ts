@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { Skills, resolveSkillName } from "./skills.js"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 export const SkillsParams = Schema.Struct({
   names: Schema.Union([Schema.Array(Schema.String), Schema.Literal("all")]).annotate({
@@ -14,8 +14,8 @@ export const SkillsParams = Schema.Struct({
   ),
 })
 
-export const SkillsTool = defineTool({
-  name: "skills",
+export const SkillsTool = tool({
+  id: "skills",
   idempotent: true,
   description:
     "Load skill content by name. Skills provide domain-specific patterns and guidelines.",

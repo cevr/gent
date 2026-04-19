@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   DEFAULT_AGENT_NAME,
-  defineTool,
+  tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -275,8 +275,8 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   return { raw, findings }
 })
 
-export const AuditTool = defineTool({
-  name: "audit",
+export const AuditTool = tool({
+  id: "audit",
   resources: ["audit"],
   description:
     "Audit code with dual-model concern analysis. Report mode presents findings. Fix mode runs one detect-audit-synthesize-execute cycle. Use @gent/auto for iterative refinement.",

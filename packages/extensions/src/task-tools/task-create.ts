@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool, AgentName, TaskId } from "@gent/core/extensions/api"
+import { tool, AgentName, TaskId } from "@gent/core/extensions/api"
 import { TaskCreateRef, TaskAddDepRef } from "./mutations.js"
 
 export const TaskCreateParams = Schema.Struct({
@@ -19,8 +19,8 @@ export const TaskCreateParams = Schema.Struct({
   ),
 })
 
-export const TaskCreateTool = defineTool({
-  name: "task_create",
+export const TaskCreateTool = tool({
+  id: "task_create",
   description:
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,

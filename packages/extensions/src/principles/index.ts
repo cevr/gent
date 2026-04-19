@@ -1,9 +1,7 @@
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension } from "@gent/core/extensions/api"
 import { PrinciplesTool } from "./principles-tool.js"
 
-// Static prompt section bundled on `PrinciplesTool.prompt` per C7 — folded
-// into `Capability.prompt` by the `tool()` smart constructor.
 export const PrinciplesExtension = defineExtension({
   id: "@gent/principles",
-  capabilities: [tool(PrinciplesTool)],
+  capabilities: [PrinciplesTool],
 })

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
-  defineTool,
+  tool,
   AgentName,
   getDurableAgentRunSessionId,
   TaskId,
@@ -35,8 +35,8 @@ export const DelegateParams = Schema.Struct({
   ),
 })
 
-export const DelegateTool = defineTool({
-  name: "delegate",
+export const DelegateTool = tool({
+  id: "delegate",
   resources: ["delegate"],
   description:
     "Delegate work to specialized agents. Modes: single (agent+task), parallel (tasks[]), chain (chain[] with {previous}). Set background: true to run asynchronously.",

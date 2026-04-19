@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { $ } from "bun"
 import { GitReader } from "./git-reader.js"
 
@@ -178,8 +178,8 @@ const ensureCached = (fs: FileSystem.FileSystem, cachePath: string, spec: string
 
 // RepoExplorer Tool
 
-export const RepoTool = defineTool({
-  name: "repo",
+export const RepoTool = tool({
+  id: "repo",
   resources: ["repo"],
   idempotent: true,
   description:

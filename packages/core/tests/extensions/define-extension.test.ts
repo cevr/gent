@@ -11,13 +11,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import {
-  defineExtension,
-  defineResource,
-  tool,
-  definePipeline,
-  defineTool,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool, definePipeline } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
@@ -57,8 +51,8 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       // C7: PermissionRule + PromptSection are now bundled on the Capability
       // they decorate (here: `myTool.permissionRules`, `myTool.prompt`).
-      const myTool = defineTool({
-        name: "echo",
+      const myTool = tool({
+        id: "echo",
         description: "echo",
         params: Schema.Struct({}),
         permissionRules: [new PermissionRule({ tool: "echo", action: "allow" })],
@@ -68,7 +62,7 @@ describe("defineExtension", () => {
       const myLayer = Layer.empty
       const ext = defineExtension({
         id: "all-kinds",
-        capabilities: [tool(myTool)],
+        capabilities: [myTool],
         agents: [Agents.cowork],
         pipelines: [definePipeline("prompt.system", (i, next) => next(i))],
         resources: [
@@ -175,14 +169,12 @@ describe("defineExtension", () => {
           Effect.gen(function* () {
             yield* Effect.void
             return [
-              tool(
-                defineTool({
-                  name: "from-effect",
-                  description: "from effect",
-                  params: Schema.Struct({}),
-                  execute: () => Effect.void,
-                }),
-              ),
+              tool({
+                id: "from-effect",
+                description: "from effect",
+                params: Schema.Struct({}),
+                execute: () => Effect.void,
+              }),
             ]
           }),
       })
@@ -210,15 +202,15 @@ describe("defineExtension", () => {
 
   it.live("defineExtension result wires through ExtensionRegistry + pipeline chain", () =>
     Effect.gen(function* () {
-      const myTool = defineTool({
-        name: "from-define",
+      const myTool = tool({
+        id: "from-define",
         description: "test",
         params: Schema.Struct({}),
         execute: () => Effect.succeed("hi"),
       })
       const ext = defineExtension({
         id: "wired",
-        capabilities: [tool(myTool)],
+        capabilities: [myTool],
         pipelines: [
           definePipeline(
             "prompt.system",

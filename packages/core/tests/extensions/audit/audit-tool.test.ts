@@ -86,7 +86,7 @@ describe("Audit Tool", () => {
           }),
       })
 
-      return AuditTool.execute(
+      return AuditTool.effect(
         {
           prompt: "check error handling",
           paths: ["src/foo.ts", "src/bar.ts"],
@@ -139,7 +139,7 @@ describe("Audit Tool", () => {
       },
     })
 
-    return AuditTool.execute({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
+    return AuditTool.effect({ paths: ["src/db.ts"], mode: "report" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.findings.length).toBe(1)
         const executeCalls = calls.filter((c) => c.prompt.includes("Execute this audit plan"))
@@ -154,7 +154,7 @@ describe("Audit Tool", () => {
       agentRun: () => Effect.succeed(makeSuccess("No specific concerns found for this code.")),
     })
 
-    return AuditTool.execute({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
+    return AuditTool.effect({ paths: ["src/clean.ts"], mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.findings.length).toBe(0)
         expect(result.output).toBe("No findings to fix.")
@@ -185,7 +185,7 @@ describe("Audit Tool", () => {
         }),
     })
 
-    return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+    return AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
       Effect.map(() => {
         expect(executorAgents.length).toBeGreaterThan(0)
         expect(executorAgents[0]).toBe("cowork")
@@ -216,7 +216,7 @@ describe("Audit Tool", () => {
         }),
     })
 
-    return AuditTool.execute({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
+    return AuditTool.effect({ paths: ["src/a.ts"], mode: "fix" }, ctx).pipe(
       Effect.map(() => {
         expect(auditOverrides.length).toBeGreaterThan(0)
         for (const overrides of auditOverrides) {

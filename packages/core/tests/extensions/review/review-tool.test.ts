@@ -59,7 +59,7 @@ describe("ReviewTool", () => {
       },
     })
 
-    return ReviewTool.execute(
+    return ReviewTool.effect(
       { description: "refactored auth module", content: "diff --git a/auth.ts b/auth.ts" },
       ctx,
     ).pipe(
@@ -96,7 +96,7 @@ describe("ReviewTool", () => {
         }),
     })
 
-    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.comments.length).toBe(1)
         expect(result.comments[0]!.severity).toBe("high")
@@ -118,7 +118,7 @@ describe("ReviewTool", () => {
         }),
     })
 
-    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.flip,
       Effect.map((error) => {
         expect(error._tag).toBe("ReviewError")
@@ -169,7 +169,7 @@ describe("ReviewTool", () => {
         }),
     })
 
-    return ReviewTool.execute({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
+    return ReviewTool.effect({ description: "test", content: "fake diff", mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.output).toBe("Applied fixes.")
         expect(
@@ -201,7 +201,7 @@ describe("ReviewTool", () => {
         }),
     })
 
-    return ReviewTool.execute({ description: "test", content: "fake diff" }, ctx).pipe(
+    return ReviewTool.effect({ description: "test", content: "fake diff" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.session).toBeUndefined()
       }),

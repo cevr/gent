@@ -1,18 +1,17 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { tool } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/extensions/api"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { defineTool } from "@gent/core/domain/tool"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 
 describe("ToolRunner", () => {
   test("returns error result when tool fails", async () => {
-    const FailTool = defineTool({
-      name: "fail",
+    const FailTool = tool({
+      id: "fail",
       description: "Fails on purpose",
       params: Schema.Struct({}),
       execute: () => Effect.fail(new Error("boom")),
@@ -25,7 +24,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [tool(FailTool)] },
+            contributions: { capabilities: [FailTool] },
           },
         ]),
       ),
@@ -53,8 +52,8 @@ describe("ToolRunner", () => {
   })
 
   test("returns structured error on invalid input", async () => {
-    const StrictTool = defineTool({
-      name: "strict",
+    const StrictTool = tool({
+      id: "strict",
       description: "Requires specific params",
       params: Schema.Struct({ path: Schema.String }),
       execute: () => Effect.succeed({ ok: true }),
@@ -67,7 +66,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [tool(StrictTool)] },
+            contributions: { capabilities: [StrictTool] },
           },
         ]),
       ),
@@ -96,8 +95,8 @@ describe("ToolRunner", () => {
   })
 
   test("returns 'Permission denied' error when tool is denied by permission rules", async () => {
-    const SafeTool = defineTool({
-      name: "safe",
+    const SafeTool = tool({
+      id: "safe",
       description: "A safe tool",
       params: Schema.Struct({}),
       execute: () => Effect.succeed({ ok: true }),
@@ -115,7 +114,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [tool(SafeTool)] },
+            contributions: { capabilities: [SafeTool] },
           },
         ]),
       ),

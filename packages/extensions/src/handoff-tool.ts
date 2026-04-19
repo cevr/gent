@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 // Handoff Tool Error
 
@@ -24,8 +24,8 @@ export const HandoffParams = Schema.Struct({
 
 // Handoff Tool
 
-export const HandoffTool = defineTool({
-  name: "handoff",
+export const HandoffTool = tool({
+  id: "handoff",
   resources: ["handoff"],
   description:
     "Create a new session with distilled context from the current one. Use when context is getting large and you want to continue with a clean slate while preserving key information. Blocks until the user confirms.",

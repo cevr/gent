@@ -18,7 +18,6 @@ import {
   definePipeline,
   defineResource,
   defineSubscription,
-  defineTool,
   pipeline,
   resource,
   subscription,
@@ -26,9 +25,9 @@ import {
 } from "@gent/core/extensions/api"
 
 describe("Effect-purity locks (compile-time)", () => {
-  test("defineTool.execute MUST return Effect — async handler rejected", () => {
-    defineTool({
-      name: "ok",
+  test("tool.execute MUST return Effect — async handler rejected", () => {
+    tool({
+      id: "ok",
       description: "ok",
       params: Schema.Struct({}),
       // @ts-expect-error — async handler must not be assignable to Effect-returning execute
@@ -91,14 +90,12 @@ describe("Effect-purity locks (compile-time)", () => {
     const ext = defineExtension({
       id: "purity-positive",
       capabilities: [
-        tool(
-          defineTool({
-            name: "noop",
-            description: "noop",
-            params: Schema.Struct({}),
-            execute: () => Effect.succeed("ok"),
-          }),
-        ),
+        tool({
+          id: "noop",
+          description: "noop",
+          params: Schema.Struct({}),
+          execute: () => Effect.succeed("ok"),
+        }),
       ],
       pipelines: [pipeline(definePipeline("prompt.system", (i, next) => next(i)))],
       subscriptions: [subscription(defineSubscription("turn.after", "isolate", () => Effect.void))],

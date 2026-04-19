@@ -27,7 +27,6 @@ import {
   defineResource,
   tool,
   ProjectionError,
-  defineTool,
   type ProjectionContribution,
   type ReadOnly,
   ReadOnlyBrand,
@@ -52,8 +51,8 @@ const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test())
 
 // C7: static prompt sections live on `Capability.prompt`. The tool here is a
 // no-op carrier — its only purpose is to bring the prompt section into scope.
-const sectionTool = defineTool({
-  name: "rp-test-tool",
+const sectionTool = tool({
+  id: "rp-test-tool",
   description: "carrier for rp-test-section",
   params: S.Struct({}),
   prompt: { id: "rp-test-section", content: "rp test content", priority: 50 },
@@ -62,7 +61,7 @@ const sectionTool = defineTool({
 
 const sectionExtension = defineExtension({
   id: "@gent/test-runtime-profile",
-  capabilities: [tool(sectionTool)],
+  capabilities: [sectionTool],
 })
 
 // Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection

@@ -76,7 +76,7 @@ describe("AskUser Tool", () => {
           }),
       })
 
-      const result = yield* AskUserTool.execute(
+      const result = yield* AskUserTool.effect(
         {
           questions: [
             {
@@ -111,7 +111,7 @@ describe("AskUser Tool", () => {
           }),
       })
 
-      const result = yield* AskUserTool.execute(
+      const result = yield* AskUserTool.effect(
         {
           questions: [
             {

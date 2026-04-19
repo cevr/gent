@@ -120,7 +120,7 @@ describe("TaskCreateTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const result = yield* TaskCreateTool.execute({ subject: "Fix auth bug" }, ctx)
+      const result = yield* TaskCreateTool.effect({ subject: "Fix auth bug" }, ctx)
       expect(result.taskId).toBeDefined()
       expect(result.subject).toBe("Fix auth bug")
       expect(result.status).toBe("pending")
@@ -131,8 +131,8 @@ describe("TaskCreateTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const t1 = yield* TaskCreateTool.execute({ subject: "First" }, ctx)
-      const t2 = yield* TaskCreateTool.execute(
+      const t1 = yield* TaskCreateTool.effect({ subject: "First" }, ctx)
+      const t2 = yield* TaskCreateTool.effect(
         {
           subject: "Second",
           blockedBy: [t1.taskId],
@@ -150,9 +150,9 @@ describe("TaskListTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      yield* TaskCreateTool.execute({ subject: "Task A" }, ctx)
-      yield* TaskCreateTool.execute({ subject: "Task B" }, ctx)
-      const result = yield* TaskListTool.execute({}, ctx)
+      yield* TaskCreateTool.effect({ subject: "Task A" }, ctx)
+      yield* TaskCreateTool.effect({ subject: "Task B" }, ctx)
+      const result = yield* TaskListTool.effect({}, ctx)
       expect(result.tasks.length).toBe(2)
       expect(result.summary.total).toBe(2)
       expect(result.summary.pending).toBe(2)
@@ -163,7 +163,7 @@ describe("TaskListTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const result = yield* TaskListTool.execute({}, ctx)
+      const result = yield* TaskListTool.effect({}, ctx)
       expect(result.tasks.length).toBe(0)
       expect(result.summary).toBe("No tasks")
     }).pipe(Effect.provide(layer)),
@@ -175,14 +175,14 @@ describe("TaskGetTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const created = yield* TaskCreateTool.execute(
+      const created = yield* TaskCreateTool.effect(
         {
           subject: "Review code",
           description: "Full review of auth module",
         },
         ctx,
       )
-      const result = yield* TaskGetTool.execute({ taskId: created.taskId }, ctx)
+      const result = yield* TaskGetTool.effect({ taskId: created.taskId }, ctx)
       expect(result.subject).toBe("Review code")
       expect(result.description).toBe("Full review of auth module")
     }).pipe(Effect.provide(layer)),
@@ -192,7 +192,7 @@ describe("TaskGetTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const result = yield* TaskGetTool.execute({ taskId: "nonexistent" }, ctx)
+      const result = yield* TaskGetTool.effect({ taskId: "nonexistent" }, ctx)
       expect(result.error).toContain("not found")
     }).pipe(Effect.provide(layer)),
   )
@@ -203,10 +203,10 @@ describe("TaskUpdateTool", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const created = yield* TaskCreateTool.execute({ subject: "Fix it" }, ctx)
+      const created = yield* TaskCreateTool.effect({ subject: "Fix it" }, ctx)
       // Must follow valid transition: pending → in_progress → completed
-      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
-      const result = yield* TaskUpdateTool.execute(
+      yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "in_progress" }, ctx)
+      const result = yield* TaskUpdateTool.effect(
         { taskId: created.taskId, status: "completed" },
         ctx,
       )
@@ -227,10 +227,10 @@ describe("TaskUpdateTool", () => {
         ),
       )
       yield* Effect.yieldNow
-      const created = yield* TaskCreateTool.execute({ subject: "Ship it" }, ctx)
+      const created = yield* TaskCreateTool.effect({ subject: "Ship it" }, ctx)
       // Valid transition: pending → in_progress → completed
-      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "in_progress" }, ctx)
-      yield* TaskUpdateTool.execute({ taskId: created.taskId, status: "completed" }, ctx)
+      yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "in_progress" }, ctx)
+      yield* TaskUpdateTool.effect({ taskId: created.taskId, status: "completed" }, ctx)
       const envelopes = yield* Fiber.join(eventsFiber)
       const events = Array.from(envelopes, (envelope) => envelope.event._tag)
       expect(events).toContain("TaskCompleted")
@@ -270,7 +270,7 @@ describe("DelegateTool background mode", () => {
     Effect.gen(function* () {
       yield* setup
       const ctx = yield* makeCtx
-      const result = yield* DelegateTool.execute(
+      const result = yield* DelegateTool.effect(
         {
           agent: "explore" as const,
           task: "analyze the codebase",

@@ -18,7 +18,7 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.execute({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
+    return PromptTool.effect({ mode: "review", content: "## Plan\\n- Step 1" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.mode).toBe("review")
         if (result.mode === "review") {
@@ -39,7 +39,7 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.execute({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
+    return PromptTool.effect({ mode: "confirm", content: "Proceed?" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.mode).toBe("confirm")
         if (result.mode === "confirm") {
@@ -59,7 +59,7 @@ describe("Prompt Tool", () => {
       },
     })
 
-    return PromptTool.execute({ mode: "present", content: "Info" }, ctx).pipe(
+    return PromptTool.effect({ mode: "present", content: "Info" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.mode).toBe("present")
         if (result.mode === "present") {

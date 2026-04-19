@@ -16,9 +16,9 @@ import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { definePipeline } from "@gent/core/domain/pipeline"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
-import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { pipeline, tool } from "@gent/core/domain/contribution"
+import { pipeline } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -29,8 +29,8 @@ const stubCtx = {
 } as unknown as ExtensionHostContext
 
 const toolReturning = (name: string, label: string) =>
-  defineTool({
-    name,
+  tool({
+    id: name,
     description: label,
     params: Schema.Struct({}),
     execute: () => Effect.succeed(label),
@@ -50,9 +50,9 @@ describe("scope precedence", () => {
       const projectTool = toolReturning("greet", "from-project")
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
-        ext("b", "user", { capabilities: [tool(userTool)] }),
-        ext("c", "project", { capabilities: [tool(projectTool)] }),
+        ext("a", "builtin", { capabilities: [builtinTool] }),
+        ext("b", "user", { capabilities: [userTool] }),
+        ext("c", "project", { capabilities: [projectTool] }),
       ])
 
       const resolvedTool = resolved.tools.get("greet")!
@@ -73,15 +73,15 @@ describe("scope precedence", () => {
     })
 
     it.live("prompt section by id (Capability.prompt): project shadows builtin", () => {
-      const builtinTool = defineTool({
-        name: "carrier-builtin",
+      const builtinTool = tool({
+        id: "carrier-builtin",
         description: "carrier",
         params: Schema.Struct({}),
         prompt: { id: "rules", content: "builtin rules", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
-      const projectTool = defineTool({
-        name: "carrier-project",
+      const projectTool = tool({
+        id: "carrier-project",
         description: "carrier",
         params: Schema.Struct({}),
         prompt: { id: "rules", content: "project rules", priority: 50 },
@@ -89,8 +89,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
-        ext("b", "project", { capabilities: [tool(projectTool)] }),
+        ext("a", "builtin", { capabilities: [builtinTool] }),
+        ext("b", "project", { capabilities: [projectTool] }),
       ])
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
@@ -101,15 +101,15 @@ describe("scope precedence", () => {
       // C7 codex BLOCKER: previously, prompts/rules were collected from raw
       // extracted capabilities, not winners. A higher-scope capability
       // shadowing a lower-scope tool would leak the loser's prompt.
-      const builtinTool = defineTool({
-        name: "shadow-me",
+      const builtinTool = tool({
+        id: "shadow-me",
         description: "carrier",
         params: Schema.Struct({}),
         prompt: { id: "shadow-prompt", content: "BUILTIN PROMPT", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
-      const projectTool = defineTool({
-        name: "shadow-me",
+      const projectTool = tool({
+        id: "shadow-me",
         description: "carrier",
         params: Schema.Struct({}),
         // NO prompt — should remove the section
@@ -117,8 +117,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
-        ext("b", "project", { capabilities: [tool(projectTool)] }),
+        ext("a", "builtin", { capabilities: [builtinTool] }),
+        ext("b", "project", { capabilities: [projectTool] }),
       ])
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
@@ -127,15 +127,15 @@ describe("scope precedence", () => {
       // C7 codex BLOCKER companion: a project-scope tool shadowing the
       // builtin `bash` without `permissionRules` must NOT inherit the
       // builtin's deny rules.
-      const builtinTool = defineTool({
-        name: "shadow-rules",
+      const builtinTool = tool({
+        id: "shadow-rules",
         description: "carrier",
         params: Schema.Struct({}),
         permissionRules: [new PermissionRule({ tool: "shadow-rules", action: "deny" })],
         execute: () => Effect.succeed("ok"),
       })
-      const projectTool = defineTool({
-        name: "shadow-rules",
+      const projectTool = tool({
+        id: "shadow-rules",
         description: "carrier",
         params: Schema.Struct({}),
         // NO permissionRules — should remove the rule
@@ -143,8 +143,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
-        ext("b", "project", { capabilities: [tool(projectTool)] }),
+        ext("a", "builtin", { capabilities: [builtinTool] }),
+        ext("b", "project", { capabilities: [projectTool] }),
       ])
       // The deny rule must be gone — project shadowed the builtin entirely.
       return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
@@ -156,8 +156,8 @@ describe("scope precedence", () => {
 
       // Pass in reverse order to prove the registry sorts, not just respects insertion
       const resolved = resolveExtensions([
-        ext("z-ext", "builtin", { capabilities: [tool(toolFromZ)] }),
-        ext("a-ext", "builtin", { capabilities: [tool(toolFromA)] }),
+        ext("z-ext", "builtin", { capabilities: [toolFromZ] }),
+        ext("a-ext", "builtin", { capabilities: [toolFromA] }),
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins

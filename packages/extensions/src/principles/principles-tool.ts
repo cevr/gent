@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { loadPrinciples, PRINCIPLE_NAMES } from "./data.js"
 
 export const PrinciplesParams = Schema.Struct({
@@ -15,8 +15,8 @@ Use the \`principles\` tool to read specific principles before making decisions.
 
 ${PRINCIPLE_NAMES.map((name) => `- ${name}`).join("\n")}`
 
-export const PrinciplesTool = defineTool({
-  name: "principles",
+export const PrinciplesTool = tool({
+  id: "principles",
   description:
     "Read governing principles by name. Use before architectural decisions, plan creation, or code review.",
   promptSnippet: "Read governing principles for grounding decisions",

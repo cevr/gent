@@ -45,7 +45,7 @@ describe("Delegate Tool", () => {
         }),
     })
 
-    return DelegateTool.execute({ agent: "explore", task: "hello" }, ctx).pipe(
+    return DelegateTool.effect({ agent: "explore", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.output).toBe("explore:hello")
         expect(result.metadata?.sessionId).toBeUndefined()
@@ -65,7 +65,7 @@ describe("Delegate Tool", () => {
         }),
     })
 
-    return DelegateTool.execute({ agent: "cowork", task: "hello" }, ctx).pipe(
+    return DelegateTool.effect({ agent: "cowork", task: "hello" }, ctx).pipe(
       Effect.map((result) => {
         // Delegate is fire-and-forget ephemeral by design — no durable session ref is shown.
         expect(result.output).toBe("cowork:hello")
@@ -88,7 +88,7 @@ describe("Delegate Tool", () => {
       },
     })
 
-    return DelegateTool.execute(
+    return DelegateTool.effect(
       {
         chain: [
           { agent: "explore", task: "first" },
@@ -118,7 +118,7 @@ describe("Delegate Tool", () => {
       },
     })
 
-    return DelegateTool.execute(
+    return DelegateTool.effect(
       {
         tasks: [
           { agent: "explore", task: "a" },
@@ -150,7 +150,7 @@ describe("Delegate Tool", () => {
       },
     })
 
-    return DelegateTool.execute({ agent: "explore", task: "go" }, ctx).pipe(
+    return DelegateTool.effect({ agent: "explore", task: "go" }, ctx).pipe(
       Effect.map(() => {
         expect(capturedRunSpec?.persistence).toBe("ephemeral")
       }),
@@ -172,7 +172,7 @@ describe("Delegate Tool", () => {
       },
     })
 
-    return DelegateTool.execute(
+    return DelegateTool.effect(
       {
         chain: [
           { agent: "explore", task: "a" },
@@ -203,7 +203,7 @@ describe("Delegate Tool", () => {
       },
     })
 
-    return DelegateTool.execute(
+    return DelegateTool.effect(
       {
         tasks: [
           { agent: "explore", task: "a" },

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 
 /**
  * Signal tool for the auto loop extension.
@@ -7,8 +7,8 @@ import { defineTool } from "@gent/core/extensions/api"
  * The agent calls this to report iteration results. The extension's mapEvent
  * watches for ToolCallSucceeded("auto_checkpoint") and advances the machine.
  */
-export const AutoCheckpointTool = defineTool({
-  name: "auto_checkpoint",
+export const AutoCheckpointTool = tool({
+  id: "auto_checkpoint",
   resources: ["auto_checkpoint"],
   description:
     "Report your iteration results. Call with status 'continue' to proceed to the next iteration, " +

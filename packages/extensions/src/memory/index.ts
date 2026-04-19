@@ -22,8 +22,6 @@ import {
   AgentEvent,
   defineExtension,
   defineResource,
-  tool,
-  type AnyToolDefinition,
   type ReduceResult,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
@@ -149,7 +147,7 @@ const memoryWorkflow: ResourceMachine<
 
 export const MemoryExtension = defineExtension({
   id: MEMORY_EXTENSION_ID,
-  capabilities: (MemoryTools as ReadonlyArray<AnyToolDefinition>).map(tool),
+  capabilities: [...MemoryTools],
   agents: [...MemoryAgents],
   projections: [MemoryVaultProjection],
   // Single Resource carries the MemoryVault layer, the dream-promotion

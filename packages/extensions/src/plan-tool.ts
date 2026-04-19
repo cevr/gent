@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   DEFAULT_AGENT_NAME,
-  defineTool,
+  tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
@@ -179,8 +179,8 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   return synthesizedPlan
 })
 
-export const PlanTool = defineTool({
-  name: "plan",
+export const PlanTool = tool({
+  id: "plan",
   resources: ["plan"],
   description:
     "Create an adversarial implementation plan. Default mode presents the plan. Fix mode runs one plan+execute cycle. Use @gent/auto for iterative refinement.",

@@ -102,7 +102,7 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "implement auth" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
@@ -141,7 +141,7 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "implement auth" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
@@ -173,7 +173,7 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "implement auth" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement auth" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
@@ -198,7 +198,7 @@ describe("PlanTool artifact persistence", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
@@ -236,7 +236,7 @@ describe("AuditTool artifact persistence", () => {
       },
     })
 
-    return AuditTool.execute({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
+    return AuditTool.effect({ paths: ["src/auth.ts"], mode: "report" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",
@@ -276,7 +276,7 @@ describe("ReviewTool artifact persistence", () => {
       },
     })
 
-    return ReviewTool.execute({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
+    return ReviewTool.effect({ content: "diff --git a/auth.ts b/auth.ts\n+code" }, ctx).pipe(
       Effect.map(() => {
         const saves = spy.calls.filter(
           (c) => c.extensionId === ARTIFACTS_EXTENSION_ID && c.tag === "Save",

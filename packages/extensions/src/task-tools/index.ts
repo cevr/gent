@@ -16,7 +16,7 @@
  * @module
  */
 import { Layer } from "effect"
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
 import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
@@ -39,10 +39,10 @@ export type { TaskEntry } from "./identity.js"
 export const TaskExtension = defineExtension({
   id: TASK_TOOLS_EXTENSION_ID,
   capabilities: [
-    tool(TaskCreateTool),
-    tool(TaskListTool),
-    tool(TaskGetTool),
-    tool(TaskUpdateTool),
+    TaskCreateTool,
+    TaskListTool,
+    TaskGetTool,
+    TaskUpdateTool,
     TaskGetQuery,
     TaskListQuery,
     TaskGetDepsQuery,

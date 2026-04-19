@@ -15,8 +15,9 @@ import {
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
-import { defineResource, tool } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/extensions/api"
 
 const fsLayer = Layer.mergeAll(
   BunFileSystem.layer,

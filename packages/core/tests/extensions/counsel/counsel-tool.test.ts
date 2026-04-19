@@ -39,7 +39,7 @@ describe("CounselTool", () => {
       },
     })
 
-    return CounselTool.execute({ prompt: "Is this approach sound?" }, ctx).pipe(
+    return CounselTool.effect({ prompt: "Is this approach sound?" }, ctx).pipe(
       Effect.map((result) => {
         expect(capturedPrompt).toContain("Is this approach sound?")
         expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
@@ -72,7 +72,7 @@ describe("CounselTool", () => {
       },
     })
 
-    return CounselTool.execute({ prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
+    return CounselTool.effect({ prompt: "Review this architecture", mode: "deep" }, ctx).pipe(
       Effect.map((result) => {
         expect(capturedOverrides?.["modelId"]).toBe("openai/gpt-5.4")
         expect(capturedOverrides?.["reasoningEffort"]).toBe("high")
@@ -106,7 +106,7 @@ describe("CounselTool", () => {
       },
     })
 
-    return CounselTool.execute(
+    return CounselTool.effect(
       { prompt: "Is this safe?", context: "We removed the auth middleware" },
       ctx,
     ).pipe(
@@ -127,7 +127,7 @@ describe("CounselTool", () => {
         }),
     })
 
-    return CounselTool.execute({ prompt: "help" }, ctx).pipe(
+    return CounselTool.effect({ prompt: "help" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.error).toBe("Model unavailable")
       }),
@@ -151,7 +151,7 @@ describe("CounselTool", () => {
       },
     })
 
-    return CounselTool.execute({ prompt: "thoughts?" }, ctx).pipe(
+    return CounselTool.effect({ prompt: "thoughts?" }, ctx).pipe(
       Effect.map(() => {
         expect(capturedAgent?.name).toBe("counsel-worker")
         expect(capturedRunPersistence).toBe("ephemeral")

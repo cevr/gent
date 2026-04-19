@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, defineTool, type ToolContext } from "@gent/core/extensions/api"
+import { defineAgent, tool, type ToolContext } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
 
@@ -71,8 +71,8 @@ const buildSynthesisPrompt = (
       : "Compare approaches across repos. Note patterns, tradeoffs, and design decisions. Recommend based on evidence.",
   ].join("\n")
 
-export const ResearchTool = defineTool({
-  name: "research",
+export const ResearchTool = tool({
+  id: "research",
   resources: ["research"],
   description:
     "Research external repositories to understand how they work. Single repo for focused explanation, multiple repos for comparative analysis.",

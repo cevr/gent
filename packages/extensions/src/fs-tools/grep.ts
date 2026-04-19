@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, FileSystem, Path } from "effect"
-import { defineTool, FileIndex } from "@gent/core/extensions/api"
+import { tool, FileIndex } from "@gent/core/extensions/api"
 import { Glob } from "bun"
 
 // Grep Tool Error
@@ -66,8 +66,8 @@ export const GrepResult = Schema.Struct({
 
 // Grep Tool
 
-export const GrepTool = defineTool({
-  name: "grep",
+export const GrepTool = tool({
+  id: "grep",
   idempotent: true,
   description: "Search file contents with regex. Returns matching lines.",
   promptSnippet: "Search file contents with regex",

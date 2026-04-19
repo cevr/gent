@@ -86,7 +86,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
     const cwd = "/some/active/repo"
     const expectedKey = projectKeyOf(cwd)
     await Effect.runPromise(
-      MemoryRememberTool.execute(
+      MemoryRememberTool.effect(
         {
           title: "Auto Key",
           content: "should land in project dir",
@@ -104,7 +104,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
 
   test("project scope with explicit project_key honors the param", async () => {
     await Effect.runPromise(
-      MemoryRememberTool.execute(
+      MemoryRememberTool.effect(
         {
           title: "Explicit Key",
           content: "uses provided key",
@@ -121,7 +121,7 @@ describe("MemoryRememberTool — auto-derived projectKey", () => {
 
   test("global scope ignores cwd and writes to global/", async () => {
     await Effect.runPromise(
-      MemoryRememberTool.execute(
+      MemoryRememberTool.effect(
         {
           title: "Global Note",
           content: "no project key needed",
@@ -149,7 +149,7 @@ describe("MemoryForgetTool — auto-derived projectKey", () => {
     expect(Fs.existsSync(file)).toBe(true)
 
     await Effect.runPromise(
-      MemoryForgetTool.execute({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
+      MemoryForgetTool.effect({ title: "To Remove", scope: "project" }, makeCtx(cwd)).pipe(
         Effect.provide(MemoryVaultTest(tmpDir)),
       ),
     )

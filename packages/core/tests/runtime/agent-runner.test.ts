@@ -18,8 +18,7 @@ import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { defineTool } from "@gent/core/domain/tool"
-import { tool } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
@@ -34,8 +33,8 @@ import { ServerProfileService } from "@gent/core/runtime/scope-brands"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 
-const bashStubTool = defineTool({
-  name: "bash",
+const bashStubTool = tool({
+  id: "bash",
   description: "Stub bash tool for tests",
   params: Schema.Struct({ command: Schema.String }),
   execute: (params) => Effect.succeed({ output: params.command }),
@@ -49,7 +48,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
-        capabilities: [tool(bashStubTool)],
+        capabilities: [bashStubTool],
       },
     },
   ]),
@@ -1148,8 +1147,8 @@ describe("ephemeral service propagation", () => {
 
   test("ephemeral agent auto-approves interactions", () =>
     Effect.gen(function* () {
-      const approveTool = defineTool({
-        name: "approve_test",
+      const approveTool = tool({
+        id: "approve_test",
         description: "Tests approval",
         params: Schema.Struct({ text: Schema.String }),
         execute: Effect.fn("approve_test")(function* (_params, ctx) {
@@ -1169,7 +1168,7 @@ describe("ephemeral service propagation", () => {
             sourcePath: "test",
             contributions: {
               agents: Object.values(Agents),
-              capabilities: [tool(approveTool)],
+              capabilities: [approveTool],
             },
           },
         ]),

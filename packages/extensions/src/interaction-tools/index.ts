@@ -13,7 +13,7 @@
  * @module
  */
 
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension } from "@gent/core/extensions/api"
 import { AskUserTool } from "./ask-user.js"
 import { PromptTool } from "./prompt.js"
 import { InteractionProjection } from "./projection.js"
@@ -22,6 +22,6 @@ export const INTERACTION_TOOLS_EXTENSION_ID = "@gent/interaction-tools"
 
 export const InteractionToolsExtension = defineExtension({
   id: INTERACTION_TOOLS_EXTENSION_ID,
-  capabilities: [tool(AskUserTool), tool(PromptTool)],
+  capabilities: [AskUserTool, PromptTool],
   projections: [InteractionProjection],
 })

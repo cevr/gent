@@ -53,7 +53,7 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: true }),
     })
 
-    return HandoffTool.execute(
+    return HandoffTool.effect(
       {
         context: "Current task: implement auth. Key files: src/auth.ts",
         reason: "context window filling up",
@@ -73,7 +73,7 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: false }),
     })
 
-    return HandoffTool.execute(
+    return HandoffTool.effect(
       {
         context: "Current task: implement auth",
       },

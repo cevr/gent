@@ -93,7 +93,7 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "implement caching" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement caching" }, ctx).pipe(
       Effect.map((result) => {
         // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
         expect(calls.length).toBe(7)
@@ -134,7 +134,7 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.execute(
+    return PlanTool.effect(
       {
         prompt: "add auth",
         context: "Using JWT tokens",
@@ -162,7 +162,7 @@ describe("Plan Tool", () => {
       reviewDecision: "no",
     })
 
-    return PlanTool.execute({ prompt: "refactor" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "refactor" }, ctx).pipe(
       Effect.map((result) => {
         expect(result.decision).toBe("no")
       }),
@@ -186,7 +186,7 @@ describe("Plan Tool", () => {
       },
     })
 
-    return PlanTool.execute({ prompt: "test" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "test" }, ctx).pipe(
       Effect.map(() => {
         // Should have at least 2 different models used
         const uniqueModels = new Set(models)
@@ -231,7 +231,7 @@ describe("Plan Tool", () => {
         }),
     })
 
-    return PlanTool.execute({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
+    return PlanTool.effect({ prompt: "implement caching", mode: "fix" }, ctx).pipe(
       Effect.map((result) => {
         // Single cycle: plan phases + execute (no evaluator loop)
         expect(result.output).toBe("Executed batch 1 successfully.")

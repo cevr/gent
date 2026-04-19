@@ -22,8 +22,8 @@ import {
 } from "@gent/core/providers/provider"
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineTool, type AnyToolDefinition, type ToolContext } from "@gent/core/domain/tool"
-import { tool } from "@gent/core/domain/contribution"
+import { type ToolContext } from "@gent/core/domain/tool"
+import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
 import {
   BaseEventStore,
@@ -59,7 +59,7 @@ import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 // Shared helpers
 // ============================================================================
 
-const makeExtRegistry = (tools: AnyToolDefinition[] = []) => {
+const makeExtRegistry = (tools: AnyCapabilityContribution[] = []) => {
   const resolved = resolveExtensions([
     {
       manifest: { id: "agents" },
@@ -67,7 +67,7 @@ const makeExtRegistry = (tools: AnyToolDefinition[] = []) => {
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
-        capabilities: tools.map(tool),
+        capabilities: tools,
       },
     },
   ])
@@ -135,7 +135,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
 
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
-  tools: AnyToolDefinition[] = [],
+  tools: AnyCapabilityContribution[] = [],
 ) => {
   const extRegistry = makeExtRegistry(tools)
   const baseDeps = Layer.mergeAll(
@@ -797,8 +797,8 @@ describe("concurrency", () => {
     let maxRunning = 0
 
     const makeSerialTool = (name: string) =>
-      defineTool({
-        name,
+      tool({
+        id: name,
         // All instances of "serial tool" share one resource lock — same
         // behavior as the old `concurrency: "serial"` flag for one tool.
         resources: ["test-serial"],
@@ -902,11 +902,11 @@ describe("continuation", () => {
       createdAt: new Date(),
     })
 
-  const echoTool = defineTool({
-    name: "echo",
+  const echoTool = tool({
+    id: "echo",
     description: "Echoes input",
     params: Schema.Struct({ text: Schema.String }),
-    handler: ({ params }) => Effect.succeed({ text: params.text }),
+    execute: (_params) => Effect.succeed({ text: _params.text }),
   })
 
   test("tool call auto-continues to next LLM call", () =>
@@ -1159,8 +1159,8 @@ describe("interaction", () => {
     })
 
   const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
-    defineTool({
-      name: "interaction-tool",
+    tool({
+      id: "interaction-tool",
       description: "Tool that triggers an interaction",
       resources: ["interaction-tool"],
       params: Schema.Struct({ value: Schema.String }),
@@ -1390,7 +1390,7 @@ describe("interaction", () => {
             return Stream.fromIterable([
               new ToolCallChunk({
                 toolCallId: ToolCallId.of("tc-guard"),
-                toolName: tool.name,
+                toolName: tool.id,
                 input: { value: "guard-test" },
               }),
               new FinishChunk({ finishReason: "tool_calls" }),
@@ -1442,8 +1442,8 @@ describe("interaction", () => {
 // ============================================================================
 
 describe("recovery", () => {
-  const idempotentTestTool = defineTool({
-    name: "test-idempotent",
+  const idempotentTestTool = tool({
+    id: "test-idempotent",
     description: "Test idempotent tool",
     idempotent: true,
     params: Schema.Unknown,

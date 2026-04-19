@@ -4,7 +4,6 @@ import {
   defineExtension,
   defineResource,
   ProjectionError,
-  tool,
   type ProjectionContribution,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
@@ -129,6 +128,6 @@ export const SkillsExtension = defineExtension({
       machine: skillsActor,
     }),
   ],
-  capabilities: [tool(SkillsTool), tool(SearchSkillsTool)],
+  capabilities: [SkillsTool, SearchSkillsTool],
   projections: [SkillsProjection],
 })

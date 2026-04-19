@@ -1,9 +1,7 @@
-import { defineExtension, tool } from "@gent/core/extensions/api"
+import { defineExtension } from "@gent/core/extensions/api"
 import { BashTool } from "./bash.js"
 
-// Permission rules are bundled on `BashTool.permissionRules` per C7 — folded
-// into `Capability.permissionRules` by the `tool()` smart constructor.
 export const ExecToolsExtension = defineExtension({
   id: "@gent/exec-tools",
-  capabilities: [tool(BashTool)],
+  capabilities: [BashTool],
 })

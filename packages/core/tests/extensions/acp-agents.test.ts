@@ -9,6 +9,10 @@ import { Effect, Schema } from "effect"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
+// B11.5b note: this test still uses `defineTool` because
+// `startCodemodeServer` takes `ReadonlyArray<AnyToolDefinition>` (legacy
+// shape). Migrating this consumer to accept Capabilities is structural
+// work tracked in B11.5d alongside the `defineTool` deletion.
 import { defineTool } from "@gent/core/domain/tool"
 
 // ── ACP → TurnEvent mapping ──

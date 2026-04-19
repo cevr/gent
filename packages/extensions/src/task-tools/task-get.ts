@@ -1,13 +1,13 @@
 import { Effect, Schema } from "effect"
-import { defineTool, TaskId } from "@gent/core/extensions/api"
+import { tool, TaskId } from "@gent/core/extensions/api"
 import { TaskGetRef, TaskGetDepsRef } from "./queries.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),
 })
 
-export const TaskGetTool = defineTool({
-  name: "task_get",
+export const TaskGetTool = tool({
+  id: "task_get",
   idempotent: true,
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,

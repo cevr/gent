@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
-  defineTool,
+  tool,
   QuestionSchema,
   QuestionOptionSchema,
   type Question,
@@ -65,8 +65,8 @@ const formatQuestionsText = (questions: ReadonlyArray<Question>): string =>
     })
     .join("\n")
 
-export const AskUserTool = defineTool({
-  name: "ask_user",
+export const AskUserTool = tool({
+  id: "ask_user",
   resources: ["ask_user"],
   interactive: true,
   description:

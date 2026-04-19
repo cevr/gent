@@ -1,10 +1,4 @@
-import {
-  defineAgent,
-  defineExtension,
-  defineResource,
-  ModelId,
-  tool,
-} from "@gent/core/extensions/api"
+import { defineAgent, defineExtension, defineResource, ModelId } from "@gent/core/extensions/api"
 import { RepoTool } from "./repo-explorer.js"
 import { GitReader } from "./git-reader.js"
 
@@ -27,7 +21,7 @@ export const librarian = defineAgent({
 
 export const LibrarianExtension = defineExtension({
   id: "@gent/librarian",
-  capabilities: [tool(RepoTool)],
+  capabilities: [RepoTool],
   agents: [librarian],
   resources: ({ ctx }) => [
     defineResource({ tag: GitReader, scope: "process", layer: GitReader.Live(ctx.home) }),

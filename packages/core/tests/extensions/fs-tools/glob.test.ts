@@ -37,7 +37,7 @@ describe("GlobTool", () => {
       yield* fs.writeFileString(`${tmpDir}/b.ts`, "")
       yield* fs.writeFileString(`${tmpDir}/c.js`, "")
 
-      const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.files.every((f) => f.endsWith(".ts"))).toBe(true)
     }).pipe(Effect.provide(PlatformLayer)),
@@ -51,7 +51,7 @@ describe("GlobTool", () => {
         yield* fs.writeFileString(`${tmpDir}/file${i}.ts`, "")
       }
 
-      const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir, limit: 2 }, ctx)
+      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir, limit: 2 }, ctx)
       expect(result.files.length).toBe(2)
       expect(result.truncated).toBe(true)
     }).pipe(Effect.provide(PlatformLayer)),
@@ -66,7 +66,7 @@ describe("GlobTool", () => {
       yield* Effect.sleep(50)
       yield* fs.writeFileString(`${tmpDir}/new.ts`, "new")
 
-      const result = yield* GlobTool.execute({ pattern: "*.ts", path: tmpDir }, ctx)
+      const result = yield* GlobTool.effect({ pattern: "*.ts", path: tmpDir }, ctx)
       expect(result.files.length).toBe(2)
       // Newest first
       expect(result.files[0]).toContain("new.ts")

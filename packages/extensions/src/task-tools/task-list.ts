@@ -1,11 +1,11 @@
 import { Effect, Schema } from "effect"
-import { defineTool } from "@gent/core/extensions/api"
+import { tool } from "@gent/core/extensions/api"
 import { TaskListRef } from "./queries.js"
 
 export const TaskListParams = Schema.Struct({})
 
-export const TaskListTool = defineTool({
-  name: "task_list",
+export const TaskListTool = tool({
+  id: "task_list",
   idempotent: true,
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,

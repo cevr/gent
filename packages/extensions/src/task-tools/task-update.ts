@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineTool, TaskId, type TaskStatus } from "@gent/core/extensions/api"
+import { tool, TaskId, type TaskStatus } from "@gent/core/extensions/api"
 import { TaskUpdateRef } from "./mutations.js"
 
 export const TaskUpdateParams = Schema.Struct({
@@ -12,8 +12,8 @@ export const TaskUpdateParams = Schema.Struct({
   description: Schema.optional(Schema.String.annotate({ description: "Updated description" })),
 })
 
-export const TaskUpdateTool = defineTool({
-  name: "task_update",
+export const TaskUpdateTool = tool({
+  id: "task_update",
   description:
     "Update a task's status or description. Use status 'completed' to mark done, 'failed' for errors.",
   params: TaskUpdateParams,

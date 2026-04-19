@@ -148,7 +148,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const result = await Effect.runPromise(
-      ExecuteTool.execute({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
+      ExecuteTool.effect({ code: "tools.search({ query: 'api' })" }, ctx).pipe(
         Effect.provide(bridgeLayer),
       ),
     )
@@ -164,7 +164,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ExecuteTool.execute({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      ExecuteTool.effect({ code: "bad()" }, ctx).pipe(Effect.provide(bridgeLayer)),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -177,7 +177,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(notReadySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ExecuteTool.execute({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      ExecuteTool.effect({ code: "x" }, ctx).pipe(Effect.provide(bridgeLayer)),
     )
 
     expect(exit._tag).toBe("Failure")
@@ -190,7 +190,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const result = await Effect.runPromise(
-      ExecuteTool.execute({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
+      ExecuteTool.effect({ code: "api.call()" }, ctx).pipe(Effect.provide(bridgeLayer)),
     )
 
     expect(result.executionId).toBe("exec-abc-123")
@@ -209,7 +209,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     await Effect.runPromise(
-      ResumeTool.execute(
+      ResumeTool.effect(
         {
           executionId: "exec-1",
           action: "accept" as "accept" | "decline" | "cancel",
@@ -232,7 +232,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(readySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ResumeTool.execute(
+      ResumeTool.effect(
         {
           executionId: "exec-1",
           action: "accept" as "accept" | "decline" | "cancel",
@@ -252,7 +252,7 @@ describe("Executor tools", () => {
     const ctx = makeToolCtx(notReadySnapshot)
 
     const exit = await Effect.runPromiseExit(
-      ResumeTool.execute(
+      ResumeTool.effect(
         {
           executionId: "exec-1",
           action: "decline" as "accept" | "decline" | "cancel",

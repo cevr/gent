@@ -3,7 +3,7 @@
  */
 
 import { Effect, Layer, Schema } from "effect"
-import { action, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { action, defineExtension, defineResource } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
 import { ExecutorMcpBridge } from "./mcp-bridge.js"
@@ -19,8 +19,8 @@ export const ExecutorExtension = defineExtension({
   id: EXECUTOR_EXTENSION_ID,
   projections: [ExecutorProjection],
   capabilities: [
-    tool(ExecuteTool),
-    tool(ResumeTool),
+    ExecuteTool,
+    ResumeTool,
     // Slash commands authored through the `action()` factory.
     // `surface: "slash"` derives `audiences: ["human-slash"]`, and
     // `public: true` adds `"transport-public"` so non-TUI clients

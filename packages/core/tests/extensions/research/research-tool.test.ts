@@ -50,7 +50,7 @@ describe("ResearchTool", () => {
         }),
     })
 
-    return ResearchTool.execute(
+    return ResearchTool.effect(
       { question: "How does Effect handle concurrency?", repos: ["effect-ts/effect"] },
       ctx,
     ).pipe(
@@ -90,7 +90,7 @@ describe("ResearchTool", () => {
       },
     })
 
-    return ResearchTool.execute(
+    return ResearchTool.effect(
       {
         question: "Compare concurrency models",
         repos: ["effect-ts/effect", "zio/zio"],
@@ -122,7 +122,7 @@ describe("ResearchTool", () => {
       },
     })
 
-    return ResearchTool.execute(
+    return ResearchTool.effect(
       {
         question: "How does the scheduler work?",
         repos: ["effect-ts/effect"],
@@ -139,7 +139,7 @@ describe("ResearchTool", () => {
   })
 
   it.live("rejects empty repos", () =>
-    ResearchTool.execute(
+    ResearchTool.effect(
       { question: "test", repos: [] },
       makeCtx({ agentRun: () => Effect.die("unreachable") }),
     ).pipe(
@@ -151,7 +151,7 @@ describe("ResearchTool", () => {
   )
 
   it.live("rejects too many repos", () =>
-    ResearchTool.execute(
+    ResearchTool.effect(
       { question: "test", repos: ["a/1", "a/2", "a/3", "a/4", "a/5", "a/6"] },
       makeCtx({ agentRun: () => Effect.die("unreachable") }),
     ).pipe(

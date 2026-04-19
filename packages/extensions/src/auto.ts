@@ -23,7 +23,6 @@ import {
   isRecord,
   pipeline,
   subscription,
-  tool,
   type ResourceMachine,
   type ExtensionEffect,
   type ToolResultInput,
@@ -665,7 +664,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   projections: [AutoProjection],
-  capabilities: [tool(AutoCheckpointTool)],
+  capabilities: [AutoCheckpointTool],
   pipelines: [pipeline(definePipeline("tool.result", journalInterceptorImpl))],
   subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
   // Single Resource carries the AutoJournal service layer AND the auto

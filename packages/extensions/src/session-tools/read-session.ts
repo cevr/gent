@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import {
-  defineTool,
+  tool,
   headTailChars,
   SessionId,
   type Message,
@@ -103,8 +103,8 @@ export function renderSessionTree(
 
 // Read Session Tool
 
-export const ReadSessionTool = defineTool({
-  name: "read_session",
+export const ReadSessionTool = tool({
+  id: "read_session",
   idempotent: true,
   description:
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",

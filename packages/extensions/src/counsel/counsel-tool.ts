@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, defineTool, type ToolContext } from "@gent/core/extensions/api"
+import { defineAgent, tool, type ToolContext } from "@gent/core/extensions/api"
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,
@@ -41,8 +41,8 @@ const buildCounselPrompt = (prompt: string, context?: string) =>
     ...(context !== undefined && context.trim() !== "" ? ["", "## Context", context] : []),
   ].join("\n")
 
-export const CounselTool = defineTool({
-  name: "counsel",
+export const CounselTool = tool({
+  id: "counsel",
   description:
     "Get a cross-vendor second opinion. Deep mode for thorough analysis with exploration tools. Standard mode for quick focused opinions.",
   promptSnippet: "Cross-vendor second opinion",

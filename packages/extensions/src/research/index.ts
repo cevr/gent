@@ -1,4 +1,4 @@
-import { defineAgent, defineExtension, ModelId, tool } from "@gent/core/extensions/api"
+import { defineAgent, defineExtension, ModelId } from "@gent/core/extensions/api"
 import { ResearchTool } from "./research-tool.js"
 
 const ARCHITECT_PROMPT = `
@@ -23,6 +23,6 @@ export const architect = defineAgent({
 
 export const ResearchExtension = defineExtension({
   id: "@gent/research",
-  capabilities: [tool(ResearchTool)],
+  capabilities: [ResearchTool],
   agents: [architect],
 })

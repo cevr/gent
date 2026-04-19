@@ -79,19 +79,19 @@ const stubCtx = {
 
 describe("BashTool execution", () => {
   test("runs a command and returns stdout", async () => {
-    const result = await Effect.runPromise(BashTool.execute({ command: "echo hello" }, stubCtx))
+    const result = await Effect.runPromise(BashTool.effect({ command: "echo hello" }, stubCtx))
     expect(result.stdout.trim()).toBe("hello")
     expect(result.exitCode).toBe(0)
   })
 
   test("captures nonzero exit code", async () => {
-    const result = await Effect.runPromise(BashTool.execute({ command: "exit 2" }, stubCtx))
+    const result = await Effect.runPromise(BashTool.effect({ command: "exit 2" }, stubCtx))
     expect(result.exitCode).toBe(2)
   })
 
   test("respects cwd parameter", async () => {
     const result = await Effect.runPromise(
-      BashTool.execute({ command: "pwd", cwd: "/tmp" }, stubCtx),
+      BashTool.effect({ command: "pwd", cwd: "/tmp" }, stubCtx),
     )
     // /tmp may resolve to /private/tmp on macOS
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
@@ -99,7 +99,7 @@ describe("BashTool execution", () => {
   })
 
   test("splits cd + command into cwd and executes", async () => {
-    const result = await Effect.runPromise(BashTool.execute({ command: "cd /tmp && pwd" }, stubCtx))
+    const result = await Effect.runPromise(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
     expect(result.exitCode).toBe(0)
   })
