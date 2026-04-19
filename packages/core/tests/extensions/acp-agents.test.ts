@@ -9,11 +9,12 @@ import { Effect, Schema } from "effect"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
-// B11.5b note: this test still uses `defineTool` because
-// `startCodemodeServer` takes `ReadonlyArray<AnyToolDefinition>` (legacy
-// shape). Migrating this consumer to accept Capabilities is structural
-// work tracked in B11.5d alongside the `defineTool` deletion.
-import { defineTool } from "@gent/core/domain/tool"
+// `startCodemodeServer` takes `ReadonlyArray<AnyToolDefinition>` (the
+// internal lowered shape). Building the test fixture as a literal is
+// safe — no factory call needed. Migrating the codemode server to
+// consume `AnyCapabilityContribution` is B11.8a's scope (alongside the
+// ToolRunner direct migration).
+import type { AnyToolDefinition } from "@gent/core/domain/tool"
 
 // ── ACP → TurnEvent mapping ──
 
@@ -155,12 +156,12 @@ describe("codemode proxy", () => {
   test("dispatches known tool to runTool", async () => {
     const calls: Array<{ toolName: string; args: unknown }> = []
 
-    const mockTool = defineTool({
+    const mockTool: AnyToolDefinition = {
       name: "echo",
       description: "echo tool",
       params: Schema.Struct({ text: Schema.String }),
       execute: () => Effect.succeed({ echoed: true }),
-    })
+    }
 
     const server = await Effect.runPromise(
       startCodemodeServer({

@@ -27,7 +27,8 @@ import type {
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
-import { type ExtensionContributions, tool } from "../domain/contribution.js"
+import { type ExtensionContributions } from "../domain/contribution.js"
+import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -199,8 +200,8 @@ export interface ToolTestLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
   readonly extensions?: ReadonlyArray<ExtensionInput>
-  /** Extra tools to register */
-  readonly tools?: ReadonlyArray<AnyToolDefinition>
+  /** Extra capabilities to register (typically authored via `tool({...})`) */
+  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., GitReader.Test) */
@@ -216,7 +217,7 @@ export interface ToolTestLayerConfig {
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
   const builtinContributions: ExtensionContributions = {
     agents: config.agents,
-    ...((config.tools ?? []).length > 0 ? { capabilities: (config.tools ?? []).map(tool) } : {}),
+    ...((config.tools ?? []).length > 0 ? { capabilities: config.tools } : {}),
   }
 
   const defaultRunner: AgentRunner = {

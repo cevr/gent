@@ -26,7 +26,6 @@ import type { AnyCapabilityContribution, ModelCapabilityContext } from "../capab
 import type { ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
-import type { AnyToolDefinition } from "../tool.js"
 
 /** Context passed to `tool({...}).execute`. Same shape as the wide
  *  `ModelCapabilityContext` but with `toolCallId` narrowed to required.
@@ -91,84 +90,45 @@ export interface ToolInput<
 }
 
 /**
- * Lower a `ToolInput` (B11.5 shape) OR a legacy `AnyToolDefinition`
- * (from `defineTool({...})`) to an `AnyCapabilityContribution` with
+ * Lower a `ToolInput` to an `AnyCapabilityContribution` with
  * `audiences: ["model"], intent: "write"`. The author never sees the
  * audience/intent fields.
- *
- * Two overloads — the new `{ id, ... }` shape is preferred; the legacy
- * `{ name, ... }` shape stays callable during the B11.5 migration
- * window. The legacy branch + `defineTool` + `ToolDefinition` interface
- * are deleted in B11.5d once all ~70 call sites migrate.
  *
  * Generic over `<Params, Result, Error, Deps>` so authors keep their
  * typed handler shape; the leaf is widened to `AnyCapabilityContribution`
  * at the bucket boundary (same variance hole as `pipeline`/`subscription`).
+ *
+ * The B11.5 migration-window overload accepting legacy `AnyToolDefinition`
+ * was deleted in B11.5d.
  */
-export function tool<
+export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Params extends Schema.Decoder<any, never>,
   Result,
   Error,
   Deps,
->(input: ToolInput<Params, Result, Error, Deps>): AnyCapabilityContribution
-export function tool(definition: AnyToolDefinition): AnyCapabilityContribution
-export function tool(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  arg: ToolInput<Schema.Decoder<any, never>, unknown, unknown, unknown> | AnyToolDefinition,
-): AnyCapabilityContribution {
-  // Discriminate by shape: new factory has `id`; legacy `defineTool`
-  // result has `name`. Migration window only — collapses to single
-  // branch in B11.5d.
-  const isLegacy = "name" in arg && !("id" in arg)
-  if (isLegacy) {
-    const t = arg as AnyToolDefinition
-    return {
-      id: t.name,
-      description: t.description,
-      audiences: ["model"],
-      intent: "write",
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      input: t.params as Schema.Schema<unknown>,
-      output: Schema.Unknown,
-      ...(t.resources !== undefined ? { resources: t.resources } : {}),
-      ...(t.idempotent !== undefined ? { idempotent: t.idempotent } : {}),
-      ...(t.promptSnippet !== undefined ? { promptSnippet: t.promptSnippet } : {}),
-      ...(t.promptGuidelines !== undefined ? { promptGuidelines: t.promptGuidelines } : {}),
-      ...(t.interactive !== undefined ? { interactive: t.interactive } : {}),
-      ...(t.permissionRules !== undefined ? { permissionRules: t.permissionRules } : {}),
-      ...(t.prompt !== undefined ? { prompt: t.prompt } : {}),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      effect: t.execute as AnyCapabilityContribution["effect"],
-    }
-  }
-  const input = arg as ToolInput<
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Schema.Decoder<any, never>,
-    unknown,
-    unknown,
-    unknown
-  >
-  return {
-    id: input.id,
-    description: input.description,
-    audiences: ["model"],
-    intent: "write",
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    input: input.params as Schema.Schema<unknown>,
-    // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
-    // Tools needing typed-output validation should author through `request(...)`.
-    output: Schema.Unknown,
-    ...(input.resources !== undefined ? { resources: input.resources } : {}),
-    ...(input.idempotent !== undefined ? { idempotent: input.idempotent } : {}),
-    ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
-    ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
-    ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
-    ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
-    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-    // ModelCapabilityContext is the wide ctx — `tool` execute signatures
-    // satisfy the capability `effect` signature contravariantly.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    effect: input.execute as AnyCapabilityContribution["effect"],
-  }
-}
+>(
+  input: ToolInput<Params, Result, Error, Deps>,
+): AnyCapabilityContribution => ({
+  id: input.id,
+  description: input.description,
+  audiences: ["model"],
+  intent: "write",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  input: input.params as Schema.Schema<unknown>,
+  // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
+  // Tools needing typed-output validation should author through `request(...)`.
+  output: Schema.Unknown,
+  ...(input.resources !== undefined ? { resources: input.resources } : {}),
+  ...(input.idempotent !== undefined ? { idempotent: input.idempotent } : {}),
+  ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
+  ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
+  ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
+  ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
+  ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+  // ToolCapabilityContext extends ModelCapabilityContext and narrows
+  // `toolCallId` to required — `tool` execute signatures satisfy the
+  // capability `effect` signature contravariantly.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  effect: input.execute as AnyCapabilityContribution["effect"],
+})

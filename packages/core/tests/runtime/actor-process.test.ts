@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { tool } from "@gent/core/domain/contribution"
+import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
 import type { ExtensionContributions } from "@gent/core/domain/extension"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -11,12 +11,11 @@ import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
-import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
-const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
+const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
   ExtensionRegistry.fromResolved(
     resolveExtensions([
       {
@@ -31,7 +30,7 @@ const makeTestExtRegistry = (tools: AnyToolDefinition[] = []) =>
               manifest: { id: "tools" },
               kind: "builtin" as const,
               sourcePath: "test",
-              contributions: { capabilities: tools.map(tool) } satisfies ExtensionContributions,
+              contributions: { capabilities: tools } satisfies ExtensionContributions,
             },
           ]
         : []),

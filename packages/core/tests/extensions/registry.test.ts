@@ -3,19 +3,23 @@ import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { tool } from "@gent/core/domain/contribution"
 import type { PromptSection } from "@gent/core/domain/prompt"
 
-const makeTool = (name: string): AnyToolDefinition => ({
-  name,
+// Test helper: build a no-op model Capability directly. Post-B11.5d the
+// `tool({...})` factory rejects the legacy `{ name, params, execute }`
+// shape, so test fixtures here construct the lowered Capability literal.
+const makeTool = (name: string): AnyCapabilityContribution => ({
+  id: name,
   description: `test tool ${name}`,
-  params: {} as never,
-  execute: () => Effect.void,
+  audiences: ["model"],
+  intent: "write",
+  input: Schema.Unknown,
+  output: Schema.Unknown,
+  effect: () => Effect.void,
 })
 
 const makeAgent = (name: string, options?: ConstructorParameters<typeof AgentDefinition>[0]) =>
@@ -28,21 +32,23 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
 })
 
 // C7: static prompt sections live on `Capability.prompt`. Build a synthetic
-// no-op tool to carry each section through the pipeline.
-const promptSectionAsToolContribution = (section: PromptSection) =>
-  tool({
-    name: `section-carrier-${section.id}`,
-    description: `carrier for ${section.id}`,
-    params: Schema.Struct({}) as never,
-    prompt: section,
-    execute: () => Effect.void,
-  } as AnyToolDefinition)
+// no-op model capability to carry each section through the pipeline.
+const promptSectionAsToolContribution = (section: PromptSection): AnyCapabilityContribution => ({
+  id: `section-carrier-${section.id}`,
+  description: `carrier for ${section.id}`,
+  audiences: ["model"],
+  intent: "write",
+  input: Schema.Struct({}),
+  output: Schema.Unknown,
+  prompt: section,
+  effect: () => Effect.void,
+})
 
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
   opts?: {
-    tools?: AnyToolDefinition[]
+    tools?: AnyCapabilityContribution[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
     promptSections?: PromptSection[]
@@ -54,7 +60,7 @@ const makeExt = (
   sourcePath: `/test/${id}`,
   contributions: {
     capabilities: [
-      ...(opts?.tools ?? []).map(tool),
+      ...(opts?.tools ?? []),
       ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
       ...(opts?.capabilities ?? []),
     ],

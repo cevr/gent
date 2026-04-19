@@ -60,12 +60,11 @@ import type { AgentEvent } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 
-export {
-  defineTool,
-  ToolDefinitionBrand,
-  type AnyToolDefinition,
-  type ToolContext,
-} from "../domain/tool.js"
+// `AnyToolDefinition` and `ToolContext` survive as the internal lowered
+// shape consumed by the provider bridge and the tool-runner registry.
+// Authors construct tools via `tool({...})` from `domain/capability/tool.ts`
+// (re-exported below). `defineTool` and `ToolDefinitionBrand` deleted in B11.5d.
+export type { AnyToolDefinition, ToolContext } from "../domain/tool.js"
 export {
   defineAgent,
   AgentDefinition,
@@ -187,23 +186,15 @@ export {
   // in is the discrimination (no `_kind` field).
   pipeline,
   subscription,
-  // Legacy lowering smart constructors — kept alive during the B11.5
-  // migration window. `query` / `mutation` are deleted in B11.5d once
-  // the call graph migrates to the unified `request(...)` factory.
-  query,
-  mutation,
   defineResource,
   resource,
 } from "../domain/contribution.js"
 
 // B11.5 typed capability factories — `audiences[] + intent` flag matrix
 // is gone from the author surface. `CapabilityHost` dispatches by
-// factory-origin metadata baked into the lowering.
-//
-// `tool(...)` accepts BOTH the new shape (`{ id, ... }`) AND the legacy
-// `ToolDefinition` (from `defineTool({...})`) during the B11.5
-// migration window — overload-routed. The legacy branch + `defineTool`
-// + `ToolDefinition` interface are deleted in B11.5d.
+// factory-origin metadata baked into the lowering. The B11.5 migration
+// window closed in B11.5d; the legacy `defineTool` smart constructor
+// and the dual-shape `tool()` overload were deleted there.
 //
 // See `domain/capability/{tool,request,action}.ts` for the typed shapes.
 export { tool, type ToolCapabilityContext, type ToolInput } from "../domain/capability/tool.js"

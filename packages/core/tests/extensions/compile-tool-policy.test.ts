@@ -2,17 +2,20 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { compileToolPolicy } from "@gent/core/runtime/extensions/registry"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import { defineTool } from "@gent/core/domain/tool"
+// `compileToolPolicy` consumes `AnyToolDefinition[]` (the internal
+// lowered shape). Hand-built literals are safe; no factory call needed.
+// Migrating compileToolPolicy to consume `AnyCapabilityContribution[]`
+// is B11.8a's scope (alongside the ToolRunner direct migration).
+import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("compileToolPolicy", () => {
-  const makeTool = (name: string) =>
-    defineTool({
-      name,
-      description: name,
-      params: Schema.Struct({}),
-      execute: () => Effect.succeed(null),
-    })
+  const makeTool = (name: string): AnyToolDefinition => ({
+    name,
+    description: name,
+    params: Schema.Struct({}),
+    execute: () => Effect.succeed(null),
+  })
 
   const allTools = [
     makeTool("read"),
@@ -129,13 +132,13 @@ describe("compileToolPolicy", () => {
   })
 
   test("interactive tools filtered when context.interactive is false", () => {
-    const interactiveTool = defineTool({
+    const interactiveTool: AnyToolDefinition = {
       name: "ask_user",
       interactive: true,
       description: "ask_user",
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
-    })
+    }
     const nonInteractiveTool = makeTool("read")
     const agent = new AgentDefinition({ name: "cowork" })
     const ctx = { ...emptyCtx, interactive: false as const }
@@ -145,13 +148,13 @@ describe("compileToolPolicy", () => {
   })
 
   test("interactive tools kept when context.interactive is not false", () => {
-    const interactiveTool = defineTool({
+    const interactiveTool: AnyToolDefinition = {
       name: "ask_user",
       interactive: true,
       description: "ask_user",
       params: Schema.Struct({}),
       execute: () => Effect.succeed(null),
-    })
+    }
     const agent = new AgentDefinition({ name: "cowork" })
     const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
     expect(names(tools)).toContain("ask_user")
