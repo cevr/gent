@@ -27,7 +27,7 @@ import type {
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
-import { type ExtensionContributions, tool as toolContribution } from "../domain/contribution.js"
+import { type ExtensionContributions, tool } from "../domain/contribution.js"
 import type { ExtensionInput } from "../domain/extension-package.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
@@ -216,9 +216,7 @@ export interface ToolTestLayerConfig {
 export const createToolTestLayer = (config: ToolTestLayerConfig) => {
   const builtinContributions: ExtensionContributions = {
     agents: config.agents,
-    ...((config.tools ?? []).length > 0
-      ? { capabilities: (config.tools ?? []).map(toolContribution) }
-      : {}),
+    ...((config.tools ?? []).length > 0 ? { capabilities: (config.tools ?? []).map(tool) } : {}),
   }
 
   const defaultRunner: AgentRunner = {

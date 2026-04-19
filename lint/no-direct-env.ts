@@ -37,12 +37,18 @@ const LOG_METHODS = new Set([
   "logFatal",
 ])
 
-const PROJECTION_FACTORY_NAMES = new Set(["projection", "projectionContribution"])
+// After B11.1c the `projection` / `capability` identity smart constructors are
+// gone; only `query` and `mutation` survive as real lowering helpers. The
+// CallExpression detection branch below uses these sets for factory-call
+// matching; type-annotation and `satisfies` paths still cover direct
+// `CapabilityContribution` / `ProjectionContribution` / `QueryContribution`
+// object literals.
+const PROJECTION_FACTORY_NAMES = new Set<string>()
 /** Query factory names — `QueryContribution.handler` is also enforced read-only by this rule. */
-const QUERY_FACTORY_NAMES = new Set(["query", "queryContribution"])
+const QUERY_FACTORY_NAMES = new Set(["query"])
 /** Capability factory names — `CapabilityContribution.effect` is enforced
  *  read-only by this rule when `intent: "read"`. */
-const CAPABILITY_FACTORY_NAMES = new Set(["capability", "capabilityContribution"])
+const CAPABILITY_FACTORY_NAMES = new Set<string>()
 
 const PROJECTION_WRITE_METHODS = new Set([
   "create",

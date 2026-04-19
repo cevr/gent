@@ -8,7 +8,7 @@ import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/cor
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { tool as toolContribution } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/domain/contribution"
 import type { PromptSection } from "@gent/core/domain/prompt"
 
 const makeTool = (name: string): AnyToolDefinition => ({
@@ -30,7 +30,7 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
 // C7: static prompt sections live on `Capability.prompt`. Build a synthetic
 // no-op tool to carry each section through the pipeline.
 const promptSectionAsToolContribution = (section: PromptSection) =>
-  toolContribution({
+  tool({
     name: `section-carrier-${section.id}`,
     description: `carrier for ${section.id}`,
     params: Schema.Struct({}) as never,
@@ -54,7 +54,7 @@ const makeExt = (
   sourcePath: `/test/${id}`,
   contributions: {
     capabilities: [
-      ...(opts?.tools ?? []).map(toolContribution),
+      ...(opts?.tools ?? []).map(tool),
       ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
       ...(opts?.capabilities ?? []),
     ],

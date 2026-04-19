@@ -116,13 +116,6 @@ export const tool = (t: AnyToolDefinition): AnyCapabilityContribution => ({
 })
 
 /**
- * Identity smart constructor for an agent. After C8 the `agents` bucket
- * accepts `AgentDefinition` directly; this exists for symmetry with the
- * other smart constructors and to anchor the public-API surface.
- */
-export const agent = (a: AgentDefinition): AgentDefinition => a
-
-/**
  * Identity smart constructor for the Pipeline primitive. Generic over
  * `<K, E, R>` so authors keep their typed handler shape; the leaf is
  * widened to `AnyPipelineContribution` at the bucket boundary.
@@ -143,26 +136,6 @@ export const subscription = <K extends SubscriptionKey, E, R>(
 ): AnySubscriptionContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   s as unknown as AnySubscriptionContribution
-
-/**
- * Identity smart constructor for a model driver. The bucket type
- * (`modelDrivers: ReadonlyArray<ModelDriverContribution>`) is the
- * discrimination — no flavor field needed.
- */
-export const modelDriver = (d: ModelDriverContribution): ModelDriverContribution => d
-
-/**
- * Identity smart constructor for an external driver. The bucket type
- * (`externalDrivers: ReadonlyArray<ExternalDriverContribution>`) is the
- * discrimination — no flavor field needed.
- */
-export const externalDriver = (d: ExternalDriverContribution): ExternalDriverContribution => d
-
-/**
- * Identity smart constructor for a projection. After C8 the `projections`
- * bucket accepts `AnyProjectionContribution` directly.
- */
-export const projection = (p: AnyProjectionContribution): AnyProjectionContribution => p
 
 /**
  * Lower a `QueryContribution` to a `Capability` with

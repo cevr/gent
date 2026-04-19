@@ -15,7 +15,7 @@ import {
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
-import { defineResource, tool as toolContribution } from "@gent/core/domain/contribution"
+import { defineResource, tool } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 
 const fsLayer = Layer.mergeAll(
@@ -45,7 +45,7 @@ describe("extension activation isolation", () => {
       const good = makeBuiltin("good-ext", () =>
         Effect.succeed({
           capabilities: [
-            toolContribution({
+            tool({
               name: "good_tool",
               description: "good",
               params: {} as never,
@@ -118,7 +118,7 @@ describe("extension activation isolation", () => {
         const result = yield* validateLoadedExtensions([
           makeLoaded("healthy-ext", {
             capabilities: [
-              toolContribution({
+              tool({
                 name: "healthy_tool",
                 description: "healthy",
                 params: {} as never,
@@ -128,7 +128,7 @@ describe("extension activation isolation", () => {
           }),
           makeLoaded("collider-a", {
             capabilities: [
-              toolContribution({
+              tool({
                 name: "shared_tool",
                 description: "a",
                 params: {} as never,
@@ -138,7 +138,7 @@ describe("extension activation isolation", () => {
           }),
           makeLoaded("collider-b", {
             capabilities: [
-              toolContribution({
+              tool({
                 name: "shared_tool",
                 description: "b",
                 params: {} as never,
@@ -209,7 +209,7 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("legacy-tool", {
           capabilities: [
-            toolContribution({
+            tool({
               name: "shared_name",
               description: "legacy",
               params: {} as never,
@@ -249,7 +249,7 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("legacy-tool", {
           capabilities: [
-            toolContribution({
+            tool({
               name: "shared_name",
               description: "legacy",
               params: {} as never,
@@ -360,7 +360,7 @@ describe("extension activation isolation", () => {
         extensions: [
           makeLoaded("healthy-ext", {
             capabilities: [
-              toolContribution({
+              tool({
                 name: "healthy_tool",
                 description: "healthy",
                 params: {} as never,

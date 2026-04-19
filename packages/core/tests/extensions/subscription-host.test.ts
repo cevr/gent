@@ -20,7 +20,7 @@ import type {
   TurnAfterInput,
 } from "@gent/core/domain/extension"
 import { compileSubscriptions } from "@gent/core/runtime/extensions/subscription-host"
-import { subscription as subscriptionContribution } from "@gent/core/domain/contribution"
+import { subscription } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
@@ -64,8 +64,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscriptionContribution(failing)] }),
-        ext("b", "builtin", { subscriptions: [subscriptionContribution(after)] }),
+        ext("a", "builtin", { subscriptions: [subscription(failing)] }),
+        ext("b", "builtin", { subscriptions: [subscription(after)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -88,8 +88,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscriptionContribution(failing)] }),
-        ext("b", "builtin", { subscriptions: [subscriptionContribution(after)] }),
+        ext("a", "builtin", { subscriptions: [subscription(failing)] }),
+        ext("b", "builtin", { subscriptions: [subscription(after)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -112,8 +112,8 @@ describe("subscription host", () => {
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscriptionContribution(halting)] }),
-        ext("b", "builtin", { subscriptions: [subscriptionContribution(afterHalt)] }),
+        ext("a", "builtin", { subscriptions: [subscription(halting)] }),
+        ext("b", "builtin", { subscriptions: [subscription(afterHalt)] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -138,9 +138,9 @@ describe("subscription host", () => {
 
       const compiled = compileSubscriptions([
         // pass out of order to prove sorting
-        ext("z-project", "project", { subscriptions: [subscriptionContribution(make("project"))] }),
-        ext("a-builtin", "builtin", { subscriptions: [subscriptionContribution(make("builtin"))] }),
-        ext("m-user", "user", { subscriptions: [subscriptionContribution(make("user"))] }),
+        ext("z-project", "project", { subscriptions: [subscription(make("project"))] }),
+        ext("a-builtin", "builtin", { subscriptions: [subscription(make("builtin"))] }),
+        ext("m-user", "user", { subscriptions: [subscription(make("user"))] }),
       ])
 
       yield* compiled.emit("turn.after", stubEvent, stubCtx)

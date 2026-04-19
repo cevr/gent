@@ -18,11 +18,7 @@ import { definePipeline } from "@gent/core/domain/pipeline"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { defineTool } from "@gent/core/domain/tool"
 import { PermissionRule } from "@gent/core/domain/permission"
-import {
-  agent as agentContribution,
-  pipeline as pipelineContribution,
-  tool as toolContribution,
-} from "@gent/core/domain/contribution"
+import { pipeline, tool } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -54,13 +50,13 @@ describe("scope precedence", () => {
       const projectTool = toolReturning("greet", "from-project")
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [toolContribution(builtinTool)] }),
-        ext("b", "user", { capabilities: [toolContribution(userTool)] }),
-        ext("c", "project", { capabilities: [toolContribution(projectTool)] }),
+        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
+        ext("b", "user", { capabilities: [tool(userTool)] }),
+        ext("c", "project", { capabilities: [tool(projectTool)] }),
       ])
 
-      const tool = resolved.tools.get("greet")!
-      return tool
+      const resolvedTool = resolved.tools.get("greet")!
+      return resolvedTool
         .execute({}, {} as never)
         .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))))
     })
@@ -70,8 +66,8 @@ describe("scope precedence", () => {
       const projectAgent = { ...Agents.cowork, description: "shadowed" }
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { agents: [agentContribution(builtinAgent)] }),
-        ext("b", "project", { agents: [agentContribution(projectAgent)] }),
+        ext("a", "builtin", { agents: [builtinAgent] }),
+        ext("b", "project", { agents: [projectAgent] }),
       ])
       return Effect.sync(() => expect(resolved.agents.get("cowork")?.description).toBe("shadowed"))
     })
@@ -93,8 +89,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [toolContribution(builtinTool)] }),
-        ext("b", "project", { capabilities: [toolContribution(projectTool)] }),
+        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
+        ext("b", "project", { capabilities: [tool(projectTool)] }),
       ])
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
@@ -121,8 +117,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [toolContribution(builtinTool)] }),
-        ext("b", "project", { capabilities: [toolContribution(projectTool)] }),
+        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
+        ext("b", "project", { capabilities: [tool(projectTool)] }),
       ])
       return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
     })
@@ -147,8 +143,8 @@ describe("scope precedence", () => {
       })
 
       const resolved = resolveExtensions([
-        ext("a", "builtin", { capabilities: [toolContribution(builtinTool)] }),
-        ext("b", "project", { capabilities: [toolContribution(projectTool)] }),
+        ext("a", "builtin", { capabilities: [tool(builtinTool)] }),
+        ext("b", "project", { capabilities: [tool(projectTool)] }),
       ])
       // The deny rule must be gone — project shadowed the builtin entirely.
       return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
@@ -160,13 +156,13 @@ describe("scope precedence", () => {
 
       // Pass in reverse order to prove the registry sorts, not just respects insertion
       const resolved = resolveExtensions([
-        ext("z-ext", "builtin", { capabilities: [toolContribution(toolFromZ)] }),
-        ext("a-ext", "builtin", { capabilities: [toolContribution(toolFromA)] }),
+        ext("z-ext", "builtin", { capabilities: [tool(toolFromZ)] }),
+        ext("a-ext", "builtin", { capabilities: [tool(toolFromA)] }),
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const tool = resolved.tools.get("greet")!
-      return tool
+      const resolvedTool = resolved.tools.get("greet")!
+      return resolvedTool
         .execute({}, {} as never)
         .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))))
     })
@@ -178,7 +174,7 @@ describe("scope precedence", () => {
       const make = (id: string, kind: "builtin" | "user" | "project") =>
         ext(id, kind, {
           pipelines: [
-            pipelineContribution(
+            pipeline(
               definePipeline("prompt.system", (input, next) => {
                 log.push(`${kind}-before`)
                 return next(input).pipe(

@@ -20,10 +20,8 @@ import {
   defineSubscription,
   defineTool,
   pipeline,
-  pipelineContribution,
   resource,
   subscription,
-  subscriptionContribution,
   tool,
 } from "@gent/core/extensions/api"
 
@@ -40,7 +38,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("definePipeline handler MUST return Effect — async handler rejected", () => {
-    pipelineContribution(
+    pipeline(
       // @ts-expect-error — async handler must not be assignable to Effect-returning pipeline
       definePipeline("prompt.system", async (input, next) => next(input)),
     )
@@ -48,7 +46,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("defineSubscription handler MUST return Effect — async handler rejected", () => {
-    subscriptionContribution(
+    subscription(
       // @ts-expect-error — async handler must not be assignable to Effect-returning subscription
       defineSubscription("turn.after", "isolate", async () => undefined),
     )

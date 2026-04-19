@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { tool as toolContribution } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/domain/contribution"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { defineTool } from "@gent/core/domain/tool"
@@ -25,7 +25,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [toolContribution(FailTool)] },
+            contributions: { capabilities: [tool(FailTool)] },
           },
         ]),
       ),
@@ -67,7 +67,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [toolContribution(StrictTool)] },
+            contributions: { capabilities: [tool(StrictTool)] },
           },
         ]),
       ),
@@ -115,7 +115,7 @@ describe("ToolRunner", () => {
             manifest: { id: "test" },
             kind: "builtin",
             sourcePath: "test",
-            contributions: { capabilities: [toolContribution(SafeTool)] },
+            contributions: { capabilities: [tool(SafeTool)] },
           },
         ]),
       ),

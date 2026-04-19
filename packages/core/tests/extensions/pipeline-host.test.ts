@@ -14,7 +14,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { definePipeline } from "@gent/core/domain/pipeline"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
-import { pipeline as pipelineContribution } from "@gent/core/domain/contribution"
+import { pipeline } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -27,7 +27,7 @@ const stubCtx = {
 const ext = (
   id: string,
   kind: "builtin" | "user" | "project",
-  pipelines: ReturnType<typeof pipelineContribution>[],
+  pipelines: ReturnType<typeof pipeline>[],
 ): LoadedExtension => ({
   manifest: { id },
   kind,
@@ -44,9 +44,9 @@ describe("pipeline host", () => {
         )
 
       const extensions = [
-        ext("a", "builtin", [pipelineContribution(make("builtin"))]),
-        ext("b", "user", [pipelineContribution(make("user"))]),
-        ext("c", "project", [pipelineContribution(make("project"))]),
+        ext("a", "builtin", [pipeline(make("builtin"))]),
+        ext("b", "user", [pipeline(make("user"))]),
+        ext("c", "project", [pipeline(make("project"))]),
       ]
 
       const facade = compilePipelines(extensions)

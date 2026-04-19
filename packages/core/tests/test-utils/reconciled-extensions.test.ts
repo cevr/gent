@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { tool as toolContribution } from "@gent/core/domain/contribution"
+import { tool } from "@gent/core/domain/contribution"
 import { testExtensionRegistryLayer } from "@gent/core/test-utils/reconciled-extensions"
 
 describe("reconcileTestExtensions", () => {
@@ -16,7 +16,7 @@ describe("reconcileTestExtensions", () => {
               sourcePath: "test-a",
               contributions: {
                 capabilities: [
-                  toolContribution({
+                  tool({
                     name: "conflict",
                     description: "tool a",
                     params: {} as never,
@@ -31,7 +31,7 @@ describe("reconcileTestExtensions", () => {
               sourcePath: "test-b",
               contributions: {
                 capabilities: [
-                  toolContribution({
+                  tool({
                     name: "conflict",
                     description: "tool b",
                     params: {} as never,

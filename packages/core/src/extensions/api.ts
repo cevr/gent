@@ -186,30 +186,12 @@ export {
   // Smart constructors — return bare leaf values; the bucket they're placed
   // in is the discrimination (no `_kind` field).
   tool,
-  agent,
   pipeline,
   subscription,
-  modelDriver,
-  externalDriver,
-  projection,
   query,
   mutation,
   defineResource,
   resource,
-} from "../domain/contribution.js"
-// Legacy aliases — many existing call sites use the `*Contribution` suffix.
-// After C8 these are pure identity wrappers and could be dropped, but the
-// re-export keeps the diff focused on the structural change. C10 cleanup.
-export {
-  tool as toolContribution,
-  agent as agentContribution,
-  pipeline as pipelineContribution,
-  subscription as subscriptionContribution,
-  modelDriver as modelDriverContribution,
-  externalDriver as externalDriverContribution,
-  projection as projectionContribution,
-  query as queryContribution,
-  mutation as mutationContribution,
 } from "../domain/contribution.js"
 export {
   type PipelineContribution,

@@ -14,7 +14,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { definePipeline } from "@gent/core/domain/pipeline"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
-import { pipeline as pipelineContribution } from "@gent/core/domain/contribution"
+import { pipeline } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const stubCtx = {
@@ -27,7 +27,7 @@ const stubCtx = {
 const makeExt = (
   id: string,
   kind: "builtin" | "user" | "project",
-  pipelines: ReturnType<typeof pipelineContribution>[],
+  pipelines: ReturnType<typeof pipeline>[],
 ): LoadedExtension => ({
   manifest: { id },
   kind,
@@ -43,7 +43,7 @@ describe("pipeline composition", () => {
   it.live("short-circuit: skipping next prevents inner chain from running", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (input, next) => {
           log.push("inner")
           return next(input)
@@ -51,7 +51,7 @@ describe("pipeline composition", () => {
       ),
     ])
     const outer = makeExt("outer", "project", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (_input, _next) => {
           log.push("outer-short-circuit")
           return Effect.succeed("override")
@@ -83,7 +83,7 @@ describe("pipeline composition", () => {
   it.live("multiple next() calls re-runs inner chain (retry semantics allowed)", () => {
     let baseCalls = 0
     const retrying = makeExt("retrier", "project", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (input, next) =>
           Effect.gen(function* () {
             const first = yield* next(input)
@@ -117,7 +117,7 @@ describe("pipeline composition", () => {
 
   it.live("typed errors from inner chain propagate to outer", () => {
     const passThrough = makeExt("pass", "project", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (input, next) =>
           // outer doesn't catch — error must propagate
           next(input),
@@ -143,7 +143,7 @@ describe("pipeline composition", () => {
   it.live("defect in middle pipeline falls through to outer's previous", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (input, next) => {
           log.push("inner")
           return next(input)
@@ -151,7 +151,7 @@ describe("pipeline composition", () => {
       ),
     ])
     const middle = makeExt("middle", "user", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", () => {
           log.push("middle-defect")
           throw new Error("middle blew up")
@@ -159,7 +159,7 @@ describe("pipeline composition", () => {
       ),
     ])
     const outer = makeExt("outer", "project", [
-      pipelineContribution(
+      pipeline(
         definePipeline("prompt.system", (input, next) => {
           log.push("outer")
           return next(input).pipe(Effect.map((r) => `${r}!`))
