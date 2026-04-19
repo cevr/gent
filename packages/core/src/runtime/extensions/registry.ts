@@ -214,18 +214,16 @@ export const resolveExtensions = (
   const modelDrivers = compileContributions(sorted, extractModelDrivers, (d) => d.id)
   const externalDrivers = compileContributions(sorted, extractExternalDrivers, (d) => d.id)
 
-  // Prompt sections come from two sources after C7:
-  //   1. Static `Capability.prompt` — bundled with the Capability that owns it
-  //      (renders whenever the Capability is loaded; no audience filter).
-  //   2. (Dynamic content lives on `Projection.prompt(value)` — assembled at
-  //      turn time, not here.)
-  // Last scope wins by section id, identical to the legacy promptSection
-  // contribution semantics.
+  // Prompt sections from `Capability.prompt` are read off the WINNERS map,
+  // not raw extractions. Otherwise a higher-scope capability shadowing a
+  // lower-scope tool would still inherit the loser's prompt — defeating the
+  // shadow (codex BLOCKER on C7). Last scope wins by section id, identical
+  // to the legacy promptSection contribution semantics.
+  // (Dynamic prompt content lives on `Projection.prompt(value)` and is
+  // assembled per-turn by ProjectionRegistry, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
-  for (const ext of sorted) {
-    for (const cap of extractCapabilities(ext.contributions)) {
-      if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
-    }
+  for (const cap of toolWinners.values()) {
+    if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
   // C4.3 command bridge — identity-first scope shadowing followed by
@@ -255,7 +253,6 @@ export const resolveExtensions = (
     | { readonly _source: "capability"; readonly cap: AnyCapabilityContribution }
 
   const commandWinners = new Map<string, CommandCandidate>()
-  const permissionRules: PermissionRule[] = []
   for (const ext of sorted) {
     for (const cmd of extractCommands(ext.contributions)) {
       commandWinners.set(cmd.name, { _source: "command", cmd })
@@ -267,9 +264,15 @@ export const resolveExtensions = (
       // `intent:"read"` MUST shadow the builtin slash command — otherwise the
       // builtin leaks. Authorization is the second step; selection is first.
       commandWinners.set(cap.id, { _source: "capability", cap })
-      // C7: permission rules are now bundled on the Capability they gate.
-      if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
     }
+  }
+
+  // C7: permission rules collected from WINNERS, not raw extractions —
+  // otherwise overriding `bash` without `permissionRules` would still inherit
+  // builtin denies (codex BLOCKER on C7).
+  const permissionRules: PermissionRule[] = []
+  for (const cap of toolWinners.values()) {
+    if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
   }
 
   const isAuthorizedAsSlashCommand = (entry: CommandCandidate): boolean =>

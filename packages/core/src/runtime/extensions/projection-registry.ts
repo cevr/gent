@@ -124,7 +124,11 @@ export const compileProjections = (
 
   const evaluateTurn: CompiledProjections["evaluateTurn"] = (ctx) =>
     Effect.gen(function* () {
-      const promptSections: PromptSection[] = []
+      // Id-keyed dedup matches the legacy `promptSection` map semantics —
+      // higher-scope projection's section with the same id shadows a
+      // lower-scope one (codex MEDIUM on C7). Entries are scope-sorted at
+      // `collectProjections`, so last write wins.
+      const sectionsById = new Map<string, PromptSection>()
       const policyFragments: ToolPolicyFragment[] = []
       for (const entry of turnBearing) {
         const value = yield* runOne(entry, ctx)
@@ -133,7 +137,7 @@ export const compileProjections = (
         if (promptFn !== undefined) {
           const sectionsExit = yield* Effect.exit(Effect.sync(() => promptFn(value)))
           if (sectionsExit._tag === "Success") {
-            promptSections.push(...sectionsExit.value)
+            for (const section of sectionsExit.value) sectionsById.set(section.id, section)
           } else {
             yield* Effect.logWarning("extension.projection.prompt.failed").pipe(
               Effect.annotateLogs({
@@ -158,7 +162,7 @@ export const compileProjections = (
           }
         }
       }
-      return { promptSections, policyFragments }
+      return { promptSections: [...sectionsById.values()], policyFragments }
     })
 
   const query: CompiledProjections["query"] = (extensionId, projectionId, ctx) =>

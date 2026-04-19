@@ -17,6 +17,7 @@ import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { definePipeline } from "@gent/core/domain/pipeline"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { defineTool } from "@gent/core/domain/tool"
+import { PermissionRule } from "@gent/core/domain/permission"
 import {
   agent as agentContribution,
   pipeline as pipelineContribution,
@@ -99,6 +100,59 @@ describe("scope precedence", () => {
       return Effect.sync(() =>
         expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
       )
+    })
+
+    it.live("Capability.prompt: shadowed capability's prompt does NOT survive", () => {
+      // C7 codex BLOCKER: previously, prompts/rules were collected from raw
+      // extracted capabilities, not winners. A higher-scope capability
+      // shadowing a lower-scope tool would leak the loser's prompt.
+      const builtinTool = defineTool({
+        name: "shadow-me",
+        description: "carrier",
+        params: Schema.Struct({}),
+        prompt: { id: "shadow-prompt", content: "BUILTIN PROMPT", priority: 50 },
+        execute: () => Effect.succeed("ok"),
+      })
+      const projectTool = defineTool({
+        name: "shadow-me",
+        description: "carrier",
+        params: Schema.Struct({}),
+        // NO prompt — should remove the section
+        execute: () => Effect.succeed("ok"),
+      })
+
+      const resolved = resolveExtensions([
+        ext("a", "builtin", [toolContribution(builtinTool)]),
+        ext("b", "project", [toolContribution(projectTool)]),
+      ])
+      return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
+    })
+
+    it.live("Capability.permissionRules: shadowed capability's rules do NOT survive", () => {
+      // C7 codex BLOCKER companion: a project-scope tool shadowing the
+      // builtin `bash` without `permissionRules` must NOT inherit the
+      // builtin's deny rules.
+      const builtinTool = defineTool({
+        name: "shadow-rules",
+        description: "carrier",
+        params: Schema.Struct({}),
+        permissionRules: [new PermissionRule({ tool: "shadow-rules", action: "deny" })],
+        execute: () => Effect.succeed("ok"),
+      })
+      const projectTool = defineTool({
+        name: "shadow-rules",
+        description: "carrier",
+        params: Schema.Struct({}),
+        // NO permissionRules — should remove the rule
+        execute: () => Effect.succeed("ok"),
+      })
+
+      const resolved = resolveExtensions([
+        ext("a", "builtin", [toolContribution(builtinTool)]),
+        ext("b", "project", [toolContribution(projectTool)]),
+      ])
+      // The deny rule must be gone — project shadowed the builtin entirely.
+      return Effect.sync(() => expect(resolved.permissionRules).toEqual([]))
     })
 
     it.live("same scope ties broken by extension id alphabetically", () => {

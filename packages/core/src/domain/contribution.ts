@@ -68,14 +68,22 @@ export interface CommandKindContribution {
  * Unified Driver kind — `flavor` discriminates `"model"` vs `"external"`. Model
  * drivers are LLM providers (auth, listModels, resolveModel + Layer); external
  * drivers wrap a `TurnExecutor` that streams `TurnEvent`s. They share `id`
- * (driver registry key) but nothing else, so the inner `driver` is a tagged
- * union, not a polymorphic shape.
+ * (driver registry key) but nothing else, so the inner `driver` is correlated
+ * with the flavor (a project/user can't accidentally pair `flavor: "model"`
+ * with an `ExternalDriverContribution`).
+ *
+ * Correlated union — codex ADVISORY on C7. Inner driver shapes have no
+ * discriminator of their own, so the type-level pairing here is the only
+ * thing keeping the cast in `extractModelDrivers` / `extractExternalDrivers`
+ * honest.
  */
-export interface DriverKindContribution {
-  readonly _kind: "driver"
-  readonly flavor: "model" | "external"
-  readonly driver: ModelDriverContribution | ExternalDriverContribution
-}
+export type DriverKindContribution =
+  | { readonly _kind: "driver"; readonly flavor: "model"; readonly driver: ModelDriverContribution }
+  | {
+      readonly _kind: "driver"
+      readonly flavor: "external"
+      readonly driver: ExternalDriverContribution
+    }
 
 export interface ProjectionKindContribution {
   readonly _kind: "projection"
@@ -351,17 +359,17 @@ export const extractModelDrivers = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<ModelDriverContribution> =>
   filterByKind(cs, "driver")
-    .filter((c) => c.flavor === "model")
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    .map((c) => c.driver as ModelDriverContribution)
+    .filter((c): c is Extract<DriverKindContribution, { flavor: "model" }> => c.flavor === "model")
+    .map((c) => c.driver)
 
 export const extractExternalDrivers = (
   cs: ReadonlyArray<Contribution>,
 ): ReadonlyArray<ExternalDriverContribution> =>
   filterByKind(cs, "driver")
-    .filter((c) => c.flavor === "external")
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    .map((c) => c.driver as ExternalDriverContribution)
+    .filter(
+      (c): c is Extract<DriverKindContribution, { flavor: "external" }> => c.flavor === "external",
+    )
+    .map((c) => c.driver)
 
 export const extractProjections = (
   cs: ReadonlyArray<Contribution>,

@@ -107,6 +107,29 @@ describe("projection registry", () => {
     }),
   )
 
+  it.live("prompt sections with same id: higher-scope shadows lower-scope (id-keyed dedup)", () =>
+    // C7 codex MEDIUM: dynamic prompt sections used to be id-keyed in the
+    // legacy registry. After the Projection.prompt migration, evaluateTurn
+    // now dedups by section id with last-write-wins (entries scope-sorted
+    // builtin → user → project).
+    Effect.gen(function* () {
+      const make = (id: string, content: string): AnyProjectionContribution => ({
+        id,
+        query: () => Effect.succeed(content),
+        // Two projections emit a section with the SAME id — only the
+        // higher-scope one should survive.
+        prompt: (v) => [{ id: "shared-id", content: String(v), priority: 50 }],
+      })
+      const compiled = compileProjections([
+        ext("a-built", "builtin", [make("p1", "builtin-content")]),
+        ext("b-proj", "project", [make("p2", "project-content")]),
+      ])
+      const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      expect(result.promptSections).toHaveLength(1)
+      expect(result.promptSections[0]?.content).toBe("project-content")
+    }),
+  )
+
   it.live("scope precedence: builtin first, user next, project last in eval order", () =>
     Effect.gen(function* () {
       const make = (id: string): AnyProjectionContribution => ({
