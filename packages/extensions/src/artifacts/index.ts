@@ -9,14 +9,15 @@
  * Upsert: by sourceTool + branchId (last-writer-wins per source per branch)
  */
 
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Machine, State as MState, Event as MEvent } from "effect-machine"
 import {
   ArtifactId,
   BranchId,
   defineExtension,
-  defineLifecycleResource,
+  defineResource,
   defineTool,
+  resource,
   tool,
   type AnyResourceMachine,
   type ToolContext,
@@ -302,10 +303,13 @@ export const ArtifactsExtension = defineExtension({
   // No-service Resource carrying the machine. WorkflowRuntime supervises
   // the machine; this extension contributes no service tag of its own.
   resources: [
-    defineLifecycleResource({
-      scope: "process",
-      machine: artifactsMachineDef,
-    }),
+    resource(
+      defineResource({
+        scope: "process",
+        layer: Layer.empty,
+        machine: artifactsMachineDef,
+      }),
+    ),
   ],
   capabilities: [
     tool(ArtifactSaveTool),

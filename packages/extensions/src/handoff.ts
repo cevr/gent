@@ -1,9 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
-  defineLifecycleResource,
+  defineResource,
   defineSubscription,
+  resource,
   subscription,
   tool,
   type ExtensionHostContext,
@@ -131,9 +132,12 @@ export const HandoffExtension = defineExtension({
   subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
   // Cooldown machine — process-scope, no service, supervised by WorkflowRuntime.
   resources: [
-    defineLifecycleResource({
-      scope: "process",
-      machine: cooldownWorkflow,
-    }),
+    resource(
+      defineResource({
+        scope: "process",
+        layer: Layer.empty,
+        machine: cooldownWorkflow,
+      }),
+    ),
   ],
 })

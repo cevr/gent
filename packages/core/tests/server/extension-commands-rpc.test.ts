@@ -15,7 +15,6 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
-import { capability } from "@gent/core/domain/contribution"
 import { toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
@@ -30,7 +29,7 @@ describe("extension command RPCs", () => {
     setup: () =>
       Effect.succeed({
         capabilities: [
-          capability({
+          {
             id: "greet",
             audiences: ["human-slash"],
             intent: "write",
@@ -41,15 +40,15 @@ describe("extension command RPCs", () => {
               Effect.sync(() => {
                 invoked.push({ args, sessionId: ctx.sessionId })
               }),
-          }),
-          capability({
+          },
+          {
             id: "noop",
             audiences: ["human-slash"],
             intent: "write",
             input: Schema.String,
             output: Schema.Void,
             effect: () => Effect.void,
-          }),
+          },
         ],
       }),
   }

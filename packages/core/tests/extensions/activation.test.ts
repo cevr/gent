@@ -15,11 +15,7 @@ import {
   setupDiscoveredExtensions,
   validateLoadedExtensions,
 } from "@gent/core/runtime/extensions/activation"
-import {
-  capability as capabilityContribution,
-  defineResource,
-  tool as toolContribution,
-} from "@gent/core/domain/contribution"
+import { defineResource, tool as toolContribution } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 
 const fsLayer = Layer.mergeAll(
@@ -173,7 +169,7 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("collider-a", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "shared_cap",
               description: "a",
               audiences: ["model"],
@@ -181,12 +177,12 @@ describe("extension activation isolation", () => {
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
         makeLoaded("collider-b", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "shared_cap",
               description: "b",
               audiences: ["model"],
@@ -194,7 +190,7 @@ describe("extension activation isolation", () => {
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])
@@ -223,7 +219,7 @@ describe("extension activation isolation", () => {
         }),
         makeLoaded("capability-tool", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "shared_name",
               description: "capability",
               audiences: ["model"],
@@ -231,7 +227,7 @@ describe("extension activation isolation", () => {
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])
@@ -263,14 +259,14 @@ describe("extension activation isolation", () => {
         }),
         makeLoaded("rpc-only", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "shared_name",
               audiences: ["agent-protocol"],
               intent: "read",
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])
@@ -288,14 +284,14 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("missing-desc", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "describeless",
               audiences: ["model"],
               intent: "write",
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])
@@ -313,7 +309,7 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("blank-desc", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "blanky",
               description: "   \t\n",
               audiences: ["model"],
@@ -321,7 +317,7 @@ describe("extension activation isolation", () => {
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])
@@ -339,14 +335,14 @@ describe("extension activation isolation", () => {
       const result = yield* validateLoadedExtensions([
         makeLoaded("rpc-no-desc", {
           capabilities: [
-            capabilityContribution({
+            {
               id: "internal",
               audiences: ["agent-protocol"],
               intent: "read",
               input: Schema.Unknown,
               output: Schema.Unknown,
               effect: () => Effect.succeed(undefined),
-            }),
+            },
           ],
         }),
       ])

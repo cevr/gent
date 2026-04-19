@@ -10,11 +10,13 @@
  *
  * @module
  */
+import { Layer } from "effect"
 import {
   defineAgent,
   defineExtension,
-  defineLifecycleResource,
+  defineResource,
   ExternalDriverRef,
+  resource,
 } from "@gent/core/extensions/api"
 import { ACP_AGENTS } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
@@ -47,9 +49,12 @@ export const AcpAgentsExtension = defineExtension({
   // executors above; its `disposeAll()` runs as the Resource's `stop`
   // finalizer at process-scope teardown. No service is contributed.
   resources: () => [
-    defineLifecycleResource({
-      scope: "process",
-      stop: getManager().disposeAll(),
-    }),
+    resource(
+      defineResource({
+        scope: "process",
+        layer: Layer.empty,
+        stop: getManager().disposeAll(),
+      }),
+    ),
   ],
 })

@@ -86,7 +86,8 @@ export interface ExtensionContributions {
  * replay-safety (safe to re-run after restart), NOT the read/write
  * discriminator (codex catch on C4.4 — `rename-session.ts` is `idempotent:
  * true` yet mutates session state). Tools that are genuinely read-only
- * should be authored as direct `capability(...)` with `intent: "read"`.
+ * should be authored as a direct `CapabilityContribution` object literal with
+ * `intent: "read"`.
  */
 export const tool = (t: AnyToolDefinition): AnyCapabilityContribution => ({
   id: t.name,
@@ -200,18 +201,10 @@ export const mutation = (m: AnyMutationContribution): AnyCapabilityContribution 
   effect: m.handler as AnyCapabilityContribution["effect"],
 })
 
-/**
- * Identity smart constructor for the collapsed Capability primitive.
- * Direct-use entry for capabilities that don't fit the `tool`/`query`/
- * `mutation` shape (e.g., `audiences:["transport-public"]`).
- */
-export const capability = (c: AnyCapabilityContribution): AnyCapabilityContribution => c
-
-// `defineResource` and `defineLifecycleResource` are exported directly from
-// `./resource.ts` — they return Resource leaves that go straight into the
-// `resources` bucket. After C8 they no longer set a `_kind: "resource"`
-// field; the bucket IS the discrimination.
-export { defineResource, defineLifecycleResource } from "./resource.js"
+// `defineResource` is exported directly from `./resource.ts` — returns the
+// Resource leaf that goes straight into the `resources` bucket. After C8 it
+// no longer sets a `_kind: "resource"` field; the bucket IS the discrimination.
+export { defineResource } from "./resource.js"
 
 /**
  * Identity smart constructor for the Resource primitive. Generic over

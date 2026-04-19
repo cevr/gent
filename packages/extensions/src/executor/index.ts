@@ -3,7 +3,7 @@
  */
 
 import { Effect, Layer, Schema } from "effect"
-import { capability, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import type { ModelCapabilityContext } from "@gent/core/extensions/api"
 import { EXECUTOR_EXTENSION_ID } from "./domain.js"
 import { ExecutorSidecar } from "./sidecar.js"
@@ -25,7 +25,7 @@ export const ExecutorExtension = defineExtension({
     // Slash commands as capabilities — `audiences: ["human-slash"]` keeps
     // them surfaced in the slash dispatcher; `intent: "write"` reflects that
     // they steer the executor sidecar lifecycle.
-    capability({
+    {
       id: "executor-start",
       audiences: ["human-slash", "transport-public"],
       intent: "write",
@@ -34,8 +34,8 @@ export const ExecutorExtension = defineExtension({
       output: Schema.Void,
       effect: (_args: string, extCtx: ModelCapabilityContext) =>
         extCtx.extension.send(ExecutorProtocol.Connect({ cwd: extCtx.cwd })).pipe(Effect.orDie),
-    }),
-    capability({
+    },
+    {
       id: "executor-stop",
       audiences: ["human-slash", "transport-public"],
       intent: "write",
@@ -44,7 +44,7 @@ export const ExecutorExtension = defineExtension({
       output: Schema.Void,
       effect: (_args: string, extCtx: ModelCapabilityContext) =>
         extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
-    }),
+    },
   ],
   // Single Resource carries the ExecutorSidecar/McpBridge layers AND the
   // executor actor machine. Per the C3.5 "Resource = layer + machine" merge.

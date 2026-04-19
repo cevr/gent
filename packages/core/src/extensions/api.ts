@@ -194,9 +194,7 @@ export {
   projection,
   query,
   mutation,
-  capability,
   defineResource,
-  defineLifecycleResource,
   resource,
 } from "../domain/contribution.js"
 // Legacy aliases — many existing call sites use the `*Contribution` suffix.
@@ -212,7 +210,6 @@ export {
   projection as projectionContribution,
   query as queryContribution,
   mutation as mutationContribution,
-  capability as capabilityContribution,
 } from "../domain/contribution.js"
 export {
   type PipelineContribution,

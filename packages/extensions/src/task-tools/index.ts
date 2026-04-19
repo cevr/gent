@@ -16,7 +16,7 @@
  * @module
  */
 import { Layer } from "effect"
-import { capability, defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { TaskCreateTool } from "./task-create.js"
 import { TaskListTool } from "./task-list.js"
 import { TaskGetTool } from "./task-get.js"
@@ -43,14 +43,14 @@ export const TaskExtension = defineExtension({
     tool(TaskListTool),
     tool(TaskGetTool),
     tool(TaskUpdateTool),
-    capability(TaskGetQuery),
-    capability(TaskListQuery),
-    capability(TaskGetDepsQuery),
-    capability(TaskCreateMutation),
-    capability(TaskUpdateMutation),
-    capability(TaskDeleteMutation),
-    capability(TaskAddDepMutation),
-    capability(TaskRemoveDepMutation),
+    TaskGetQuery,
+    TaskListQuery,
+    TaskGetDepsQuery,
+    TaskCreateMutation,
+    TaskUpdateMutation,
+    TaskDeleteMutation,
+    TaskAddDepMutation,
+    TaskRemoveDepMutation,
   ],
   projections: [TaskProjection],
   resources: [
