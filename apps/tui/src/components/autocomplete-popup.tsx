@@ -9,6 +9,7 @@
 import { createSignal, createMemo, createResource, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
+import { Effect } from "effect"
 import { useTheme } from "../theme/index"
 import { ChromePanel } from "./chrome-panel"
 import { useScrollSync } from "../hooks/use-scroll-sync"
@@ -43,6 +44,22 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
     extensionUI.autocompleteItems().filter((c) => c.prefix === props.state.type),
   )
 
+  // C9.2: items() may return sync array, Promise, or Effect. Effect is run
+  // through `extensionUI.clientRuntime.runPromise` so the result behaves
+  // identically to a Promise from the resource's POV. Errors are normalized
+  // to an empty array per contribution and logged once.
+  const runItems = (
+    c: AutocompleteContribution,
+    filter: string,
+  ): Promise<readonly AutocompleteItem[]> => {
+    const out = c.items(filter)
+    if (Effect.isEffect(out)) {
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — adapter boundary; AutocompleteContribution.items intentionally accepts any-typed Effects so contribution authors don't have to spell their full E/R union, and the popup normalizes failures to []
+      return extensionUI.clientRuntime.runPromise(out)
+    }
+    return Promise.resolve(out)
+  }
+
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     () => [props.state.type, props.state.filter] as const,
@@ -50,7 +67,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
       setSelectedIndex(0)
       const results = await Promise.all(
         contributions().map((c) =>
-          Promise.resolve(c.items(filter)).catch((err) => {
+          runItems(c, filter).catch((err) => {
             log.error("autocomplete.contribution.failed", {
               prefix: c.prefix,
               error: err instanceof Error ? err.message : String(err),

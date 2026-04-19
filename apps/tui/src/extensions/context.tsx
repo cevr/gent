@@ -37,6 +37,7 @@ import type {
   SnapshotSource,
 } from "@gent/core/domain/extension-client.js"
 import { loadTuiExtensions } from "./loader"
+import { makeClientTransportLayer } from "./client-transport"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
 
@@ -95,6 +96,10 @@ export interface ExtensionUIContextValue {
   readonly sessionId: Accessor<string | undefined>
   /** Current branch ID (undefined before session is active) */
   readonly branchId: Accessor<string | undefined>
+  /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
+   *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly clientRuntime: ManagedRuntime.ManagedRuntime<any, never>
 }
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
@@ -113,6 +118,26 @@ const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
   const clientCtx = useClient()
+
+  // C9.2: build a per-provider ManagedRuntime that augments the shared
+  // platform layer (FileSystem, Path) with `ClientTransport`. Effect-typed
+  // client extensions yield `ClientTransport` to reach the typed
+  // GentNamespacedClient + GentRuntime; the loader's `invokeSetup` runs
+  // them against this runtime.
+  const clientRuntime = ManagedRuntime.make(
+    Layer.merge(
+      Layer.merge(BunFileSystem.layer, BunServices.layer),
+      makeClientTransportLayer({
+        client: clientCtx.client,
+        runtime: clientCtx.runtime,
+        currentSession: () => {
+          const session = clientCtx.session()
+          if (session === null) return undefined
+          return { sessionId: session.sessionId, branchId: session.branchId }
+        },
+      }),
+    ),
+  )
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
@@ -385,7 +410,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           projectDir: `${workspace.cwd}/.gent/extensions`,
           disabled: [...disabledSet],
           onModuleLoaded: registerExtensionModule,
-          runtime: platformRuntime,
+          runtime: clientRuntime,
         },
         makeCtx,
         _asyncFs,
@@ -466,6 +491,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setComposerStateProvider,
         sessionId: () => clientCtx.session()?.sessionId,
         branchId: () => clientCtx.session()?.branchId,
+        clientRuntime,
       }}
     >
       {props.children}

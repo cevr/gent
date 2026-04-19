@@ -28,7 +28,7 @@ import type {
   ExtractExtensionReply,
 } from "./extension-protocol.js"
 import type { QueryRef } from "./query.js"
-import type { ClientEffect } from "./client-effect.js"
+import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -140,11 +140,19 @@ export interface AutocompleteContribution {
   readonly _kind: "autocomplete"
   readonly prefix: string
   readonly title: string
-  /** Fetch items for the given filter. Sync or async.
-   *  Popup wraps in createResource — undefined while loading, items when resolved. */
-  readonly items: (
-    filter: string,
-  ) => ReadonlyArray<AutocompleteItem> | Promise<ReadonlyArray<AutocompleteItem>>
+  /** Fetch items for the given filter. Sync, Promise, or Effect.
+   *  - Sync: returned array used directly.
+   *  - Promise: awaited.
+   *  - Effect: run via the popup's `runtime.runFork(...)` adapter. R may be
+   *    any subset of services the TUI shell's `clientRuntime` provides
+   *    (FileSystem | Path | ClientTransport).
+   *  The popup wraps in `createResource` — undefined while loading, items
+   *  when resolved. */
+  readonly items: (filter: string) =>
+    | ReadonlyArray<AutocompleteItem>
+    | Promise<ReadonlyArray<AutocompleteItem>>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    | Effect.Effect<ReadonlyArray<AutocompleteItem>, any, any>
   /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */
   readonly formatInsertion?: (id: string) => string
   /** Called after an item is selected. Use for side effects like frecency tracking. */
@@ -293,14 +301,19 @@ export interface ExtensionClientContext {
  * The loader detects which shape was returned and dispatches accordingly.
  * C9.2 migrates builtins to the Effect shape; C9.3 deletes the legacy one.
  */
-export type ExtensionClientSetup<TComponent = unknown> =
+export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> =
   | ((ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>)
-  | ClientEffect<ReadonlyArray<ClientContribution<TComponent>>>
+  | ClientEffect<ReadonlyArray<ClientContribution<TComponent>>, ClientSetupError, R>
 
-/** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files */
-export interface ExtensionClientModule<TComponent = unknown> {
+/** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
+ *
+ * `R` defaults to `ClientDeps` (FileSystem | Path). An extension that yields
+ * additional services (e.g. a TUI-side `ClientTransport`) widens `R` and
+ * relies on the loader's runtime to provide every service it requires.
+ */
+export interface ExtensionClientModule<TComponent = unknown, R = ClientDeps> {
   readonly id: string
-  readonly setup: ExtensionClientSetup<TComponent>
+  readonly setup: ExtensionClientSetup<TComponent, R>
   /** Optional snapshot source published by the paired `defineExtensionPackage`.
    *  The TUI provider uses this to refetch on `ExtensionStateChanged` pulses
    *  and populate the cache that backs `ctx.getSnapshotRaw()`.

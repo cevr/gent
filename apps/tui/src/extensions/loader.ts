@@ -12,7 +12,6 @@ import type {
   ExtensionClientContext,
   ClientContribution,
 } from "@gent/core/domain/extension-client.js"
-import type { ClientDeps } from "@gent/core/domain/client-effect.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
@@ -28,13 +27,23 @@ import {
  * differs.
  */
 const invokeSetup = async (
-  ext: ExtensionClientModule,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ext: ExtensionClientModule<unknown, any>,
   ctx: ExtensionClientContext,
-  runtime: ManagedRuntime.ManagedRuntime<ClientDeps, never>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  runtime: ManagedRuntime.ManagedRuntime<any, never>,
 ): Promise<ReadonlyArray<ClientContribution>> => {
   const { setup } = ext
   if (Effect.isEffect(setup)) {
-    return runtime.runPromise(setup)
+    // The runtime carries every service provided by the TUI shell. The
+    // module's R is asserted at this boundary because the type system can't
+    // prove runtime-vs-module union compatibility across discovery + cast;
+    // runtime.runPromise enforces it dynamically.
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS module: E and R erased; runtime.runPromise enforces dependency satisfaction
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const erased = setup as Effect.Effect<ReadonlyArray<ClientContribution>, unknown, unknown>
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — same erasure as above; runPromise dynamically enforces all required services exist on the runtime
+    return runtime.runPromise(erased)
   }
   return setup(ctx)
 }
@@ -90,17 +99,21 @@ const importExtension = async (
  */
 export const loadTuiExtensions = async (
   opts: {
-    readonly builtins?: ReadonlyArray<ExtensionClientModule>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readonly builtins?: ReadonlyArray<ExtensionClientModule<unknown, any>>
     readonly userDir: string
     readonly projectDir: string
     readonly disabled?: ReadonlyArray<string>
     /** Called once per discovered module (builtin or external) before setup runs.
      *  Lets the caller register snapshot sources, etc., before contributions execute. */
-    readonly onModuleLoaded?: (module: ExtensionClientModule) => void
-    /** ManagedRuntime that satisfies `ClientDeps` — required for any extension
-     *  whose `setup` is an Effect (the new C9 shape). Legacy sync-function
-     *  setups don't touch the runtime. */
-    readonly runtime: ManagedRuntime.ManagedRuntime<ClientDeps, never>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readonly onModuleLoaded?: (module: ExtensionClientModule<unknown, any>) => void
+    /** ManagedRuntime that satisfies the union of services any Effect-typed
+     *  setup may yield. The TUI shell builds this with `FileSystem | Path |
+     *  ClientTransport` (and any future shell-specific services). Legacy
+     *  sync-function setups don't touch the runtime. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readonly runtime: ManagedRuntime.ManagedRuntime<any, never>
   },
   makeCtx: (extensionId: string) => ExtensionClientContext,
   fs: ExtensionClientContext["fs"],

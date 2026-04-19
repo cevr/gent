@@ -41,47 +41,37 @@ export class ClientSetupError extends Schema.TaggedErrorClass<ClientSetupError>(
 
 // ── Transport ─────────────────────────────────────────────────────────────
 
-/**
- * Opaque transport surface available to client extensions during setup.
- *
- * Core declares the tag; the TUI shell provides the layer with a
- * `GentNamespacedClient` + `GentRuntime` payload. Keeping the interface
- * `unknown` here preserves the package layering (core does not depend on
- * `@gent/sdk`); the TUI exposes a typed re-export via
- * `apps/tui/src/extensions/client-transport.ts` (added in C9.2 when the
- * first Effect-typed client extension needs it).
- */
-export interface ClientTransportShape {
-  readonly client: unknown
-  readonly runtime: unknown
-}
-
-export class ClientTransport extends Context.Service<ClientTransport, ClientTransportShape>()(
-  "@gent/core/src/domain/client-effect/ClientTransport",
-) {}
-
 // ── Dependencies ──────────────────────────────────────────────────────────
 
 /**
- * The dependency channel a client extension's setup Effect requires.
+ * The dependency channel a client extension's setup Effect MAY require.
  *
- * Intentionally minimal: a client extension does ONLY what the TUI itself
- * does — read files, build paths, call typed transport queries / commands,
- * subscribe to typed events. There is no privileged channel into a paired
- * server extension; everything goes through the same transport surface
- * any client uses.
+ * `ClientDeps` is the universal core-level set: file system and path
+ * services. It's a *floor*, not a ceiling — an individual client surface
+ * (the TUI shell, a future SDK headless, a web UI) augments its runtime
+ * with additional services like transport, theming, or platform-specific
+ * APIs, and an extension that yields one of those declares a wider `R`.
  *
- * Scope for C9.1: `FileSystem | Path` only. `ClientTransport` joins the
- * union in C9.2 once the TUI shell wires a live transport layer — adding
- * it now would force `ManagedRuntime<ClientDeps, never>` construction in
- * the TUI shell before transport exists.
+ * Core does NOT declare `ClientTransport` because its payload type lives
+ * downstream of `@gent/core` (`GentNamespacedClient` + `GentRuntime` are
+ * SDK types). The TUI declares its own `ClientTransport` tag with a typed
+ * payload at `apps/tui/src/extensions/client-transport.ts` (C9.2). Other
+ * client surfaces would do the same with whatever transport they speak.
  */
 export type ClientDeps = FileSystem.FileSystem | Path.Path
 
 // ── ClientEffect ──────────────────────────────────────────────────────────
 
 /**
- * An Effect that may read from `ClientDeps` and fail with `ClientSetupError`.
- * The shape every client extension's `setup` returns under the new surface.
+ * An Effect that returns a value, may fail with `ClientSetupError`, and may
+ * read from any subset of services its runtime provides. `R` defaults to
+ * `ClientDeps` — the floor — so a setup that only needs `FileSystem`/`Path`
+ * compiles without ceremony. Extensions needing more (transport, theme,
+ * shell-specific services) widen `R` themselves; the loader's runtime
+ * provides whatever services the extension yields.
  */
-export type ClientEffect<A, E = ClientSetupError> = Effect.Effect<A, E, ClientDeps>
+export type ClientEffect<A, E = ClientSetupError, R = ClientDeps> = Effect.Effect<A, E, R>
+
+// `Context` import retained for downstream tag declarations re-exporting
+// from this module (currently none — kept for API stability).
+export { Context }
