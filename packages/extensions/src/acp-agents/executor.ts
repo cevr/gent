@@ -9,11 +9,9 @@
  *
  * @module
  */
-import { Context, Deferred, Effect, Stream } from "effect"
+import { Deferred, Effect, Stream } from "effect"
 import {
   TurnError,
-  ToolCallId,
-  ToolRunner,
   type TurnContext,
   type TurnEvent,
   type TurnExecutor,
@@ -23,6 +21,7 @@ import type { AcpConnection } from "./protocol.js"
 import { AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
+import { makeAcpRunTool } from "./executor-boundary.js"
 
 // ── Session Manager Interface (Batch 3 provides implementation) ──
 
@@ -126,28 +125,15 @@ export const makeAcpTurnExecutor = (
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
       // SDK boundary: the codemode JS sandbox invokes `runTool` as a
-      // Promise-returning function. The `TurnExecutor` interface pins the
-      // executor stream's `R = never`, but at runtime the agent runtime
-      // provides `ToolRunner` ambiently. We capture the live ServiceMap
-      // once and build a narrowly typed adapter — the only Effect we ever
-      // cross the SDK edge with is `toolRunner.run`'s typed
-      // `Effect<ToolResultPart, InteractionPendingError>`. No generic
-      // Effect-runner cast is exposed; `runTool`'s argument and return
-      // types pin the boundary to exactly one shape.
+      // Promise-returning function. Adapter built in
+      // `executor-boundary.ts` — the only Effect crossing the SDK edge
+      // is `toolRunner.run(...)`, pinned by `makeAcpRunTool`. No generic
+      // Effect-runner is exposed.
       const services = yield* Effect.context<never>()
-      // The TurnExecutor interface pins R = never, but the agent runtime
-      // ambiently provides ToolRunner at executor invocation time. Re-type
-      // the captured ServiceMap to expose the typed ToolRunner key.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const ambient = services as unknown as Context.Context<ToolRunner>
-      const toolRunner = Context.get(ambient, ToolRunner)
-      const runOnRuntime = Effect.runPromiseWith(services)
-
-      const runTool: CodemodeConfig["runTool"] = (toolName, args) => {
-        const toolCallId = ToolCallId.of(crypto.randomUUID())
-        const toolCtx = { ...ctx.hostCtx, toolCallId }
-        return runOnRuntime(toolRunner.run({ toolCallId, toolName, input: args }, toolCtx))
-      }
+      const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
+        services,
+        hostCtx: ctx.hostCtx,
+      })
 
       const codemodeConfig: CodemodeConfig = {
         tools: ctx.tools,

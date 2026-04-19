@@ -3,7 +3,6 @@ import {
   defineExtension,
   AuthMethod,
   type ModelDriverContribution,
-  type ProviderAuthInfo,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
@@ -17,6 +16,7 @@ import {
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { FetchHttpClient } from "effect/unstable/http"
 import { keychainClient } from "./keychain-client.js"
+import { buildAnthropicCredentialLoader, type CredentialCache } from "./runtime-boundary.js"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
@@ -25,83 +25,8 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-/** Credential cache — owned by extension closure, not module globals */
-interface CredentialCache {
-  creds: { accessToken: string; refreshToken: string; expiresAt: number } | null
-  at: number
-}
-
-const CREDENTIAL_CACHE_TTL_MS = 30_000
-
-type ClaudeCredentials = { accessToken: string; refreshToken: string; expiresAt: number }
-
-const loadCredentialsEffect = (
-  cache: CredentialCache,
-  authInfo?: ProviderAuthInfo,
-): Effect.Effect<ClaudeCredentials | null> =>
-  Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis
-
-    // Check cache
-    if (
-      cache.creds !== null &&
-      now - cache.at < CREDENTIAL_CACHE_TTL_MS &&
-      cache.creds.expiresAt > now + 60_000
-    ) {
-      return cache.creds
-    }
-
-    // Read fresh from keychain
-    const result = yield* readClaudeCodeCredentials().pipe(
-      Effect.catchEager(() => Effect.succeed(null)),
-    )
-    if (result === null) {
-      cache.creds = null
-      cache.at = 0
-      return null
-    }
-
-    if (result.expiresAt <= now + 60_000) {
-      // Try refresh
-      yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-      const refreshed = yield* readClaudeCodeCredentials().pipe(
-        Effect.catchEager(() => Effect.succeed(null)),
-      )
-      if (refreshed === null || refreshed.expiresAt <= now + 60_000) {
-        cache.creds = null
-        cache.at = 0
-        return null
-      }
-      // Persist refreshed creds
-      const persist = authInfo?.persist
-      if (persist !== undefined) {
-        yield* persist({
-          access: refreshed.accessToken,
-          refresh: refreshed.refreshToken,
-          expires: refreshed.expiresAt,
-        }).pipe(
-          Effect.catchDefect((cause) =>
-            Effect.logWarning("anthropic.persist.refreshed.credentials.failed").pipe(
-              Effect.annotateLogs({ error: String(cause) }),
-            ),
-          ),
-        )
-      }
-      cache.creds = refreshed
-      cache.at = now
-      return refreshed
-    }
-
-    cache.creds = result
-    cache.at = now
-    return result
-  })
-
-/** SDK boundary: Anthropic SDK invokes this loader as a Promise-returning function.
- *  The wrapped Effect has `R = never` (closure-captured state), so `runPromise`
- *  here is the explicit Effect→SDK edge, not an internal escape hatch. */
-const buildCredentialLoader = (cache: CredentialCache, authInfo?: ProviderAuthInfo) => () =>
-  Effect.runPromise(loadCredentialsEffect(cache, authInfo))
+// Credential loader + cache live in `runtime-boundary.ts` — that module
+// owns the Promise edge into the Anthropic SDK loader contract.
 
 // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
 const ANTHROPIC_EFFORT: Record<string, "low" | "medium" | "high"> = {
@@ -164,7 +89,7 @@ export const AnthropicExtension = defineExtension({
         // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
         // system identity injection, and cache control at the structured payload level.
         // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
-        const loadCredentials = buildCredentialLoader(credentialCache, authInfo)
+        const loadCredentials = buildAnthropicCredentialLoader(credentialCache, authInfo)
         const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
 
         const customFetchLayer = Layer.succeed(

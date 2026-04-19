@@ -447,13 +447,6 @@ const plugin: Plugin = {
         // tracked in the v2 redesign plan; remove from this list when the file
         // is renamed or split into a `*-boundary.ts`.
         const KNOWN_BOUNDARY_FILES = [
-          // Anthropic SDK fetcher + credential loader (driver flavor=model)
-          "packages/extensions/src/anthropic/index.ts",
-          "packages/extensions/src/anthropic/oauth.ts",
-          // OpenAI SDK token-refresh callback (driver flavor=model)
-          "packages/extensions/src/openai/index.ts",
-          // ACP codemode JS sandbox tool runner (driver flavor=external)
-          "packages/extensions/src/acp-agents/executor.ts",
           // SDK client and supervisor — Promise-returning public API
           "packages/sdk/src/client.ts",
           "packages/sdk/src/local-supervisor.ts",

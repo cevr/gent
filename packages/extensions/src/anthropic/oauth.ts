@@ -2,6 +2,7 @@ import { Effect, Schedule, Schema } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import * as os from "node:os"
 import { ProviderAuthError } from "@gent/core/extensions/api"
+import { runAnthropicFetcher } from "./fetch-boundary.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -421,9 +422,8 @@ export const createAnthropicKeychainFetch = (
     }
 
     // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-returning
-    // function (typeof fetch). The wrapped Effect has `R = never` so this is the
-    // explicit Effect→SDK edge, not an internal escape hatch.
-    return Effect.runPromise(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
+    // function (typeof fetch). Promise edge lives in `runtime-boundary.ts`.
+    return runAnthropicFetcher(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
   }
   return Object.assign(fetcher, {
     preconnect: fetch.preconnect?.bind(fetch),

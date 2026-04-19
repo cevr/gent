@@ -14,6 +14,7 @@ import {
   refreshOpenAIOauth,
   OPENAI_OAUTH_ALLOWED_MODELS,
 } from "./oauth.js"
+import { persistRefreshedOpenAICredentials } from "./persist-boundary.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import { FetchHttpClient } from "effect/unstable/http"
 
@@ -52,15 +53,11 @@ const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
       accountId: refreshed.accountId ?? current.accountId,
     }
 
-    // Persist back to AuthStore. SDK boundary: this loader is invoked by the
-    // OpenAI SDK as a Promise-returning function. `persist` is `Effect<void>`
-    // (R=never), so this is the explicit Effect→SDK edge.
+    // Persist back to AuthStore — Promise edge lives in `persist-boundary.ts`.
+    // The SDK loader is Promise-returning; persistence runs the Effect via
+    // the boundary helper, which logs and swallows failures.
     if (authInfo.persist !== undefined) {
-      try {
-        await Effect.runPromise(authInfo.persist(current))
-      } catch (e) {
-        console.warn("[openai] failed to persist refreshed OAuth tokens:", e)
-      }
+      await persistRefreshedOpenAICredentials(authInfo.persist, current)
     }
 
     return new AuthOauth({

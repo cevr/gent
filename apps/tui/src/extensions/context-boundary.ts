@@ -13,16 +13,19 @@
  * module (counsel B11.2a finding).
  */
 
-import { type ManagedRuntime } from "effect"
+import { type FileSystem, type ManagedRuntime, type Path } from "effect"
 import { readDisabledExtensions } from "@gent/core/runtime/extensions/disabled"
 
 /**
  * Resolve the disabled-extensions set for the current workspace by reading
  * user + project config. The Effect runs through `clientRuntime.runPromise`
  * so the awaited result lands directly in `onMount`'s sync flow.
+ *
+ * The runtime type is pinned to exactly the services `readDisabledExtensions`
+ * needs (`FileSystem.FileSystem | Path.Path`) — see the loader-boundary
+ * precedent — so the caller cannot launder extra Effects through this helper.
  */
 export const loadDisabledExtensions = (
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary; the caller's runtime layer shape is opaque to this helper, but it must provide FileSystem | Path for `readDisabledExtensions`
-  clientRuntime: ManagedRuntime.ManagedRuntime<any, never>,
+  clientRuntime: ManagedRuntime.ManagedRuntime<FileSystem.FileSystem | Path.Path, never>,
   params: { home: string; cwd: string },
 ): Promise<ReadonlySet<string>> => clientRuntime.runPromise(readDisabledExtensions(params))
