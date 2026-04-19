@@ -11,10 +11,7 @@
  * R-channels enforce read-only at the type level — `MachineEngine`
  * exposes `send` + `publish` and can't honestly carry the brand.
  *
- * Until B11.3d renames the underlying `MachineEngine.ask` method to
- * `execute`, this Tag's `execute` simply delegates to `engine.ask` —
- * the public surface name is what matters; the internal name flips in
- * the same commit that renames `extension.ask` → `extension.execute`.
+ * Delegates to `engine.execute` (renamed from `engine.ask` in B11.3d).
  *
  * @module
  */
@@ -39,18 +36,16 @@ export class MachineExecute extends Context.Service<MachineExecute, MachineExecu
   "@gent/core/src/runtime/extensions/machine-execute/MachineExecute",
 ) {
   /**
-   * Live layer — projects `MachineEngine.ask` onto the read-only
+   * Live layer — projects `MachineEngine.execute` onto the read-only
    * `execute` surface. Requires `MachineEngine` (provided alongside
    * by callers — see `runtime/profile.ts`).
-   *
-   * The `ask`→`execute` rename on `MachineEngine` lands in B11.3d.
    */
   static Live: Layer.Layer<MachineExecute, never, MachineEngine> = Layer.effect(
     MachineExecute,
     Effect.gen(function* () {
       const engine: MachineEngineService = yield* MachineEngine
       return {
-        execute: (sessionId, message, branchId) => engine.ask(sessionId, message, branchId),
+        execute: (sessionId, message, branchId) => engine.execute(sessionId, message, branchId),
       }
     }),
   )

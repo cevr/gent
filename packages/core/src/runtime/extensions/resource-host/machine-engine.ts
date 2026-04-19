@@ -2,22 +2,20 @@
  * MachineEngine — substrate that drives `Resource.machine` actors.
  *
  * Owns per-session actor spawn, mailbox queues, supervised restart, and
- * the `send` / `ask` / `publish` / `getActorStatuses` / `terminateAll`
+ * the `send` / `execute` / `publish` / `getActorStatuses` / `terminateAll`
  * operations. Producers yield this Tag; read-only consumers (projections)
  * yield `MachineExecute` instead — the read-only call surface that
  * gains the `ReadOnly` brand in B11.4.
  *
- * Sequencing:
- *   - B11.3a: extracted `makeMachineEngine` factory.
- *   - B11.3b: introduced `MachineExecute` (read-only `execute<M>`) atop
- *     the same engine for projections.
- *   - B11.3c: promoted `MachineEngine` to a public Context.Service;
- *     migrated all producers; deleted the legacy `WorkflowRuntime` Tag.
- *   - B11.3d: rename `MachineEngine.ask` → `MachineEngine.execute` (and
- *     the matching `extension.ask` RPC).
+ * Method semantics:
+ *   - `send`: cast (fire-and-forget) of a typed command message
+ *   - `execute`: typed call/await-reply (formerly `ask` pre-B11.3d)
+ *   - `publish`: broadcast an `AgentEvent` to all session actors;
+ *     returns the extensionIds whose machine actually transitioned
+ *   - `getActorStatuses`: snapshot of per-actor status (debug surface)
+ *   - `terminateAll`: stop every actor + close mailboxes for a session
  *
- * Internal mailbox-tag rename preserved from the B11.3a move:
- *   `AskMailboxItem._tag = "ask"` → `ExecuteMailboxItem._tag = "execute"`
+ * Internal mailbox-tag uses `_tag: "execute"` for typed-reply items.
  *
  * @module
  */
@@ -130,7 +128,14 @@ export interface MachineEngineService {
     message: AnyExtensionCommandMessage,
     branchId?: BranchId,
   ) => Effect.Effect<void, ExtensionProtocolError>
-  readonly ask: <M extends AnyExtensionRequestMessage>(
+  /**
+   * Typed call/await-reply against an actor's request protocol.
+   *
+   * Renamed from `ask` in B11.3d together with the `extension.ask` RPC.
+   * The internal mailbox-item tag stayed as `_tag: "execute"` since the
+   * B11.3a extraction.
+   */
+  readonly execute: <M extends AnyExtensionRequestMessage>(
     sessionId: SessionId,
     message: M,
     branchId?: BranchId,
@@ -689,7 +694,7 @@ export const makeMachineEngine = (
           )
         }
         const replyResult = yield* runSupervised(sessionId, branchId, entry, "ask", (ref) =>
-          ref.ask(decoded, branchId),
+          ref.execute(decoded, branchId),
         )
         if (replyResult._tag === "protocol") {
           return yield* replyResult.error
@@ -879,12 +884,12 @@ export const makeMachineEngine = (
           }),
         ),
 
-      ask: <M extends AnyExtensionRequestMessage>(
+      execute: <M extends AnyExtensionRequestMessage>(
         sessionId: SessionId,
         message: M,
         branchId?: BranchId,
       ) =>
-        Effect.withSpan("MachineEngine.ask", {
+        Effect.withSpan("MachineEngine.execute", {
           attributes: {
             "extension.id": message.extensionId,
             "extension.message": message._tag,

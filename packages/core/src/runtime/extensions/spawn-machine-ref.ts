@@ -260,13 +260,13 @@ export const spawnMachineExtensionRef = <
             if (mapped === undefined) return
             yield* dispatch(mapped, branchId)
           }),
-        ask: (message: AnyExtensionRequestMessage, branchId?: BranchId) =>
+        execute: (message: AnyExtensionRequestMessage, branchId?: BranchId) =>
           Effect.gen(function* () {
             yield* ensureStarted
             const snapshot = yield* machineRef.snapshot
             const mapped = actor.mapRequest?.(message, snapshot)
             if (mapped === undefined) {
-              yield* Effect.logWarning("extension.actor.ask.unmapped").pipe(
+              yield* Effect.logWarning("extension.actor.execute.unmapped").pipe(
                 Effect.annotateLogs({
                   extensionId,
                   tag: message._tag,

@@ -76,7 +76,7 @@ describe("SkillsExtension actor via MachineEngine", () => {
 
       return yield* Effect.gen(function* () {
         const runtime = yield* MachineEngine
-        const reply = yield* runtime.ask(sessionId, SkillsProtocol.ListSkills(), branchId)
+        const reply = yield* runtime.execute(sessionId, SkillsProtocol.ListSkills(), branchId)
 
         expect(Array.isArray(reply)).toBe(true)
         expect(reply).toHaveLength(2)
@@ -94,7 +94,7 @@ describe("SkillsExtension actor via MachineEngine", () => {
 
       return yield* Effect.gen(function* () {
         const runtime = yield* MachineEngine
-        const reply = yield* runtime.ask(
+        const reply = yield* runtime.execute(
           sessionId,
           SkillsProtocol.GetSkillContent({ name: "react" }),
           branchId,
@@ -114,7 +114,7 @@ describe("SkillsExtension actor via MachineEngine", () => {
 
       return yield* Effect.gen(function* () {
         const runtime = yield* MachineEngine
-        const reply = yield* runtime.ask(
+        const reply = yield* runtime.execute(
           sessionId,
           SkillsProtocol.GetSkillContent({ name: "nonexistent" }),
           branchId,

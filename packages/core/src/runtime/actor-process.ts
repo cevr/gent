@@ -191,7 +191,7 @@ export const LocalActorProcessLive: Layer.Layer<
       }),
       extensionStateRuntime: opt(yield* Effect.serviceOption(MachineEngine), {
         send: die("MachineEngine"),
-        ask: die("MachineEngine"),
+        execute: die("MachineEngine"),
       }),
       approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
         present: die("ApprovalService"),

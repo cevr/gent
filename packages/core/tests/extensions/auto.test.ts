@@ -39,7 +39,7 @@ const makeLayer = () =>
 
 const getSnapshot = (runtime: MachineEngine) =>
   Effect.gen(function* () {
-    const model = (yield* runtime.ask(
+    const model = (yield* runtime.execute(
       sessionId,
       AutoProtocol.GetSnapshot(),
       branchId,
@@ -415,7 +415,7 @@ describe("Auto runtime integration", () => {
       // exactly the state where the projection should inject them into the
       // system prompt.
       yield* runtime.publish(reviewSignal(), { sessionId, branchId })
-      const reply = (yield* runtime.ask(
+      const reply = (yield* runtime.execute(
         sessionId,
         AutoProtocol.GetSnapshot(),
         branchId,
@@ -463,7 +463,7 @@ describe("Auto JSONL replay via onInit", () => {
 
   const getAutoSnapshot = (runtime: MachineEngine) =>
     Effect.gen(function* () {
-      const model = (yield* runtime.ask(
+      const model = (yield* runtime.execute(
         childId,
         AutoProtocol.GetSnapshot(),
         childBranchId,
@@ -533,7 +533,7 @@ describe("Auto JSONL replay via onInit", () => {
         branchId,
       })
 
-      const ui = (yield* runtime.ask(
+      const ui = (yield* runtime.execute(
         parentId,
         AutoProtocol.GetSnapshot(),
         branchId,

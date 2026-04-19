@@ -107,7 +107,7 @@ describe("spawnMachineExtensionRef", () => {
       const effects = [
         actor.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId }),
         actor.send({ extensionId: "cold-start", _tag: "Message" }),
-        actor.ask(Ping()),
+        actor.execute(Ping()),
         actor.snapshot,
       ] as const
 
@@ -149,7 +149,7 @@ describe("spawnMachineExtensionRef", () => {
       ).pipe(Effect.provide(testLayer))
 
       yield* actor.start
-      const reply = yield* actor.ask(Increment({ delta: 2 }))
+      const reply = yield* actor.execute(Increment({ delta: 2 }))
       expect(reply).toEqual({ count: 2 })
     }),
   )
@@ -205,7 +205,7 @@ describe("MachineEngine", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const reply = yield* runtime.ask(sessionId, Ping({}), branchId)
+      const reply = yield* runtime.execute(sessionId, Ping({}), branchId)
       const statuses = yield* runtime.getActorStatuses(sessionId)
 
       expect(reply).toEqual({ count: 1 })
@@ -261,7 +261,7 @@ describe("MachineEngine", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const exit = yield* runtime.ask(sessionId, GetCount(), branchId).pipe(Effect.exit)
+      const exit = yield* runtime.execute(sessionId, GetCount(), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const error = Cause.findErrorOption(exit.cause)
@@ -333,10 +333,10 @@ describe("Resource.machine end-to-end", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const reply = yield* runtime.ask(sessionId, Increment({ delta: 3 }), branchId)
+      const reply = yield* runtime.execute(sessionId, Increment({ delta: 3 }), branchId)
       expect(reply).toEqual({ count: 3 })
 
-      const replyAgain = yield* runtime.ask(sessionId, Increment({ delta: 2 }), branchId)
+      const replyAgain = yield* runtime.execute(sessionId, Increment({ delta: 2 }), branchId)
       expect(replyAgain).toEqual({ count: 5 })
     }).pipe(Effect.provide(layer))
   })

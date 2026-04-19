@@ -95,7 +95,7 @@ describe("Auto extension E2E", () => {
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const model = (yield* stateRuntime.ask(
+          const model = (yield* stateRuntime.execute(
             sessionId,
             AutoProtocol.GetSnapshot(),
             branchId,
@@ -144,7 +144,7 @@ describe("Auto extension E2E", () => {
 
           yield* agentLoop.run(makeMessage("begin"))
 
-          const model = (yield* stateRuntime.ask(
+          const model = (yield* stateRuntime.execute(
             sessionId,
             AutoProtocol.GetSnapshot(),
             branchId,
@@ -248,7 +248,7 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage(`follow-up ${i + 1}`))
         }
 
-        const model = (yield* stateRuntime.ask(
+        const model = (yield* stateRuntime.execute(
           sessionId,
           AutoProtocol.GetSnapshot(),
           branchId,
@@ -293,7 +293,7 @@ describe("Auto extension E2E", () => {
         yield* controls.waitForCall(1)
 
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
-        const midModel = (yield* stateRuntime.ask(
+        const midModel = (yield* stateRuntime.execute(
           sessionId,
           AutoProtocol.GetSnapshot(),
           branchId,
@@ -308,7 +308,7 @@ describe("Auto extension E2E", () => {
         yield* Fiber.join(runFiber)
 
         // Final state: auto is inactive
-        const finalModel = (yield* stateRuntime.ask(
+        const finalModel = (yield* stateRuntime.execute(
           sessionId,
           AutoProtocol.GetSnapshot(),
           branchId,

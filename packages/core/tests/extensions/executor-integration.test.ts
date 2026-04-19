@@ -131,7 +131,7 @@ const waitForExecutorStatus = (
 ) =>
   waitFor(
     runtime
-      .ask(sessionId, ExecutorProtocol.GetSnapshot(), branchId)
+      .execute(sessionId, ExecutorProtocol.GetSnapshot(), branchId)
       .pipe(Effect.catchEager(() => Effect.succeed(undefined as ExecutorUiModel | undefined))),
     (snap) => (snap as ExecutorUiModel | undefined)?.status === status,
     3_000,
@@ -282,7 +282,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const model = (yield* runtime.ask(
+        const model = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -309,7 +309,7 @@ describe("Executor actor lifecycle", () => {
         // autoStart=false means no Connect is sent — actor stays Idle.
         yield* waitForExecutorStatus(runtime, "idle")
 
-        const model = (yield* runtime.ask(
+        const model = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -339,7 +339,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "error")
 
-        const model = (yield* runtime.ask(
+        const model = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -366,7 +366,7 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "idle")
 
         // Verify idle
-        const beforeModel = (yield* runtime.ask(
+        const beforeModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -378,7 +378,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const afterModel = (yield* runtime.ask(
+        const afterModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -404,7 +404,7 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "ready")
 
         // Verify ready
-        const beforeModel = (yield* runtime.ask(
+        const beforeModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -416,7 +416,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "idle")
 
-        const afterModel = (yield* runtime.ask(
+        const afterModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -453,7 +453,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "error")
 
-        const midModel = (yield* runtime.ask(
+        const midModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -465,7 +465,7 @@ describe("Executor actor lifecycle", () => {
 
         yield* waitForExecutorStatus(runtime, "ready")
 
-        const afterModel = (yield* runtime.ask(
+        const afterModel = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,
@@ -492,7 +492,7 @@ describe("Executor actor lifecycle", () => {
         yield* waitForExecutorStatus(runtime, "ready")
 
         // Actor should be Ready (onInit → Connect → .spawn → Connected)
-        const model = (yield* runtime.ask(
+        const model = (yield* runtime.execute(
           sessionId,
           ExecutorProtocol.GetSnapshot(),
           branchId,

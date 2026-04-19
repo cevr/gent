@@ -118,12 +118,12 @@ describe("Handoff cooldown workflow", () => {
       yield* actor.start
 
       // Initial cooldown is 0.
-      const initial = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const initial = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(initial).toBe(0)
 
       // Suppress(5) sets cooldown to 5.
       yield* actor.send(HandoffProtocol.Suppress({ count: 5 }))
-      const afterSuppress = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const afterSuppress = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(afterSuppress).toBe(5)
 
       // Each TurnCompleted decrements the counter.
@@ -131,7 +131,7 @@ describe("Handoff cooldown workflow", () => {
         sessionId,
         branchId,
       })
-      const afterOne = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const afterOne = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(afterOne).toBe(4)
 
       yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
@@ -142,12 +142,12 @@ describe("Handoff cooldown workflow", () => {
         sessionId,
         branchId,
       })
-      const afterThree = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const afterThree = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(afterThree).toBe(2)
 
       // Suppress(2) re-arms the counter (overwrite, not add).
       yield* actor.send(HandoffProtocol.Suppress({ count: 2 }))
-      const reArmed = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const reArmed = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(reArmed).toBe(2)
 
       // Decrement clamps at zero.
@@ -163,7 +163,7 @@ describe("Handoff cooldown workflow", () => {
         sessionId,
         branchId,
       })
-      const drained = yield* actor.ask(HandoffProtocol.GetCooldown())
+      const drained = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(drained).toBe(0)
     }),
   )

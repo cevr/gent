@@ -559,7 +559,7 @@ describe("AgentRunner", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not used"),
+      execute: () => Effect.die("not used"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     }

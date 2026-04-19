@@ -89,7 +89,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
     extensionStateRuntime: {
       publish: die("MachineEngine"),
       send: die("MachineEngine"),
-      ask: die("MachineEngine"),
+      execute: die("MachineEngine"),
       getActorStatuses: die("MachineEngine"),
       terminateAll: die("MachineEngine"),
     } as unknown as MakeExtensionHostContextDeps["extensionStateRuntime"],

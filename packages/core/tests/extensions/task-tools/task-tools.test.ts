@@ -76,7 +76,7 @@ const makeCtx = Effect.gen(function* () {
     },
     extension: {
       send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.ask(SessionId.of("s1"), message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
       query,
       mutate,
       getUiSnapshots: dieStub("extension.getUiSnapshots"),
@@ -84,7 +84,7 @@ const makeCtx = Effect.gen(function* () {
     },
     extensions: {
       send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.ask(SessionId.of("s1"), message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
     },
   }) as ToolContext
 })

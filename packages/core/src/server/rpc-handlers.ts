@@ -320,7 +320,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
             }),
           )
           const { stateRuntime: askRuntime } = yield* resolveSessionProfile(sessionId)
-          const reply = yield* askRuntime.ask(sessionId, message, branchId)
+          const reply = yield* askRuntime.execute(sessionId, message, branchId)
           yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
             Effect.annotateLogs({
               sessionId,

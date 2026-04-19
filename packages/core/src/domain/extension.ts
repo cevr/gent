@@ -265,7 +265,7 @@ export interface ExtensionRef {
     message: AnyExtensionCommandMessage,
     branchId?: BranchId,
   ) => Effect.Effect<void, ExtensionProtocolError>
-  readonly ask: <M extends AnyExtensionRequestMessage>(
+  readonly execute: <M extends AnyExtensionRequestMessage>(
     message: M,
     branchId?: BranchId,
   ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>

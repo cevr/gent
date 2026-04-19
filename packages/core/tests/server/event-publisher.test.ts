@@ -41,7 +41,7 @@ describe("EventPublisher", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
+      execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -88,7 +88,7 @@ describe("EventPublisher", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
+      execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -138,7 +138,7 @@ describe("EventPublisher", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
+      execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -174,7 +174,7 @@ describe("EventPublisher", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
+      execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
@@ -213,7 +213,7 @@ describe("EventPublisher", () => {
           return [] as ReadonlyArray<string>
         }),
       send: () => Effect.void,
-      ask: () => Effect.die("not implemented"),
+      execute: () => Effect.die("not implemented"),
       getActorStatuses: () => Effect.succeed([]),
       terminateAll: () => Effect.void,
     })
