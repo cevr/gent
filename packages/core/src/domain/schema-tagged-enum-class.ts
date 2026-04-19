@@ -101,6 +101,7 @@ export type AssertNoTagField<F extends VariantFields> = "_tag" extends keyof F
  * by a test that asserts exact set equality.
  */
 export type ReservedVariantTag =
+  | "__proto__"
   | "annotate"
   | "annotateKey"
   | "ast"
@@ -154,7 +155,14 @@ const probeReservedTags = (): ReadonlySet<string> => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
   const probe = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag" as any))
 
-  const reserved = new Set<string>()
+  // Seed with names that aren't on the schema prototype but are still
+  // dangerous as variant tags:
+  //   - `__proto__`: a tag named `__proto__` mutates the prototype of the
+  //     internal variantClasses map instead of becoming an own property,
+  //     silently dropping the variant from `Object.values(...)`. The
+  //     `Object.create(null)` map blocks the mutation, but explicitly
+  //     rejecting the name gives a clear error to the author.
+  const reserved = new Set<string>(["__proto__"])
   // Walk the entire prototype chain so inherited methods (`pipe`,
   // `annotate`, `check`, etc.) are also rejected — `Object.assign` will
   // happily shadow them with a variant class constructor.
@@ -374,7 +382,13 @@ export const TaggedEnumClass = <V extends VariantsMap>(
   }
 
   // Build per-variant TaggedClasses.
-  const variantClasses: Record<string, unknown> = {}
+  // `Object.create(null)` (no prototype) avoids the `__proto__` footgun:
+  // assigning to `obj.__proto__` on a plain `{}` mutates the prototype
+  // instead of creating an own property, silently dropping the variant
+  // from `Object.values(...)`. RESERVED_TAGS already rejects `__proto__`
+  // explicitly (see below); this is belt + suspenders.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const variantClasses = Object.create(null) as Record<string, unknown>
   for (const [tag, fields] of variantEntries) {
     variantClasses[tag] = buildVariantClass(identifier, tag, fields)
   }

@@ -153,6 +153,7 @@ describe("TaggedEnumClass — construction-time validation", () => {
   test("static `ReservedVariantTag` type union matches runtime probe set", () => {
     const runtimeSet = __getReservedTagsForTesting()
     const staticSet = new Set<ReservedVariantTag>([
+      "__proto__",
       "annotate",
       "annotateKey",
       "ast",
@@ -218,6 +219,21 @@ describe("TaggedEnumClass — construction-time validation", () => {
     expect(() =>
       TaggedEnumClass("Reserved", {
         guards: { value: Schema.Number },
+      }),
+    ).toThrow(/reserved/)
+  })
+
+  test("rejects variant tag named `__proto__` (prototype-pollution footgun)", () => {
+    // Codex S0 review found this: a variant named `__proto__` would
+    // mutate the prototype of the internal variantClasses map instead of
+    // becoming an own property, silently dropping the variant from
+    // `Object.values(variantClasses)`. The internal map now uses
+    // `Object.create(null)` AND the name is explicitly rejected so authors
+    // see a clear error rather than a silently-missing variant.
+    expect(() =>
+      TaggedEnumClass("RejectsProto", {
+        ["__proto__"]: { value: Schema.Number },
+        Normal: { value: Schema.Number },
       }),
     ).toThrow(/reserved/)
   })
