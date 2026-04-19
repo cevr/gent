@@ -93,7 +93,10 @@ interface VaultProjectionValue {
 
 /**
  * Reads the on-disk vault index per evaluation, derives prompt + ui from it.
- * `query` is read-only (lint-enforced) — no `ensureDirs` / `write` calls.
+ * `query` yields `MemoryVaultReadOnly`, the branded read-only Tag — the
+ * `ProjectionContribution<A, R extends ReadOnlyTag>` fence blocks
+ * `ensureDirs` / `write` / `remove` / `rebuildIndex` access at the type
+ * level (B11.4).
  *
  * Performance: scopes the disk walk to the relevant slice (global + the
  * derived project key only) rather than scanning every project under

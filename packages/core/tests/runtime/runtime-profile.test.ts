@@ -29,6 +29,9 @@ import {
   ProjectionError,
   defineTool,
   type ProjectionContribution,
+  type ReadOnly,
+  ReadOnlyBrand,
+  withReadOnly,
 } from "@gent/core/extensions/api"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import {
@@ -64,11 +67,21 @@ const sectionExtension = defineExtension({
 
 // Dynamic prompt section: was `DynamicPromptSection` pre-C7, now a Projection
 // whose `query` Effect yields a service from the extension's Resource layer.
-class FakeProvider extends Context.Service<FakeProvider, { readonly text: () => string }>()(
+// The service Tag is `ReadOnly`-branded so the projection's R channel
+// satisfies `ProjectionContribution<A, R extends ReadOnlyTag>` (B11.4).
+interface FakeProviderShape {
+  readonly text: () => string
+}
+class FakeProvider extends Context.Service<FakeProvider, ReadOnly<FakeProviderShape>>()(
   "@gent/test/runtime-profile/FakeProvider",
-) {}
+) {
+  declare readonly [ReadOnlyBrand]: true
+}
 
-const fakeProviderLive = Layer.succeed(FakeProvider, { text: () => "dynamic-from-service" })
+const fakeProviderLive = Layer.succeed(
+  FakeProvider,
+  withReadOnly({ text: () => "dynamic-from-service" } satisfies FakeProviderShape),
+)
 
 const dynamicProjection: ProjectionContribution<string, FakeProvider> = {
   id: "rp-dynamic-section",

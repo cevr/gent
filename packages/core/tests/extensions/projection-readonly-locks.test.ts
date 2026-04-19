@@ -14,8 +14,9 @@
  */
 
 import { describe, test, expect } from "bun:test"
-import { Context, Effect } from "effect"
+import { Context, Effect, Layer } from "effect"
 import {
+  defineExtension,
   type ProjectionContribution,
   ProjectionError,
   type ReadOnly,
@@ -121,3 +122,68 @@ describe("Projection ReadOnly-brand locks (compile-time)", () => {
 type _AssertReadOnlyExtendsTag = ReadOnly<ReadOnlyShape> extends ReadOnlyTag ? true : false
 const _readOnlyExtendsTag: _AssertReadOnlyExtendsTag = true
 void _readOnlyExtendsTag
+
+describe("Projection ReadOnly-brand locks — defineExtension boundary", () => {
+  test("inline projection in defineExtension({ projections }) is fenced", () => {
+    // Read-only projection passes through defineExtension's contextual type.
+    const ok = defineExtension({
+      id: "@gent/test/readonly-locks-ok",
+      projections: [
+        {
+          id: "ok-inline",
+          query: () =>
+            Effect.gen(function* () {
+              const svc = yield* ReadOnlyService
+              const value = yield* svc.read()
+              return { value }
+            }),
+        },
+      ],
+      resources: [
+        {
+          scope: "process",
+          layer: Layer.empty as Layer.Layer<unknown>,
+        },
+      ],
+    })
+    void ok
+
+    // Write-capable Tag in an inline projection passed through
+    // defineExtension must fail compile. Counsel B11.4c.review caught
+    // that the previous existential `ProjectionContribution<any, any>`
+    // erased R, letting writes slide in via inline literals. Tightening
+    // `AnyProjectionContribution` to `<any, ReadOnlyTag>` re-arms the
+    // fence at the contextual-typing boundary.
+    const bad = defineExtension({
+      id: "@gent/test/readonly-locks-bad",
+      projections: [
+        {
+          id: "bad-inline",
+          query: () =>
+            // @ts-expect-error — write-capable Tag fails the
+            // `R extends ReadOnlyTag` constraint on
+            // `AnyProjectionContribution` (the array element type
+            // imposed contextually by `defineExtension({ projections })`).
+            Effect.gen(function* () {
+              const svc = yield* WriteCapableService
+              yield* svc.write()
+              return { value: 1 }
+            }).pipe(
+              Effect.mapError(
+                () => new ProjectionError({ projectionId: "bad-inline", reason: "x" }),
+              ),
+            ),
+        },
+      ],
+      resources: [
+        {
+          scope: "process",
+          layer: Layer.empty as Layer.Layer<unknown>,
+        },
+      ],
+    })
+    void bad
+
+    expect(true).toBe(true)
+  })
+})

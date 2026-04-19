@@ -19,6 +19,7 @@ import {
   type ProjectionTurnContext,
   ProjectionError,
 } from "@gent/core/domain/projection"
+import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/domain/read-only"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileProjections } from "@gent/core/runtime/extensions/projection-registry"
 
@@ -36,7 +37,7 @@ const ext = (
 const turnCtx: ExtensionTurnContext = {
   sessionId: "s" as ExtensionTurnContext["sessionId"],
   branchId: "b" as ExtensionTurnContext["branchId"],
-  agent: Agents.cowork,
+  agent: Agents["cowork"],
   allTools: [],
   interactive: true,
   cwd: "/tmp",
@@ -234,10 +235,13 @@ describe("projection registry", () => {
 
   it.live("projection with service requirement runs when layer is composed", () =>
     Effect.gen(function* () {
-      class Greeter extends Context.Service<
-        Greeter,
-        { readonly say: () => Effect.Effect<string> }
-      >()("test/Greeter") {}
+      // ReadOnly-branded service Tag — required by `ProjectionContribution<A, R extends ReadOnlyTag>`.
+      interface GreeterShape {
+        readonly say: () => Effect.Effect<string>
+      }
+      class Greeter extends Context.Service<Greeter, ReadOnly<GreeterShape>>()("test/Greeter") {
+        declare readonly [ReadOnlyBrand]: true
+      }
 
       const projection: ProjectionContribution<string, Greeter> = {
         id: "greeter",
@@ -252,7 +256,12 @@ describe("projection registry", () => {
       const result = yield* compiled
         .evaluateTurn(turnEvalCtx)
         .pipe(
-          Effect.provide(Layer.succeed(Greeter, { say: () => Effect.succeed("hi from service") })),
+          Effect.provide(
+            Layer.succeed(
+              Greeter,
+              withReadOnly({ say: () => Effect.succeed("hi from service") } satisfies GreeterShape),
+            ),
+          ),
         )
       expect(result.promptSections[0]?.content).toBe("hi from service")
     }),

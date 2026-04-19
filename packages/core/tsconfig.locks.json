@@ -6,7 +6,9 @@
   "include": [
     "src",
     "tests/runtime/scope-brands.test.ts",
+    "tests/runtime/runtime-profile.test.ts",
     "tests/extensions/effect-purity-locks.test.ts",
-    "tests/extensions/projection-readonly-locks.test.ts"
+    "tests/extensions/projection-readonly-locks.test.ts",
+    "tests/extensions/projection-registry.test.ts"
   ]
 }

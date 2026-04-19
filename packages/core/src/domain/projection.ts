@@ -9,7 +9,11 @@
  *
  * A projection:
  *   1. Has a `query` Effect that reads from services and produces a value `A`.
- *      Read-only by lint rule (`gent/no-projection-writes`).
+ *      Read-only by structural type fence: `R extends ReadOnlyTag` blocks
+ *      write-capable service Tags at compile time (B11.4). See
+ *      `domain/read-only.ts` and the per-service read-only Tags
+ *      (`MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`,
+ *      `InteractionPendingReader`, `Skills`).
  *   2. Optionally exposes the projected value through:
  *      - `prompt` — additional `PromptSection`s injected into the system prompt
  *      - `policy` — `ToolPolicyFragment` shaping the active tool set
@@ -82,5 +86,13 @@ export interface ProjectionContribution<A = unknown, R extends ReadOnlyTag = nev
   readonly policy?: (value: A, ctx: ProjectionContext) => ToolPolicyFragment
 }
 
+/**
+ * Existential projection — the value bucket type used at the
+ * `defineExtension` boundary. R is constrained to `ReadOnlyTag` so
+ * inline projection literals authored under `defineExtension({
+ * projections: [...] })` flow contextually through the read-only
+ * fence. Keeping `any` for the value `A` is intentional — `A` is a
+ * pure data shape that downstream consumers narrow per call.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyProjectionContribution = ProjectionContribution<any, any>
+export type AnyProjectionContribution = ProjectionContribution<any, ReadOnlyTag>
