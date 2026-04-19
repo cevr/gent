@@ -84,29 +84,33 @@ export type AssertNoTagField<F extends VariantFields> = "_tag" extends keyof F
   : F
 
 /**
- * Names that the wrapper attaches to the merged shape and Effect's
- * `toTaggedUnion` augmentation also installs. Variant tag names that match
- * any of these would shadow the wrapper's own surface — reject at the
- * type level and at runtime.
+ * Names that the merged shape (`Schema.Union(...).pipe(toTaggedUnion("_tag"))`)
+ * attaches as own properties. Variant tag names that match any of these would
+ * shadow the wrapper's own surface — reject at the type level and at runtime.
  *
- * Note: this is about VARIANT TAG NAMES, not payload field names. A
- * payload field named `cases` is fine (it lives on instances). A variant
- * tag named `cases` would collide with `Shape.cases`.
+ * Note: this is about VARIANT TAG NAMES, not payload field names. A payload
+ * field named `cases` is fine (it lives on instances). A variant tag named
+ * `cases` would collide with `Shape.cases` because we attach the variant
+ * class via `Object.assign(union, variantClasses)`, which only walks own
+ * enumerable properties.
+ *
+ * The runtime list is derived from a probe at module load (see
+ * `RESERVED_TAGS` below) so it stays correct as Effect evolves; this static
+ * list is the type-level mirror, manually kept in sync with the probe and
+ * verified by a test in `schema-tagged-enum-class.test.ts`.
  */
 export type ReservedVariantTag =
+  | "ast"
   | "cases"
   | "guards"
   | "isAnyOf"
+  | "make"
+  | "makeEffect"
+  | "makeOption"
+  | "mapMembers"
   | "match"
   | "members"
-  | "ast"
-  | "pipe"
-  | "make"
-  | "makeSync"
-  | "annotate"
-  | "annotations"
-  | "Type"
-  | "Encoded"
+  | "rebuild"
 
 export type AssertNoReservedTags<V extends VariantsMap> = {
   readonly [K in keyof V]: K extends ReservedVariantTag
@@ -116,21 +120,38 @@ export type AssertNoReservedTags<V extends VariantsMap> = {
     : V[K]
 }
 
-const RESERVED_TAGS: ReadonlySet<string> = new Set<ReservedVariantTag>([
-  "cases",
-  "guards",
-  "isAnyOf",
-  "match",
-  "members",
-  "ast",
-  "pipe",
-  "make",
-  "makeSync",
-  "annotate",
-  "annotations",
-  "Type",
-  "Encoded",
-])
+/**
+ * The actual reserved-key set. Built dynamically from a probe union at
+ * module load so we get the truth from Effect itself rather than a
+ * hand-curated list that ages like milk. The static `ReservedVariantTag`
+ * union above is the type-level mirror, and a test asserts the two stay in
+ * sync.
+ */
+const probeReservedTags = (): ReadonlySet<string> => {
+  // Two-variant probe — the union must have at least two members for
+  // `toTaggedUnion` to behave as a union (vs degenerating to the single
+  // member). The variant tag names ("__probeA"/"__probeB") cannot collide
+  // with anything reasonable.
+  class __ProbeA extends Schema.TaggedClass<__ProbeA>("@gent/internal/__TaggedEnumClass/probe/A")(
+    "__probeA",
+    { __v: Schema.Number },
+  ) {}
+  class __ProbeB extends Schema.TaggedClass<__ProbeB>("@gent/internal/__TaggedEnumClass/probe/B")(
+    "__probeB",
+    { __v: Schema.Number },
+  ) {}
+  // The Union+toTaggedUnion type constraint demands an index signature on
+  // each member's `Type` shape; class instances don't satisfy that, so we
+  // erase the member types via `any[]` for the probe (the runtime path is
+  // identical).
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+  const members = [__ProbeA, __ProbeB] as ReadonlyArray<any>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
+  const probe = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag" as any))
+  return new Set(Object.getOwnPropertyNames(probe))
+}
+
+const RESERVED_TAGS: ReadonlySet<string> = probeReservedTags()
 
 /**
  * Defect raised at construction time when the variant map violates the
@@ -188,18 +209,25 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
   // eslint-disable-next-line import/namespace
   extends Schema.Codec<
     Schema.Struct.Type<F> & { readonly _tag: Tag },
-    Schema.Struct.Encoded<F> & { readonly _tag: Tag }
+    Schema.Struct.Encoded<F> & { readonly _tag: Tag },
+    Schema.Struct.DecodingServices<F>,
+    Schema.Struct.EncodingServices<F>
   > {
-  new (props: Schema.Struct.Type<F>): Schema.Struct.Type<F> & { readonly _tag: Tag }
+  // Constructor input mirrors `Schema.TaggedClass`'s contract: fields with
+  // schema-level constructor defaults may be omitted. Falling back to
+  // `Type<F>` would force callers to pass defaulted fields explicitly.
+  new (props: Schema.Struct.MakeIn<F>): Schema.Struct.Type<F> & { readonly _tag: Tag }
 }
 
 /**
  * The TaggedEnumClass result. Combines:
  *
  * - the underlying tagged-union schema (decode/encode/AST) typed via
- *   `Schema.Codec<Type, Encoded>` so consumers see a fully-resolved
- *   schema (no leaking generic poisoning the requirements channel of
- *   downstream Effect chains);
+ *   `Schema.Codec<Type, Encoded, DecodingServices, EncodingServices>` so
+ *   field-level service requirements are preserved across the union — a
+ *   variant whose field schemas require a service propagates that service
+ *   to consumers' `R` channel rather than silently being erased to
+ *   `never`;
  * - per-variant TaggedClasses as own properties (`MyEnum.Variant`);
  * - the `cases` / `guards` / `isAnyOf` / `match` augmentation from
  *   Effect's `Schema.toTaggedUnion("_tag")` (typed loosely — the runtime
@@ -209,7 +237,9 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
 // eslint-disable-next-line import/namespace
 export type TaggedEnumClass<V extends VariantsMap> = Schema.Codec<
   { readonly [K in keyof V]: Schema.Struct.Type<V[K]> & { readonly _tag: K } }[keyof V],
-  { readonly [K in keyof V]: Schema.Struct.Encoded<V[K]> & { readonly _tag: K } }[keyof V]
+  { readonly [K in keyof V]: Schema.Struct.Encoded<V[K]> & { readonly _tag: K } }[keyof V],
+  { [K in keyof V]: Schema.Struct.DecodingServices<V[K]> }[keyof V],
+  { [K in keyof V]: Schema.Struct.EncodingServices<V[K]> }[keyof V]
 > & {
   readonly [K in keyof V & string]: TaggedEnumClassVariant<K, V[K]>
 } & {
@@ -228,11 +258,32 @@ export type TaggedEnumClass<V extends VariantsMap> = Schema.Codec<
   ) => (u: unknown) => u is {
     readonly [K in Tags[number]]: Schema.Struct.Type<V[K]> & { readonly _tag: K }
   }[Tags[number]]
-  readonly match: <Out>(handlers: {
-    readonly [K in keyof V & string]: (v: Schema.Struct.Type<V[K]> & { readonly _tag: K }) => Out
-  }) => (
-    v: { readonly [K in keyof V]: Schema.Struct.Type<V[K]> & { readonly _tag: K } }[keyof V],
-  ) => Out
+  readonly match: {
+    // Curried: `match(handlers)(value)`. Inferred return type unifies all
+    // handler returns rather than collapsing to a single forced `Out`.
+    <
+      Handlers extends {
+        readonly [K in keyof V & string]: (
+          v: Schema.Struct.Type<V[K]> & { readonly _tag: K },
+        ) => unknown
+      },
+    >(
+      handlers: Handlers,
+    ): (
+      v: { readonly [K in keyof V]: Schema.Struct.Type<V[K]> & { readonly _tag: K } }[keyof V],
+    ) => ReturnType<Handlers[keyof Handlers]>
+    // Uncurried: `match(value, handlers)`. Same inference behavior.
+    <
+      Handlers extends {
+        readonly [K in keyof V & string]: (
+          v: Schema.Struct.Type<V[K]> & { readonly _tag: K },
+        ) => unknown
+      },
+    >(
+      v: { readonly [K in keyof V]: Schema.Struct.Type<V[K]> & { readonly _tag: K } }[keyof V],
+      handlers: Handlers,
+    ): ReturnType<Handlers[keyof Handlers]>
+  }
 }
 
 /**

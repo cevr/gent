@@ -18,6 +18,8 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { AgentEvent } from "@gent/core/domain/event"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 describe("TaggedEnumClass — basic shape", () => {
   const Shape = TaggedEnumClass("Shape", {
@@ -132,6 +134,33 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
 })
 
 describe("TaggedEnumClass — construction-time validation", () => {
+  // Codex review found the original RESERVED_TAGS list missed real own-keys
+  // (`makeEffect`, `makeOption`, `mapMembers`, `rebuild`). The runtime now
+  // probes the actual own-keys from a probe union; this test guards against
+  // the static type-level list drifting from the probe.
+  test("rejects every actual own-key of the toTaggedUnion-augmented Union", () => {
+    const expectedReservedKeys = [
+      "ast",
+      "cases",
+      "guards",
+      "isAnyOf",
+      "make",
+      "makeEffect",
+      "makeOption",
+      "mapMembers",
+      "match",
+      "members",
+      "rebuild",
+    ] as const
+    for (const key of expectedReservedKeys) {
+      expect(() =>
+        TaggedEnumClass("ReservedScan", {
+          [key]: { value: Schema.Number },
+        }),
+      ).toThrow(/reserved/)
+    }
+  })
+
   test("rejects empty variant map", () => {
     expect(() => TaggedEnumClass("Empty", {})).toThrow(/no variants/)
   })
@@ -168,12 +197,15 @@ describe("TaggedEnumClass — construction-time validation", () => {
     ).toThrow(/reserved/)
   })
 
-  test("rejects variant tag named `pipe` (Schema base method)", () => {
+  test("ALLOWS variant tag named `pipe` (prototype method, not an own-key)", () => {
+    // `pipe` lives on the prototype chain — `Object.assign` only walks own
+    // enumerable properties so a variant called `pipe` does not actually
+    // shadow `schema.pipe(...)`. Documented as accepted via this test.
     expect(() =>
-      TaggedEnumClass("Reserved", {
+      TaggedEnumClass("AllowsPipe", {
         pipe: { value: Schema.Number },
       }),
-    ).toThrow(/reserved/)
+    ).not.toThrow()
   })
 })
 
@@ -252,6 +284,28 @@ describe("TaggedEnumClass — per-enum schema id namespacing", () => {
     const a = new A.Shared({ value: 1 })
     expect(a instanceof A.Shared).toBe(true)
     expect(a instanceof B.Shared).toBe(false)
+  })
+})
+
+describe("TaggedEnumClass — AgentEvent migration smoke", () => {
+  // Per codex review of S0: an AgentEvent-specific roundtrip test that
+  // exercises the wire-shape contract (`{ _tag, ...fields }` JSON ⟷
+  // class instance) belongs at the substrate layer, not only in the
+  // generic substrate tests above. The full SQLite path is covered by
+  // `tests/storage/sqlite-storage.test.ts`; this is a tighter check that
+  // the migration preserved the documented wire shape.
+  test("AgentEvent.SessionStarted JSON wire shape unchanged", () => {
+    const sessionId = SessionId.of("01234567-89ab-7cde-8123-456789abcdef")
+    const branchId = BranchId.of("01234567-89ab-7cde-8123-456789abcdee")
+    const evt = new AgentEvent.SessionStarted({ sessionId, branchId })
+    const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
+    expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
+    const decoded = Schema.decodeUnknownSync(AgentEvent)(encoded)
+    expect(decoded instanceof AgentEvent.SessionStarted).toBe(true)
+    if (decoded._tag === "SessionStarted") {
+      expect(decoded.sessionId).toBe(sessionId)
+      expect(decoded.branchId).toBe(branchId)
+    }
   })
 })
 
