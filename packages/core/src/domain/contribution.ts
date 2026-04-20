@@ -22,7 +22,7 @@
  * @module
  */
 import type { AgentDefinition } from "./agent.js"
-import type { AnyCapabilityContribution } from "./capability.js"
+import type { CapabilityToken } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyPipelineContribution, PipelineHandler, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
@@ -49,7 +49,7 @@ import type {
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
-  readonly capabilities?: ReadonlyArray<AnyCapabilityContribution>
+  readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
   readonly pipelines?: ReadonlyArray<AnyPipelineContribution>

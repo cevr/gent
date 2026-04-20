@@ -193,6 +193,18 @@ export interface CapabilityContribution<
 export type AnyCapabilityContribution = CapabilityContribution<any, any, any, any>
 
 /**
+ * Opaque token returned by the `tool()` / `request()` / `action()` factories.
+ * The `capabilities` bucket on `ExtensionContributions` and `DefineExtensionInput`
+ * only accepts `CapabilityToken` — not raw `AnyCapabilityContribution` — so
+ * authors must go through a typed factory. Internal runtime code (registry,
+ * capability-host) consumes `AnyCapabilityContribution` directly.
+ */
+declare const CapabilityTokenBrand: unique symbol
+export type CapabilityToken = AnyCapabilityContribution & {
+  readonly [CapabilityTokenBrand]: true
+}
+
+/**
  * Reference object handed to callers so they can route + decode through the
  * runtime's Capability dispatcher. The actual invoker on
  * `ExtensionHostContext.Extension` is wired in C4.2 (when query/mutation

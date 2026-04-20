@@ -26,6 +26,7 @@ import type {
   AnyCapabilityContribution,
   Audience,
   CapabilityError,
+  CapabilityToken,
   ModelCapabilityContext,
 } from "../capability.js"
 
@@ -83,12 +84,11 @@ const surfaceToAudiences = (
  * derived `audiences[]` (one per surface, plus `"transport-public"`
  * when `public: true`) and `intent: "write"`.
  */
-export const action = <Input, Output, R>(
-  input: ActionInput<Input, Output, R>,
-): AnyCapabilityContribution => {
+export const action = <Input, Output, R>(input: ActionInput<Input, Output, R>): CapabilityToken => {
   const audiences: ReadonlyArray<Audience> = input.public
     ? [...surfaceToAudiences(input.surface), "transport-public"]
     : surfaceToAudiences(input.surface)
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
   return {
     id: input.id,
     description: input.description,
@@ -99,5 +99,5 @@ export const action = <Input, Output, R>(
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     effect: input.execute as AnyCapabilityContribution["effect"],
-  }
+  } as unknown as CapabilityToken
 }

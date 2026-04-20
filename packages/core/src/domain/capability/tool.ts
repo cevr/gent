@@ -22,7 +22,11 @@
  */
 
 import { type Effect, Schema } from "effect"
-import type { AnyCapabilityContribution, ModelCapabilityContext } from "../capability.js"
+import type {
+  AnyCapabilityContribution,
+  CapabilityToken,
+  ModelCapabilityContext,
+} from "../capability.js"
 import type { ToolCallId } from "../ids.js"
 import type { PermissionRule } from "../permission.js"
 import type { PromptSection } from "../prompt.js"
@@ -109,26 +113,28 @@ export const tool = <
   Deps,
 >(
   input: ToolInput<Params, Result, Error, Deps>,
-): AnyCapabilityContribution => ({
-  id: input.id,
-  description: input.description,
-  audiences: ["model"],
-  intent: "write",
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  input: input.params as Schema.Schema<unknown>,
-  // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
-  // Tools needing typed-output validation should author through `request(...)`.
-  output: Schema.Unknown,
-  ...(input.resources !== undefined ? { resources: input.resources } : {}),
-  ...(input.idempotent !== undefined ? { idempotent: input.idempotent } : {}),
-  ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
-  ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
-  ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
-  ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
-  ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-  // ToolCapabilityContext extends ModelCapabilityContext and narrows
-  // `toolCallId` to required — `tool` execute signatures satisfy the
-  // capability `effect` signature contravariantly.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  effect: input.execute as AnyCapabilityContribution["effect"],
-})
+): CapabilityToken =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
+  ({
+    id: input.id,
+    description: input.description,
+    audiences: ["model"],
+    intent: "write",
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    input: input.params as Schema.Schema<unknown>,
+    // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
+    // Tools needing typed-output validation should author through `request(...)`.
+    output: Schema.Unknown,
+    ...(input.resources !== undefined ? { resources: input.resources } : {}),
+    ...(input.idempotent !== undefined ? { idempotent: input.idempotent } : {}),
+    ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
+    ...(input.promptGuidelines !== undefined ? { promptGuidelines: input.promptGuidelines } : {}),
+    ...(input.interactive !== undefined ? { interactive: input.interactive } : {}),
+    ...(input.permissionRules !== undefined ? { permissionRules: input.permissionRules } : {}),
+    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    // ToolCapabilityContext extends ModelCapabilityContext and narrows
+    // `toolCallId` to required — `tool` execute signatures satisfy the
+    // capability `effect` signature contravariantly.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    effect: input.execute as AnyCapabilityContribution["effect"],
+  }) as unknown as CapabilityToken

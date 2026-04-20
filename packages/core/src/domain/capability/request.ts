@@ -21,6 +21,7 @@
 import { type Effect, type Schema } from "effect"
 import type {
   AnyCapabilityContribution,
+  CapabilityToken,
   CapabilityCoreContext,
   CapabilityError,
 } from "../capability.js"
@@ -83,10 +84,10 @@ export interface WriteRequestInput<Input = unknown, Output = unknown, R = never>
  */
 export function request<Input, Output, R extends ReadOnlyTag = never>(
   input: ReadRequestInput<Input, Output, R>,
-): AnyCapabilityContribution
+): CapabilityToken
 export function request<Input, Output, R = never>(
   input: WriteRequestInput<Input, Output, R>,
-): AnyCapabilityContribution
+): CapabilityToken
 export function request(input: {
   readonly id: string
   readonly intent: "read" | "write"
@@ -94,7 +95,8 @@ export function request(input: {
   readonly output: Schema.Schema<unknown>
   readonly prompt?: PromptSection
   readonly execute: AnyCapabilityContribution["effect"]
-}): AnyCapabilityContribution {
+}): CapabilityToken {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- CapabilityToken brand applied at factory boundary
   return {
     id: input.id,
     audiences: ["agent-protocol", "transport-public"],
@@ -103,5 +105,5 @@ export function request(input: {
     output: input.output,
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     effect: input.execute,
-  }
+  } as unknown as CapabilityToken
 }

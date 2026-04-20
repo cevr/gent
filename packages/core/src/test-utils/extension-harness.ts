@@ -29,7 +29,7 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { AnyCapabilityContribution } from "../domain/capability.js"
+import type { CapabilityToken } from "../domain/capability.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -200,8 +200,8 @@ export interface ToolTestLayerConfig {
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
   readonly extensions?: ReadonlyArray<GentExtension>
-  /** Extra capabilities to register (typically authored via `tool({...})`) */
-  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
+  /** Extra capabilities to register (authored via `tool({...})` / `request({...})` / `action({...})`) */
+  readonly tools?: ReadonlyArray<CapabilityToken>
   /** AgentRunner mock — default returns success with empty text */
   readonly subagentRunner?: AgentRunner
   /** Extra layers to merge (e.g., GitReader.Test) */

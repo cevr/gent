@@ -50,7 +50,7 @@ import type {
 } from "../domain/extension.js"
 import type { ExtensionContributions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
-import type { AnyCapabilityContribution } from "../domain/capability.js"
+import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
 import type { AnyPipelineContribution } from "../domain/pipeline.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
@@ -219,6 +219,7 @@ export {
   type SubscriptionFailureMode,
 } from "../domain/subscription.js"
 export type {
+  CapabilityToken,
   CapabilityContribution,
   AnyCapabilityContribution,
   CapabilityContext,
@@ -314,7 +315,7 @@ export type FieldSpec<A> =
 export interface DefineExtensionInput {
   readonly id: string
   readonly resources?: FieldSpec<AnyResourceContribution>
-  readonly capabilities?: FieldSpec<AnyCapabilityContribution>
+  readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly projections?: FieldSpec<AnyProjectionContribution>
   readonly pipelines?: FieldSpec<AnyPipelineContribution>
