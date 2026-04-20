@@ -18,18 +18,17 @@ import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
 import { SYSTEM_IDENTITY_PREFIX, getBillingHeaderInputs } from "./oauth.js"
 import { buildBillingHeaderValue } from "./signing.js"
+import { getModelOverride } from "./model-config.js"
 
 // ── Constants ──
 
 const MCP_PREFIX = "mcp_"
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
 
-// Counsel C7 — opencode parity. Models that don't accept the
-// `output_config.effort` knob: Anthropic rejects haiku requests with the
-// effort param set. Match by prefix so future haiku versions roll
-// forward automatically. (opencode reference uses a richer per-model
-// override map, ported in C8.)
-const HAIKU_PREFIX = "claude-haiku"
+// Counsel C8 — model-specific quirks (effort-disabled, etc.) live in
+// `model-config.ts`'s `MODEL_OVERRIDES` table; we read them via
+// `getModelOverride(modelId).disableEffort` rather than a prefix check
+// hard-coded here.
 
 // ── Payload Transforms (outgoing) ──
 
@@ -363,7 +362,12 @@ const stripObjectKey = (
 
 const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unknown> => {
   const model = payload["model"]
-  if (typeof model !== "string" || !model.startsWith(HAIKU_PREFIX)) return payload
+  if (typeof model !== "string") return payload
+  // Counsel C8 — defer to the per-model override table instead of
+  // string-prefix matching here. `disableEffort` is currently set for
+  // the `haiku` family in `MODEL_CONFIG`.
+  const override = getModelOverride(model)
+  if (override?.disableEffort !== true) return payload
 
   const next = { ...payload }
   const outputConfig = next["output_config"]

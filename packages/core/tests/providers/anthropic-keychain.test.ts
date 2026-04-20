@@ -39,9 +39,16 @@ describe("getModelBetas", () => {
     expect(getModelBetas("opus")).not.toContain("context-1m-2025-08-07")
   })
 
-  it("drops claude-code-20250219 for haiku", () => {
+  it("drops interleaved-thinking-2025-05-14 for haiku (counsel C8 — model-config override)", () => {
+    // Counsel C8 — the previous haiku rule dropped claude-code-20250219;
+    // the model-config.ts port (matching opencode-claude-auth) excludes
+    // interleaved-thinking-2025-05-14 for the haiku family instead, so
+    // haiku rejects the combo of effort + thinking. Lock the new
+    // expectation here so future haiku regressions surface immediately.
     const betas = getModelBetas("claude-haiku-4-5")
-    expect(betas).not.toContain("claude-code-20250219")
+    expect(betas).not.toContain("interleaved-thinking-2025-05-14")
+    expect(betas).toContain("claude-code-20250219")
+    expect(betas).toContain("oauth-2025-04-20")
   })
 
   it("filters excluded betas", () => {

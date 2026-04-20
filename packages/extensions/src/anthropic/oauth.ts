@@ -595,11 +595,16 @@ export const refreshClaudeCodeCredentials = (
   })
 
 // ── Beta Management ──
+//
+// Counsel C8 — beta + ccVersion config delegates to `model-config.ts`
+// (port of `griffinmartin/opencode-claude-auth/src/model-config.ts`).
+// This module keeps the env-var override + per-process exclusion cache
+// (used by the long-context backoff path) and forwards to
+// `getModelBetas` for the actual derivation.
 
-const DEFAULT_BETA_FLAGS =
-  "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05"
+import { getModelBetas as deriveModelBetas, MODEL_CONFIG, getCcVersion } from "./model-config.js"
 
-export const LONG_CONTEXT_BETAS = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+export const LONG_CONTEXT_BETAS: ReadonlyArray<string> = MODEL_CONFIG.longContextBetas
 
 /** Env vars for Anthropic keychain, read once at init via Config */
 export interface AnthropicKeychainEnv {
@@ -615,12 +620,6 @@ export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
   _env = env
   lastBetaFlagsEnv = env.betaFlags
 }
-
-const getRequiredBetas = (): string[] =>
-  (_env.betaFlags ?? DEFAULT_BETA_FLAGS)
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
 
 // Session-level excluded betas per model
 const excludedBetas = new Map<string, Set<string>>()
@@ -658,39 +657,8 @@ export const getNextBetaToExclude = (modelId: string): string | null => {
   return null
 }
 
-export const getModelBetas = (modelId: string, excluded?: Set<string>): string[] => {
-  const betas = [...getRequiredBetas()]
-  const lower = modelId.toLowerCase()
-
-  // context-1m for opus/sonnet 4.6+ (1M context is default for these models)
-  if (lower.includes("opus") || lower.includes("sonnet")) {
-    const versionMatch = lower.match(/(opus|sonnet)-(\d+)-(\d+)/)
-    if (versionMatch) {
-      const majorStr = versionMatch[2]
-      const minorStr = versionMatch[3]
-      if (majorStr !== undefined && minorStr !== undefined) {
-        const major = parseInt(majorStr, 10)
-        const minor = parseInt(minorStr, 10)
-        const effectiveMinor = minor > 99 ? 0 : minor
-        if (major > 4 || (major === 4 && effectiveMinor >= 6)) {
-          betas.push("context-1m-2025-08-07")
-        }
-      }
-    }
-  }
-
-  // haiku doesn't get claude-code-20250219
-  if (lower.includes("haiku")) {
-    const idx = betas.indexOf("claude-code-20250219")
-    if (idx !== -1) betas.splice(idx, 1)
-  }
-
-  if (excluded !== undefined && excluded.size > 0) {
-    return betas.filter((beta) => !excluded.has(beta))
-  }
-
-  return betas
-}
+export const getModelBetas = (modelId: string, excluded?: Set<string>): ReadonlyArray<string> =>
+  deriveModelBetas(modelId, _env.betaFlags, excluded)
 
 // ── System Identity (exported for keychain-client.ts) ──
 
@@ -701,9 +669,10 @@ export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official
 // are handled by keychain-client.ts at the AnthropicClient layer.
 // This fetch wrapper only handles: auth, headers, beta flags, billing, retry.
 
-const DEFAULT_CC_VERSION = "2.1.80"
-
-const getCliVersion = (): string => _env.cliVersion ?? DEFAULT_CC_VERSION
+// Counsel C8 — single source of truth in `model-config.ts`
+// (`MODEL_CONFIG.ccVersion`). Env-var override still wins so users can
+// pin a specific CC version without editing source.
+const getCliVersion = (): string => _env.cliVersion ?? getCcVersion()
 
 const getUserAgent = (): string => _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
 
