@@ -1,9 +1,9 @@
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Stream, SubscriptionRef } from "effect"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { GentRpcs } from "./rpcs"
-import type { SteerCommand } from "../runtime/agent/agent-loop.js"
+import { AgentLoop, type SteerCommand } from "../runtime/agent/agent-loop.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
@@ -14,8 +14,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { SessionQueries } from "./session-queries.js"
 import { SessionCommands } from "./session-commands.js"
-import { SessionEvents } from "./session-events.js"
-import { SessionSubscriptions } from "./session-subscriptions.js"
+import { EventStore, EventId, type EventEnvelope } from "../domain/event.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -37,6 +36,11 @@ import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ServerIdentity } from "./server-identity.js"
 
+const isPublicTransportEvent = (envelope: EventEnvelope) =>
+  envelope.event._tag !== "MachineInspected" &&
+  envelope.event._tag !== "MachineTaskSucceeded" &&
+  envelope.event._tag !== "MachineTaskFailed"
+
 // ============================================================================
 // RPC Handlers Layer
 // ============================================================================
@@ -45,8 +49,8 @@ export const RpcHandlersLive = GentRpcs.toLayer(
   Effect.gen(function* () {
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
-    const events = yield* SessionEvents
-    const subscriptions = yield* SessionSubscriptions
+    const eventStore = yield* EventStore
+    const agentLoop = yield* AgentLoop
     const interactions = yield* InteractionCommands
     const permission = yield* Permission
     const configService = yield* ConfigService
@@ -147,14 +151,31 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         commands.updateSessionReasoningLevel({ sessionId, reasoningLevel }),
 
       "session.events": ({ sessionId, branchId, after }) =>
-        events.streamEvents({
-          sessionId,
-          ...(branchId !== undefined ? { branchId } : {}),
-          ...(after !== undefined ? { after } : {}),
-        }),
+        eventStore
+          .subscribe({
+            sessionId,
+            ...(branchId !== undefined ? { branchId } : {}),
+            ...(after !== undefined ? { after: EventId.of(after) } : {}),
+          })
+          .pipe(Stream.filter(isPublicTransportEvent)),
 
       "session.watchRuntime": ({ sessionId, branchId }) =>
-        subscriptions.watchRuntime({ sessionId, branchId }),
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const actor = yield* agentLoop.getActor({ sessionId, branchId })
+            yield* Effect.logInfo("watchRuntime.open").pipe(
+              Effect.annotateLogs({ sessionId, branchId }),
+            )
+            return SubscriptionRef.changes(actor.state).pipe(
+              Stream.map(agentLoop.toRuntimeState),
+              Stream.ensuring(
+                Effect.logInfo("watchRuntime.close").pipe(
+                  Effect.annotateLogs({ sessionId, branchId }),
+                ),
+              ),
+            )
+          }),
+        ),
 
       // -- branch --
       "branch.list": ({ sessionId }) => queries.listBranches(sessionId),
