@@ -1,13 +1,13 @@
 import { Effect } from "effect"
 import {
-  ExtensionPackage,
+  defineClientExtension,
   clientCommandContribution,
   interactionRendererContribution,
 } from "@gent/core/domain/extension-client.js"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ClientShell } from "../client-services"
 
-export default ExtensionPackage.tui("@gent/handoff", {
+export default defineClientExtension("@gent/handoff", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
     return [

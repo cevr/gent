@@ -15,7 +15,7 @@
 import { createSignal, createMemo, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import {
-  ExtensionPackage,
+  defineClientExtension,
   borderLabelContribution,
   clientCommandContribution,
   overlayContribution,
@@ -31,7 +31,7 @@ import { useScopedKeyboard } from "../../keyboard/context"
 const EXT_ID = "@gent/task-tools"
 const QUERY_ID = "task.list"
 
-export default ExtensionPackage.tui("@gent/task-tools", {
+export default defineClientExtension("@gent/task-tools", {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell

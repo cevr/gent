@@ -56,7 +56,7 @@ import type { AnyPipelineContribution } from "../domain/pipeline.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
 import type { AnySubscriptionContribution } from "../domain/subscription.js"
-import type { AgentEvent } from "../domain/event.js"
+import type { AgentEvent, AgentEventTag } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 
@@ -147,6 +147,7 @@ export type {
 export { DriverError } from "../domain/driver.js"
 export {
   AgentEvent,
+  type AgentEventTag,
   type Question,
   QuestionSchema,
   QuestionOptionSchema,
@@ -322,7 +323,7 @@ export interface DefineExtensionInput {
   readonly subscriptions?: FieldSpec<AnySubscriptionContribution>
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
-  readonly pulseTags?: ReadonlyArray<string>
+  readonly pulseTags?: ReadonlyArray<AgentEventTag>
 }
 
 /**

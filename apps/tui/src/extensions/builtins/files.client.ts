@@ -8,7 +8,10 @@
  */
 
 import { Effect, FileSystem } from "effect"
-import { ExtensionPackage, autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import {
+  defineClientExtension,
+  autocompleteContribution,
+} from "@gent/core/domain/extension-client.js"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
 import { searchFiles, trackSelection } from "../../utils/file-finder"
@@ -25,7 +28,7 @@ const formatMatch = (f: { path: string; name: string }) => {
   }
 }
 
-export default ExtensionPackage.tui("@gent/files-ui", {
+export default defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
     const workspace = yield* ClientWorkspace
     return [

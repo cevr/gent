@@ -283,7 +283,10 @@ function standaloneClientModule<TComponent = unknown, R = unknown>(
   return { id, setup: spec.setup }
 }
 
-/** Namespace for client-module factories. Currently exposes `tui` only. */
+/** Create a TUI client extension module with typed contributions. */
+export const defineClientExtension = standaloneClientModule
+
+/** @deprecated Use `defineClientExtension` directly. */
 export const ExtensionPackage = {
   tui: standaloneClientModule,
 }

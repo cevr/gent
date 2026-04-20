@@ -23,6 +23,7 @@
  */
 import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
+import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { AnyPipelineContribution, PipelineHandler, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
@@ -69,7 +70,7 @@ export interface ExtensionContributions {
    * this extension. Honest set: "events whose occurrence invalidates the
    * extension's snapshot."
    */
-  readonly pulseTags?: ReadonlyArray<string>
+  readonly pulseTags?: ReadonlyArray<AgentEventTag>
 }
 
 // ── Smart constructors ──

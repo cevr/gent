@@ -1,4 +1,7 @@
-import { ExtensionPackage, autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import {
+  defineClientExtension,
+  autocompleteContribution,
+} from "@gent/core/domain/extension-client.js"
 import { Effect } from "effect"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { askExtension } from "../client-transport"
@@ -9,7 +12,7 @@ import { askExtension } from "../client-transport"
 // active session and decodes the reply against the registered protocol.
 // The popup adapter runs both the setup and the per-call `items` Effect
 // through `extensionUI.clientRuntime.runPromise`.
-export default ExtensionPackage.tui("@gent/skills-ui", {
+export default defineClientExtension("@gent/skills-ui", {
   setup: Effect.succeed([
     autocompleteContribution({
       prefix: "$",

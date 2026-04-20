@@ -12,7 +12,7 @@
  *   import { Effect } from "effect"
  *   import { ClientTransport } from "../client-transport"
  *
- *   export default ExtensionPackage.tui("@gent/x", {
+ *   export default defineClientExtension("@gent/x", {
  *     id: "@gent/x",
  *     setup: Effect.gen(function* () {
  *       const { client } = yield* ClientTransport

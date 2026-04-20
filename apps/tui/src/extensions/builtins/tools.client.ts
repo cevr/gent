@@ -1,13 +1,13 @@
 import { Effect } from "effect"
 import {
-  ExtensionPackage,
+  defineClientExtension,
   clientCommandContribution,
   rendererContribution,
 } from "@gent/core/domain/extension-client.js"
 import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
 import { ClientShell } from "../client-services"
 
-export default ExtensionPackage.tui("@gent/tools", {
+export default defineClientExtension("@gent/tools", {
   setup: Effect.gen(function* () {
     const shell = yield* ClientShell
     return [

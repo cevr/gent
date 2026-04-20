@@ -387,6 +387,9 @@ export type AgentRestarted = typeof AgentEvent.AgentRestarted.Type
 export const ExtensionStateChanged = AgentEvent.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.ExtensionStateChanged.Type
 
+/** Union of all `_tag` literal strings across `AgentEvent` variants. */
+export type AgentEventTag = Schema.Schema.Type<typeof AgentEvent>["_tag"]
+
 // ============================================================================
 // Interaction types — shared between server and client
 // ============================================================================

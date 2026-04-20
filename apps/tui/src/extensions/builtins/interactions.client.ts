@@ -4,13 +4,13 @@
 
 import { Effect } from "effect"
 import {
-  ExtensionPackage,
+  defineClientExtension,
   interactionRendererContribution,
 } from "@gent/core/domain/extension-client.js"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 
-export default ExtensionPackage.tui("@gent/interaction-tools", {
+export default defineClientExtension("@gent/interaction-tools", {
   setup: Effect.succeed([
     interactionRendererContribution(PromptRenderer), // default fallback
     interactionRendererContribution(PromptRenderer, "prompt"),

@@ -1,8 +1,8 @@
 import { Effect } from "effect"
-import { ExtensionPackage, widgetContribution } from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, widgetContribution } from "@gent/core/domain/extension-client.js"
 import { ConnectionWidget } from "../../components/connection-widget"
 
-export default ExtensionPackage.tui("@gent/connection", {
+export default defineClientExtension("@gent/connection", {
   setup: Effect.succeed([
     widgetContribution({
       id: "connection",

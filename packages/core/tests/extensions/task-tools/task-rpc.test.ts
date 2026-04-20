@@ -17,7 +17,9 @@ import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { TaskCreateRef, TaskUpdateRef, TaskDeleteRef } from "@gent/extensions/task-tools/mutations"
 import { TaskListRef } from "@gent/extensions/task-tools/queries"
-import { createRpcHarness } from "../helpers/rpc-harness"
+import { Gent } from "@gent/sdk"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { e2ePreset } from "../helpers/test-preset"
 
 const setupTaskExt = Effect.provide(
   setupExtension(
@@ -36,7 +38,9 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           // mutate: create
@@ -108,7 +112,9 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
@@ -135,7 +141,9 @@ describe("TaskExtension via RPC", () => {
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension

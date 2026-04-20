@@ -14,7 +14,10 @@
  */
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
-import { ExtensionPackage, borderLabelContribution } from "@gent/core/domain/extension-client.js"
+import {
+  defineClientExtension,
+  borderLabelContribution,
+} from "@gent/core/domain/extension-client.js"
 import type { Artifact } from "@gent/extensions/artifacts-protocol.js"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol.js"
 import { ClientTransport } from "../client-transport"
@@ -22,7 +25,7 @@ import { ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
 
-export default ExtensionPackage.tui(EXT_ID, {
+export default defineClientExtension(EXT_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const lifecycle = yield* ClientLifecycle

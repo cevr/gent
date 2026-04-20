@@ -15,7 +15,7 @@
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import {
-  ExtensionPackage,
+  defineClientExtension,
   borderLabelContribution,
   clientCommandContribution,
   overlayContribution,
@@ -28,7 +28,7 @@ import { ClientShell, ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/auto"
 
-export default ExtensionPackage.tui(EXT_ID, {
+export default defineClientExtension(EXT_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell

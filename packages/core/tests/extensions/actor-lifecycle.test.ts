@@ -14,8 +14,10 @@ import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { defineResource } from "@gent/core/domain/contribution"
+import { Gent } from "@gent/sdk"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { reducerActor } from "./helpers/reducer-actor"
-import { createRpcHarness } from "./helpers/rpc-harness"
+import { e2ePreset } from "./helpers/test-preset"
 
 // ============================================================================
 // Counter extension — stateful actor with request support + protocol
@@ -89,10 +91,9 @@ describe("Actor lifecycle across RPC boundaries", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* createRpcHarness({
-            providerLayer,
-            extensions: [counterExtension],
-          })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
+          )
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
@@ -123,10 +124,9 @@ describe("Actor lifecycle across RPC boundaries", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
-          const { client } = yield* createRpcHarness({
-            providerLayer,
-            extensions: [counterExtension],
-          })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
+          )
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
@@ -162,10 +162,9 @@ describe("Actor lifecycle across RPC boundaries", () => {
             textStep("session reply"),
             textStep("message reply"),
           ])
-          const { client } = yield* createRpcHarness({
-            providerLayer,
-            extensions: [counterExtension],
-          })
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
+          )
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
