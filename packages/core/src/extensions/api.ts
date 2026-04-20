@@ -120,6 +120,12 @@ export {
   type ExtractExtensionReply,
 } from "../domain/extension-protocol.js"
 export type { PromptSection } from "../domain/prompt.js"
+export {
+  sectionStartMarker,
+  sectionEndMarker,
+  sectionPatternFor,
+  withSectionMarkers,
+} from "../server/system-prompt.js"
 export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
 export {
   TurnError,

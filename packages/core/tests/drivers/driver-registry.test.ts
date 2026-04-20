@@ -13,6 +13,7 @@ import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type {
+  ExternalDriverContribution,
   ModelDriverContribution,
   ProviderResolution,
   TurnError,
@@ -20,6 +21,8 @@ import type {
   TurnExecutor,
 } from "@gent/core/domain/driver"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
+
+const noopInvalidate = (): Effect.Effect<void> => Effect.void
 
 const stubResolution = (): ProviderResolution => ({ layer: Layer.empty as never })
 
@@ -42,7 +45,7 @@ const makeExt = (
   kind: "builtin" | "user" | "project",
   opts: {
     readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
-    readonly externalDrivers?: ReadonlyArray<{ id: string; executor: TurnExecutor }>
+    readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
   },
 ): LoadedExtension => {
   const contributions: ExtensionContributions = {
@@ -83,7 +86,7 @@ describe("DriverRegistry", () => {
     const exec = makeExecutor("hello")
     const layer = buildRegistry([
       makeExt("acp-ext", "builtin", {
-        externalDrivers: [{ id: "acp-claude-code", executor: exec }],
+        externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
       }),
     ])
     const result = await Effect.runPromise(
@@ -115,10 +118,10 @@ describe("DriverRegistry", () => {
     const projectExec = makeExecutor("project")
     const layer = buildRegistry([
       makeExt("ext-builtin", "builtin", {
-        externalDrivers: [{ id: "shared", executor: builtinExec }],
+        externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
       }),
       makeExt("ext-project", "project", {
-        externalDrivers: [{ id: "shared", executor: projectExec }],
+        externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
       }),
     ])
     const result = await Effect.runPromise(

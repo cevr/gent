@@ -292,13 +292,17 @@ export interface ExternalDriverContribution {
    *  the compiled system prompt. Defaults to `"native"`. */
   readonly toolSurface?: ToolSurface
   /**
-   * Optional hook called by the runtime when a config change makes any
-   * cached external session for this driver stale (e.g. `driver.set` /
+   * Hook called by the runtime when a config change makes any cached
+   * external session for this driver stale (e.g. `driver.set` /
    * `driver.clear` swaps an agent's routing). Implementations should tear
-   * down every cached session keyed under this driver id. Drivers without
-   * cached state can omit it.
+   * down every cached session keyed under this driver id. Counsel C6 —
+   * required, not optional: external drivers are the only contributors to
+   * this primitive, and an absent `invalidate` hides cache-staleness bugs
+   * (the BLOCKER fixed in C1 only mattered because we *expected* tearDown
+   * to fully reclaim resources). Stateless drivers supply `Effect.void`
+   * explicitly so reviewers see the intent.
    */
-  readonly invalidate?: () => Effect.Effect<void>
+  readonly invalidate: () => Effect.Effect<void>
 }
 
 export type AnyDriverContribution = ModelDriverContribution | ExternalDriverContribution

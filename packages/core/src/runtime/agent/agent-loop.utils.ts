@@ -11,7 +11,11 @@ import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"
 import type { AnyToolDefinition } from "../../domain/tool.js"
-import { compileSystemPrompt, type PromptSection } from "../../server/system-prompt.js"
+import {
+  compileSystemPrompt,
+  withSectionMarkers,
+  type PromptSection,
+} from "../../server/system-prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
 const isReasoningEffort = Schema.is(ReasoningEffort)
@@ -46,9 +50,13 @@ export const buildTurnPromptSections = (
     .filter((t) => t.promptSnippet !== undefined)
     .map((t) => `- **${t.name}**: ${t.promptSnippet}`)
   if (snippets.length > 0) {
+    // Wrap with section sentinels so the ACP codemode pipeline can swap
+    // this block atomically. Other sections don't need markers because
+    // nothing downstream rewrites them — markers cost tokens, only spend
+    // them where a hook needs the anchor.
     sections.push({
       id: "tool-list",
-      content: `## Available Tools\n\n${snippets.join("\n")}`,
+      content: withSectionMarkers("tool-list", `## Available Tools\n\n${snippets.join("\n")}`),
       priority: 42,
     })
   }
@@ -64,7 +72,10 @@ export const buildTurnPromptSections = (
     const deduped = [...new Set(guidelines)]
     sections.push({
       id: "tool-guidelines",
-      content: `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
+      content: withSectionMarkers(
+        "tool-guidelines",
+        `## Tool Guidelines\n\n${deduped.map((g) => `- ${g}`).join("\n")}`,
+      ),
       priority: 44,
     })
   }

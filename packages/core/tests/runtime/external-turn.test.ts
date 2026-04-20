@@ -77,7 +77,7 @@ const makeResolved = (executor: TurnExecutor) =>
       sourcePath: "test",
       contributions: {
         agents: [externalAgent],
-        externalDrivers: [{ id: "test-runner", executor }],
+        externalDrivers: [{ id: "test-runner", executor, invalidate: () => Effect.void }],
       },
     },
   ])
@@ -422,7 +422,9 @@ describe("ExternalDriverContribution end-to-end", () => {
         sourcePath: "test",
         contributions: {
           agents: [e2eAgent],
-          externalDrivers: [{ id: "my-test-driver", executor: e2eExecutor }],
+          externalDrivers: [
+            { id: "my-test-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+          ],
         },
       },
     ])

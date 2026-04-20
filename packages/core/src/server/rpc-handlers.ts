@@ -66,7 +66,7 @@ const invalidateExternalDriversFor = (
     if (next?._tag === "external" && typeof next.id === "string") ids.add(next.id)
     for (const id of ids) {
       const driver = yield* registry.getExternal(id)
-      if (driver?.invalidate !== undefined) yield* driver.invalidate()
+      if (driver !== undefined) yield* driver.invalidate()
     }
   })
 

@@ -25,6 +25,7 @@ import {
   ExternalDriverRef,
   pipeline,
   resource,
+  sectionPatternFor,
 } from "@gent/core/extensions/api"
 import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
@@ -97,37 +98,29 @@ const codemodeInstructions = (toolList: string): string =>
 // Section ids produced by `buildTurnPromptSections` that describe the
 // native tool surface — replaced (not appended-to) when the resolved
 // driver is codemode-routed.
-const NATIVE_TOOL_SECTION_IDS = new Set(["tool-list", "tool-guidelines"])
+const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
 
 /**
- * Strip the *content* of any native tool section from an already-compiled
- * prompt string — used after `next(input)` runs so upstream pipeline
- * edits (additions, rewrites) are preserved while the codemode-incompat
- * `## Available Tools` / `## Tool Usage Guidelines` blocks are removed.
+ * Strip native tool sections from an already-compiled prompt string by
+ * matching the `<!-- @section:<id>:start --> ... <!-- @section:<id>:end -->`
+ * sentinel pair that `compileSystemPrompt` emits around every section.
  *
- * Section content is rendered with `\n\n` separators by
- * `buildTurnPromptSections`; we match the content prefix and consume
- * through to the next blank line that starts a different section. This
- * is a best-effort string surgery — when the pipeline can't find a
- * native section in the compiled string (e.g. the upstream rewrote it
- * away already) we leave the prompt untouched.
+ * Counsel C6 — replaces the prior `indexOf(section.content)` surgery,
+ * which broke the moment any upstream pipeline rewrote a single
+ * character inside the native section. Markers are stable across
+ * upstream edits to section *content* and stay invisible to most
+ * renderers, so they're the right anchor for atomic cross-section
+ * mutations.
  */
-const stripNativeToolSections = (
-  compiled: string,
-  sections: ReadonlyArray<{ id: string; content: string }>,
-): string => {
+const stripNativeToolSections = (compiled: string): string => {
   let out = compiled
-  for (const section of sections) {
-    if (!NATIVE_TOOL_SECTION_IDS.has(section.id)) continue
-    const trimmed = section.content.trim()
-    if (trimmed.length === 0) continue
-    const idx = out.indexOf(trimmed)
-    if (idx === -1) continue
-    const before = out.slice(0, idx).replace(/\n+$/, "")
-    const after = out.slice(idx + trimmed.length).replace(/^\n+/, "")
-    out = before.length === 0 || after.length === 0 ? `${before}${after}` : `${before}\n\n${after}`
+  for (const id of NATIVE_TOOL_SECTION_IDS) {
+    const pattern = sectionPatternFor(id)
+    out = out.replace(pattern, "")
   }
-  return out
+  // Collapse the blank lines left by removed sections so we don't end up
+  // with three-line gaps where one section used to be.
+  return out.replace(/\n{3,}/g, "\n\n").replace(/\n+$/, "")
 }
 
 export const AcpAgentsExtension = defineExtension({
@@ -143,20 +136,17 @@ export const AcpAgentsExtension = defineExtension({
       Effect.gen(function* () {
         // Always run downstream first so this hook composes on top of
         // any upstream pipeline edits (additions, rewrites). We then
-        // surgically remove native tool sections from the compiled
-        // result and append the codemode block — composing with the
+        // strip native tool sections via the marker sentinels and
+        // append the codemode block — composing with the
         // post-`next(input)` string instead of recompiling from raw
-        // sections preserves edits another extension may have made
-        // (counsel MEDIUM #5).
+        // sections preserves edits another extension may have made.
         const base = yield* next(input)
         if (input.driverToolSurface !== "codemode") return base
         const tools = input.tools ?? []
         if (tools.length === 0) return base
         const codemode = codemodeInstructions(generateToolDescription(tools))
-        const stripped =
-          input.sections !== undefined ? stripNativeToolSections(base, input.sections) : base
-        const trimmed = stripped.replace(/\n+$/, "")
-        return trimmed.length === 0 ? codemode : `${trimmed}\n\n${codemode}`
+        const stripped = stripNativeToolSections(base)
+        return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
       }),
     ),
   ],

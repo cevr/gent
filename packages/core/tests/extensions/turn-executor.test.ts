@@ -26,14 +26,17 @@ const echoExecutor: TurnExecutor = {
 const makeExt = (
   id: string,
   externalDrivers?: Array<{ id: string; executor: TurnExecutor }>,
-): LoadedExtension => ({
-  manifest: { id },
-  kind: "builtin" as const,
-  sourcePath: `/test/${id}`,
-  contributions: (externalDrivers !== undefined && externalDrivers.length > 0
-    ? { externalDrivers }
-    : {}) as ExtensionContributions,
-})
+): LoadedExtension => {
+  const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: () => Effect.void }))
+  return {
+    manifest: { id },
+    kind: "builtin" as const,
+    sourcePath: `/test/${id}`,
+    contributions: (drivers !== undefined && drivers.length > 0
+      ? { externalDrivers: drivers }
+      : {}) as ExtensionContributions,
+  }
+}
 
 describe("ExternalDriver registry", () => {
   test("compiles external drivers from extensions", () => {

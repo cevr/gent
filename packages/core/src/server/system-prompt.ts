@@ -1,10 +1,48 @@
 /**
- * System prompt construction via ordered sections
+ * System prompt construction via ordered sections.
+ *
+ * Pipeline hooks that need to swap or strip a section (e.g. codemode
+ * replacing `tool-list` / `tool-guidelines`) ask the section author to
+ * wrap content in `<!-- @section:<id>:start --> ... @section:<id>:end -->`
+ * sentinel comments via `withSectionMarkers`. Markers are HTML comments
+ * so they're invisible to most renderers but survive whatever upstream
+ * rewrite the previous pipeline did. Counsel C6 — replaces brittle
+ * `indexOf(section.content)` string surgery; the previous shape broke
+ * the moment any upstream pipeline rewrote a single character inside the
+ * native section.
+ *
+ * Markers are opt-in (per-section, by author) rather than wrapped around
+ * every section automatically — most sections never need to be swapped
+ * by another extension, and unconditional markers add token noise to
+ * every turn for no benefit.
  */
 
 import type { PromptSection } from "../domain/prompt.js"
 
 export type { PromptSection } from "../domain/prompt.js"
+
+/** Sentinel pair marking the bounds of a section that downstream
+ *  pipelines may swap or strip. */
+export const sectionStartMarker = (id: string): string => `<!-- @section:${id}:start -->`
+export const sectionEndMarker = (id: string): string => `<!-- @section:${id}:end -->`
+
+/**
+ * Wrap section content with start/end sentinels so downstream pipeline
+ * hooks can locate it for atomic replacement. Used by section authors
+ * whose content is intentionally swappable (currently `tool-list` and
+ * `tool-guidelines`, swapped by the ACP codemode pipeline).
+ */
+export const withSectionMarkers = (id: string, content: string): string =>
+  `${sectionStartMarker(id)}\n${content}\n${sectionEndMarker(id)}`
+
+/**
+ * Match a compiled section by id. Returns the regex that captures the
+ * inner content (group 1) and supports atomic replacement.
+ */
+export const sectionPatternFor = (id: string): RegExp =>
+  new RegExp(
+    `${sectionStartMarker(id).replace(/[-]/g, "\\$&")}\\n([\\s\\S]*?)\\n${sectionEndMarker(id).replace(/[-]/g, "\\$&")}`,
+  )
 
 /** Compile ordered sections into a single system prompt string */
 export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): string =>

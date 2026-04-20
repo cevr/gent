@@ -9,6 +9,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import { withSectionMarkers } from "@gent/core/server/system-prompt"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
 
 const baseAgent = new AgentDefinition({
@@ -113,16 +114,17 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).toBe("BASE")
   })
 
-  test("structural rewrite: strips tool-list / tool-guidelines from compiled prompt and appends codemode", async () => {
-    // basePrompt represents the post-`next(input)` compiled string —
-    // that's what an upstream pipeline (or the loop's default builder)
-    // hands us. The hook surgically removes native tool-section content
-    // from that string and appends the codemode block, preserving any
-    // upstream edits (counsel MEDIUM #5).
+  test("strips marker-wrapped tool-list / tool-guidelines and appends codemode", async () => {
+    // basePrompt mirrors what `compileSystemPrompt` produces in
+    // production: native tool sections wrapped in `@section:<id>` start
+    // and end sentinels. Counsel C6 — the codemode hook now matches
+    // those sentinels rather than doing `indexOf(section.content)` on
+    // raw content, so upstream edits to the *content* between the
+    // sentinels still get cleaned up atomically.
     const compiled = [
       "ID-SECTION",
-      "## Available Tools\n\n- echo",
-      "## Tool Guidelines\n\n- use tools",
+      withSectionMarkers("tool-list", "## Available Tools\n\n- echo"),
+      withSectionMarkers("tool-guidelines", "## Tool Guidelines\n\n- use tools"),
       "EXTRA-SECTION",
     ].join("\n\n")
     const result = await runHandler({
@@ -134,28 +136,26 @@ describe("ACP prompt.system pipeline", () => {
       driverSource: "config",
       driverToolSurface: "codemode",
       tools: [fakeTool],
-      sections: [
-        { id: "identity", content: "ID-SECTION", priority: 0 },
-        { id: "tool-list", content: "## Available Tools\n\n- echo", priority: 42 },
-        { id: "tool-guidelines", content: "## Tool Guidelines\n\n- use tools", priority: 44 },
-        { id: "extra", content: "EXTRA-SECTION", priority: 80 },
-      ],
     })
     expect(result).toContain("ID-SECTION")
     expect(result).toContain("EXTRA-SECTION")
     expect(result).toContain("External Tool Surface (codemode)")
-    expect(result).not.toContain("## Available Tools\n\n- echo")
+    expect(result).not.toContain("## Available Tools")
     expect(result).not.toContain("- use tools")
+    // Sentinels are removed alongside content.
+    expect(result).not.toContain("@section:tool-list")
+    expect(result).not.toContain("@section:tool-guidelines")
   })
 
-  test("preserves upstream basePrompt edits when stripping native sections", async () => {
-    // Simulate an earlier pipeline that prepended an "INSTRUCTIONS"
-    // block to the compiled prompt — the upstream edit must survive
-    // the codemode rewrite.
+  test("strips even when upstream rewrote the inner section content", async () => {
+    // An upstream pipeline mutated the inside of the tool-list section.
+    // The marker sentinels still bound the block, so the codemode hook
+    // strips it cleanly — the prior `indexOf(section.content)` shape
+    // would have left rewritten content stranded in the prompt.
     const compiled = [
       "INSTRUCTIONS-FROM-UPSTREAM",
       "ID-SECTION",
-      "## Available Tools\n\n- echo",
+      withSectionMarkers("tool-list", "## Available Tools\n\n- echo (rewritten upstream)"),
       "EXTRA-SECTION",
     ].join("\n\n")
     const result = await runHandler({
@@ -167,16 +167,34 @@ describe("ACP prompt.system pipeline", () => {
       driverSource: "config",
       driverToolSurface: "codemode",
       tools: [fakeTool],
-      sections: [
-        { id: "identity", content: "ID-SECTION", priority: 0 },
-        { id: "tool-list", content: "## Available Tools\n\n- echo", priority: 42 },
-        { id: "extra", content: "EXTRA-SECTION", priority: 80 },
-      ],
     })
     expect(result).toContain("INSTRUCTIONS-FROM-UPSTREAM")
     expect(result).toContain("ID-SECTION")
     expect(result).toContain("EXTRA-SECTION")
     expect(result).toContain("External Tool Surface (codemode)")
-    expect(result).not.toContain("## Available Tools\n\n- echo")
+    expect(result).not.toContain("rewritten upstream")
+    expect(result).not.toContain("@section:tool-list")
+  })
+
+  test("leaves prompt untouched when native sections lack markers", async () => {
+    // If the section was authored without sentinels (e.g. an extension
+    // produced a tool-list section directly), the codemode hook can't
+    // locate it. Prefer leaving the prompt untouched over guessing —
+    // the model gets a contradicting tool surface, which is bad, but
+    // mangled-prompt is worse. The native-builder always wraps these
+    // sections, so this is only a concern for hand-rolled extensions.
+    const compiled = ["ID-SECTION", "## Available Tools\n\n- echo", "EXTRA-SECTION"].join("\n\n")
+    const result = await runHandler({
+      basePrompt: compiled,
+      agent: new AgentDefinition({
+        ...baseAgent,
+        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+      }),
+      driverSource: "config",
+      driverToolSurface: "codemode",
+      tools: [fakeTool],
+    })
+    expect(result).toContain("## Available Tools")
+    expect(result).toContain("External Tool Surface (codemode)")
   })
 })
