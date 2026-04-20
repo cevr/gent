@@ -33,7 +33,13 @@ export interface CodemodeConfig {
 
 // ── Tool description generator ──
 
-const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>): string => {
+/**
+ * Build a markdown description of the codemode `execute` surface listing
+ * every available tool as `gent.<name>({ ...params })`. Used as the MCP
+ * tool's description AND as the ACP system prompt's tools section
+ * (replaces the default per-tool listing for external-routed agents).
+ */
+export const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>): string => {
   const lines = [
     "Execute JavaScript with access to gent tools.",
     "",

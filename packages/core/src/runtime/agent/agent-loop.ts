@@ -342,7 +342,13 @@ const resolveTurnContext = (params: {
     )
     const systemPrompt = yield* params.extensionRegistry.pipelines.runPipeline(
       "prompt.system",
-      { basePrompt: turnPrompt, agent: effectiveAgent, interactive: params.interactive },
+      {
+        basePrompt: turnPrompt,
+        agent: dispatchAgent,
+        interactive: params.interactive,
+        driverSource: driverResolution.source,
+        tools,
+      },
       (input) => Effect.succeed(input.basePrompt),
       params.hostCtx,
     )

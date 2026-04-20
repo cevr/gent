@@ -2,7 +2,7 @@ import type { Effect, FileSystem, Path } from "effect"
 import { Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
-import type { AgentDefinition, AgentName } from "./agent"
+import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
 import type { Message, MessageMetadata, MessagePart } from "./message"
@@ -120,6 +120,19 @@ export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
   readonly interactive?: boolean
+  /**
+   * Origin of the resolved driver for this turn. Set by the agent loop
+   * after `resolveAgentDriver` runs. Pipeline hooks read this to detect
+   * external dispatch (e.g. ACP via codemode) and rewrite the prompt's
+   * tool section accordingly. `undefined` for code paths that bypass
+   * `resolveTurnContext`.
+   */
+  readonly driverSource?: DriverSource
+  /**
+   * Tools resolved for this turn. ACP-aware hooks need this to render
+   * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
+   */
+  readonly tools?: ReadonlyArray<AnyToolDefinition>
 }
 
 export interface ToolExecuteInput {
