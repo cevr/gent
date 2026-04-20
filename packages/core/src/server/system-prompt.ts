@@ -35,13 +35,19 @@ export const sectionEndMarker = (id: string): string => `<!-- @section:${id}:end
 export const withSectionMarkers = (id: string, content: string): string =>
   `${sectionStartMarker(id)}\n${content}\n${sectionEndMarker(id)}`
 
+// Counsel C6 — full regex escape for the marker strings. PromptSection
+// `id` is unconstrained (extension-authored), so a section named e.g.
+// `tool.list+v2` would otherwise carry regex metacharacters straight
+// into `new RegExp(...)`. The previous shape only escaped `-`.
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")
+
 /**
  * Match a compiled section by id. Returns the regex that captures the
  * inner content (group 1) and supports atomic replacement.
  */
 export const sectionPatternFor = (id: string): RegExp =>
   new RegExp(
-    `${sectionStartMarker(id).replace(/[-]/g, "\\$&")}\\n([\\s\\S]*?)\\n${sectionEndMarker(id).replace(/[-]/g, "\\$&")}`,
+    `${escapeRegExp(sectionStartMarker(id))}\\n([\\s\\S]*?)\\n${escapeRegExp(sectionEndMarker(id))}`,
   )
 
 /** Compile ordered sections into a single system prompt string */

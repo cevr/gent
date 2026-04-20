@@ -3,6 +3,8 @@ import {
   buildSystemPrompt,
   buildBasePromptSections,
   compileSystemPrompt,
+  sectionPatternFor,
+  withSectionMarkers,
 } from "@gent/core/server/system-prompt"
 import { buildTurnPrompt } from "@gent/core/runtime/agent/agent-loop.utils"
 import { AgentDefinition } from "@gent/core/domain/agent"
@@ -106,6 +108,43 @@ describe("buildBasePromptSections", () => {
       { id: "a", content: "first", priority: 10 },
     ])
     expect(result).toBe("first\n\nsecond")
+  })
+})
+
+describe("withSectionMarkers / sectionPatternFor", () => {
+  // Counsel C6 — `PromptSection.id` is unconstrained; the helpers must
+  // tolerate ids carrying regex metacharacters without leaking them
+  // into the compiled pattern.
+  test("round-trips a normal id", () => {
+    const wrapped = withSectionMarkers("tool-list", "## Available Tools\n\n- echo")
+    const match = wrapped.match(sectionPatternFor("tool-list"))
+    expect(match?.[1]).toBe("## Available Tools\n\n- echo")
+  })
+
+  test("escapes regex metacharacters in the id", () => {
+    // A section author choosing this id would, with naive escaping,
+    // turn `.` into 'any char' and `+` into 'one or more', which would
+    // both over-match and risk catastrophic-backtracking input. Full
+    // escape protects the helper from that surface.
+    const id = "tool.list+v2"
+    const wrapped = withSectionMarkers(id, "ALPHA")
+    const pattern = sectionPatternFor(id)
+    const match = wrapped.match(pattern)
+    expect(match?.[1]).toBe("ALPHA")
+    // A confusable id (different chars where the metacharacters would
+    // have matched) does not match the strict pattern.
+    const wrappedSibling = withSectionMarkers("toolXlistXv2", "BRAVO")
+    expect(pattern.test(wrappedSibling)).toBe(false)
+  })
+
+  test("does not match across two sibling sections", () => {
+    // The lazy `[\s\S]*?` between markers must not span from one
+    // section's start to a later section's end.
+    const a = withSectionMarkers("tool-list", "ALPHA")
+    const b = withSectionMarkers("tool-list", "BRAVO")
+    const compiled = `${a}\n\n${b}`
+    const matches = compiled.match(new RegExp(sectionPatternFor("tool-list").source, "g"))
+    expect(matches?.length).toBe(2)
   })
 })
 

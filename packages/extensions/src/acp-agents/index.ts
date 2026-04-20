@@ -103,7 +103,8 @@ const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
 /**
  * Strip native tool sections from an already-compiled prompt string by
  * matching the `<!-- @section:<id>:start --> ... <!-- @section:<id>:end -->`
- * sentinel pair that `compileSystemPrompt` emits around every section.
+ * sentinel pair that section authors opt into via `withSectionMarkers`
+ * (currently `tool-list` + `tool-guidelines` in `agent-loop.utils.ts`).
  *
  * Counsel C6 — replaces the prior `indexOf(section.content)` surgery,
  * which broke the moment any upstream pipeline rewrote a single
@@ -111,17 +112,34 @@ const NATIVE_TOOL_SECTION_IDS = ["tool-list", "tool-guidelines"] as const
  * upstream edits to section *content* and stay invisible to most
  * renderers, so they're the right anchor for atomic cross-section
  * mutations.
+ *
+ * Returns `{ stripped, anyStripped }` so the caller can warn when the
+ * codemode hook expected to strip but found no markers (extension
+ * authored a tool-list section without going through the marker
+ * helper).
  */
-const stripNativeToolSections = (compiled: string): string => {
+const stripNativeToolSections = (compiled: string): { stripped: string; anyStripped: boolean } => {
   let out = compiled
+  let anyStripped = false
   for (const id of NATIVE_TOOL_SECTION_IDS) {
     const pattern = sectionPatternFor(id)
-    out = out.replace(pattern, "")
+    if (pattern.test(out)) {
+      out = out.replace(pattern, "")
+      anyStripped = true
+    }
   }
   // Collapse the blank lines left by removed sections so we don't end up
   // with three-line gaps where one section used to be.
-  return out.replace(/\n{3,}/g, "\n\n").replace(/\n+$/, "")
+  const stripped = out.replace(/\n{3,}/g, "\n\n").replace(/\n+$/, "")
+  return { stripped, anyStripped }
 }
+
+// Heuristic check used only to warn when the codemode hook can't find
+// markers but the prompt still looks like it carries a native tool
+// surface — without it we'd silently send contradictory tool surfaces
+// to the model (codemode block + `## Available Tools`).
+const looksLikeNativeToolSurface = (s: string): boolean =>
+  s.includes("## Available Tools") || s.includes("## Tool Guidelines")
 
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
@@ -145,7 +163,24 @@ export const AcpAgentsExtension = defineExtension({
         const tools = input.tools ?? []
         if (tools.length === 0) return base
         const codemode = codemodeInstructions(generateToolDescription(tools))
-        const stripped = stripNativeToolSections(base)
+        const { stripped, anyStripped } = stripNativeToolSections(base)
+        // Counsel C6 — warn (don't fail) when the prompt still looks
+        // like it has a native tool surface but no markers were stripped.
+        // Hand-rolled extensions that emit a tool-list without
+        // `withSectionMarkers` would otherwise silently end up with two
+        // contradictory tool surfaces. Failing loudly would break those
+        // extensions on first turn; logging keeps the defect visible
+        // without regressing compatibility.
+        if (!anyStripped && looksLikeNativeToolSurface(stripped)) {
+          yield* Effect.logWarning(
+            "acp.codemode.native-tool-surface-without-markers — " +
+              "prompt contains '## Available Tools' / '## Tool Guidelines' " +
+              "but no @section:tool-list / @section:tool-guidelines markers " +
+              "were found. The model will see contradictory tool surfaces. " +
+              "Wrap section content with `withSectionMarkers(id, content)` " +
+              "from `@gent/core/extensions/api`.",
+          )
+        }
         return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
       }),
     ),

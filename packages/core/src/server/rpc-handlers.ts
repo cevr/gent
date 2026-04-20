@@ -52,8 +52,9 @@ const isPublicTransportEvent = (envelope: EventEnvelope) =>
  * subsequent turn rebuilds the session against the new routing instead
  * of reusing the previous subprocess. Both `prev` and `next` may be the
  * same external — invalidating it once still tears down stale cache
- * (re-set after config edits, etc.). Drivers without `invalidate` are
- * skipped (model drivers, external drivers without cached state).
+ * (re-set after config edits, etc.). External drivers always carry an
+ * `invalidate` hook (counsel C6 — required, not optional); model
+ * drivers don't appear here because they aren't external.
  */
 const invalidateExternalDriversFor = (
   registry: DriverRegistryService,
