@@ -31,7 +31,12 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
-import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
+import {
+  createSequenceProvider,
+  toolCallStep,
+  textStep,
+  DebugProvider,
+} from "@gent/core/debug/provider"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   assistantMessageIdForTurn,
@@ -129,6 +134,20 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     AgentLoop.Live({ baseSections: [] }),
     Layer.merge(deps, eventPublisherLayer),
   )
+}
+
+/** Scripted provider: returns chunks from an array, one response per stream() call. */
+const scriptedProvider = (
+  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
+): Layer.Layer<Provider> => {
+  let index = 0
+  return Layer.succeed(Provider, {
+    stream: () =>
+      Effect.succeed(
+        Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
+      ),
+    generate: () => Effect.succeed("test response"),
+  })
 }
 
 const makeLiveToolLayer = (
@@ -714,7 +733,7 @@ describe("streaming", () => {
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
-      Provider.Test([[new FinishChunk({ finishReason: "stop" })]]),
+      DebugProvider(),
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -820,7 +839,7 @@ describe("concurrency", () => {
     const toolB = makeSerialTool("serial-b")
 
     const layer = makeLiveToolLayer(
-      Provider.Test([
+      scriptedProvider([
         [
           new ToolCallChunk({ toolCallId: "tc-1", toolName: "serial-a", input: {} }),
           new ToolCallChunk({ toolCallId: "tc-2", toolName: "serial-b", input: {} }),

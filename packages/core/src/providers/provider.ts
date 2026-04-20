@@ -461,15 +461,4 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       } satisfies ProviderService
     }),
   )
-
-  static Test = (responses: ReadonlyArray<ReadonlyArray<StreamChunk>>): Layer.Layer<Provider> => {
-    let index = 0
-    return Layer.succeed(Provider, {
-      stream: () =>
-        Effect.succeed(
-          Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
-        ),
-      generate: () => Effect.succeed("test response"),
-    })
-  }
 }

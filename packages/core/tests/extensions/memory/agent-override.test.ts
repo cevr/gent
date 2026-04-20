@@ -20,7 +20,7 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { Provider } from "@gent/core/providers/provider"
+import { DebugProvider } from "@gent/core/debug/provider"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 const testExtensions = resolveExtensions([
@@ -80,7 +80,7 @@ const makeTestLayer = (logs: {
     storageDeps,
     eventPublisherLayer,
     actorProcessLayer,
-    Provider.Test([]),
+    DebugProvider(),
     Permission.Live([], "allow"),
     ConfigService.Test(),
   )

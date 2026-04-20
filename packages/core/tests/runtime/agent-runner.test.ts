@@ -1,6 +1,12 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
-import { FinishChunk, Provider, TextChunk, ToolCallChunk } from "@gent/core/providers/provider"
+import { Effect, Layer, Schema, Stream } from "effect"
+import {
+  Provider,
+  FinishChunk,
+  TextChunk,
+  ToolCallChunk,
+  type StreamChunk,
+} from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
@@ -21,7 +27,12 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
+import {
+  DebugProvider,
+  createSequenceProvider,
+  textStep,
+  toolCallStep,
+} from "@gent/core/debug/provider"
 import {
   MachineEngine,
   type MachineEngineService,
@@ -32,6 +43,20 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ServerProfileService } from "@gent/core/runtime/scope-brands"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
+
+/** Scripted provider: returns chunks from an array, one response per stream() call. */
+const scriptedProvider = (
+  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
+): Layer.Layer<Provider> => {
+  let index = 0
+  return Layer.succeed(Provider, {
+    stream: () =>
+      Effect.succeed(
+        Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
+      ),
+    generate: () => Effect.succeed("test response"),
+  })
+}
 
 const bashStubTool = tool({
   id: "bash",
@@ -113,7 +138,7 @@ describe("RunSpec", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: (input) => {
@@ -187,7 +212,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.void,
@@ -273,7 +298,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.fail(new AgentRunError({ message: "permanent failure" })),
@@ -336,7 +361,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.sleep("50 millis"),
@@ -400,7 +425,7 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
       testRegistryLayer,
-      Provider.Test([
+      scriptedProvider([
         [new TextChunk({ text: "ephemeral response" }), new FinishChunk({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
@@ -472,7 +497,7 @@ describe("AgentRunner", () => {
       eventStoreLayer,
       eventPublisherLayer,
       testRegistryLayer,
-      Provider.Test([
+      scriptedProvider([
         [
           new ToolCallChunk({
             toolCallId: "tc-ephemeral",
@@ -576,7 +601,7 @@ describe("AgentRunner", () => {
       baseEventStoreLayer,
       eventPublisherLayer,
       testRegistryLayer,
-      Provider.Test([
+      scriptedProvider([
         [
           new ToolCallChunk({
             toolCallId: "tc-ephemeral-reduce",
@@ -646,7 +671,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.void,
@@ -741,7 +766,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
@@ -823,7 +848,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
@@ -900,7 +925,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      Provider.Test([]),
+      DebugProvider(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
