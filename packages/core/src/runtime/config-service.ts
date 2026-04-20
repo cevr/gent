@@ -162,9 +162,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       yield* ensureUserConfig
       yield* loadConfig
 
-      // Read a project config from an arbitrary cwd. Used by `getForCwd`
+      // Read a project config from an arbitrary cwd — used by `get(cwd)`
       // so consumers acting on behalf of a session in `<sessionCwd>` see
-      // the right per-project overrides instead of the server's launch
+      // that cwd's per-project overrides instead of the server's launch
       // cwd. Falls back to an empty UserConfig on missing / unparsable
       // file so a misconfigured project never blocks dispatch.
       const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> => {
