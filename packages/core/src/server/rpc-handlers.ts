@@ -10,7 +10,10 @@ import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
-import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import {
+  DriverRegistry,
+  type DriverRegistryService,
+} from "../runtime/extensions/driver-registry.js"
 import { NotFoundError } from "./errors.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -42,6 +45,30 @@ const isPublicTransportEvent = (envelope: EventEnvelope) =>
   envelope.event._tag !== "MachineInspected" &&
   envelope.event._tag !== "MachineTaskSucceeded" &&
   envelope.event._tag !== "MachineTaskFailed"
+
+/**
+ * Tear down cached external sessions for any driver whose routing is
+ * about to change. Called after a `driver.set` / `driver.clear` so a
+ * subsequent turn rebuilds the session against the new routing instead
+ * of reusing the previous subprocess. Both `prev` and `next` may be the
+ * same external — invalidating it once still tears down stale cache
+ * (re-set after config edits, etc.). Drivers without `invalidate` are
+ * skipped (model drivers, external drivers without cached state).
+ */
+const invalidateExternalDriversFor = (
+  registry: DriverRegistryService,
+  prev: { readonly _tag: "model" | "external"; readonly id?: string } | undefined,
+  next: { readonly _tag: "model" | "external"; readonly id?: string } | undefined,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const ids = new Set<string>()
+    if (prev?._tag === "external" && typeof prev.id === "string") ids.add(prev.id)
+    if (next?._tag === "external" && typeof next.id === "string") ids.add(next.id)
+    for (const id of ids) {
+      const driver = yield* registry.getExternal(id)
+      if (driver?.invalidate !== undefined) yield* driver.invalidate()
+    }
+  })
 
 // ============================================================================
 // RPC Handlers Layer
@@ -302,17 +329,31 @@ export const RpcHandlersLive = GentRpcs.toLayer(
               })
             }
           }
+
+          // Read the previous override (if any) before persisting so we
+          // can tear down its cached external sessions. Without this, an
+          // ACP subprocess that was bound to the old routing would keep
+          // serving turns until the next fingerprint mismatch — see
+          // counsel HIGH #3.
+          const prevConfig = yield* configService.get()
+          const prevOverride = prevConfig.driverOverrides?.[agentName]
+
           yield* configService.setDriverOverride(agentName, driver)
+
+          yield* invalidateExternalDriversFor(driverRegistry, prevOverride, driver)
         }),
 
-      // Stale external sessions are torn down lazily: the per-driver session
-      // manager (Claude Code SDK / ACP-protocol) fingerprints by
-      // (cwd, systemPrompt, codemode tools) and rebuilds when those change.
-      // A cleared override falls back to the model path on the next turn,
-      // so the previously-cached external session is simply never reused —
-      // it's reaped at process shutdown via the per-process resource
-      // finalizer registered by `@gent/acp-agents`.
-      "driver.clear": ({ agentName }) => configService.clearDriverOverride(agentName),
+      // The cleared override falls back to the model path on the next
+      // turn. Any cached external session bound to the previous routing
+      // is torn down here so a re-set to the same external doesn't
+      // resurrect a stale subprocess (counsel HIGH #3).
+      "driver.clear": ({ agentName }) =>
+        Effect.gen(function* () {
+          const prevConfig = yield* configService.get()
+          const prevOverride = prevConfig.driverOverrides?.[agentName]
+          yield* configService.clearDriverOverride(agentName)
+          yield* invalidateExternalDriversFor(driverRegistry, prevOverride, undefined)
+        }),
 
       // -- auth --
       "auth.listProviders": ({ agentName }) =>

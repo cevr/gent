@@ -37,6 +37,9 @@ import { ClaudeSdkError, type ClaudeSdkServiceShape, type ClaudeSdkSession } fro
 import { startCodemodeServer, type CodemodeConfig, type CodemodeServer } from "./mcp-codemode.js"
 import { makeAcpRunTool } from "./executor-boundary.js"
 import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
+import { CLAUDE_CODE_AGENT_NAME } from "./config.js"
+import type { ExternalSessionKey } from "./executor.js"
+import { composePromptWithTranscript } from "./transcript.js"
 
 // ── SDK message → TurnEvent mapping ──
 
@@ -170,13 +173,16 @@ interface ClaudeCodeProcess {
   readonly fingerprint: string
 }
 
+// `ExternalSessionKey` is defined in `executor.ts` and re-used by both
+// session managers (SDK + ACP-protocol) so the cache-key shape stays in
+// one place — codex HIGH #2 / #3.
+const cacheKey = (k: ExternalSessionKey): string => `${k.driverId}::${k.sessionId}::${k.branchId}`
+
 /**
  * Fingerprint covers every session-defining input passed to the SDK
- * `query()` call. If any of these change for the same gent session,
+ * `query()` call. If any of these change for the same composite key,
  * the cached SDK session is stale (wrong cwd, prompt, or tool surface)
- * and must be torn down and rebuilt — otherwise a runtime driver
- * override or extension list change would silently keep serving the
- * old configuration.
+ * and must be torn down and rebuilt.
  */
 const fingerprintSession = (
   cwd: string,
@@ -193,14 +199,30 @@ const fingerprintSession = (
   return JSON.stringify({ cwd, systemPrompt, tools: toolNames })
 }
 
+export interface ClaudeCodeManagedSession {
+  readonly session: ClaudeSdkSession
+  /**
+   * `true` when this call built (or rebuilt) the SDK session. Callers
+   * use it to seed the freshly-created remote session with the prior
+   * transcript before sending the new turn — without seeding, a
+   * fingerprint mismatch / `invalidateDriver` silently drops the
+   * conversation on the floor (counsel HIGH #4).
+   */
+  readonly created: boolean
+}
+
 export interface ClaudeCodeSessionManager {
   readonly getOrCreate: (
-    gentSessionId: string,
+    key: ExternalSessionKey,
     cwd: string,
     systemPrompt: string,
     codemodeConfig: CodemodeConfig | undefined,
-  ) => Effect.Effect<ClaudeSdkSession, ClaudeSdkError>
-  readonly invalidate: (gentSessionId: string) => Effect.Effect<void>
+  ) => Effect.Effect<ClaudeCodeManagedSession, ClaudeSdkError>
+  /** Invalidate one specific (sessionId, branchId, driverId) entry. */
+  readonly invalidate: (key: ExternalSessionKey) => Effect.Effect<void>
+  /** Invalidate every entry whose driverId matches — used by `driver.set` /
+   *  `driver.clear` so the next turn cannot land on a stale conversation. */
+  readonly invalidateDriver: (driverId: string) => Effect.Effect<void>
   readonly disposeAll: Effect.Effect<void>
 }
 
@@ -218,6 +240,10 @@ export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
 ): ClaudeCodeSessionManager => {
   const sessions = new Map<string, ClaudeCodeProcess>()
+  // Parallel index from driverId → set of cache keys. Lets `invalidateDriver`
+  // run in O(matched) rather than O(all sessions). Maintained alongside
+  // `sessions` on every set/delete.
+  const byDriver = new Map<string, Set<string>>()
 
   const tearDown = (entry: ClaudeCodeProcess): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -225,18 +251,29 @@ export const createClaudeCodeSessionManager = (
       entry.codemode?.stop()
     })
 
+  const removeFromDriverIndex = (driverId: string, k: string) => {
+    const set = byDriver.get(driverId)
+    if (set === undefined) return
+    set.delete(k)
+    if (set.size === 0) byDriver.delete(driverId)
+  }
+
   const getOrCreate = (
-    gentSessionId: string,
+    key: ExternalSessionKey,
     cwd: string,
     systemPrompt: string,
     codemodeConfig: CodemodeConfig | undefined,
-  ): Effect.Effect<ClaudeSdkSession, ClaudeSdkError> =>
+  ): Effect.Effect<ClaudeCodeManagedSession, ClaudeSdkError> =>
     Effect.gen(function* () {
       const fingerprint = fingerprintSession(cwd, systemPrompt, codemodeConfig)
-      const existing = sessions.get(gentSessionId)
+      const k = cacheKey(key)
+      const existing = sessions.get(k)
       if (existing !== undefined) {
-        if (existing.fingerprint === fingerprint) return existing.session
-        sessions.delete(gentSessionId)
+        if (existing.fingerprint === fingerprint) {
+          return { session: existing.session, created: false }
+        }
+        sessions.delete(k)
+        removeFromDriverIndex(key.driverId, k)
         yield* tearDown(existing).pipe(Effect.ignore)
       }
 
@@ -273,26 +310,48 @@ export const createClaudeCodeSessionManager = (
           ),
         )
 
-      sessions.set(gentSessionId, { session, codemode, fingerprint })
-      return session
+      sessions.set(k, { session, codemode, fingerprint })
+      const driverSet = byDriver.get(key.driverId) ?? new Set<string>()
+      driverSet.add(k)
+      byDriver.set(key.driverId, driverSet)
+      return { session, created: true }
     })
 
-  const invalidate = (gentSessionId: string): Effect.Effect<void> =>
+  const invalidate = (key: ExternalSessionKey): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const entry = sessions.get(gentSessionId)
+      const k = cacheKey(key)
+      const entry = sessions.get(k)
       if (entry === undefined) return
-      sessions.delete(gentSessionId)
+      sessions.delete(k)
+      removeFromDriverIndex(key.driverId, k)
       yield* tearDown(entry)
     })
 
+  const invalidateDriver = (driverId: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const keys = byDriver.get(driverId)
+      if (keys === undefined) return
+      // Snapshot the key set before mutating — `tearDown` is async and
+      // re-entries via getOrCreate during teardown would otherwise see
+      // a partially-cleared set.
+      const keysArr = [...keys]
+      byDriver.delete(driverId)
+      for (const k of keysArr) {
+        const entry = sessions.get(k)
+        sessions.delete(k)
+        if (entry !== undefined) yield* tearDown(entry).pipe(Effect.ignore)
+      }
+    })
+
   const disposeAll: Effect.Effect<void> = Effect.gen(function* () {
-    for (const [id, entry] of sessions) {
+    for (const [k, entry] of sessions) {
       yield* tearDown(entry).pipe(Effect.ignore)
-      sessions.delete(id)
+      sessions.delete(k)
     }
+    byDriver.clear()
   })
 
-  return { getOrCreate, invalidate, disposeAll }
+  return { getOrCreate, invalidate, invalidateDriver, disposeAll }
 }
 
 // ── Turn Executor Factory ──
@@ -309,18 +368,36 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       const codemodeConfig: CodemodeConfig | undefined =
         ctx.tools.length > 0 ? { tools: ctx.tools, runTool } : undefined
 
-      const session = yield* manager
-        .getOrCreate(ctx.sessionId, ctx.cwd, ctx.systemPrompt, codemodeConfig)
+      // Driver id is hardcoded to the contribution registered in
+      // `acp-agents/index.ts`; matches the value used in the
+      // `invalidateDriver` calls from `driver.set` / `driver.clear`.
+      const key: ExternalSessionKey = {
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        driverId: `acp-${CLAUDE_CODE_AGENT_NAME}`,
+      }
+
+      const managed = yield* manager
+        .getOrCreate(key, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(Effect.mapError((err) => new TurnError({ message: err.message, cause: err.cause })))
 
-      const lastUser = extractLastUserMessage(ctx.messages)
+      // On a fresh / rebuilt SDK session we send the prior transcript as
+      // a single preamble user message before the new turn — the SDK
+      // exposes no other channel for backfilling assistant history, so a
+      // bare `prompt(lastUser)` would silently drop everything before
+      // the cache miss (counsel HIGH #4). The preamble is suppressed
+      // when reusing a warm session.
+      const lastUserText = extractLastUserMessage(ctx.messages)
+      const promptText = managed.created
+        ? composePromptWithTranscript(ctx.messages, lastUserText)
+        : lastUserText
 
       // Per-prompt cancel — `session.prompt` calls `q.interrupt()` when
       // the signal aborts. The SDK session stays cached.
       // Stream-level errors evict the cached session (process death,
       // auth expiry, etc.) so the next turn starts fresh.
-      const stream = mapSdkMessageStream(session.prompt(lastUser, ctx.abortSignal)).pipe(
-        Stream.tapError(() => manager.invalidate(ctx.sessionId)),
+      const stream = mapSdkMessageStream(managed.session.prompt(promptText, ctx.abortSignal)).pipe(
+        Stream.tapError(() => manager.invalidate(key)),
       )
       return stream
     }).pipe(

@@ -22,24 +22,45 @@ import { AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 import { makeAcpRunTool } from "./executor-boundary.js"
+import { composePromptWithTranscript } from "./transcript.js"
 
 // ── Session Manager Interface (Batch 3 provides implementation) ──
+
+/**
+ * Composite cache key shared by the SDK and ACP-protocol managers.
+ * Keying on `(driverId, sessionId, branchId)` keeps two branches of the
+ * same gent session, and two driver routings of the same branch, from
+ * sharing remote state (codex HIGH #2 / #3).
+ */
+export interface ExternalSessionKey {
+  readonly sessionId: string
+  readonly branchId: string
+  readonly driverId: string
+}
 
 export interface AcpManagedSession {
   readonly conn: AcpConnection
   readonly acpSessionId: string
+  /**
+   * `true` when this call built (or rebuilt) the ACP subprocess + session.
+   * The executor uses it to seed the freshly-created remote session with
+   * the prior transcript before sending the live user message — without
+   * seeding, a fingerprint mismatch / `invalidateDriver` silently drops
+   * conversation history (counsel HIGH #4).
+   */
+  readonly created: boolean
 }
 
 export interface AcpSessionManager {
   readonly getOrCreate: (
-    gentSessionId: string,
+    key: ExternalSessionKey,
     config: AcpProtocolAgentConfig,
     cwd: string,
     systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
   ) => Effect.Effect<AcpManagedSession, AcpError>
-  readonly get: (gentSessionId: string) => AcpManagedSession | undefined
-  readonly invalidate: (gentSessionId: string) => Effect.Effect<void>
+  readonly invalidate: (key: ExternalSessionKey) => Effect.Effect<void>
+  readonly invalidateDriver: (driverId: string) => Effect.Effect<void>
   readonly disposeAll: () => Effect.Effect<void>
 }
 
@@ -121,6 +142,7 @@ const extractLastUserMessage = (
 // ── Turn Executor Factory ──
 
 export const makeAcpTurnExecutor = (
+  driverId: string,
   config: AcpProtocolAgentConfig,
   manager: AcpSessionManager,
 ): TurnExecutor => ({
@@ -142,8 +164,13 @@ export const makeAcpTurnExecutor = (
         runTool,
       }
 
+      const key: ExternalSessionKey = {
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        driverId,
+      }
       const session = yield* manager
-        .getOrCreate(ctx.sessionId, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
+        .getOrCreate(key, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(Effect.mapError((e) => new TurnError({ message: e.message })))
 
       // Signal for when the prompt completes
@@ -160,12 +187,22 @@ export const makeAcpTurnExecutor = (
         )
       }
 
+      // On a fresh / rebuilt ACP subprocess we send the prior transcript
+      // as a single preamble user message before the new turn — the ACP
+      // protocol exposes only `prompt` for user input; we cannot inject
+      // assistant turns directly. Bare last-user would silently drop
+      // history across cache misses / driver swaps (counsel HIGH #4).
+      const lastUser = extractLastUserMessage(ctx.messages)
+      const promptText = session.created
+        ? composePromptWithTranscript(ctx.messages, lastUser)
+        : lastUser
+
       // Fork the prompt call — runs concurrently with the update stream.
       // On failure, fail the deferred so the stream doesn't hang.
       yield* session.conn
         .prompt({
           sessionId: session.acpSessionId,
-          prompt: [{ type: "text", text: extractLastUserMessage(ctx.messages) }],
+          prompt: [{ type: "text", text: promptText }],
         })
         .pipe(
           Effect.tap((result) => Deferred.succeed(promptDone, result.stopReason)),
@@ -210,11 +247,10 @@ export const makeAcpTurnExecutor = (
     return Stream.unwrap(runTurn)
   },
 
-  cancel: (sessionId: string) =>
-    Effect.gen(function* () {
-      const session = manager.get(sessionId)
-      if (session !== undefined) {
-        yield* session.conn.cancel(session.acpSessionId)
-      }
-    }),
+  // The agent loop already wires `ctx.abortSignal` inside `executeTurn`
+  // to call `conn.cancel(acpSessionId)`. The per-driver `cancel` hook
+  // can't do better because it only receives a `sessionId` string —
+  // not the full `(sessionId, branchId, driverId)` cache key — so it
+  // would mis-target rebuilt sessions on a different branch / driver.
+  cancel: () => Effect.void,
 })

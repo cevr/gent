@@ -137,16 +137,22 @@ export const AcpAgentsExtension = defineExtension({
     ),
   ],
   externalDrivers: () => {
+    const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
     const claudeCode = {
-      id: `acp-${CLAUDE_CODE_AGENT_NAME}`,
+      id: claudeCodeId,
       executor: makeClaudeCodeTurnExecutor(getClaudeCodeManager()),
       toolSurface: "codemode" as const,
+      invalidate: () => getClaudeCodeManager().invalidateDriver(claudeCodeId),
     }
-    const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => ({
-      id: `acp-${name}`,
-      executor: makeAcpTurnExecutor(config, getAcpManager()),
-      toolSurface: "codemode" as const,
-    }))
+    const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => {
+      const id = `acp-${name}`
+      return {
+        id,
+        executor: makeAcpTurnExecutor(id, config, getAcpManager()),
+        toolSurface: "codemode" as const,
+        invalidate: () => getAcpManager().invalidateDriver(id),
+      }
+    })
     return [claudeCode, ...protocolDrivers]
   },
   // Per-process lifecycle Resource: dispose both managers (ACP-protocol

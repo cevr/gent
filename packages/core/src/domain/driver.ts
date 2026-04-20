@@ -285,6 +285,14 @@ export interface ExternalDriverContribution {
   /** How the driver consumes tools. Determines the tool surface section in
    *  the compiled system prompt. Defaults to `"native"`. */
   readonly toolSurface?: ToolSurface
+  /**
+   * Optional hook called by the runtime when a config change makes any
+   * cached external session for this driver stale (e.g. `driver.set` /
+   * `driver.clear` swaps an agent's routing). Implementations should tear
+   * down every cached session keyed under this driver id. Drivers without
+   * cached state can omit it.
+   */
+  readonly invalidate?: () => Effect.Effect<void>
 }
 
 export type AnyDriverContribution = ModelDriverContribution | ExternalDriverContribution

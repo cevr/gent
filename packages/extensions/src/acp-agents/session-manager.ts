@@ -3,7 +3,12 @@
  * ACP-protocol agents (opencode / gemini-cli). Claude Code lives on the
  * SDK path; see `claude-code-executor.ts`.
  *
- * One ACP subprocess per gent session, reused across turns.
+ * One ACP subprocess per (driverId, gentSessionId, branchId), reused
+ * across turns. Branch + driver are part of the key because two
+ * branches of the same gent session run logically separate
+ * conversations and a driver swap mid-session must not reuse the prior
+ * driver's subprocess (codex HIGH #2 / #3).
+ *
  * Lifecycle: spawn → start codemode MCP → initialize → newSession (with
  * `_meta.systemPrompt`) → cache → reuse.
  *
@@ -12,7 +17,7 @@
 import { Effect, Exit, Scope } from "effect"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import { makeAcpConnection, type AcpConnection, type AcpError } from "./protocol.js"
-import type { AcpManagedSession, AcpSessionManager } from "./executor.js"
+import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
 import { startCodemodeServer, type CodemodeServer, type CodemodeConfig } from "./mcp-codemode.js"
 
 interface AcpProcess {
@@ -23,6 +28,8 @@ interface AcpProcess {
   readonly codemode?: CodemodeServer
   readonly fingerprint: string
 }
+
+const cacheKey = (k: ExternalSessionKey): string => `${k.driverId}::${k.sessionId}::${k.branchId}`
 
 /**
  * Fingerprint covers every session-defining input passed to ACP
@@ -54,22 +61,45 @@ const fingerprintSession = (
 
 export const createAcpSessionManager = (): AcpSessionManager => {
   const sessions = new Map<string, AcpProcess>()
+  const byDriver = new Map<string, Set<string>>()
+
+  const removeFromDriverIndex = (driverId: string, k: string) => {
+    const set = byDriver.get(driverId)
+    if (set === undefined) return
+    set.delete(k)
+    if (set.size === 0) byDriver.delete(driverId)
+  }
+
+  const tearDown = (k: string, entry: AcpProcess): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* entry.conn.close.pipe(Effect.ignore)
+      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
+      entry.proc.kill()
+      entry.codemode?.stop()
+      sessions.delete(k)
+    })
 
   const getOrCreate = (
-    gentSessionId: string,
+    key: ExternalSessionKey,
     config: AcpProtocolAgentConfig,
     cwd: string,
     systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
   ): Effect.Effect<AcpManagedSession, AcpError> =>
     Effect.gen(function* () {
+      const k = cacheKey(key)
       const fingerprint = fingerprintSession(config, cwd, systemPrompt, codemodeConfig)
-      const existing = sessions.get(gentSessionId)
+      const existing = sessions.get(k)
       if (existing !== undefined) {
         if (existing.fingerprint === fingerprint) {
-          return { conn: existing.conn, acpSessionId: existing.acpSessionId }
+          return {
+            conn: existing.conn,
+            acpSessionId: existing.acpSessionId,
+            created: false,
+          }
         }
-        yield* tearDown(gentSessionId, existing).pipe(Effect.ignore)
+        removeFromDriverIndex(key.driverId, k)
+        yield* tearDown(k, existing).pipe(Effect.ignore)
       }
 
       // Spawn subprocess first — if the binary is missing, fail fast before
@@ -142,39 +172,42 @@ export const createAcpSessionManager = (): AcpSessionManager => {
         codemode,
         fingerprint,
       }
-      sessions.set(gentSessionId, entry)
+      sessions.set(k, entry)
+      const driverSet = byDriver.get(key.driverId) ?? new Set<string>()
+      driverSet.add(k)
+      byDriver.set(key.driverId, driverSet)
 
-      return { conn, acpSessionId: sessionResponse.sessionId }
+      return { conn, acpSessionId: sessionResponse.sessionId, created: true }
     })
 
-  const get = (gentSessionId: string): AcpManagedSession | undefined => {
-    const entry = sessions.get(gentSessionId)
-    if (entry === undefined) return undefined
-    return { conn: entry.conn, acpSessionId: entry.acpSessionId }
-  }
-
-  const tearDown = (id: string, entry: AcpProcess): Effect.Effect<void> =>
+  const invalidate = (key: ExternalSessionKey): Effect.Effect<void> =>
     Effect.gen(function* () {
-      yield* entry.conn.close.pipe(Effect.ignore)
-      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
-      entry.proc.kill()
-      entry.codemode?.stop()
-      sessions.delete(id)
-    })
-
-  const invalidate = (gentSessionId: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const entry = sessions.get(gentSessionId)
+      const k = cacheKey(key)
+      const entry = sessions.get(k)
       if (entry === undefined) return
-      yield* tearDown(gentSessionId, entry)
+      removeFromDriverIndex(key.driverId, k)
+      yield* tearDown(k, entry)
+    })
+
+  const invalidateDriver = (driverId: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const keys = byDriver.get(driverId)
+      if (keys === undefined) return
+      const keysArr = [...keys]
+      byDriver.delete(driverId)
+      for (const k of keysArr) {
+        const entry = sessions.get(k)
+        if (entry !== undefined) yield* tearDown(k, entry).pipe(Effect.ignore)
+      }
     })
 
   const disposeAll = (): Effect.Effect<void> =>
     Effect.gen(function* () {
-      for (const [id, entry] of sessions) {
-        yield* tearDown(id, entry)
+      for (const [k, entry] of sessions) {
+        yield* tearDown(k, entry)
       }
+      byDriver.clear()
     })
 
-  return { getOrCreate, get, invalidate, disposeAll }
+  return { getOrCreate, invalidate, invalidateDriver, disposeAll }
 }
