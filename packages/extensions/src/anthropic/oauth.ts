@@ -1,5 +1,5 @@
 import { Effect, Schedule, Schema } from "effect"
-import { FetchHttpClient } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as os from "node:os"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { runAnthropicFetcher } from "./fetch-boundary.js"
@@ -370,35 +370,48 @@ export const parseOAuthResponse = (
 const refreshViaOAuth = (
   refreshToken: string,
 ): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const requestBody = new URLSearchParams({
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const request = HttpClientRequest.post(OAUTH_TOKEN_URL).pipe(
+      HttpClientRequest.bodyUrlParams({
         grant_type: "refresh_token",
         client_id: OAUTH_CLIENT_ID,
         refresh_token: refreshToken,
-      })
-      const response = await fetch(OAUTH_TOKEN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: requestBody.toString(),
-        signal: AbortSignal.timeout(15_000),
-      })
-      if (!response.ok) {
-        throw new Error(`OAuth refresh failed: ${response.status} ${response.statusText}`)
-      }
-      const responseBody = await response.text()
-      const creds = parseOAuthResponse(responseBody, refreshToken)
-      if (creds === undefined) {
-        throw new Error("OAuth refresh response missing access_token")
-      }
-      return creds
-    },
-    catch: (e) =>
-      new ProviderAuthError({
-        message: `Direct OAuth refresh failed: ${e instanceof Error ? e.message : String(e)}`,
-        cause: e,
       }),
-  })
+    )
+    const response = yield* http.execute(request)
+    if (response.status >= 400) {
+      const errText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
+      return yield* Effect.fail(
+        new ProviderAuthError({
+          message: `Direct OAuth refresh failed: ${response.status} ${errText}`,
+        }),
+      )
+    }
+    const body = yield* response.text
+    const creds = parseOAuthResponse(body, refreshToken)
+    if (creds === undefined) {
+      return yield* Effect.fail(
+        new ProviderAuthError({
+          message: "OAuth refresh response missing access_token",
+        }),
+      )
+    }
+    return creds
+  }).pipe(
+    Effect.timeout("15 seconds"),
+    Effect.catchEager((e) =>
+      e instanceof ProviderAuthError
+        ? Effect.fail(e)
+        : Effect.fail(
+            new ProviderAuthError({
+              message: `Direct OAuth refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+              cause: e,
+            }),
+          ),
+    ),
+    Effect.provide(FetchHttpClient.layer),
+  )
 
 const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
   Effect.tryPromise({
