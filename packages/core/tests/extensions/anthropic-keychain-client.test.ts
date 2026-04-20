@@ -391,6 +391,82 @@ describe("transformPayload — system content relocation", () => {
     const messages = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
     expect(messages[0]!.content).toHaveLength(1)
   })
+
+  test("billing hash matches the post-relocation first-user text (counsel C7 regression)", () => {
+    // Counsel C7 follow-up: the prior order computed billing before
+    // relocation, so the hash on the wire didn't match what the API
+    // actually saw. Compare against a control payload with the same
+    // POST-relocation first-user text but no system to relocate — the
+    // billing hash header must be identical.
+    const relocatedPayload = transformPayload({
+      model: "claude-opus-4-6",
+      max_tokens: 4096,
+      system: [{ type: "text", text: "third-party prefix" }],
+      messages: [{ role: "user", content: "hello" }],
+    })
+    const controlPayload = transformPayload({
+      model: "claude-opus-4-6",
+      max_tokens: 4096,
+      system: [],
+      // The control directly carries what the relocator would produce.
+      messages: [{ role: "user", content: "third-party prefix\n\nhello" }],
+    })
+    const relocatedBilling = (relocatedPayload["system"] as Array<{ text: string }>)[0]!.text
+    const controlBilling = (controlPayload["system"] as Array<{ text: string }>)[0]!.text
+    expect(relocatedBilling).toBe(controlBilling)
+  })
+
+  test("inserts relocated text after a leading tool_result run (preserves Anthropic ordering)", () => {
+    // Anthropic requires tool_result blocks to be the FIRST blocks of
+    // a user message that carries any. Counsel C7 follow-up: relocator
+    // must splice the prefix in AFTER the leading tool_result run,
+    // not at index 0, otherwise the API returns 400.
+    const payload = {
+      model: "claude-opus-4-6",
+      max_tokens: 4096,
+      system: [{ type: "text", text: "third-party prefix" }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "tc-1", content: "ok" },
+            { type: "tool_result", tool_use_id: "tc-2", content: "ok" },
+            { type: "text", text: "follow-up" },
+          ],
+        },
+      ],
+      // Provide the matching upstream tool_use blocks so repairToolPairs
+      // doesn't drop the tool_result entries.
+      tools: [],
+    }
+    // Add an upstream assistant turn so the tool_result blocks survive
+    // the orphan check.
+    const payloadWithPair = {
+      ...payload,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "tc-1", name: "echo", input: {} },
+            { type: "tool_use", id: "tc-2", name: "echo", input: {} },
+          ],
+        },
+        ...payload.messages,
+      ],
+    }
+    const result = transformPayload(payloadWithPair)
+    const messages = result["messages"] as Array<{
+      role: string
+      content: Array<Record<string, unknown>>
+    }>
+    const userMsg = messages.find((m) => m.role === "user")!
+    expect(userMsg.content[0]!["type"]).toBe("tool_result")
+    expect(userMsg.content[1]!["type"]).toBe("tool_result")
+    expect(userMsg.content[2]!["type"]).toBe("text")
+    expect(userMsg.content[2]!["text"]).toBe("third-party prefix")
+    expect(userMsg.content[3]!["type"]).toBe("text")
+    expect(userMsg.content[3]!["text"]).toBe("follow-up")
+  })
 })
 
 // ── haiku effort-strip (counsel C7 / opencode parity C) ──
@@ -430,5 +506,34 @@ describe("transformPayload — haiku effort-strip", () => {
     const result = transformPayload(payload)
     const oc = result["output_config"] as { effort?: string }
     expect(oc.effort).toBe("high")
+  })
+
+  test("strips thinking.effort for haiku models (defensive — opencode parity)", () => {
+    // gent's anthropic/index.ts only emits output_config.effort today,
+    // but the upstream Anthropic SDK may emit thinking.effort in
+    // future shapes. Counsel C7 follow-up — match the opencode reference
+    // and strip both, so the haiku 400 stays away regardless of which
+    // shape carries the knob.
+    const payload = {
+      model: "claude-haiku-4-5",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: "hi" }],
+      thinking: { type: "enabled", effort: "high" },
+    }
+    const result = transformPayload(payload)
+    const thinking = result["thinking"] as { type?: string; effort?: string }
+    expect(thinking.effort).toBeUndefined()
+    expect(thinking.type).toBe("enabled")
+  })
+
+  test("removes thinking entirely when stripping leaves it empty", () => {
+    const payload = {
+      model: "claude-haiku-4-5",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: "hi" }],
+      thinking: { effort: "high" },
+    }
+    const result = transformPayload(payload)
+    expect(result["thinking"]).toBeUndefined()
   })
 })

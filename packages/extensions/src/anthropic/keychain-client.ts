@@ -174,51 +174,69 @@ const stripExistingBillingBlocks = (
   })
 
 /**
+ * Split caller-provided system blocks into the identity entry, billing
+ * entries (always discarded — re-computed per-request), and everything
+ * else (the movable third-party content). Used by the relocator to
+ * decide what to pull into the first user message before billing is
+ * computed.
+ */
+const partitionSystemBlocks = (
+  callerSystem: unknown,
+): {
+  readonly identityBlocks: ReadonlyArray<Record<string, unknown>>
+  readonly thirdPartyBlocks: ReadonlyArray<Record<string, unknown>>
+} => {
+  const blocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
+  const identityBlocks: Record<string, unknown>[] = []
+  const thirdPartyBlocks: Record<string, unknown>[] = []
+  for (const block of blocks) {
+    const text = block["text"]
+    if (typeof text === "string" && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
+      identityBlocks.push(block)
+    } else {
+      thirdPartyBlocks.push(block)
+    }
+  }
+  return { identityBlocks, thirdPartyBlocks }
+}
+
+/**
  * Build the final `system[]` array with the strict shape Anthropic's
  * OAuth billing validator expects:
  *
  *   [0] billing-header text block (no cache_control)
  *   [1] identity prefix text block (no cache_control)
- *   [2..] caller's other system blocks, each gets cache_control
  *
- * Identity must be its own entry — concatenating it into another text
- * block trips the validator (opencode issue #98). The billing block
- * MUST NOT carry cache_control: Anthropic rejects requests that exceed
- * 4 cache_control blocks per request, and the billing entry counts
- * toward that limit if marked.
+ * After C7 relocation there are no third-party blocks left to attach;
+ * any third-party content was pulled into the first user message
+ * before this builder ran. Identity must be its own entry —
+ * concatenating it into another text block trips the validator
+ * (opencode issue #98). The billing block MUST NOT carry cache_control:
+ * Anthropic rejects requests exceeding 4 cache_control blocks per
+ * request, and the billing entry would count toward that limit.
+ *
+ * Counsel C7 — caller MUST pass the FINAL post-relocation messages so
+ * the billing hash matches the first-user text actually sent on the
+ * wire. Computing the hash from pre-relocation messages produces a
+ * stale digest and 400s.
  */
 const buildSystemArray = (
-  callerSystem: unknown,
-  messages: ReadonlyArray<Record<string, unknown>>,
+  finalMessages: ReadonlyArray<Record<string, unknown>>,
 ): ReadonlyArray<Record<string, unknown>> => {
-  const callerBlocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
   const { version, entrypoint } = getBillingHeaderInputs()
   // Cast through unknown — the Message type in signing.ts is a tighter
   // shape than the wire-level Record we receive from the SDK. The
   // signature only reads `role` + `content` defensively.
   const billing = buildBillingHeaderValue(
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    messages as ReadonlyArray<{ role?: string; content?: string }>,
+    finalMessages as ReadonlyArray<{ role?: string; content?: string }>,
     version,
     entrypoint,
   )
 
-  // Pull any caller-provided identity entry out so we can re-emit it
-  // separately (without cache_control) right after billing.
-  const withoutIdentity = callerBlocks.filter((block) => {
-    const text = block["text"]
-    return !(typeof text === "string" && text.startsWith(SYSTEM_IDENTITY_PREFIX))
-  })
-
-  const otherBlocks = withoutIdentity.map((block) => ({
-    ...block,
-    cache_control: { type: "ephemeral" as const },
-  }))
-
   return [
     { type: "text", text: billing },
     { type: "text", text: SYSTEM_IDENTITY_PREFIX },
-    ...otherBlocks,
   ]
 }
 
@@ -255,107 +273,132 @@ export const transformSystem = (system: unknown): unknown => {
 
 /**
  * Counsel C7 (opencode parity A) — Anthropic's OAuth-billing path
- * validates the `system[]` array against the Claude Code identity
- * prefix. Third-party system content sitting alongside the prefix
- * trips a 400 "out of extra usage" rejection. This relocator pulls
- * any non-billing, non-identity system blocks out of `system[]` and
- * prepends them to the first user message as a single text block
- * (functionally equivalent because Anthropic's LLM concatenates
- * system + first-user anyway, but the validator now sees a clean
- * Claude-Code-shaped system array).
+ * validates `system[]` against the Claude Code identity prefix.
+ * Third-party system content alongside the prefix trips a 400 "out of
+ * extra usage" rejection. The relocator takes the third-party blocks
+ * (already partitioned by `partitionSystemBlocks`) and folds them into
+ * the first user message as a single text block.
+ *
+ * Counsel C7 follow-up:
+ *   - tool_result ordering: Anthropic requires tool_result blocks to be
+ *     the FIRST blocks of a user message that carries any. Inserting
+ *     text at index 0 in such a message produces 400. We splice the
+ *     relocated text in AFTER the leading run of tool_result blocks.
+ *   - billing freshness: this runs BEFORE buildSystemArray so the
+ *     billing hash is computed from the FINAL first-user text. The
+ *     pre-fix shape computed billing first, then mutated the message,
+ *     so the wire hash didn't match the wire text.
  *
  * Returns the new messages array; mutates nothing.
  */
-const relocateSystemContent = (
-  systemBlocks: ReadonlyArray<Record<string, unknown>>,
+const relocateThirdPartyIntoFirstUser = (
+  thirdPartyBlocks: ReadonlyArray<Record<string, unknown>>,
   messages: ReadonlyArray<Record<string, unknown>>,
-): {
-  readonly system: ReadonlyArray<Record<string, unknown>>
-  readonly messages: ReadonlyArray<Record<string, unknown>>
-} => {
-  const kept: Record<string, unknown>[] = []
+): ReadonlyArray<Record<string, unknown>> => {
   const movedTexts: string[] = []
-  for (const block of systemBlocks) {
+  for (const block of thirdPartyBlocks) {
     const text = block["text"]
-    const txt = typeof text === "string" ? text : ""
-    if (txt.startsWith(BILLING_HEADER_PREFIX) || txt.startsWith(SYSTEM_IDENTITY_PREFIX)) {
-      kept.push(block)
-    } else if (txt.length > 0) {
-      movedTexts.push(txt)
-    } else {
-      // Non-text blocks (cache_control sentinels, etc.) ride along
-      // with `kept` — we only relocate text content.
-      kept.push(block)
-    }
+    if (typeof text === "string" && text.length > 0) movedTexts.push(text)
   }
-  if (movedTexts.length === 0) return { system: systemBlocks, messages }
+  if (movedTexts.length === 0) return messages
 
   const firstUserIdx = messages.findIndex((m) => m["role"] === "user")
-  if (firstUserIdx === -1) return { system: systemBlocks, messages }
+  if (firstUserIdx === -1) return messages
 
-  const prefix = movedTexts.join("\n\n")
   const firstUser = messages[firstUserIdx]
-  if (firstUser === undefined) return { system: systemBlocks, messages }
+  if (firstUser === undefined) return messages
   const content = firstUser["content"]
+  const prefix = movedTexts.join("\n\n")
+
   let newContent: unknown
   if (typeof content === "string") {
     newContent = `${prefix}\n\n${content}`
   } else if (isRecordArray(content)) {
-    newContent = [{ type: "text", text: prefix }, ...content]
+    // Find the index where leading tool_result blocks end. Inserting
+    // text before that boundary trips Anthropic's "tool_result must
+    // come first" check.
+    let firstNonToolResult = 0
+    while (
+      firstNonToolResult < content.length &&
+      content[firstNonToolResult]?.["type"] === "tool_result"
+    ) {
+      firstNonToolResult += 1
+    }
+    newContent = [
+      ...content.slice(0, firstNonToolResult),
+      { type: "text", text: prefix },
+      ...content.slice(firstNonToolResult),
+    ]
   } else {
     // Unknown content shape — bail out rather than mangling it.
-    return { system: systemBlocks, messages }
+    return messages
   }
 
   const nextMessages = messages.slice()
   nextMessages[firstUserIdx] = { ...firstUser, content: newContent }
-  return { system: kept, messages: nextMessages }
+  return nextMessages
 }
 
 /**
- * Counsel C7 (opencode parity C) — strip `output_config.effort` for
- * models that don't support it (haiku family). Anthropic returns 400
- * if effort is sent with a haiku model. The caller (`anthropic/index.ts`
- * `buildAnthropicConfig`) sets `output_config.effort` from the gent
- * reasoning level; we surgically remove it for haiku rather than
- * making the caller model-aware.
+ * Counsel C7 (opencode parity C) — strip the effort knob for models
+ * that don't support it (haiku family). Anthropic returns 400 if
+ * effort is sent with a haiku model. We strip from BOTH
+ * `output_config.effort` (the shape gent emits today via
+ * `anthropic/index.ts` `buildAnthropicConfig`) AND `thinking.effort`
+ * (the shape the upstream Anthropic SDK may emit in future versions —
+ * matches the opencode reference). Each branch deletes the parent
+ * object if it empties out.
+ *
+ * C8 will replace the `claude-haiku` prefix match with the per-model
+ * override table from opencode-claude-auth's `model-config.ts`.
  */
+const stripObjectKey = (
+  parent: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined => {
+  if (!(key in parent)) return parent
+  const { [key]: _removed, ...rest } = parent
+  return Object.keys(rest).length === 0 ? undefined : rest
+}
+
 const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unknown> => {
   const model = payload["model"]
   if (typeof model !== "string" || !model.startsWith(HAIKU_PREFIX)) return payload
-  const outputConfig = payload["output_config"]
-  if (!isRecord(outputConfig) || !("effort" in outputConfig)) return payload
-  const { effort: _effort, ...rest } = outputConfig
+
   const next = { ...payload }
-  if (Object.keys(rest).length === 0) {
-    delete next["output_config"]
-  } else {
-    next["output_config"] = rest
+  const outputConfig = next["output_config"]
+  if (isRecord(outputConfig)) {
+    const stripped = stripObjectKey(outputConfig, "effort")
+    if (stripped === undefined) delete next["output_config"]
+    else next["output_config"] = stripped
+  }
+  const thinking = next["thinking"]
+  if (isRecord(thinking)) {
+    const stripped = stripObjectKey(thinking, "effort")
+    if (stripped === undefined) delete next["thinking"]
+    else next["thinking"] = stripped
   }
   return next
 }
 
 /**
- * Apply every outgoing OAuth-billing transform. Order is load-bearing:
- *   1. Tools first — billing sees the `tools` array indirectly via the
- *      messages, but PascalCase prefix must be applied so the wire
- *      format matches what Claude Code itself sends.
- *   2. repairToolPairs (counsel C7 / opencode parity B) — drop orphan
- *      tool_use / tool_result blocks BEFORE PascalCase prefixing so we
- *      don't compute billing from a message that the API would reject.
- *   3. Messages next — same reason as tools; tool_use blocks in
- *      history need PascalCase prefixing before billing inspects the
- *      user text.
- *   4. tool_choice — independent.
- *   5. system — depends on the (already-prefixed) messages array to
- *      compute the billing hash.
- *   6. relocateSystemContent (counsel C7 / opencode parity A) — pull
- *      third-party system blocks into the first user message AFTER
- *      buildSystemArray attaches the billing + identity entries, so
- *      the relocator only sees post-attach state and never moves the
- *      billing/identity blocks out by mistake.
- *   7. stripHaikuEffort (counsel C7 / opencode parity C) — final
- *      payload-shape correction independent of the others.
+ * Apply every outgoing OAuth-billing transform. Order is load-bearing —
+ * counsel C7 follow-up reordered relocation BEFORE billing computation
+ * because the relocator changes the first-user message text and the
+ * billing hash MUST match what's on the wire:
+ *
+ *   1. transformTools — PascalCase mcp_ prefix on tool names.
+ *   2. repairToolPairs — drop orphan tool_use / tool_result blocks
+ *      before they can poison the billing hash or trip the API.
+ *   3. transformMessages — PascalCase mcp_ prefix on tool_use blocks
+ *      in history.
+ *   4. transformToolChoice — independent.
+ *   5. relocateThirdPartyIntoFirstUser — pull non-billing/non-identity
+ *      system blocks into the first user message FIRST, so the
+ *      billing hash in step 6 sees the final wire text.
+ *   6. buildSystemArray — compute billing from FINAL (post-relocation)
+ *      messages; emit the strict `[billing, identity]` system shape.
+ *   7. stripHaikuEffort — final payload correction; independent.
  */
 export const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
   let result: Record<string, unknown> = { ...payload }
@@ -376,11 +419,12 @@ export const transformPayload = (payload: Record<string, unknown>): Record<strin
     result["tool_choice"] = transformToolChoice(result["tool_choice"])
   }
 
-  const messages = isRecordArray(result["messages"]) ? result["messages"] : []
-  const systemAfterBuild = buildSystemArray(result["system"], messages)
-  const relocated = relocateSystemContent(systemAfterBuild, messages)
-  result["system"] = relocated.system
-  result["messages"] = relocated.messages
+  const { thirdPartyBlocks } = partitionSystemBlocks(result["system"])
+  const messagesAfterRelocate = isRecordArray(result["messages"])
+    ? relocateThirdPartyIntoFirstUser(thirdPartyBlocks, result["messages"])
+    : []
+  result["messages"] = messagesAfterRelocate
+  result["system"] = buildSystemArray(messagesAfterRelocate)
 
   result = stripHaikuEffort(result)
 
