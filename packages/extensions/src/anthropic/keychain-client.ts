@@ -16,15 +16,30 @@ import { isRecord, isRecordArray } from "@gent/core/extensions/api"
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 
 export { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
-import { SYSTEM_IDENTITY_PREFIX } from "./oauth.js"
+import { SYSTEM_IDENTITY_PREFIX, getBillingHeaderInputs } from "./oauth.js"
+import { buildBillingHeaderValue } from "./signing.js"
 
 // ── Constants ──
 
 const MCP_PREFIX = "mcp_"
+const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
 
 // ── Payload Transforms (outgoing) ──
 
-const prefixName = (name: string): string => `${MCP_PREFIX}${name}`
+/**
+ * Prefix tool names with `mcp_` AND uppercase the first letter — Claude
+ * Code uses PascalCase tool names (`mcp_Bash`, `mcp_Read`); lowercase
+ * names trip the Anthropic OAuth-billing validation when multiple tools
+ * are present (verified in opencode-claude-auth issue notes).
+ */
+const prefixName = (name: string): string =>
+  `${MCP_PREFIX}${name.charAt(0).toUpperCase()}${name.slice(1)}`
+
+/** Reverse `prefixName`: drop `mcp_` and lowercase the first char. */
+const unprefixName = (name: string): string => {
+  const stripped = name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name
+  return `${stripped.charAt(0).toLowerCase()}${stripped.slice(1)}`
+}
 
 /** Prefix all tool names with mcp_ in the outgoing payload */
 const transformTools = (
@@ -61,7 +76,84 @@ const transformToolChoice = (toolChoice: unknown): unknown => {
   return toolChoice
 }
 
-/** Inject system identity prefix and cache control into system field */
+/**
+ * Coerce `system` (string | array | undefined) into the canonical block
+ * array shape used by the rest of the pipeline. The downstream billing
+ * + identity injection expects an array — string input is wrapped.
+ */
+const normalizeSystemBlocks = (system: unknown): ReadonlyArray<Record<string, unknown>> => {
+  if (system === undefined || system === null) return []
+  if (typeof system === "string") return [{ type: "text", text: system }]
+  if (Array.isArray(system) && isRecordArray(system)) return system
+  return []
+}
+
+/**
+ * Drop any `system[]` entry that already carries a billing-header text
+ * block — we re-compute the header per request from the live messages
+ * so a stale entry from an earlier turn would otherwise sit alongside
+ * the fresh one and confuse the validator.
+ */
+const stripExistingBillingBlocks = (
+  blocks: ReadonlyArray<Record<string, unknown>>,
+): ReadonlyArray<Record<string, unknown>> =>
+  blocks.filter((block) => {
+    const text = block["text"]
+    return !(typeof text === "string" && text.startsWith(BILLING_HEADER_PREFIX))
+  })
+
+/**
+ * Build the final `system[]` array with the strict shape Anthropic's
+ * OAuth billing validator expects:
+ *
+ *   [0] billing-header text block (no cache_control)
+ *   [1] identity prefix text block (no cache_control)
+ *   [2..] caller's other system blocks, each gets cache_control
+ *
+ * Identity must be its own entry — concatenating it into another text
+ * block trips the validator (opencode issue #98). The billing block
+ * MUST NOT carry cache_control: Anthropic rejects requests that exceed
+ * 4 cache_control blocks per request, and the billing entry counts
+ * toward that limit if marked.
+ */
+const buildSystemArray = (
+  callerSystem: unknown,
+  messages: ReadonlyArray<Record<string, unknown>>,
+): ReadonlyArray<Record<string, unknown>> => {
+  const callerBlocks = stripExistingBillingBlocks(normalizeSystemBlocks(callerSystem))
+  const { version, entrypoint } = getBillingHeaderInputs()
+  // Cast through unknown — the Message type in signing.ts is a tighter
+  // shape than the wire-level Record we receive from the SDK. The
+  // signature only reads `role` + `content` defensively.
+  const billing = buildBillingHeaderValue(
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    messages as ReadonlyArray<{ role?: string; content?: string }>,
+    version,
+    entrypoint,
+  )
+
+  // Pull any caller-provided identity entry out so we can re-emit it
+  // separately (without cache_control) right after billing.
+  const withoutIdentity = callerBlocks.filter((block) => {
+    const text = block["text"]
+    return !(typeof text === "string" && text.startsWith(SYSTEM_IDENTITY_PREFIX))
+  })
+
+  const otherBlocks = withoutIdentity.map((block) => ({
+    ...block,
+    cache_control: { type: "ephemeral" as const },
+  }))
+
+  return [
+    { type: "text", text: billing },
+    { type: "text", text: SYSTEM_IDENTITY_PREFIX },
+    ...otherBlocks,
+  ]
+}
+
+/** @deprecated kept for the existing test surface — use `buildSystemArray`
+ *  via `transformPayload`. The legacy single-arg shape can't compute the
+ *  billing hash because it has no access to the messages. */
 export const transformSystem = (system: unknown): unknown => {
   if (system === undefined || system === null) return SYSTEM_IDENTITY_PREFIX
 
@@ -81,7 +173,6 @@ export const transformSystem = (system: unknown): unknown => {
       ? blocks
       : [{ type: "text", text: SYSTEM_IDENTITY_PREFIX }, ...blocks]
 
-    // Add cache_control to all system blocks
     return withIdentity.map((block) => ({
       ...block,
       cache_control: { type: "ephemeral" as const },
@@ -91,7 +182,17 @@ export const transformSystem = (system: unknown): unknown => {
   return system
 }
 
-/** Apply all outgoing transforms to a payload */
+/**
+ * Apply every outgoing OAuth-billing transform. Order is load-bearing:
+ *   1. Tools first — billing sees the `tools` array indirectly via the
+ *      messages, but PascalCase prefix must be applied so the wire
+ *      format matches what Claude Code itself sends.
+ *   2. Messages next — same reason; tool_use blocks in history need
+ *      PascalCase prefixing before billing inspects the user text.
+ *   3. tool_choice — independent.
+ *   4. system LAST — depends on the (already-prefixed) messages array
+ *      to compute the billing hash from the first user message text.
+ */
 export const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
   const result: Record<string, unknown> = { ...payload }
 
@@ -107,15 +208,17 @@ export const transformPayload = (payload: Record<string, unknown>): Record<strin
     result["tool_choice"] = transformToolChoice(result["tool_choice"])
   }
 
-  result["system"] = transformSystem(result["system"])
+  const messages = isRecordArray(result["messages"]) ? result["messages"] : []
+  result["system"] = buildSystemArray(result["system"], messages)
 
   return result
 }
 
 // ── Response Transforms (incoming) ──
 
-const stripPrefix = (name: string): string =>
-  name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name
+/** Strip `mcp_` and lowercase the first char so gent sees its
+ *  registered tool name (`Bash` from the wire → `bash` internally). */
+const stripPrefix = (name: string): string => unprefixName(name)
 
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (

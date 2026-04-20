@@ -577,8 +577,18 @@ const getCliVersion = (): string => _env.cliVersion ?? DEFAULT_CC_VERSION
 
 const getUserAgent = (): string => _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
 
-const getBillingHeader = (modelId: string): string =>
-  `cc_version=${getCliVersion()}.${modelId}; cc_entrypoint=cli; cch=c5e82;`
+/**
+ * Inputs the billing-header builder needs (CLI version + entrypoint).
+ * Lives here because `_env` is the source of truth for the version
+ * after `initAnthropicKeychainEnv` runs at extension setup. The actual
+ * header text is built in `signing.ts` per request because both hashes
+ * depend on the live first-user-message text.
+ */
+export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
+  version: getCliVersion(),
+  // eslint-disable-next-line no-process-env
+  entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
+})
 
 const buildRequestHeaders = (
   input: RequestInfo | URL,
@@ -621,7 +631,11 @@ const buildRequestHeaders = (
   headers.set("anthropic-beta", mergedBetas.join(","))
   headers.set("x-app", "cli")
   headers.set("user-agent", getUserAgent())
-  headers.set("x-anthropic-billing-header", getBillingHeader(modelId))
+  // The billing header lives in `system[0]` (see keychain-client.ts +
+  // signing.ts), NOT as an HTTP header. The previous header path sent
+  // a hard-coded `cch=c5e82` placeholder that tripped the OAuth
+  // billing validator on every request — symptom: `InvalidKey` from
+  // the SDK on a fresh prompt.
   headers.set("anthropic-dangerous-direct-browser-access", "true")
   headers.delete("x-api-key")
 

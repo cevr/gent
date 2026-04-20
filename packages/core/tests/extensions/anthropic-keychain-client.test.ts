@@ -10,7 +10,11 @@ import {
 // ── transformPayload ──
 
 describe("transformPayload", () => {
-  test("prefixes tool names in tools[]", () => {
+  // Tool names go on the wire as `mcp_<PascalCase>` — Anthropic's OAuth
+  // billing validator rejects lowercase-after-prefix tool names when
+  // multiple tools are present (matches Claude Code's PascalCase
+  // convention; opencode-claude-auth issue notes).
+  test("prefixes tool names in tools[] with PascalCase", () => {
     const payload = {
       model: "claude-opus-4-6",
       max_tokens: 4096,
@@ -22,11 +26,11 @@ describe("transformPayload", () => {
     }
     const result = transformPayload(payload)
     const tools = result["tools"] as Array<{ name: string }>
-    expect(tools[0]!.name).toBe("mcp_echo")
-    expect(tools[1]!.name).toBe("mcp_search")
+    expect(tools[0]!.name).toBe("mcp_Echo")
+    expect(tools[1]!.name).toBe("mcp_Search")
   })
 
-  test("prefixes tool_use names in historical messages", () => {
+  test("prefixes tool_use names in historical messages with PascalCase", () => {
     const payload = {
       model: "claude-opus-4-6",
       max_tokens: 4096,
@@ -47,7 +51,7 @@ describe("transformPayload", () => {
     const result = transformPayload(payload)
     const msgs = result["messages"] as Array<{ content: Array<Record<string, unknown>> }>
     const toolUse = msgs[0]!.content[1]!
-    expect(toolUse["name"]).toBe("mcp_echo")
+    expect(toolUse["name"]).toBe("mcp_Echo")
   })
 
   test("does not prefix non-tool_use blocks", () => {
@@ -67,7 +71,7 @@ describe("transformPayload", () => {
     expect(msgs[0]!.content[0]!["text"]).toBe("hello")
   })
 
-  test("prefixes tool_choice name when type is tool", () => {
+  test("prefixes tool_choice name with PascalCase when type is tool", () => {
     const payload = {
       model: "claude-opus-4-6",
       max_tokens: 4096,
@@ -76,7 +80,7 @@ describe("transformPayload", () => {
     }
     const result = transformPayload(payload)
     const tc = result["tool_choice"] as { type: string; name: string }
-    expect(tc.name).toBe("mcp_echo")
+    expect(tc.name).toBe("mcp_Echo")
   })
 
   test("does not modify tool_choice when type is auto", () => {
@@ -90,7 +94,7 @@ describe("transformPayload", () => {
     expect(result["tool_choice"]).toEqual({ type: "auto" })
   })
 
-  test("unconditionally prefixes — mcp_foo becomes mcp_mcp_foo", () => {
+  test("unconditionally prefixes — mcp_foo becomes mcp_Mcp_foo", () => {
     const payload = {
       model: "claude-opus-4-6",
       max_tokens: 4096,
@@ -99,7 +103,7 @@ describe("transformPayload", () => {
     }
     const result = transformPayload(payload)
     const tools = result["tools"] as Array<{ name: string }>
-    expect(tools[0]!.name).toBe("mcp_mcp_foo")
+    expect(tools[0]!.name).toBe("mcp_Mcp_foo")
   })
 
   test("passes through payload without tools/messages", () => {
