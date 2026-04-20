@@ -45,7 +45,7 @@ const runHandler = async (
 }
 
 describe("ACP prompt.system pipeline", () => {
-  test("appends codemode section when driver is ACP external + driverSource set", async () => {
+  test("appends codemode section when driverToolSurface is codemode", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
       agent: new AgentDefinition({
@@ -53,6 +53,7 @@ describe("ACP prompt.system pipeline", () => {
         driver: new ExternalDriverRef({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
+      driverToolSurface: "codemode",
       tools: [fakeTool],
     })
     expect(result.startsWith("BASE\n\n")).toBe(true)
@@ -60,7 +61,7 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).toContain("gent.echo({ text: string })")
   })
 
-  test("no-op when driverSource is default", async () => {
+  test("no-op when driverToolSurface is undefined (model-routed)", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
       agent: baseAgent,
@@ -70,7 +71,7 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).toBe("BASE")
   })
 
-  test("no-op when driver is model (not external)", async () => {
+  test("no-op when driverToolSurface is native", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
       agent: new AgentDefinition({
@@ -78,12 +79,13 @@ describe("ACP prompt.system pipeline", () => {
         driver: new ModelDriverRef({ id: "anthropic" }),
       }),
       driverSource: "config",
+      driverToolSurface: "native",
       tools: [fakeTool],
     })
     expect(result).toBe("BASE")
   })
 
-  test("no-op when external driver id doesn't match acp- prefix", async () => {
+  test("no-op when external driver opts out of codemode (toolSurface: native)", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
       agent: new AgentDefinition({
@@ -91,6 +93,7 @@ describe("ACP prompt.system pipeline", () => {
         driver: new ExternalDriverRef({ id: "custom-driver" }),
       }),
       driverSource: "config",
+      driverToolSurface: "native",
       tools: [fakeTool],
     })
     expect(result).toBe("BASE")
@@ -104,8 +107,33 @@ describe("ACP prompt.system pipeline", () => {
         driver: new ExternalDriverRef({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
+      driverToolSurface: "codemode",
       tools: [],
     })
     expect(result).toBe("BASE")
+  })
+
+  test("structural rewrite: replaces tool-list/tool-guidelines sections", async () => {
+    const result = await runHandler({
+      basePrompt: "ignored when sections is provided",
+      agent: new AgentDefinition({
+        ...baseAgent,
+        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+      }),
+      driverSource: "config",
+      driverToolSurface: "codemode",
+      tools: [fakeTool],
+      sections: [
+        { id: "identity", content: "ID-SECTION", priority: 0 },
+        { id: "tool-list", content: "## Available Tools\n\n- echo", priority: 42 },
+        { id: "tool-guidelines", content: "## Tool Guidelines\n\n- use tools", priority: 44 },
+        { id: "extra", content: "EXTRA-SECTION", priority: 80 },
+      ],
+    })
+    expect(result).toContain("ID-SECTION")
+    expect(result).toContain("EXTRA-SECTION")
+    expect(result).toContain("External Tool Surface (codemode)")
+    expect(result).not.toContain("## Available Tools\n\n- echo")
+    expect(result).not.toContain("- use tools")
   })
 })

@@ -10,6 +10,8 @@ import { AuthApi, AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
+import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { NotFoundError } from "./errors.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { SessionQueries } from "./session-queries.js"
@@ -56,6 +58,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
     const modelRegistry = yield* ModelRegistry
+    const driverRegistry = yield* DriverRegistry
     const authStore = yield* AuthStore
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
@@ -253,6 +256,63 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- model --
       "model.list": () => modelRegistry.list(),
+
+      // -- driver --
+      "driver.list": () =>
+        Effect.gen(function* () {
+          const config = yield* configService.get()
+          const models = yield* driverRegistry.listModels()
+          const externals = yield* driverRegistry.listExternal()
+          const drivers = [
+            ...models.map((d) => ({
+              id: d.id,
+              kind: "model" as const,
+              ...(d.name !== undefined ? { description: d.name } : {}),
+            })),
+            ...externals.map((d) => ({
+              id: d.id,
+              kind: "external" as const,
+            })),
+          ]
+          return {
+            drivers,
+            overrides: config.driverOverrides ?? {},
+          }
+        }),
+
+      "driver.set": ({ agentName, driver }) =>
+        Effect.gen(function* () {
+          // Validate the driver exists in the registry before persisting —
+          // a bad ref now would fail silently at agent dispatch time.
+          if (driver._tag === "model" && driver.id !== undefined) {
+            const found = yield* driverRegistry.getModel(driver.id)
+            if (found === undefined) {
+              return yield* new NotFoundError({
+                entity: "driver",
+                message: `Unknown model driver "${driver.id}"`,
+              })
+            }
+          }
+          if (driver._tag === "external") {
+            const found = yield* driverRegistry.getExternal(driver.id)
+            if (found === undefined) {
+              return yield* new NotFoundError({
+                entity: "driver",
+                message: `Unknown external driver "${driver.id}"`,
+              })
+            }
+          }
+          yield* configService.setDriverOverride(agentName, driver)
+        }),
+
+      // Stale external sessions are torn down lazily: the per-driver session
+      // manager (Claude Code SDK / ACP-protocol) fingerprints by
+      // (cwd, systemPrompt, codemode tools) and rebuilds when those change.
+      // A cleared override falls back to the model path on the next turn,
+      // so the previously-cached external session is simply never reused —
+      // it's reaped at process shutdown via the per-process resource
+      // finalizer registered by `@gent/acp-agents`.
+      "driver.clear": ({ agentName }) => configService.clearDriverOverride(agentName),
 
       // -- auth --
       "auth.listProviders": ({ agentName }) =>

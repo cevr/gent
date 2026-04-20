@@ -128,10 +128,11 @@ import {
 import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
-  buildTurnPrompt,
+  buildTurnPromptSections,
   resolveReasoning,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
+import { compileSystemPrompt } from "../../server/system-prompt.js"
 
 // ============================================================================
 // Turn Phases (inlined from agent-loop-phases.ts)
@@ -220,6 +221,25 @@ const persistAssistantText = (params: {
     return message
   })
 
+/**
+ * Resolve the tool surface a driver expects, used by the `prompt.system`
+ * pipeline to decide whether to append/replace tool-section content.
+ * External drivers expose this on `ExternalDriverContribution.toolSurface`
+ * (defaulting to `"native"` when omitted); model drivers are always native.
+ * Returns `undefined` when no driver is set.
+ */
+const resolveDriverToolSurface = (
+  agent: AgentDefinition,
+  driverRegistry: DriverRegistryService,
+): Effect.Effect<"native" | "codemode" | undefined> =>
+  Effect.gen(function* () {
+    const driver = agent.driver
+    if (driver === undefined) return undefined
+    if (driver._tag === "model") return "native"
+    const ext = yield* driverRegistry.getExternal(driver.id)
+    return ext?.toolSurface ?? "native"
+  })
+
 const resolveTurnContext = (params: {
   agentOverride?: AgentNameType
   runSpec?: RunSpec
@@ -228,12 +248,13 @@ const resolveTurnContext = (params: {
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime: MachineEngineService
+  driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
-}): Effect.Effect<ResolvedTurnContext | undefined, StorageError> =>
+}): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
     const rawMessages = yield* params.storage
@@ -256,15 +277,11 @@ const resolveTurnContext = (params: {
 
     // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
     // then `UserConfig.driverOverrides[agent.name]`, else default.
-    // ConfigService is yielded as an Effect — best-effort: if the
-    // service isn't provided in this context (rare; some test layers),
-    // the resolution falls through to default. The `driverSource` is
-    // threaded into `prompt.system` (Commit 3) so ACP-aware hooks can
-    // detect external dispatch.
-    const config = yield* Effect.serviceOption(ConfigService)
-    const driverOverrides = Option.isSome(config)
-      ? ((yield* config.value.get()).driverOverrides ?? undefined)
-      : undefined
+    // `ConfigService` is a hard requirement of `AgentLoop.Live` — making
+    // it optional here let test layers omit it and silently fall through
+    // to the default driver, hiding wiring bugs (codex MEDIUM #1).
+    const configService = yield* ConfigService
+    const driverOverrides = (yield* configService.get()).driverOverrides ?? undefined
     const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
     // If config-routed and the agent had no hardcoded driver, the
     // override replaces it — `effectiveAgent` is otherwise unchanged.
@@ -331,15 +348,22 @@ const resolveTurnContext = (params: {
         extensionProjections,
       )
 
-    // Build tool-aware prompt, then run through prompt.system interceptor
+    // Build tool-aware prompt, then run through prompt.system interceptor.
+    // We hand the pipeline both the compiled `basePrompt` (for hooks that
+    // append sentinel sections) AND the structured `sections` (for hooks
+    // that need to swap or strip a section by id, e.g. codemode replacing
+    // `tool-list` / `tool-guidelines` rather than appending a contradicting
+    // surface — codex MEDIUM #2).
     const allAgents = yield* params.extensionRegistry.listAgents()
-    const turnPrompt = buildTurnPrompt(
+    const sections = buildTurnPromptSections(
       params.baseSections,
       effectiveAgent,
       tools,
       extensionSections,
       allAgents,
     )
+    const turnPrompt = compileSystemPrompt(sections)
+    const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent, params.driverRegistry)
     const systemPrompt = yield* params.extensionRegistry.pipelines.runPipeline(
       "prompt.system",
       {
@@ -348,6 +372,8 @@ const resolveTurnContext = (params: {
         interactive: params.interactive,
         driverSource: driverResolution.source,
         tools,
+        ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
+        sections,
       },
       (input) => Effect.succeed(input.basePrompt),
       params.hostCtx,
@@ -628,6 +654,7 @@ const resolveTurnPhase = (params: {
   branchId: BranchId
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime: MachineEngineService
+  driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
   baseSections: ReadonlyArray<PromptSection>
@@ -1662,6 +1689,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | EventPublisher
     | ToolRunner
     | ResourceManager
+    | ConfigService
   > =>
     Layer.effect(
       AgentLoop,
@@ -1676,6 +1704,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const eventPublisher = yield* EventPublisher
         const toolRunner = yield* ToolRunner
         const resourceManager = yield* ResourceManager
+        // Yield ConfigService at setup so the captured service shape is
+        // available to inner closures without leaking the requirement
+        // into Stream/Machine task signatures.
+        const configServiceForRun = yield* ConfigService
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const pendingQueuesRef = yield* Ref.make<Map<string, LoopState["queue"]>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
@@ -1935,6 +1967,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }
 
                 // 1. Resolve
+                // ConfigService is required by `resolveTurnContext` (driver
+                // override resolution). Provided here from the captured
+                // service so the surrounding Machine task signature stays
+                // requirement-free.
                 const resolved = yield* resolveTurnPhase({
                   message: state.message,
                   agentOverride: state.agentOverride,
@@ -1944,12 +1980,13 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   branchId,
                   extensionRegistry: turnExtensionRegistry,
                   extensionStateRuntime: turnExtensionStateRuntime,
+                  driverRegistry: turnDriverRegistry,
                   sessionId,
                   publishEvent: publishEventOrDie,
                   baseSections: turnBaseSections,
                   interactive: state.interactive,
                   hostCtx: turnHostCtx,
-                })
+                }).pipe(Effect.provideService(ConfigService, configServiceForRun))
                 if (resolved === undefined) break
 
                 yield* Ref.set(turnToolsRef, resolved.tools)

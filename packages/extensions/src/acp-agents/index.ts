@@ -69,13 +69,6 @@ const protocolAgents = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) 
   }),
 )
 
-/**
- * ID prefix shared by all ACP-routed external drivers (claude-code,
- * opencode, gemini-cli). The prompt pipeline checks this to detect
- * external dispatch.
- */
-const ACP_DRIVER_PREFIX = "acp-"
-
 const codemodeInstructions = (toolList: string): string =>
   [
     "## External Tool Surface (codemode)",
@@ -101,24 +94,45 @@ const codemodeInstructions = (toolList: string): string =>
     toolList,
   ].join("\n")
 
+// Section ids produced by `buildTurnPromptSections` that describe the
+// native tool surface — replaced (not appended-to) when the resolved
+// driver is codemode-routed.
+const NATIVE_TOOL_SECTION_IDS = new Set(["tool-list", "tool-guidelines"])
+
+const compileSections = (sections: ReadonlyArray<{ content: string; priority: number }>): string =>
+  [...sections]
+    .sort((a, b) => a.priority - b.priority)
+    .map((s) => s.content)
+    .join("\n\n")
+
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
   agents: [claudeCodeAgent, ...protocolAgents],
   pipelines: [
-    // When the resolved driver is an ACP external driver, append codemode
-    // instructions describing the `execute` proxy. The default tool list
-    // sections (`## Available Tools`, `## Tool Guidelines`) stay — they
-    // remain accurate documentation; this section adds the routing rule
-    // the model needs to actually call them via codemode.
+    // When the resolved driver declares `toolSurface: "codemode"`, replace
+    // the native tool sections (`tool-list` + `tool-guidelines`) with a
+    // codemode section — the model would otherwise see two contradictory
+    // tool surfaces. Detection keys off driver metadata, not driver-id
+    // prefix (codex MEDIUM #3).
     pipeline("prompt.system", (input, next) =>
       Effect.gen(function* () {
         const base = yield* next(input)
-        if (input.driverSource === undefined || input.driverSource === "default") return base
-        const driver = input.agent.driver
-        if (driver?._tag !== "external" || !driver.id.startsWith(ACP_DRIVER_PREFIX)) return base
+        if (input.driverToolSurface !== "codemode") return base
         const tools = input.tools ?? []
         if (tools.length === 0) return base
-        return `${base}\n\n${codemodeInstructions(generateToolDescription(tools))}`
+        const codemode = {
+          id: "tool-codemode",
+          content: codemodeInstructions(generateToolDescription(tools)),
+          priority: 42,
+        }
+        // Prefer structural rewrite when the loop hands us sections.
+        // Fallback to base-prompt append for callers that haven't been
+        // updated to thread sections (tests, custom pipelines).
+        if (input.sections !== undefined) {
+          const filtered = input.sections.filter((s) => !NATIVE_TOOL_SECTION_IDS.has(s.id))
+          return compileSections([...filtered, codemode])
+        }
+        return `${base}\n\n${codemode.content}`
       }),
     ),
   ],
@@ -126,10 +140,12 @@ export const AcpAgentsExtension = defineExtension({
     const claudeCode = {
       id: `acp-${CLAUDE_CODE_AGENT_NAME}`,
       executor: makeClaudeCodeTurnExecutor(getClaudeCodeManager()),
+      toolSurface: "codemode" as const,
     }
     const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => ({
       id: `acp-${name}`,
       executor: makeAcpTurnExecutor(config, getAcpManager()),
+      toolSurface: "codemode" as const,
     }))
     return [claudeCode, ...protocolDrivers]
   },

@@ -10,6 +10,7 @@ import {
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
+import { ConfigService } from "@gent/core/runtime/config-service"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
   resolveAgentModel,
@@ -94,6 +95,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   Permission.Live([], "allow"),
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ServerProfileService.Test(),
+  ConfigService.Test(),
 )
 
 describe("RunSpec", () => {

@@ -256,6 +256,22 @@ export interface TurnExecutor {
 // ── ExternalDriverContribution — turn-executor-shaped driver ──
 
 /**
+ * Tool surface a driver expects in its system prompt.
+ *
+ * - `native` — driver receives gent's normal `## Available Tools` listing
+ *   and dispatches them directly. The default for everything that isn't
+ *   an external sandbox (i.e. all model drivers).
+ * - `codemode` — driver receives a single `execute` MCP tool that takes
+ *   JS code; tool calls go through a `gent.<name>(args)` proxy. The
+ *   `prompt.system` pipeline replaces the native tool sections with a
+ *   codemode listing so the model sees the right affordance.
+ *
+ * Pipelines key off this metadata rather than driver-id heuristics —
+ * see `acp-agents/index.ts`.
+ */
+export type ToolSurface = "native" | "codemode"
+
+/**
  * Registers an external execution loop as a driver. The wrapped
  * `TurnExecutor` streams `TurnEvent`s; the agent loop collects them into an
  * assistant draft. The driver registry routes a
@@ -266,6 +282,9 @@ export interface ExternalDriverContribution {
   readonly id: string
   /** The turn executor implementation. */
   readonly executor: TurnExecutor
+  /** How the driver consumes tools. Determines the tool surface section in
+   *  the compiled system prompt. Defaults to `"native"`. */
+  readonly toolSurface?: ToolSurface
 }
 
 export type AnyDriverContribution = ModelDriverContribution | ExternalDriverContribution

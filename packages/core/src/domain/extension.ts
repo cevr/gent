@@ -133,6 +133,25 @@ export interface SystemPromptInput {
    * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
    */
   readonly tools?: ReadonlyArray<AnyToolDefinition>
+  /**
+   * Tool surface declared by the resolved driver (`"native"` or
+   * `"codemode"`). Set by the agent loop from
+   * `ExternalDriverContribution.toolSurface`; `undefined` for
+   * model-routed turns. The codemode pipeline keys off this metadata
+   * rather than driver-id heuristics.
+   */
+  readonly driverToolSurface?: "native" | "codemode"
+  /**
+   * The structured prompt sections used to build `basePrompt`, in
+   * pre-compile form. Pipeline hooks that need to swap or strip
+   * sections (e.g. codemode replacing `tool-list` / `tool-guidelines`)
+   * rewrite this and recompile rather than performing string surgery.
+   */
+  readonly sections?: ReadonlyArray<{
+    readonly id: string
+    readonly content: string
+    readonly priority: number
+  }>
 }
 
 export interface ToolExecuteInput {

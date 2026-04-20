@@ -13,6 +13,7 @@ import { InteractionRpcs } from "./rpcs/interaction.js"
 import { PermissionRpcs } from "./rpcs/permission.js"
 import { ModelRpcs } from "./rpcs/model.js"
 import { AuthRpcs } from "./rpcs/auth.js"
+import { DriverRpcs } from "./rpcs/driver.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ActorRpcs } from "./rpcs/actor.js"
 import { ServerRpcs } from "./rpcs/server.js"
@@ -28,6 +29,7 @@ export {
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
+  DriverRpcs,
   ExtensionRpcs,
   ActorRpcs,
   ServerRpcs,
@@ -75,6 +77,10 @@ export {
   CallbackAuthInput,
   AuthProviderInfo,
   EventEnvelope,
+  DriverInfo,
+  DriverListResult,
+  SetDriverOverrideInput,
+  ClearDriverOverrideInput,
   ListExtensionStatusInput,
   ExtensionActivationPhase,
   ExtensionActorLifecycleStatus,
@@ -99,6 +105,7 @@ export class GentRpcs extends RpcGroup.make().merge(
   PermissionRpcs,
   ModelRpcs,
   AuthRpcs,
+  DriverRpcs,
   ExtensionRpcs,
   ActorRpcs,
   ServerRpcs,

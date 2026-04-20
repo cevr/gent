@@ -167,6 +167,30 @@ const mapSdkMessageStream = (
 interface ClaudeCodeProcess {
   readonly session: ClaudeSdkSession
   readonly codemode?: CodemodeServer
+  readonly fingerprint: string
+}
+
+/**
+ * Fingerprint covers every session-defining input passed to the SDK
+ * `query()` call. If any of these change for the same gent session,
+ * the cached SDK session is stale (wrong cwd, prompt, or tool surface)
+ * and must be torn down and rebuilt — otherwise a runtime driver
+ * override or extension list change would silently keep serving the
+ * old configuration.
+ */
+const fingerprintSession = (
+  cwd: string,
+  systemPrompt: string,
+  codemodeConfig: CodemodeConfig | undefined,
+): string => {
+  const toolNames =
+    codemodeConfig === undefined
+      ? []
+      : codemodeConfig.tools
+          .map((t) => t.name)
+          .slice()
+          .sort()
+  return JSON.stringify({ cwd, systemPrompt, tools: toolNames })
 }
 
 export interface ClaudeCodeSessionManager {
@@ -208,8 +232,13 @@ export const createClaudeCodeSessionManager = (
     codemodeConfig: CodemodeConfig | undefined,
   ): Effect.Effect<ClaudeSdkSession, ClaudeSdkError> =>
     Effect.gen(function* () {
+      const fingerprint = fingerprintSession(cwd, systemPrompt, codemodeConfig)
       const existing = sessions.get(gentSessionId)
-      if (existing !== undefined) return existing.session
+      if (existing !== undefined) {
+        if (existing.fingerprint === fingerprint) return existing.session
+        sessions.delete(gentSessionId)
+        yield* tearDown(existing).pipe(Effect.ignore)
+      }
 
       const oauthToken = yield* readClaudeCodeOAuthToken().pipe(
         Effect.mapError(
@@ -244,7 +273,7 @@ export const createClaudeCodeSessionManager = (
           ),
         )
 
-      sessions.set(gentSessionId, { session, codemode })
+      sessions.set(gentSessionId, { session, codemode, fingerprint })
       return session
     })
 

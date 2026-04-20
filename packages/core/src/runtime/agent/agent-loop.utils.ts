@@ -17,19 +17,19 @@ import type { AssistantDraft } from "./agent-loop.state.js"
 const isReasoningEffort = Schema.is(ReasoningEffort)
 
 /**
- * Build a per-turn system prompt from base sections, agent addendum, and active tools.
- *
- * Tools with `promptSnippet` appear in a tool list; tools with `promptGuidelines`
- * contribute behavioral bullets. This replaces the old static `# Tools` section
- * with dynamic, tool-aware content.
+ * Build the per-turn prompt sections (base + agent addendum + tool list +
+ * tool guidelines + delegation targets + extension extras). Returns the
+ * unsorted section list so pipeline hooks can rewrite specific sections
+ * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
+ * compilation.
  */
-export const buildTurnPrompt = (
+export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
   tools: ReadonlyArray<AnyToolDefinition>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
-): string => {
+): ReadonlyArray<PromptSection> => {
   const sections: PromptSection[] = [...baseSections]
 
   // Agent addendum
@@ -95,8 +95,24 @@ export const buildTurnPrompt = (
     }
   }
 
-  return compileSystemPrompt(sections)
+  return sections
 }
+
+/**
+ * Build a per-turn system prompt from base sections, agent addendum, and
+ * active tools. Wraps `buildTurnPromptSections` for callers that don't
+ * need the structured intermediate form.
+ */
+export const buildTurnPrompt = (
+  baseSections: ReadonlyArray<PromptSection>,
+  agent: AgentDefinition,
+  tools: ReadonlyArray<AnyToolDefinition>,
+  extraSections?: ReadonlyArray<PromptSection>,
+  delegationTargets?: ReadonlyArray<AgentDefinition>,
+): string =>
+  compileSystemPrompt(
+    buildTurnPromptSections(baseSections, agent, tools, extraSections, delegationTargets),
+  )
 
 export const resolveReasoning = (
   agent: AgentDefinition,

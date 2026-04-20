@@ -3,6 +3,7 @@ import type { ExtensionClientModule } from "@gent/core/domain/extension-client.j
 import builtinArtifacts from "./artifacts.client"
 import builtinAuto from "./auto.client"
 import builtinConnection from "./connection.client"
+import builtinDriver from "./driver.client"
 import builtinFiles from "./files.client"
 import builtinHandoff from "./handoff.client"
 import builtinInteractions from "./interactions.client"
@@ -23,6 +24,7 @@ export const builtinClientModules: ReadonlyArray<
   builtinArtifacts,
   builtinAuto,
   builtinConnection,
+  builtinDriver,
   builtinFiles,
   builtinHandoff,
   builtinInteractions,

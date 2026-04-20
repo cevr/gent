@@ -25,6 +25,7 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
+import { ConfigService } from "@gent/core/runtime/config-service"
 import { Agents } from "@gent/extensions/all-agents"
 
 // ── Helpers ──
@@ -120,6 +121,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunServices.layer,
     ResourceManagerLive,
+    ConfigService.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -302,6 +304,7 @@ describe("external turn execution", () => {
       makeCountingEventStore(eventsRef),
       ToolRunner.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
     )
@@ -449,6 +452,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       }),
       ToolRunner.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
     )

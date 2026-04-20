@@ -9,7 +9,7 @@ import { StorageError } from "../storage/sqlite-storage.js"
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {
   message: Schema.String,
-  entity: Schema.Literals(["session", "branch", "message"]),
+  entity: Schema.Literals(["session", "branch", "message", "driver"]),
 }) {}
 
 // Schema-compatible wrapper for PlatformError (Data.TaggedError, not Schema-based)

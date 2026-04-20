@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
-import { RunSpecSchema, AgentName, ReasoningEffort } from "../domain/agent.js"
+import { RunSpecSchema, AgentName, DriverRef, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import { AuthProviderInfo, AuthProviderQuery } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
@@ -458,6 +458,39 @@ export const ExtensionHealthSnapshot = Schema.Struct({
   summary: ExtensionHealthSummary,
 })
 export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
+
+// ---------------------------------------------------------------------------
+// Driver routing
+// ---------------------------------------------------------------------------
+
+/** Per-driver descriptor returned by `driver.list`. `kind` distinguishes
+ *  model drivers (provider-routed) from external drivers (e.g. ACP). */
+export const DriverInfo = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["model", "external"]),
+  description: Schema.optional(Schema.String),
+})
+export type DriverInfo = typeof DriverInfo.Type
+
+/** Snapshot returned by `driver.list`. Carries every registered driver
+ *  and the active per-agent override map. The TUI joins these against
+ *  the agent catalogue to render `/driver`. */
+export const DriverListResult = Schema.Struct({
+  drivers: Schema.Array(DriverInfo),
+  overrides: Schema.Record(Schema.String, DriverRef),
+})
+export type DriverListResult = typeof DriverListResult.Type
+
+export const SetDriverOverrideInput = Schema.Struct({
+  agentName: Schema.String,
+  driver: DriverRef,
+})
+export type SetDriverOverrideInput = typeof SetDriverOverrideInput.Type
+
+export const ClearDriverOverrideInput = Schema.Struct({
+  agentName: Schema.String,
+})
+export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 
 // ---------------------------------------------------------------------------
 // Connection lifecycle

@@ -21,6 +21,35 @@ interface AcpProcess {
   readonly proc: { kill: () => void }
   readonly scope: Scope.Closeable
   readonly codemode?: CodemodeServer
+  readonly fingerprint: string
+}
+
+/**
+ * Fingerprint covers every session-defining input passed to ACP
+ * `newSession` plus the spawn config. Stale-cache hits otherwise let
+ * a runtime driver override or extension change silently keep serving
+ * the wrong cwd / prompt / tool surface.
+ */
+const fingerprintSession = (
+  config: AcpProtocolAgentConfig,
+  cwd: string,
+  systemPrompt: string,
+  codemodeConfig: CodemodeConfig | undefined,
+): string => {
+  const toolNames =
+    codemodeConfig === undefined
+      ? []
+      : codemodeConfig.tools
+          .map((t) => t.name)
+          .slice()
+          .sort()
+  return JSON.stringify({
+    command: config.command,
+    args: config.args,
+    cwd,
+    systemPrompt,
+    tools: toolNames,
+  })
 }
 
 export const createAcpSessionManager = (): AcpSessionManager => {
@@ -34,9 +63,13 @@ export const createAcpSessionManager = (): AcpSessionManager => {
     codemodeConfig?: CodemodeConfig,
   ): Effect.Effect<AcpManagedSession, AcpError> =>
     Effect.gen(function* () {
+      const fingerprint = fingerprintSession(config, cwd, systemPrompt, codemodeConfig)
       const existing = sessions.get(gentSessionId)
       if (existing !== undefined) {
-        return { conn: existing.conn, acpSessionId: existing.acpSessionId }
+        if (existing.fingerprint === fingerprint) {
+          return { conn: existing.conn, acpSessionId: existing.acpSessionId }
+        }
+        yield* tearDown(gentSessionId, existing).pipe(Effect.ignore)
       }
 
       // Spawn subprocess first — if the binary is missing, fail fast before
@@ -107,6 +140,7 @@ export const createAcpSessionManager = (): AcpSessionManager => {
         proc: { kill: () => proc.kill() },
         scope,
         codemode,
+        fingerprint,
       }
       sessions.set(gentSessionId, entry)
 

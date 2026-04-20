@@ -10,6 +10,7 @@ import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensi
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import {
@@ -96,6 +97,7 @@ const makeLayer = (
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
     EventStore.Memory,
     ToolRunner.Test(),
     BunServices.layer,
@@ -118,6 +120,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
@@ -157,6 +160,7 @@ const makeLiveToolLayer = (
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
     EventStore.Memory,
     ApprovalService.Test(),
     Permission.Live([], "allow"),
@@ -193,6 +197,7 @@ const makeLayerWithEvents = (
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
     makeCountingEventStore(eventsRef),
     ToolRunner.Test(),
     BunServices.layer,
@@ -322,6 +327,7 @@ describe("streaming", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       EventStore.Memory,
       ToolRunner.Test(),
       BunServices.layer,
@@ -723,6 +729,7 @@ describe("streaming", () => {
       Permission.Test(),
       ApprovalService.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       MachineEngine.Test(),
     )
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
@@ -732,6 +739,7 @@ describe("streaming", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
       recorderLayer,
@@ -1225,6 +1233,7 @@ describe("interaction", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       ApprovalService.Test(),
       Permission.Live([], "allow"),
       BunServices.layer,
@@ -1342,6 +1351,7 @@ describe("interaction", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       EventStore.Memory,
       ToolRunner.Test(),
       BunServices.layer,
@@ -1543,6 +1553,7 @@ describe("recovery", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
       providerLayer,
       toolRunnerLayer,
       ApprovalService.Test(),
