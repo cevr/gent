@@ -52,7 +52,7 @@ bun run --cwd apps/tui dev sessions
 - **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils/in-process-layer.js`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal provider for lifecycle assertions** - Use `createSignalProvider(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `stream()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **DebugProvider({ delayMs })** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
-- **Ephemeral runtime composition** - `buildEphemeralLayer` in `agent-runner.ts` builds the per-run layer through `RuntimeComposer.ephemeral({ parent: ServerProfile, parentServices }).own(...).merge(extensionLayers).build()`. The composer's `.own(...)` list is the single source of truth: it both omits each owned key from the forwarded parent context AND contributes the override layer in last-wins order. To prevent the parent's already-built layer instances from being replayed when the child re-requests them, the composer also (a) omits `Layer.CurrentMemoMap` from the forwarded parent context — otherwise `Layer.succeedContext(parentServices)` would re-introduce the parent's memo as a service, and (b) wraps the final merged layer in `Layer.fresh`. Both belt and suspenders are load-bearing — do not delete one without the other. To add a new ephemeral-local service, add an `ownService(Tag, layer)` entry — no separate omit list to keep in sync. The `parent: ServerProfile` brand makes cross-scope misuse a type error.
+- **Ephemeral runtime composition** - `agent-runner.ts` builds the per-run layer through `RuntimeComposer.ephemeral({ parent: ServerProfile, parentServices }).withOverrides({ storage, eventStore, ... }).merge(extensionLayers).build()`. The `.withOverrides(...)` method maps each named field (e.g. `storage`, `eventStore`) to ALL Tags that should be omitted from parent context — including sub-Tags (e.g. `storage` omits `Storage`, `SessionStorage`, `BranchStorage`, etc. via `OVERRIDE_TAG_SETS`). To prevent the parent's already-built layer instances from being replayed, the composer (a) omits `Layer.CurrentMemoMap` from the forwarded parent context, and (b) wraps the final merged layer in `Layer.fresh`. Both are load-bearing — do not delete one without the other. The `parent: ServerProfile` brand makes cross-scope misuse a type error.
 
 ## Architecture
 
@@ -106,8 +106,8 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 - **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `createSequenceProvider` for LLM responses.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
-- **Mock at system boundaries**: only the LLM provider (via `createSequenceProvider` / `Provider.Test`). Use real services inside the boundary.
-- **`Provider.Test()` and `EventStore.Test()` are banned for new tests** — use `createSequenceProvider` or `EventStore.Memory` / `EventStoreLive` instead.
+- **Mock at system boundaries**: only the LLM provider (via `createSequenceProvider` / `DebugProvider`). Use real services inside the boundary.
+- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `createSequenceProvider` or `DebugProvider()` for provider mocking, `EventStore.Memory` for in-memory event stores.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -162,8 +162,8 @@ assertSequence(calls, [
 | `packages/core/src/runtime/wide-event-boundary.ts` | `effect-wide-event` integration + context factories |
 | `packages/core/src/test-utils/in-process-layer.ts` | `baseLocalLayer` / `baseLocalLayerWithProvider`     |
 | `packages/core/src/debug/provider.ts`              | debug providers + `createSignalProvider`            |
-| `packages/core/src/extensions/auto.ts`             | auto loop modality extension (fromMachine)          |
-| `packages/core/src/tools/auto-checkpoint.ts`       | signal tool for auto loop iteration                 |
+| `packages/extensions/src/auto.ts`                  | auto loop modality extension (fromMachine)          |
+| `packages/extensions/src/auto-checkpoint.ts`       | signal tool for auto loop iteration                 |
 | `apps/tui/tsconfig.json`                           | `jsxImportSource: "@opentui/solid"` required        |
 
 ## Documentation

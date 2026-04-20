@@ -22,7 +22,7 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # SQLite persistence (focused services: Storage, CheckpointStorage, InteractionStorage, SearchStorage)
+│   ├── storage/   # SQLite persistence (focused services: SessionStorage, BranchStorage, MessageStorage, EventStorage, RelationshipStorage, ExtensionStateStorage)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # actor-process, agent-loop, task/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
@@ -92,8 +92,9 @@ The app surface is split by concern:
 
 - `SessionCommands`
 - `SessionQueries`
-- `SessionEvents`
 - `InteractionCommands`
+
+`SessionEvents` and `SessionSubscriptions` are inlined into `rpc-handlers.ts` — they are not separate services.
 
 `packages/core/src/server/index.ts` is intentionally small. It only assembles `AppServicesLive`.
 
@@ -300,10 +301,10 @@ One authoring shape: `defineExtension({ id, resources?, capabilities?, projectio
 There is no flat `Contribution[]` and no `_kind` discriminator. The C8 redesign collapsed 16 contribution kinds into the six-primitive set below. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, machine?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Carries optional `effect-machine` machine + declared effects when the extension owns one. Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
-- **Capability** — `tool(...)` / `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` smart constructors lowering to a single `CapabilityContribution`. Discriminated by `audiences: ("model" | "agent-protocol" | "transport-public" | "human-palette" | "human-slash")[]` and `intent: "read" | "write"`. See `packages/core/src/domain/capability.ts` and `runtime/extensions/capability-host.ts`.
-- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors (agent-loop only; UI deleted in C2; client widgets read state via transport-public Capabilities). The `R` channel is fenced read-only by a structural type constraint: `ProjectionContribution<A, R extends ReadOnlyTag>` blocks write-capable service Tags at compile time (B11.4). See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
-- **Pipeline** (`pipeline(definePipeline(hook, handler))`) — transforming middleware at five hooks (`tool.execute`, `tool.result`, `permission.check`, `context.messages`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
-- **Subscription** (`subscription(defineSubscription(event, failureMode, handler))`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
+- **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering to a single `CapabilityContribution`. `tool` = model-facing tool (audiences `["model"]`); `request` = transport-public or agent-protocol query/mutation (discriminated by `intent: "read" | "write"`); `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories and the `audiences + intent` flag matrix are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts` and `runtime/extensions/capability-host.ts`.
+- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors (agent-loop only; UI deleted in C2; client widgets read state via transport-public Capabilities). The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
+- **Pipeline** (`pipeline(hook, handler)`) — transforming middleware at five hooks (`tool.execute`, `tool.result`, `permission.check`, `context.messages`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). The `definePipeline` intermediate is deleted — pass `hook` and `handler` directly to `pipeline(...)`. See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
+- **Subscription** (`subscription(event, failureMode, handler)`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). The `defineSubscription` intermediate is deleted — pass `event`, `failureMode`, and `handler` directly to `subscription(...)`. See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
@@ -311,6 +312,10 @@ Other notes:
 - Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
+
+### EventPublisher
+
+`EventPublisherRouterLive` (`server/event-publisher.ts`) dispatches through per-cwd profiles. For a single-cwd run the profile is resolved once at boot; for multi-cwd server topologies the router resolves lazily per cwd and fans out to the correct extension runtime. Transport-level broadcast (session stream, WebSocket push) is cwd-agnostic; only the extension runtime dispatch is per-cwd.
 
 ### Extension Pub/Sub
 
@@ -337,7 +342,7 @@ Other notes:
 - Builtins are individual `.client.{ts,tsx}` files in `apps/tui/src/extensions/builtins/`
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
-- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument and no sync `(ctx) => Array` arm — the paired-package wrapper, `ExtensionClientContext`, `getSnapshotRaw`, `SnapshotSource`, and `ClientSnapshots` were all deleted in B11.6.
+- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument and no sync `(ctx) => Array` arm. `ExtensionClientContext`, `getSnapshotRaw`, `SnapshotSource`, `ClientSnapshots`, `defineExtensionPackage`, and `ExtensionPackage.tui()` were all deleted in B11.6.
 - Widgets are transport-only: subscribe to `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.ask(extId, GetSnapshot)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,tasks}.client.{ts,tsx}` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and pulse unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
@@ -366,6 +371,15 @@ Extension actors (state machines) are managed by `ExtensionStateRuntime`. Key pa
 - Machine transitions stay explicit: pure state changes in handlers, side effects through declared slots.
 - `AgentLoop` uses effect-machine's `Lifecycle` API: `recovery.resolve` loads checkpoints + runs `makeRecoveryDecision`, `durability.save` persists checkpoints after transitions.
 
+**Actor semantics — `MachineEngine` / `MachineExecute`**:
+
+- `MachineEngine` (`runtime/extensions/resource-host/machine-engine.ts`) — internal service. Owns actor spawn/supervision and exposes the full write surface: `send` (commands), `execute` (request/reply), `publish` (events), `terminateAll`.
+- `MachineExecute` (`runtime/extensions/machine-execute.ts`) — read-only surface for projections and `request`-intent capabilities. Exposes only `execute<M>`; write operations (`send`/`publish`) are structurally absent. The `R` type of every `ProjectionContribution` is fenced to `ReadOnly`-branded tags — `MachineExecute` carries that brand, `MachineEngine` does not. Projection and read-intent capability authors receive `MachineExecute`; resource `start`/`stop` and write-intent capabilities receive `MachineEngine` from the ephemeral layer.
+
+**Compositor `withOverrides`**:
+
+`RuntimeComposer.ephemeral().withOverrides({...})` (`runtime/composer.ts`) accepts named override fields for sub-Tag-aware ephemeral layer construction. Each field maps one override slot (e.g. `provider`, `eventStore`, `storage`) to a concrete Tag + layer. `.own(...)` remains the mechanism for fully-owned per-run services (belt); `.withOverrides(...)` handles targeted service substitutions (suspenders).
+
 ## Testing
 
 Use the smallest honest boundary:
@@ -374,6 +388,8 @@ Use the smallest honest boundary:
 - transport/app services: Effect tests
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
+
+**Banned test primitives**: `Provider.Test` and `EventStore.Test` are deleted. Use `DebugProvider()` (or `createSequenceProvider`) for provider mocking and `EventStore.Memory` for in-memory event stores.
 
 ### Commands
 

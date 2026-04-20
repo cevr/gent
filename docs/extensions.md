@@ -2,15 +2,56 @@
 
 ## Overview
 
-Extensions add tools, agents, prompt sections, pipelines (transformers),
-subscriptions (observers), projections, queries, mutations, resources
-(long-lived state with optional state machines, schedules, subscriptions, and
-lifecycle hooks), and drivers to gent. The single authoring API is
-`defineExtension({ id, contributions })`. Contributions are a flat array of
-typed values built with smart constructors (`toolContribution`,
-`agentContribution`, `pipelineContribution`, `subscriptionContribution`, …).
-gent itself is a library used inside Effect programs — every contribution
-returns `Effect`, no Promise edges.
+Extensions add capabilities to gent: tools for the LLM, typed RPCs between
+extensions, UI actions (slash commands / palette), prompt-shaping pipelines,
+event observers, read-only projections, long-lived resources (with optional
+state machines, schedules, pub/sub), and LLM drivers.
+
+Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
+typed array of values built with small factories. gent is a library used
+inside Effect programs — every contribution returns `Effect`, no Promise edges.
+
+## Quick Start
+
+```ts
+import { defineExtension, tool } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+const GreetTool = tool({
+  id: "greet",
+  description: "Say hello to someone",
+  params: Schema.Struct({
+    name: Schema.String.annotate({ description: "Who to greet" }),
+  }),
+  execute: (params) => Effect.succeed(`Hello, ${params.name}!`),
+})
+
+export default defineExtension({
+  id: "greet-ext",
+  capabilities: [GreetTool],
+})
+```
+
+That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
+
+## Named Concepts
+
+You need at most 10 concepts to write a complete extension:
+
+| #   | Concept           | What it is                                       |
+| --- | ----------------- | ------------------------------------------------ |
+| 1   | `defineExtension` | Extension factory — takes `id` + typed buckets   |
+| 2   | `tool`            | LLM-callable tool (params + execute)             |
+| 3   | `request`         | Extension-to-extension typed RPC (read or write) |
+| 4   | `action`          | Human-triggered UI affordance (slash / palette)  |
+| 5   | `pipeline`        | Transforming middleware at named hooks           |
+| 6   | `subscription`    | Void observer at named events                    |
+| 7   | `defineResource`  | Long-lived state with explicit scope             |
+| 8   | `defineAgent`     | Spawnable subagent                               |
+| 9   | `PermissionRule`  | Allow/deny rule for tool patterns                |
+| 10  | Projection        | Read-only view for prompt sections / tool policy |
+
+All imports come from one path: `@gent/core/extensions/api`.
 
 ## Discovery
 
@@ -26,16 +67,9 @@ Within each directory:
 - Top-level `*.ts`, `*.js`, `*.mjs` files are loaded
 - Subdirectories with `index.ts`/`index.js`/`index.mjs` are loaded
 - Files starting with `.` or `_` are skipped
-- `*.client.{tsx,ts,js,mjs}` and `client.{tsx,ts,js,mjs}` are TUI-only
-  (not loaded server-side)
-
-**Per-file isolation**: One broken file does not suppress siblings. Each
-file is loaded independently; failures are logged as warnings and the
-extension is skipped.
 
 **Scope precedence**: Higher scope wins for same-key contributions. Project
-overrides User overrides Builtin. Same-scope contribution collisions
-degrade the conflicting extension instead of crashing host startup.
+overrides User overrides Builtin.
 
 ## Disabling Extensions
 
@@ -48,107 +82,104 @@ Create `.gent/disabled-extensions.json`:
 Both `~/.gent/disabled-extensions.json` (user-level) and
 `.gent/disabled-extensions.json` (project-level) are merged.
 
-## defineExtension
+## Capabilities
 
-```ts
-import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
+Three typed factories replace the old `audiences[] + intent` flag matrix.
+The `audience` concept is gone from authoring entirely — the factory choice
+determines dispatch routing.
 
-const MyTool = tool({
-  id: "my-tool",
-  description: "...",
-  params: Schema.Struct({}),
-  execute: () => Effect.succeed(null),
-})
-
-export default defineExtension({
-  id: "my-ext",
-  capabilities: [MyTool],
-  resources: ({ ctx }) => [
-    // ctx.cwd — project working directory
-    // ctx.home — user home directory
-    // ctx.fs / ctx.path / ctx.spawner — platform services
-    defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
-  ],
-})
-```
-
-> **B11.9 NOTE**: this doc is mid-rewrite. The Contribution Kinds table
-> below describes the pre-B11.5 `*Contribution(...)` smart-constructor
-> world; the current authoring API is the 3-factory shape — `tool({...})`,
-> `request({ intent: "read" | "write", ... })`, `action({...})`. Full
-> rewrite scheduled for B11.9.
-
-## Contribution Kinds
-
-Every contribution kind has a smart constructor. Order of registration
-within an extension does not matter for any kind except lifecycle effects
-(which compose in declaration order). Scope precedence handles cross-extension
-collisions.
-
-| Kind               | Smart constructor                                                                        | Purpose                                                                                                                                            |
-| ------------------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tool               | `toolContribution(def)`                                                                  | Agent-callable tool                                                                                                                                |
-| Agent              | `agentContribution(def)`                                                                 | Spawnable subagent                                                                                                                                 |
-| Pipeline           | `pipelineContribution(definePipeline(hook, handler))`                                    | Transforming middleware with `next` (`prompt.system`, `tool.execute`, `permission.check`, `context.messages`, `tool.result`, `message.input`)      |
-| Subscription       | `subscriptionContribution(defineSubscription(event, failureMode, handler))`              | Void observer (`turn.before`, `turn.after`, `message.output`); `failureMode` is `continue` / `isolate` / `halt`                                    |
-| Projection         | `projectionContribution(p)`                                                              | Read-only view (prompt section / tool policy)                                                                                                      |
-| Query              | `queryContribution(q)`                                                                   | Typed read-only RPC                                                                                                                                |
-| Mutation           | `mutationContribution(m)`                                                                | Typed write RPC                                                                                                                                    |
-| Resource           | `defineResource({ scope, layer, machine?, schedule?, subscriptions?, start?, stop? })`   | Long-lived state with explicit scope. `machine` carries the `effect-machine` state machine when the extension owns one.                            |
-| Lifecycle Resource | `defineLifecycleResource({ scope, machine?, schedule?, subscriptions?, start?, stop? })` | Same as `defineResource` for the no-service case (Resource carries lifecycle / schedule / subscriptions / machine without exposing a service tag). |
-| Permission rule    | `permissionRuleContribution(r)`                                                          | Allow/deny rule for tool patterns                                                                                                                  |
-| Prompt section     | `promptSectionContribution(s)`                                                           | Static or dynamic system prompt fragment                                                                                                           |
-| Command            | `commandContribution(c)`                                                                 | Slash command                                                                                                                                      |
-| Model driver       | `modelDriverContribution(d)`                                                             | LLM provider                                                                                                                                       |
-| External driver    | `externalDriverContribution(d)`                                                          | Out-of-process turn executor (e.g. ACP)                                                                                                            |
-
-### Tool
+### tool — LLM-callable
 
 ```ts
 import { defineExtension, tool } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
-const GreetTool = tool({
-  id: "greet",
-  description: "Say hello",
-  params: Schema.Struct({
-    name: Schema.String.annotate({ description: "Who to greet" }),
-    count: Schema.optional(Schema.Number),
-  }),
-  execute: (params) => Effect.succeed(`Hello, ${params.name}!`),
+const EchoTool = tool({
+  id: "echo",
+  description: "Echo back the input",
+  params: Schema.Struct({ text: Schema.String }),
+  execute: (params) => Effect.succeed(params.text),
 })
 
 export default defineExtension({
-  id: "greet-ext",
-  capabilities: [GreetTool],
+  id: "echo-ext",
+  capabilities: [EchoTool],
 })
 ```
 
-### Agent
+`tool` fields:
+
+- `id` — stable name (the LLM sees this as the tool name)
+- `description` — sent to the LLM as the tool description
+- `params` — `Schema.Schema` (must be context-free for sync JSON decode)
+- `execute(params, ctx)` — returns `Effect`
+- Optional: `idempotent`, `interactive`, `permissionRules`, `prompt`,
+  `promptSnippet`, `promptGuidelines`, `resources`
+
+### request — extension-to-extension RPC
 
 ```ts
-import { defineAgent, ModelId } from "@gent/core/extensions/api"
+import { defineExtension, request } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
 
-const helper = defineAgent({
-  name: "helper",
-  description: "Helper for specific tasks",
-  model: ModelId.of("anthropic/claude-opus-4-6"),
-  allowedTools: ["read", "write"],
+const GetStatus = request({
+  id: "get-status",
+  intent: "read",
+  input: Schema.Struct({ key: Schema.String }),
+  output: Schema.String,
+  execute: (input) => Effect.succeed(`status for ${input.key}`),
+})
+
+const SetStatus = request({
+  id: "set-status",
+  intent: "write",
+  input: Schema.Struct({ key: Schema.String, value: Schema.String }),
+  output: Schema.Void,
+  execute: (input) => Effect.succeed(void 0),
 })
 
 export default defineExtension({
-  id: "helper-ext",
-  contributions: () => [agentContribution(helper)],
+  id: "status-ext",
+  capabilities: [GetStatus, SetStatus],
 })
 ```
 
-### Pipeline (transforming middleware)
+`intent: "read"` capabilities have a **ReadOnly-branded R channel** — the
+handler can only yield read-only services (`MachineExecute`,
+`TaskStorageReadOnly`, etc.). Write-tagged services fail to compile.
 
-Six hooks. Handler shape: `(input, next, ctx) => Effect<output>`. `next`
-actually does work — call it to invoke the inner chain, transform its output,
-or skip it entirely to short-circuit.
+### action — human-triggered UI affordance
 
-| Key                | Output shape             | Purpose                        |
+```ts
+import { defineExtension, action } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+const DeployAction = action({
+  id: "deploy",
+  name: "/deploy",
+  description: "Deploy the current branch",
+  surface: "slash", // "slash" | "palette" | "both"
+  input: Schema.Struct({}),
+  output: Schema.Void,
+  execute: (_input, ctx) =>
+    Effect.gen(function* () {
+      yield* ctx.extension.send(ctx.extensionId, deployCommand)
+    }),
+})
+
+export default defineExtension({
+  id: "deploy-ext",
+  capabilities: [DeployAction],
+})
+```
+
+## Pipeline (transforming middleware)
+
+Six hooks. Handler shape: `(input, next) => Effect<output>`. Call `next` to
+invoke the inner chain, transform its output, or skip it entirely to
+short-circuit.
+
+| Hook               | Output type              | Purpose                        |
 | ------------------ | ------------------------ | ------------------------------ |
 | `prompt.system`    | `string`                 | Modify the system prompt       |
 | `tool.execute`     | `unknown`                | Intercept tool execution       |
@@ -158,28 +189,27 @@ or skip it entirely to short-circuit.
 | `message.input`    | `string`                 | Transform user input on send   |
 
 ```ts
-import { definePipeline, pipelineContribution } from "@gent/core/extensions/api"
+import { defineExtension, pipeline } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
   id: "prompt-rules",
-  contributions: () => [
-    pipelineContribution(
-      definePipeline("prompt.system", (input, next) =>
-        next(input).pipe(Effect.map((s) => s + "\n## House rule\n…")),
-      ),
+  pipelines: [
+    pipeline("prompt.system", (input, next) =>
+      next(input).pipe(Effect.map((s) => s + "\n## House rule\nAlways write tests.")),
     ),
   ],
 })
 ```
 
-### Subscription (void observer)
+Composition order: builtin (innermost) -> user -> project (outermost).
 
-Three hooks. Handler shape: `(event, ctx) => Effect<void>`. No `next` —
-subscriptions don't transform; they fan out. Each subscription declares a
-`failureMode`:
+## Subscription (void observer)
 
-| Mode       | Behavior on handler failure                                |
+Three events. Handler shape: `(event) => Effect<void>`. No `next` —
+subscriptions don't transform; they fan out. Each declares a failure mode:
+
+| Mode       | On failure                                                 |
 | ---------- | ---------------------------------------------------------- |
 | `continue` | Log debug, skip; remaining subscriptions still fire        |
 | `isolate`  | Log warning with extension id, skip; remaining still fire  |
@@ -192,159 +222,53 @@ subscriptions don't transform; they fan out. Each subscription declares a
 | `message.output` | Observe assistant output |
 
 ```ts
-import { defineSubscription, subscriptionContribution } from "@gent/core/extensions/api"
+import { defineExtension, subscription } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
 export default defineExtension({
   id: "turn-logger",
-  contributions: () => [
-    subscriptionContribution(
-      defineSubscription("turn.after", "isolate", (event) =>
-        Effect.logInfo(`Turn completed in ${event.durationMs}ms`),
-      ),
+  subscriptions: [
+    subscription("turn.after", "isolate", (event) =>
+      Effect.logInfo(`Turn completed in ${event.durationMs}ms`),
     ),
   ],
 })
 ```
 
-### Prompt section
+## Resource (long-lived state)
 
-Static or dynamic. Dynamic sections may require services from the same
-extension's Resource(s).
+A Resource declares its scope (lifetime) and carries an optional service
+Layer, state machine, schedule, pub/sub subscriptions, and lifecycle hooks.
 
-```ts
-contributions: ({ ctx }) => [
-  defineResource({ tag: MyService, scope: "process", layer: MyService.Live }),
-  promptSectionContribution({
-    id: "rules",
-    content: "Be nice.",
-    priority: 50,
-  }),
-  promptSectionContribution({
-    id: "live",
-    priority: 80,
-    resolve: Effect.gen(function* () {
-      const svc = yield* MyService
-      return yield* svc.renderPromptSection()
-    }),
-  }),
-]
-```
-
-### Permission rule
+| Scope     | Lifetime                |
+| --------- | ----------------------- |
+| `process` | Server lifetime         |
+| `cwd`     | Per working directory   |
+| `session` | Per session (ephemeral) |
+| `branch`  | Per branch (ephemeral)  |
 
 ```ts
-import { PermissionRule } from "@gent/core/extensions/api"
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import { Context, Layer, Effect } from "effect"
 
-contributions: () => [
-  permissionRuleContribution(
-    new PermissionRule({
-      tool: "bash",
-      pattern: "rm\\s+-rf\\s+/",
-      action: "deny",
-    }),
-  ),
-]
-```
+class MyService extends Context.Tag("MyService")<
+  MyService,
+  { readonly getData: () => Effect.Effect<string> }
+>() {
+  static Live = Layer.succeed(MyService, {
+    getData: () => Effect.succeed("data"),
+  })
+}
 
-### Resource
-
-A long-lived service Layer with explicit scope. Multiple Resources from
-one extension merge into one composition root.
-
-```ts
-contributions: ({ ctx }) => [
-  defineResource({ tag: MyStorage, scope: "process", layer: MyStorage.Live }),
-  defineResource({ tag: MyCache, scope: "process", layer: MyCache.Live }),
-]
-```
-
-### Command
-
-Slash commands available in the TUI / programmatic clients. Handler
-returns Effect.
-
-```ts
-contributions: () => [
-  commandContribution({
-    name: "deploy",
-    description: "Deploy the current branch",
-    handler: (args, ctx) =>
-      Effect.gen(function* () {
-        yield* Effect.logInfo(`Deploying ${args}…`)
-      }),
-  }),
-]
-```
-
-### Schedule
-
-Cron-scheduled host effects live on a Resource as part of `schedule`.
-
-```ts
-contributions: () => [
-  defineLifecycleResource({
-    scope: "process",
-    schedule: [
-      {
-        id: "reflect",
-        cron: "0 21 * * 1-5",
-        target: {
-          kind: "headless-agent",
-          agent: "memory:reflect",
-          prompt: "Reflect on recent sessions.",
-        },
-      },
-    ],
-  }),
-]
-```
-
-### Pub/sub subscription
-
-Pattern-matched event subscriptions live on a Resource. Handler returns
-Effect. Patterns: exact match (`"ext:foo"`) or `"<prefix>:*"` wildcard
-(`"agent:*"` matches all `"agent:<EventTag>"` channels).
-
-```ts
-contributions: () => [
-  defineLifecycleResource({
-    scope: "process",
-    subscriptions: [
-      {
-        pattern: "agent:*",
-        handler: (envelope) => Effect.logInfo(`pub/sub event ${envelope.channel}`),
-      },
-    ],
-  }),
-]
-```
-
-### Lifecycle
-
-Resource lifecycle hooks. `start` runs at install time; `stop` runs at
-scope teardown via Effect's per-scope LIFO finalizer ordering. Failures
-in `start` log and degrade the Resource (other Resources keep running);
-`stop` may not fail (Effect finalizer contract).
-
-```ts
-contributions: ({ ctx }) => [
-  defineLifecycleResource({
-    scope: "process",
-    start: Effect.logInfo(`init for cwd=${ctx.cwd}`),
-    stop: Effect.logInfo("shutdown"),
-  }),
-]
+export default defineExtension({
+  id: "my-service-ext",
+  resources: [defineResource({ tag: MyService, scope: "process", layer: MyService.Live })],
+})
 ```
 
 ### Resource.machine
 
-Stateful extensions attach a state machine to a Resource via the
-`machine` field. The machine is an `effect-machine` `Machine` whose
-transitions can declare effects (`QueueFollowUp`, `Interject`,
-`BusEmit`, etc.) for the host runtime to dispatch. See
-`packages/extensions/src/auto.ts` for a complete example. When the
-extension owns a service Layer, declare both on one Resource:
+Attach an `effect-machine` state machine to a Resource:
 
 ```ts
 defineResource({
@@ -355,43 +279,72 @@ defineResource({
 })
 ```
 
-When the extension has no service Layer, use `defineLifecycleResource`:
+One machine per extension. Only `scope: "process"` machines are accepted today.
+
+## Agent
 
 ```ts
-defineLifecycleResource({
-  scope: "process",
-  machine: myMachine,
+import { defineExtension, defineAgent, ModelId } from "@gent/core/extensions/api"
+
+const helper = defineAgent({
+  name: "helper",
+  description: "Helper for specific tasks",
+  model: ModelId.of("anthropic/claude-sonnet-4-6"),
+  allowedTools: ["read", "write"],
+})
+
+export default defineExtension({
+  id: "helper-ext",
+  agents: [helper],
 })
 ```
 
-Validation: an extension may declare at most one Resource with `machine`
-(otherwise the runtime would silently pick the first by array order).
-Today only `scope: "process"` machines are accepted; session/branch-scope
-machines are rejected at setup time until the per-cwd / ephemeral
-composers wire Resource layers (C3 successor work).
+## Stateful Extension (cross-bucket shared state)
 
-### Driver / Projection / Query / Mutation
+Hoist state to module scope so multiple buckets see the same counter:
 
-These primitives are documented inline at their domain-module sources:
+```ts
+import { defineExtension, pipeline, subscription } from "@gent/core/extensions/api"
+import { Effect } from "effect"
 
-- `packages/core/src/domain/driver.ts`
-- `packages/core/src/domain/projection.ts`
-- `packages/core/src/domain/query.ts`
-- `packages/core/src/domain/mutation.ts`
+let turns = 0
 
-Each has at least one in-tree example: providers (`packages/extensions/src/anthropic`,
-`openai`, `google`, `mistral`, `bedrock`); ACP external drivers
-(`packages/extensions/src/acp-agents`); task projection / queries / mutations
-(`packages/extensions/src/task-tools`); memory vault projection
-(`packages/extensions/src/memory`).
+export default defineExtension({
+  id: "turn-counter",
+  subscriptions: [
+    subscription("turn.after", "continue", () => {
+      turns++
+      return Effect.void
+    }),
+  ],
+  pipelines: [
+    pipeline("prompt.system", (input, next) =>
+      next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns + 1}.` }),
+    ),
+  ],
+})
+```
 
 ## Validation
 
 The framework validates all loaded extensions before creating the registry:
 
-- **Duplicate IDs** in same scope → conflicting extension degrades
-- **Same-name tools/agents/drivers/prompt-sections** in same scope →
-  conflicting extension degrades
+- **At most one** Resource with `machine` per extension
+- **Duplicate IDs** in same scope degrade the conflicting extension
+- **Capability `audiences`** must be non-empty (enforced by factories)
+- **Model-audience tools** require a non-empty `description`
+- Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides
 builtin).
+
+## In-tree Examples
+
+| Extension                               | Demonstrates                                    |
+| --------------------------------------- | ----------------------------------------------- |
+| `packages/extensions/src/session-tools` | `tool` + `pipeline` composition                 |
+| `packages/extensions/src/task-tools`    | `tool` + `request` + `defineResource` + machine |
+| `packages/extensions/src/memory`        | `tool` + projection + `defineResource`          |
+| `packages/extensions/src/auto.ts`       | `defineResource` with `machine` + projection    |
+| `examples/extensions/prompt-rules.ts`   | Minimal `pipeline` example                      |
+| `examples/extensions/turn-counter.ts`   | Cross-bucket shared state                       |
