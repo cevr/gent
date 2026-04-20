@@ -18,7 +18,7 @@ import {
 } from "@gent/core/extensions/api"
 import type { AcpProtocolAgentConfig } from "./config.js"
 import type { AcpConnection } from "./protocol.js"
-import { AcpError } from "./protocol.js"
+import { AcpClosedError, AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 import { makeAcpRunTool } from "./executor-boundary.js"
@@ -58,7 +58,7 @@ export interface AcpSessionManager {
     cwd: string,
     systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
-  ) => Effect.Effect<AcpManagedSession, AcpError>
+  ) => Effect.Effect<AcpManagedSession, AcpError | AcpClosedError>
   readonly invalidate: (key: ExternalSessionKey) => Effect.Effect<void>
   readonly invalidateDriver: (driverId: string) => Effect.Effect<void>
   readonly disposeAll: () => Effect.Effect<void>
@@ -171,7 +171,13 @@ export const makeAcpTurnExecutor = (
       }
       const session = yield* manager
         .getOrCreate(key, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
-        .pipe(Effect.mapError((e) => new TurnError({ message: e.message })))
+        .pipe(
+          Effect.mapError((e) =>
+            e instanceof AcpClosedError
+              ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
+              : new TurnError({ message: e.message }),
+          ),
+        )
 
       // Signal for when the prompt completes
       const promptDone = yield* Deferred.make<string, TurnError>()
@@ -198,7 +204,10 @@ export const makeAcpTurnExecutor = (
         : lastUser
 
       // Fork the prompt call — runs concurrently with the update stream.
-      // On failure, fail the deferred so the stream doesn't hang.
+      // On failure, fail the deferred so the stream doesn't hang. An
+      // `AcpClosedError` here means the driver was invalidated mid-turn
+      // (manager `tearDown`); surface it as a clearly-labelled TurnError
+      // so the agent loop reports cleanly instead of an interrupt.
       yield* session.conn
         .prompt({
           sessionId: session.acpSessionId,
@@ -209,7 +218,9 @@ export const makeAcpTurnExecutor = (
           Effect.catchEager((e) =>
             Deferred.fail(
               promptDone,
-              new TurnError({ message: e instanceof AcpError ? e.message : String(e) }),
+              e instanceof AcpClosedError
+                ? new TurnError({ message: `driver invalidated: ${e.reason}`, cause: e })
+                : new TurnError({ message: e instanceof AcpError ? e.message : String(e) }),
             ),
           ),
           Effect.forkScoped,

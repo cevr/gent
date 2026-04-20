@@ -16,7 +16,12 @@
  */
 import { Effect, Exit, Scope } from "effect"
 import type { AcpProtocolAgentConfig } from "./config.js"
-import { makeAcpConnection, type AcpConnection, type AcpError } from "./protocol.js"
+import {
+  makeAcpConnection,
+  type AcpClosedError,
+  type AcpConnection,
+  type AcpError,
+} from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager, ExternalSessionKey } from "./executor.js"
 import { startCodemodeServer, type CodemodeServer, type CodemodeConfig } from "./mcp-codemode.js"
 
@@ -72,7 +77,7 @@ export const createAcpSessionManager = (): AcpSessionManager => {
 
   const tearDown = (k: string, entry: AcpProcess): Effect.Effect<void> =>
     Effect.gen(function* () {
-      yield* entry.conn.close.pipe(Effect.ignore)
+      yield* entry.conn.close("driver invalidated").pipe(Effect.ignore)
       yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
       entry.proc.kill()
       entry.codemode?.stop()
@@ -85,7 +90,7 @@ export const createAcpSessionManager = (): AcpSessionManager => {
     cwd: string,
     systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
-  ): Effect.Effect<AcpManagedSession, AcpError> =>
+  ): Effect.Effect<AcpManagedSession, AcpError | AcpClosedError> =>
     Effect.gen(function* () {
       const k = cacheKey(key)
       const fingerprint = fingerprintSession(config, cwd, systemPrompt, codemodeConfig)

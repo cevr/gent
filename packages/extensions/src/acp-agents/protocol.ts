@@ -25,22 +25,40 @@ export class AcpError extends Schema.TaggedErrorClass<AcpError>()("AcpError", {
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
+/**
+ * Raised on every pending RPC `Deferred` when `AcpConnection.close`
+ * runs. Without it, mid-turn invalidation (driver swap, manager
+ * `tearDown`) would leak the executor's `Stream.interruptWhen(promptDone)`
+ * forever — `promptDone` only resolves from the `prompt` RPC, and the
+ * RPC's pending Deferred would never be signalled. Callers identify a
+ * driver-invalidation hang vs. a transport error via this tag.
+ */
+export class AcpClosedError extends Schema.TaggedErrorClass<AcpClosedError>()("AcpClosedError", {
+  reason: Schema.String,
+}) {}
+
 // ── Connection Interface ──
 
 export interface AcpConnection {
-  readonly initialize: (params: InitializeRequest) => Effect.Effect<InitializeResponse, AcpError>
-  readonly newSession: (params: NewSessionRequest) => Effect.Effect<NewSessionResponse, AcpError>
-  readonly prompt: (params: PromptRequest) => Effect.Effect<PromptResponse, AcpError>
+  readonly initialize: (
+    params: InitializeRequest,
+  ) => Effect.Effect<InitializeResponse, AcpError | AcpClosedError>
+  readonly newSession: (
+    params: NewSessionRequest,
+  ) => Effect.Effect<NewSessionResponse, AcpError | AcpClosedError>
+  readonly prompt: (
+    params: PromptRequest,
+  ) => Effect.Effect<PromptResponse, AcpError | AcpClosedError>
   readonly cancel: (sessionId: string) => Effect.Effect<void>
   readonly updates: Stream.Stream<SessionNotification, AcpError>
-  readonly close: Effect.Effect<void>
+  readonly close: (reason?: string) => Effect.Effect<void>
 }
 
 // ── Internal types ──
 
 type RequestId = number
 type PendingRequest = {
-  readonly resolve: Deferred.Deferred<unknown, AcpError>
+  readonly resolve: Deferred.Deferred<unknown, AcpError | AcpClosedError>
 }
 
 type IncomingRequestHandler = (method: string, params: unknown) => Effect.Effect<unknown, AcpError>
@@ -214,11 +232,17 @@ export const makeAcpConnection = (
       Effect.forkScoped,
     )
 
-    // RPC helper — sends request, waits for response
+    // RPC helper — sends request, waits for response.
+    // Refuses new requests after `close` so a late caller doesn't park
+    // forever on a Deferred that the close-walker already drained.
     const rpcRaw = (method: string, params: unknown) =>
       Effect.gen(function* () {
+        const closed = yield* Ref.get(closedRef)
+        if (closed) {
+          return yield* Effect.fail(new AcpClosedError({ reason: "connection closed" }))
+        }
         const id = yield* Ref.getAndUpdate(nextIdRef, (n) => (n + 1) as RequestId)
-        const deferred = yield* Deferred.make<unknown, AcpError>()
+        const deferred = yield* Deferred.make<unknown, AcpError | AcpClosedError>()
         yield* Ref.update(pendingRef, HashMap.set(id, { resolve: deferred } as PendingRequest))
         yield* write(encodeRequest(id, method, params))
         return yield* Deferred.await(deferred)
@@ -239,11 +263,26 @@ export const makeAcpConnection = (
         ),
       cancel: (sessionId) => write(encodeNotification("session/cancel", { sessionId })),
       updates: Stream.fromPubSub(updatesPubSub),
-      close: Effect.gen(function* () {
-        yield* Ref.set(closedRef, true)
-        yield* Fiber.interrupt(writerFiber)
-        yield* Fiber.interrupt(readerFiber)
-      }),
+      // Order matters: flip closedRef → atomically claim pending map →
+      // fail each Deferred with AcpClosedError → shut down updatesPubSub
+      // → interrupt I/O fibers. Failing the Deferreds *before* killing
+      // the reader makes invalidation surface as a typed error in the
+      // executor, not an interrupt.
+      close: (reason = "connection closed") =>
+        Effect.gen(function* () {
+          const wasClosed = yield* Ref.getAndSet(closedRef, true)
+          if (wasClosed) return
+          const drained = yield* Ref.getAndSet(
+            pendingRef,
+            HashMap.empty<RequestId, PendingRequest>(),
+          )
+          for (const [, entry] of drained) {
+            yield* Deferred.fail(entry.resolve, new AcpClosedError({ reason }))
+          }
+          yield* PubSub.shutdown(updatesPubSub)
+          yield* Fiber.interrupt(writerFiber)
+          yield* Fiber.interrupt(readerFiber)
+        }),
     }
 
     return connection
