@@ -178,6 +178,13 @@ const stripExistingBillingBlocks = (
  * else (the movable third-party content). Used by the relocator to
  * decide what to pull into the first user message before billing is
  * computed.
+ *
+ * Counsel C8 deep — a single block carrying `IDENTITY + "\n\n<rest>"`
+ * (the shape OpenCode's `system.transform` hook produces) used to
+ * classify as identity-only and silently drop `<rest>`. Now we split
+ * the block at the identity boundary: identity goes to identityBlocks,
+ * the trailing remainder rides along as third-party so the relocator
+ * pulls it into the first user message.
  */
 const partitionSystemBlocks = (
   callerSystem: unknown,
@@ -191,7 +198,17 @@ const partitionSystemBlocks = (
   for (const block of blocks) {
     const text = block["text"]
     if (typeof text === "string" && text.startsWith(SYSTEM_IDENTITY_PREFIX)) {
-      identityBlocks.push(block)
+      const rest = text.slice(SYSTEM_IDENTITY_PREFIX.length).replace(/^\n+/, "")
+      const { text: _t, cache_control: _cc, ...rest_props } = block
+      // Identity itself rides without cache_control (validator rejects
+      // a marked identity block — counts toward the 4-block limit).
+      identityBlocks.push({ ...rest_props, text: SYSTEM_IDENTITY_PREFIX })
+      if (rest.length > 0) {
+        // Remainder picks back up the original block's `cache_control`
+        // and other props so users can still mark long instructions
+        // for prompt caching.
+        thirdPartyBlocks.push({ ...block, text: rest })
+      }
     } else {
       thirdPartyBlocks.push(block)
     }

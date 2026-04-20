@@ -176,6 +176,31 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).not.toContain("@section:tool-list")
   })
 
+  test("strips every duplicate marker-wrapped section (counsel C8 deep)", async () => {
+    // Pre-fix the strip used a single non-global replace per id, so
+    // duplicate marker-wrapped sections left one behind.
+    const compiled = [
+      "ID-SECTION",
+      withSectionMarkers("tool-list", "## Available Tools\n\n- echo (a)"),
+      withSectionMarkers("tool-list", "## Available Tools\n\n- echo (b)"),
+      "EXTRA-SECTION",
+    ].join("\n\n")
+    const result = await runHandler({
+      basePrompt: compiled,
+      agent: new AgentDefinition({
+        ...baseAgent,
+        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+      }),
+      driverSource: "config",
+      driverToolSurface: "codemode",
+      tools: [fakeTool],
+    })
+    expect(result).not.toContain("- echo (a)")
+    expect(result).not.toContain("- echo (b)")
+    expect(result).not.toContain("@section:tool-list")
+    expect(result).toContain("External Tool Surface (codemode)")
+  })
+
   test("leaves prompt untouched when native sections lack markers", async () => {
     // If the section was authored without sentinels (e.g. an extension
     // produced a tool-list section directly), the codemode hook can't

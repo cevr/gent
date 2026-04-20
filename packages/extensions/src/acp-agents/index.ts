@@ -122,8 +122,13 @@ const stripNativeToolSections = (compiled: string): { stripped: string; anyStrip
   let out = compiled
   let anyStripped = false
   for (const id of NATIVE_TOOL_SECTION_IDS) {
+    // Counsel C8 deep — duplicate marker-wrapped sections (rare, but
+    // possible when an upstream pipeline duplicates the tool list)
+    // used to leave one behind because we ran a single non-global
+    // replace per id. Loop until no match so every wrapped section
+    // peels off, then collapse the blank lines.
     const pattern = sectionPatternFor(id)
-    if (pattern.test(out)) {
+    while (pattern.test(out)) {
       out = out.replace(pattern, "")
       anyStripped = true
     }
@@ -163,22 +168,26 @@ export const AcpAgentsExtension = defineExtension({
         const tools = input.tools ?? []
         if (tools.length === 0) return base
         const codemode = codemodeInstructions(generateToolDescription(tools))
-        const { stripped, anyStripped } = stripNativeToolSections(base)
-        // Counsel C6 — warn (don't fail) when the prompt still looks
-        // like it has a native tool surface but no markers were stripped.
-        // Hand-rolled extensions that emit a tool-list without
-        // `withSectionMarkers` would otherwise silently end up with two
-        // contradictory tool surfaces. Failing loudly would break those
-        // extensions on first turn; logging keeps the defect visible
-        // without regressing compatibility.
-        if (!anyStripped && looksLikeNativeToolSurface(stripped)) {
+        const { stripped } = stripNativeToolSections(base)
+        // Counsel C6 + C8 deep — warn whenever the post-strip prompt
+        // still looks like a native tool surface. Covers two cases:
+        //   (a) hand-rolled extension emitted a tool section without
+        //       wrapping it in `withSectionMarkers` (no markers found);
+        //   (b) only some marker-wrapped sections were found, but raw
+        //       `## Available Tools` / `## Tool Guidelines` text from
+        //       another source still leaks through.
+        // Either way the model sees two contradictory tool surfaces.
+        // Failing loudly would break (a) on first turn; logging keeps
+        // the defect visible without regressing compatibility.
+        if (looksLikeNativeToolSurface(stripped)) {
           yield* Effect.logWarning(
-            "acp.codemode.native-tool-surface-without-markers — " +
-              "prompt contains '## Available Tools' / '## Tool Guidelines' " +
-              "but no @section:tool-list / @section:tool-guidelines markers " +
-              "were found. The model will see contradictory tool surfaces. " +
-              "Wrap section content with `withSectionMarkers(id, content)` " +
-              "from `@gent/core/extensions/api`.",
+            "acp.codemode.native-tool-surface-leak — " +
+              "prompt still contains '## Available Tools' / '## Tool Guidelines' " +
+              "after marker stripping. The model will see contradictory tool " +
+              "surfaces (codemode block + native section). Wrap native tool " +
+              "section content with `withSectionMarkers(id, content)` from " +
+              "`@gent/core/extensions/api`, or remove the upstream native " +
+              "section entirely.",
           )
         }
         return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`

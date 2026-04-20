@@ -392,6 +392,29 @@ describe("transformPayload — system content relocation", () => {
     expect(messages[0]!.content).toHaveLength(1)
   })
 
+  test("splits IDENTITY+rest blocks so the rest gets relocated (counsel C8 deep — HIGH)", () => {
+    // OpenCode's system.transform hook produces a single block of
+    // shape `IDENTITY + "\n\n<real instructions>"`. Pre-fix, the
+    // partition treated the whole block as identity-only and silently
+    // dropped <real instructions>. The remainder must survive into
+    // the first user message via relocation.
+    const payload = {
+      model: "claude-opus-4-6",
+      max_tokens: 4096,
+      system: [{ type: "text", text: `${SYSTEM_IDENTITY_PREFIX}\n\nDO-NOT-DROP these rules.` }],
+      messages: [{ role: "user", content: "hello" }],
+    }
+    const result = transformPayload(payload)
+    const system = result["system"] as Array<{ text?: string }>
+    // System still holds [billing, identity] — identity is the bare
+    // prefix without the trailing rules.
+    expect(system[1]!.text).toBe(SYSTEM_IDENTITY_PREFIX)
+    // The rules survived: relocated into the first user message.
+    const messages = result["messages"] as Array<{ content: string }>
+    expect(messages[0]!.content).toContain("DO-NOT-DROP these rules.")
+    expect(messages[0]!.content.endsWith("hello")).toBe(true)
+  })
+
   test("billing hash matches the post-relocation first-user text (counsel C7 regression)", () => {
     // Counsel C7 follow-up: the prior order computed billing before
     // relocation, so the hash on the wire didn't match what the API

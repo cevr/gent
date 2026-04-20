@@ -1,6 +1,7 @@
 import { Effect, Schedule, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as os from "node:os"
+import * as fsPromises from "node:fs/promises"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { runAnthropicFetcher } from "./fetch-boundary.js"
 
@@ -387,6 +388,10 @@ export const writeBackCredentials = (
           const updated = updateCredentialBlob(raw, creds)
           if (updated === undefined) return
           await Bun.write(CREDENTIALS_FILE, updated)
+          // Counsel C8 deep — chmod 0600 after write so the credentials
+          // file isn't world-readable on first creation. Matches the
+          // opencode reference's keychain.ts:297 behavior.
+          await fsPromises.chmod(CREDENTIALS_FILE, 0o600)
         },
         catch: (e) =>
           new ProviderAuthError({
@@ -397,10 +402,25 @@ export const writeBackCredentials = (
       return
     }
 
+    // Counsel C8 deep — surface the read failure as a typed error
+    // instead of swallowing it into "" and silently returning success.
+    // The previous shape bypassed the warn-on-failure path at the
+    // refresh call site, so a keychain read fault during write-back
+    // looked indistinguishable from a successful update.
+    //
+    // ClaudeKeychainNotFoundError is mapped to a ProviderAuthError so
+    // the public signature stays narrow — write-back callers use a
+    // best-effort `catchEager` that doesn't need to know about the
+    // internal not-found tag.
     const raw = yield* spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
-      Effect.catchEager(() => Effect.succeed("")),
+      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Cannot write back: no keychain entry for source: ${source}`,
+          }),
+        ),
+      ),
     )
-    if (raw === "") return
     const updated = updateCredentialBlob(raw, creds)
     if (updated === undefined) return
     const accountName = (yield* getKeychainAccountName(source)) ?? source
@@ -649,9 +669,28 @@ export const isLongContextError = (responseBody: string): boolean =>
   responseBody.includes("Extra usage is required for long context requests") ||
   responseBody.includes("long context beta is not yet available")
 
+/**
+ * Long-context backoff candidates — only the long-context betas that
+ * actually appear in this model's effective header. Counsel C8 deep
+ * surfaced two related defects in the prior shape:
+ *   1. We walked `LONG_CONTEXT_BETAS` directly, ignoring per-model
+ *      overrides — so a haiku request (which excludes
+ *      `interleaved-thinking-2025-05-14` via the override) would still
+ *      "exclude" it on backoff, burning a retry on a beta that wasn't
+ *      sent.
+ *   2. The retry budget at the call site was `length - 1`, so the
+ *      second exclusion attempt never went on the wire.
+ * Both are fixed by deriving candidates from the model's actual
+ * outgoing betas and giving each one a retry slot.
+ */
+export const getLongContextBetasFor = (modelId: string): ReadonlyArray<string> => {
+  const modelBetas = new Set(deriveModelBetas(modelId, _env.betaFlags))
+  return LONG_CONTEXT_BETAS.filter((beta) => modelBetas.has(beta))
+}
+
 export const getNextBetaToExclude = (modelId: string): string | null => {
   const excluded = getExcludedBetas(modelId)
-  for (const beta of LONG_CONTEXT_BETAS) {
+  for (const beta of getLongContextBetasFor(modelId)) {
     if (!excluded.has(beta)) return beta
   }
   return null
@@ -812,8 +851,14 @@ const fetchWithBetaRetry = (
       }),
     )
 
+  // Counsel C8 deep — retry budget = one slot per long-context candidate
+  // that actually rides on this model's header. Prior shape used the
+  // module-wide LONG_CONTEXT_BETAS.length - 1 which (a) under-counted by
+  // one (the second exclusion never reached the wire) and (b) didn't
+  // account for per-model overrides removing candidates entirely.
+  const candidates = getLongContextBetasFor(modelId)
   return attempt().pipe(
-    Effect.retry({ times: LONG_CONTEXT_BETAS.length - 1 }),
+    Effect.retry({ times: candidates.length }),
     Effect.catchEager((e) => Effect.succeed(e.response)),
   )
 }
