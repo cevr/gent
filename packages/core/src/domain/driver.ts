@@ -247,10 +247,16 @@ export interface TurnContext {
   readonly hostCtx: ExtensionHostContext
 }
 
-/** Executor interface implemented by external drivers (ACP agents, etc.). */
+/** Executor interface implemented by external drivers (ACP agents, etc.).
+ *
+ *  Cancellation is per-turn via `ctx.abortSignal` inside `executeTurn` — each
+ *  driver wires the signal to its own cancel mechanism (ACP `conn.cancel`,
+ *  SDK `q.interrupt`). A driver-wide `cancel(sessionId)` hook would only see
+ *  the outer session string, not the full `(sessionId, branchId, driverId)`
+ *  cache key, so it cannot target a specific cached session correctly.
+ *  Counsel C5 — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
   readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
-  readonly cancel?: (sessionId: string) => Effect.Effect<void>
 }
 
 // ── ExternalDriverContribution — turn-executor-shaped driver ──

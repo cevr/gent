@@ -413,9 +413,6 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
     )
     return Stream.unwrap(runTurn)
   },
-  // The agent loop already wires `ctx.abortSignal`; the executor's
-  // `cancel` per-driver hook is unused for the SDK path.
-  cancel: () => Effect.void,
 })
 
 // ── Helpers ──

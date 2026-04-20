@@ -257,11 +257,4 @@ export const makeAcpTurnExecutor = (
 
     return Stream.unwrap(runTurn)
   },
-
-  // The agent loop already wires `ctx.abortSignal` inside `executeTurn`
-  // to call `conn.cancel(acpSessionId)`. The per-driver `cancel` hook
-  // can't do better because it only receives a `sessionId` string —
-  // not the full `(sessionId, branchId, driverId)` cache key — so it
-  // would mis-target rebuilt sessions on a different branch / driver.
-  cancel: () => Effect.void,
 })
