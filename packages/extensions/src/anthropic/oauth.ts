@@ -124,7 +124,281 @@ export const readClaudeCodeCredentials = (): Effect.Effect<
   )
 }
 
+// ── Multi-account discovery (counsel keychain alignment K2) ──
+
+/**
+ * Enumerate every `Claude Code-credentials*` keychain entry — the CLI
+ * stores per-account credentials with the suffix `-<random hex>`. Used
+ * to surface multiple Claude accounts in the auth picker. Returns the
+ * primary first, then the rest in keychain dump order.
+ *
+ * On non-darwin (no keychain), or when `dump-keychain` itself fails,
+ * returns just the primary so callers fall back to the existing
+ * single-credential path.
+ */
+export const listClaudeCodeKeychainServices = (): Effect.Effect<
+  ReadonlyArray<string>,
+  ProviderAuthError
+> =>
+  Effect.tryPromise({
+    try: async () => {
+      if (process.platform !== "darwin") return [CLAUDE_CODE_SERVICE]
+      const proc = Bun.spawn(["security", "dump-keychain"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 5000,
+      })
+      const raw = await new Response(proc.stdout).text()
+      const code = await proc.exited
+      if (code !== 0) return [CLAUDE_CODE_SERVICE]
+      const services: string[] = []
+      const seen = new Set<string>()
+      const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
+      let m = re.exec(raw)
+      while (m !== null) {
+        const svc = m[0].slice(1, -1)
+        if (!seen.has(svc)) {
+          seen.add(svc)
+          services.push(svc)
+        }
+        m = re.exec(raw)
+      }
+      const ordered: string[] = []
+      if (seen.has(CLAUDE_CODE_SERVICE)) ordered.push(CLAUDE_CODE_SERVICE)
+      for (const svc of services) {
+        if (svc !== CLAUDE_CODE_SERVICE) ordered.push(svc)
+      }
+      return ordered.length > 0 ? ordered : [CLAUDE_CODE_SERVICE]
+    },
+    catch: (e) =>
+      new ProviderAuthError({
+        message: `Failed to enumerate Claude keychain services: ${e instanceof Error ? e.message : String(e)}`,
+        cause: e,
+      }),
+  })
+
+// ── Write-back (counsel keychain alignment K2) ──
+
+/**
+ * Discover the macOS username stored on a keychain entry. The Claude
+ * CLI uses the user's account name (e.g. "alice") as the keychain
+ * `acct` field, NOT the service name. Writing with the wrong `acct`
+ * creates a duplicate entry instead of updating the existing one —
+ * exactly the bug `griffinmartin/opencode-claude-auth` ran into.
+ */
+const getKeychainAccountName = (serviceName: string): Effect.Effect<string | undefined> =>
+  Effect.tryPromise(async () => {
+    const proc = Bun.spawn(["security", "find-generic-password", "-s", serviceName], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 2000,
+    })
+    const raw = await new Response(proc.stdout).text()
+    await proc.exited
+    const match = /"acct"<blob>="([^"]*)"/.exec(raw)
+    return match?.[1]
+  }).pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+
+const writeKeychainEntry = (
+  serviceName: string,
+  accountName: string,
+  payload: string,
+): Effect.Effect<void, ProviderAuthError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(
+        [
+          "security",
+          "add-generic-password",
+          "-s",
+          serviceName,
+          "-a",
+          accountName,
+          "-w",
+          payload,
+          "-U",
+        ],
+        { stdout: "ignore", stderr: "pipe", timeout: 2000 },
+      )
+      const code = await proc.exited
+      if (code !== 0) {
+        const err = await new Response(proc.stderr).text()
+        throw new Error(err || `security add-generic-password exit ${code}`)
+      }
+    },
+    catch: (e) =>
+      new ProviderAuthError({
+        message: `Failed to write Claude credentials to Keychain: ${e instanceof Error ? e.message : String(e)}`,
+        cause: e,
+      }),
+  })
+
+/**
+ * Splice fresh credentials into an existing keychain blob, preserving
+ * any other fields (e.g. `subscriptionType`, `mcpOAuth`) so a write-back
+ * doesn't blow away CLI state. Returns `undefined` if the blob isn't
+ * valid JSON. Exported for testing.
+ *
+ * @internal
+ */
+export const updateCredentialBlob = (
+  existingJson: string,
+  newCreds: ClaudeCredentials,
+): string | undefined => {
+  let parsed: Record<string, unknown>
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    parsed = JSON.parse(existingJson) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const wrapper = parsed["claudeAiOauth"] as Record<string, unknown> | undefined
+  const target = wrapper ?? parsed
+  target["accessToken"] = newCreds.accessToken
+  target["refreshToken"] = newCreds.refreshToken
+  target["expiresAt"] = newCreds.expiresAt
+  return JSON.stringify(parsed)
+}
+
+/**
+ * Persist refreshed credentials back to the source they were read from
+ * (keychain entry on darwin, `~/.claude/.credentials.json` elsewhere).
+ * Without this, every direct OAuth refresh is wasted — the next read
+ * pulls the stale `accessToken` straight back from disk/keychain. The
+ * `acct` field is preserved by reading the existing entry first.
+ *
+ * Errors are swallowed; the caller has the new credentials in memory
+ * and a write-back failure should not kill the in-flight request.
+ */
+export const writeBackCredentials = (
+  creds: ClaudeCredentials,
+): Effect.Effect<void, ProviderAuthError> =>
+  Effect.gen(function* () {
+    if (process.platform !== "darwin") {
+      yield* Effect.tryPromise({
+        try: async () => {
+          const file = Bun.file(CREDENTIALS_FILE)
+          const exists = await file.exists()
+          const raw = exists ? await file.text() : JSON.stringify({ claudeAiOauth: {} })
+          const updated = updateCredentialBlob(raw, creds)
+          if (updated === undefined) return
+          await Bun.write(CREDENTIALS_FILE, updated)
+        },
+        catch: (e) =>
+          new ProviderAuthError({
+            message: `Failed to write Claude credentials file: ${e instanceof Error ? e.message : String(e)}`,
+            cause: e,
+          }),
+      })
+      return
+    }
+
+    const raw = yield* spawnSecurity([
+      "find-generic-password",
+      "-s",
+      CLAUDE_CODE_SERVICE,
+      "-w",
+    ]).pipe(Effect.catchEager(() => Effect.succeed("")))
+    if (raw === "") return
+    const updated = updateCredentialBlob(raw, creds)
+    if (updated === undefined) return
+    const accountName = (yield* getKeychainAccountName(CLAUDE_CODE_SERVICE)) ?? CLAUDE_CODE_SERVICE
+    yield* writeKeychainEntry(CLAUDE_CODE_SERVICE, accountName, updated)
+  })
+
 // ── Token Refresh ──
+
+/**
+ * Anthropic's OAuth refresh endpoint and CLI client id. Discovered by
+ * `griffinmartin/opencode-claude-auth` from the Claude Code CLI's
+ * traffic; both values are public (the client id ships in every
+ * `claude` install) so checking them in is safe.
+ */
+const OAUTH_TOKEN_URL = "https://claude.ai/v1/oauth/token"
+const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
+interface OAuthTokenResponse {
+  readonly access_token?: string
+  readonly refresh_token?: string
+  readonly expires_in?: number
+}
+
+/**
+ * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
+ * Returns `undefined` if the body is not valid JSON, not an object,
+ * or missing `access_token`. Defaults `expires_in` to 36 000s (10h) per
+ * Anthropic's observed token lifetime. Exported for testing.
+ *
+ * @internal
+ */
+export const parseOAuthResponse = (
+  raw: string,
+  fallbackRefreshToken: string,
+  now: number = Date.now(),
+): ClaudeCredentials | undefined => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const data = parsed as OAuthTokenResponse
+  if (typeof data.access_token !== "string") return undefined
+  const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 36_000
+  return {
+    accessToken: data.access_token,
+    refreshToken:
+      typeof data.refresh_token === "string" ? data.refresh_token : fallbackRefreshToken,
+    expiresAt: now + expiresIn * 1000,
+  }
+}
+
+/**
+ * Refresh the OAuth token by POSTing directly to Anthropic's OAuth
+ * endpoint, then writing the new credentials back so the next
+ * `readClaudeCodeCredentials` call sees them. Costs zero LLM tokens —
+ * matches the path `griffinmartin/opencode-claude-auth` discovered.
+ *
+ * Falls back to the legacy `claude -p . --model haiku` spawn (which
+ * triggers the CLI's own refresh logic) when the direct refresh fails
+ * for any reason — auth-server downtime, refresh-token revoked, schema
+ * change, etc.
+ */
+const refreshViaOAuth = (
+  refreshToken: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const requestBody = new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: OAUTH_CLIENT_ID,
+        refresh_token: refreshToken,
+      })
+      const response = await fetch(OAUTH_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: requestBody.toString(),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) {
+        throw new Error(`OAuth refresh failed: ${response.status} ${response.statusText}`)
+      }
+      const responseBody = await response.text()
+      const creds = parseOAuthResponse(responseBody, refreshToken)
+      if (creds === undefined) {
+        throw new Error("OAuth refresh response missing access_token")
+      }
+      return creds
+    },
+    catch: (e) =>
+      new ProviderAuthError({
+        message: `Direct OAuth refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+        cause: e,
+      }),
+  })
 
 const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
   Effect.tryPromise({
@@ -149,8 +423,33 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
       }),
   })
 
+/**
+ * Refresh the cached Claude Code credentials. Tries the direct OAuth
+ * endpoint first (fast, free); falls back to spawning `claude` (slow,
+ * costs Haiku tokens) only if the direct path fails. On successful
+ * direct refresh, writes the new credentials back to the keychain (or
+ * `~/.claude/.credentials.json` on non-darwin) so subsequent reads
+ * pick up the new access_token without another HTTP round-trip.
+ */
 export const refreshClaudeCodeCredentials = (): Effect.Effect<void, ProviderAuthError> =>
-  spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
+  Effect.gen(function* () {
+    const current = yield* readClaudeCodeCredentials().pipe(
+      Effect.catchEager(() => Effect.succeed(undefined)),
+    )
+    if (current?.refreshToken !== undefined && current.refreshToken !== "") {
+      const refreshed = yield* refreshViaOAuth(current.refreshToken).pipe(
+        Effect.catchEager(() => Effect.succeed(undefined)),
+      )
+      if (refreshed !== undefined) {
+        yield* writeBackCredentials(refreshed).pipe(Effect.ignore)
+        return
+      }
+    }
+    // Fall back to the CLI spawn — second attempt of the same path
+    // historically helps when the CLI's first invocation just kicks
+    // a stale-token error.
+    yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
+  })
 
 // ── Beta Management ──
 
