@@ -2,7 +2,11 @@ import { Schema } from "effect"
 import type { Effect } from "effect"
 import { RunSpecSchema, AgentName, DriverRef, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
-import { AuthProviderInfo, AuthProviderQuery } from "../domain/auth-guard.js"
+import {
+  AuthProviderInfo,
+  AuthProviderQuery,
+  ListAuthProvidersPayload,
+} from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
@@ -295,7 +299,10 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
-export const ListAuthProvidersInput = AuthProviderQuery
+// Public RPC payload — server re-derives `driverOverrides` from
+// session-cwd config, so callers cannot smuggle in an override
+// that bypasses model auth.
+export const ListAuthProvidersInput = ListAuthProvidersPayload
 export type ListAuthProvidersInput = typeof ListAuthProvidersInput.Type
 
 export const ListAuthMethodsSuccess = Schema.Record(Schema.String, Schema.Array(AuthMethod))
@@ -318,7 +325,7 @@ export const CallbackAuthInput = Schema.Struct({
 })
 export type CallbackAuthInput = typeof CallbackAuthInput.Type
 
-export { AuthProviderInfo, AuthProviderQuery }
+export { AuthProviderInfo, AuthProviderQuery, ListAuthProvidersPayload }
 export { EventEnvelope }
 export { QueueSnapshot }
 

@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
-import { AuthGuard, AuthProviderQuery } from "@gent/core/domain/auth-guard"
+import { AuthGuard, ListAuthProvidersPayload } from "@gent/core/domain/auth-guard"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -201,18 +201,19 @@ describe("AuthGuard", () => {
   })
 })
 
-describe("AuthProviderQuery schema (counsel HIGH #2)", () => {
+describe("ListAuthProvidersPayload schema (counsel HIGH #2)", () => {
   // The RPC handler resolves project config from the session's cwd,
-  // not the launch cwd. The query schema must carry sessionId so the
-  // TUI can opt into per-session resolution. Without this, a session
-  // whose project config routes `cowork` to an external driver would
-  // still be UX-blocked by model auth from the launch cwd.
+  // not the launch cwd. The wire payload must carry sessionId so the
+  // TUI can opt into per-session resolution. Notably it does NOT
+  // carry `driverOverrides` — the server re-derives those from
+  // session-cwd config so a wire caller can't smuggle in an override
+  // that bypasses model auth.
   //
   // Plain `bunTest` here: these are pure schema decode checks with
   // no Effect context, so the `effect-bun-test` `it.live`/`it.effect`
   // ceremony isn't needed (and the bare `it` from that lib is an
   // object, not a function).
-  const decode = Schema.decodeUnknownSync(AuthProviderQuery)
+  const decode = Schema.decodeUnknownSync(ListAuthProvidersPayload)
 
   bunTest("accepts a sessionId field", () => {
     const query = decode({ sessionId: "019d-test-session-id" })
@@ -229,5 +230,19 @@ describe("AuthProviderQuery schema (counsel HIGH #2)", () => {
     const query = decode({})
     expect(query.agentName).toBeUndefined()
     expect(query.sessionId).toBeUndefined()
+  })
+
+  bunTest("rejects driverOverrides — those are server-derived, not wire-supplied", () => {
+    // Schema is closed-by-default? No — Schema.Struct is open by default.
+    // The point of the split is that consumers see a type without
+    // driverOverrides; runtime decode of an unknown field is a no-op.
+    // This test documents intent: callers shouldn't include driverOverrides.
+    const query = decode({
+      sessionId: "019d-test-session-id",
+      driverOverrides: { cowork: { _tag: "external", id: "evil" } },
+    } as Record<string, unknown>)
+    expect(query.sessionId).toBe("019d-test-session-id")
+    // The decoded type intentionally has no `driverOverrides` field.
+    expect((query as Record<string, unknown>).driverOverrides).toBeUndefined()
   })
 })

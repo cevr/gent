@@ -18,7 +18,15 @@ export const AuthProviderInfo = Schema.Struct({
 })
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
-export const AuthProviderQuery = Schema.Struct({
+/**
+ * Public RPC payload for `auth.listProviders` — what callers send.
+ *
+ * Carries `sessionId` (so the server can resolve project config from
+ * the session's cwd) and `agentName` (so external-routed agents skip
+ * model auth). Notably does NOT include `driverOverrides`: those are
+ * server-derived from config and never trusted from the wire.
+ */
+export const ListAuthProvidersPayload = Schema.Struct({
   agentName: Schema.optional(AgentName),
   /**
    * Session whose cwd should resolve project-level driverOverrides.
@@ -31,6 +39,17 @@ export const AuthProviderQuery = Schema.Struct({
    * cwd (counsel HIGH #2).
    */
   sessionId: Schema.optional(SessionId),
+})
+export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
+
+/**
+ * Internal query passed from the RPC handler into AuthGuard. Adds
+ * `driverOverrides` resolved server-side by the handler from
+ * `configService.get(sessionCwd)`. Kept separate from the wire payload
+ * so callers can't smuggle in an override that bypasses model auth.
+ */
+export const AuthProviderQuery = Schema.Struct({
+  agentName: Schema.optional(AgentName),
   /**
    * Per-agent driver routing overrides (from `UserConfig.driverOverrides`).
    * When the resolved driver for `agentName` is external, model auth is
