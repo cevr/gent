@@ -172,7 +172,7 @@ client responds via respondInteraction RPC
           → continues normally
 ```
 
-**Projection-driven UI.** The `@gent/interaction-tools` extension contributes a `ProjectionContribution` that derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation. Its UI snapshot reflects the pending interaction state (`{ requestId, text, metadata }` or `{}`). The client reads this from `extensionSnapshots` — no dedicated `activeInteraction` field on the transport contract. Source of truth is the storage row, not an in-memory mirror (`derive-do-not-create-states`).
+**Projection-driven UI.** The `@gent/interaction-tools` extension contributes a `ProjectionContribution` that derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation. Post-B11.6 the client renders interactions from the typed event feed (`InteractionPresented` and friends on the session stream) — there is no `extensionSnapshots` cache to read from. Source of truth is the storage row, not an in-memory mirror (`derive-do-not-create-states`).
 
 Key properties:
 
@@ -252,7 +252,7 @@ Extension shape lives in:
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
 - `packages/core/src/domain/contribution.ts` — `ExtensionContributions` typed-bucket carrier (six primitive sub-arrays)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
-- `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule`, `ExtensionClientContext`)
+- `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule` + Effect-typed `ExtensionClientSetup`)
 - `packages/core/src/runtime/extensions/pipeline-host.ts` — pipeline compilation (`compilePipelines`)
 - `packages/core/src/runtime/extensions/subscription-host.ts` — subscription compilation (`compileSubscriptions`)
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
@@ -419,7 +419,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `@gent/interaction-tools` — `ask_user` and `prompt` tools, plus an `InteractionProjection`.
 
-The projection derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation (storage row is the source of truth — no actor mirror). Its UI snapshot shape is `{ requestId?, text?, metadata? }`. The client reads the snapshot from `extensionSnapshots` and renders the appropriate interaction UI (routed by `metadata.type`). Both event-driven hydration (via `EventPublisherLive` re-evaluating projections) and cold-start hydration (via `SessionQueries.getSessionSnapshot` calling `projections.evaluateUi`) include this snapshot.
+The projection derives the pending-interaction snapshot from `InteractionPendingReader.listPending(scope)` per evaluation (storage row is the source of truth — no actor mirror). Its UI snapshot shape is `{ requestId?, text?, metadata? }`. Post-B11.6 the TUI renders interactions from the typed event feed (`InteractionPresented` etc.) — routed by `metadata.type`. The projection re-evaluates per `EventPublisherLive` pulse so server-side state stays warm even though the client no longer caches it.
 
 ## Artifacts Extension
 

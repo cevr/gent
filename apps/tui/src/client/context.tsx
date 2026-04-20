@@ -200,11 +200,10 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   // Extension state-change pulse subscribers — registered by widgets
-  // (via `ClientTransport`) and by `ExtensionUIProvider` for the legacy
-  // snapshot cache. Fires once per `ExtensionStateChanged` event seen on
-  // the active session for each subscriber. The pulse carries no payload
-  // — consumers refetch via the extension's typed
-  // `client.extension.query(...)`.
+  // through `ClientTransport.onExtensionStateChanged`. Fires once per
+  // `ExtensionStateChanged` event seen on the active session for each
+  // subscriber. The pulse carries no payload — consumers refetch via
+  // the extension's typed `client.extension.ask(...)`.
   type ExtensionPulseCallback = (s: {
     sessionId: SessionId
     branchId: BranchId
