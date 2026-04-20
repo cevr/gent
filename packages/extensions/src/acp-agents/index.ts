@@ -99,11 +99,36 @@ const codemodeInstructions = (toolList: string): string =>
 // driver is codemode-routed.
 const NATIVE_TOOL_SECTION_IDS = new Set(["tool-list", "tool-guidelines"])
 
-const compileSections = (sections: ReadonlyArray<{ content: string; priority: number }>): string =>
-  [...sections]
-    .sort((a, b) => a.priority - b.priority)
-    .map((s) => s.content)
-    .join("\n\n")
+/**
+ * Strip the *content* of any native tool section from an already-compiled
+ * prompt string — used after `next(input)` runs so upstream pipeline
+ * edits (additions, rewrites) are preserved while the codemode-incompat
+ * `## Available Tools` / `## Tool Usage Guidelines` blocks are removed.
+ *
+ * Section content is rendered with `\n\n` separators by
+ * `buildTurnPromptSections`; we match the content prefix and consume
+ * through to the next blank line that starts a different section. This
+ * is a best-effort string surgery — when the pipeline can't find a
+ * native section in the compiled string (e.g. the upstream rewrote it
+ * away already) we leave the prompt untouched.
+ */
+const stripNativeToolSections = (
+  compiled: string,
+  sections: ReadonlyArray<{ id: string; content: string }>,
+): string => {
+  let out = compiled
+  for (const section of sections) {
+    if (!NATIVE_TOOL_SECTION_IDS.has(section.id)) continue
+    const trimmed = section.content.trim()
+    if (trimmed.length === 0) continue
+    const idx = out.indexOf(trimmed)
+    if (idx === -1) continue
+    const before = out.slice(0, idx).replace(/\n+$/, "")
+    const after = out.slice(idx + trimmed.length).replace(/^\n+/, "")
+    out = before.length === 0 || after.length === 0 ? `${before}${after}` : `${before}\n\n${after}`
+  }
+  return out
+}
 
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
@@ -116,23 +141,22 @@ export const AcpAgentsExtension = defineExtension({
     // prefix (codex MEDIUM #3).
     pipeline("prompt.system", (input, next) =>
       Effect.gen(function* () {
+        // Always run downstream first so this hook composes on top of
+        // any upstream pipeline edits (additions, rewrites). We then
+        // surgically remove native tool sections from the compiled
+        // result and append the codemode block — composing with the
+        // post-`next(input)` string instead of recompiling from raw
+        // sections preserves edits another extension may have made
+        // (counsel MEDIUM #5).
         const base = yield* next(input)
         if (input.driverToolSurface !== "codemode") return base
         const tools = input.tools ?? []
         if (tools.length === 0) return base
-        const codemode = {
-          id: "tool-codemode",
-          content: codemodeInstructions(generateToolDescription(tools)),
-          priority: 42,
-        }
-        // Prefer structural rewrite when the loop hands us sections.
-        // Fallback to base-prompt append for callers that haven't been
-        // updated to thread sections (tests, custom pipelines).
-        if (input.sections !== undefined) {
-          const filtered = input.sections.filter((s) => !NATIVE_TOOL_SECTION_IDS.has(s.id))
-          return compileSections([...filtered, codemode])
-        }
-        return `${base}\n\n${codemode.content}`
+        const codemode = codemodeInstructions(generateToolDescription(tools))
+        const stripped =
+          input.sections !== undefined ? stripNativeToolSections(base, input.sections) : base
+        const trimmed = stripped.replace(/\n+$/, "")
+        return trimmed.length === 0 ? codemode : `${trimmed}\n\n${codemode}`
       }),
     ),
   ],

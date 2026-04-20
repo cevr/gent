@@ -236,8 +236,16 @@ export interface ClaudeCodeSessionManager {
  * `executeTurn` Stream stays free of any service requirement —
  * `TurnExecutor.executeTurn` returns a Stream without a context channel.
  */
+/** Resolves the Claude Code OAuth token. Defaults to the macOS keychain
+ *  reader; tests inject a stub so they can exercise lifecycle/cache
+ *  invariants without a real keychain entry (counsel MEDIUM #6). The
+ *  error type is left wide enough to accept either the production
+ *  `ProviderAuthError` or test stubs returning a plain `{ message }`. */
+export type ClaudeCodeTokenReader = () => Effect.Effect<string, { readonly message: string }>
+
 export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
+  tokenReader: ClaudeCodeTokenReader = readClaudeCodeOAuthToken,
 ): ClaudeCodeSessionManager => {
   const sessions = new Map<string, ClaudeCodeProcess>()
   // Parallel index from driverId → set of cache keys. Lets `invalidateDriver`
@@ -277,7 +285,7 @@ export const createClaudeCodeSessionManager = (
         yield* tearDown(existing).pipe(Effect.ignore)
       }
 
-      const oauthToken = yield* readClaudeCodeOAuthToken().pipe(
+      const oauthToken = yield* tokenReader().pipe(
         Effect.mapError(
           (err) =>
             new ClaudeSdkError({

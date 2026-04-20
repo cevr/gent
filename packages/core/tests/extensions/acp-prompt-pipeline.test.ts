@@ -113,9 +113,20 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).toBe("BASE")
   })
 
-  test("structural rewrite: replaces tool-list/tool-guidelines sections", async () => {
+  test("structural rewrite: strips tool-list / tool-guidelines from compiled prompt and appends codemode", async () => {
+    // basePrompt represents the post-`next(input)` compiled string —
+    // that's what an upstream pipeline (or the loop's default builder)
+    // hands us. The hook surgically removes native tool-section content
+    // from that string and appends the codemode block, preserving any
+    // upstream edits (counsel MEDIUM #5).
+    const compiled = [
+      "ID-SECTION",
+      "## Available Tools\n\n- echo",
+      "## Tool Guidelines\n\n- use tools",
+      "EXTRA-SECTION",
+    ].join("\n\n")
     const result = await runHandler({
-      basePrompt: "ignored when sections is provided",
+      basePrompt: compiled,
       agent: new AgentDefinition({
         ...baseAgent,
         driver: new ExternalDriverRef({ id: "acp-claude-code" }),
@@ -135,5 +146,37 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).toContain("External Tool Surface (codemode)")
     expect(result).not.toContain("## Available Tools\n\n- echo")
     expect(result).not.toContain("- use tools")
+  })
+
+  test("preserves upstream basePrompt edits when stripping native sections", async () => {
+    // Simulate an earlier pipeline that prepended an "INSTRUCTIONS"
+    // block to the compiled prompt — the upstream edit must survive
+    // the codemode rewrite.
+    const compiled = [
+      "INSTRUCTIONS-FROM-UPSTREAM",
+      "ID-SECTION",
+      "## Available Tools\n\n- echo",
+      "EXTRA-SECTION",
+    ].join("\n\n")
+    const result = await runHandler({
+      basePrompt: compiled,
+      agent: new AgentDefinition({
+        ...baseAgent,
+        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+      }),
+      driverSource: "config",
+      driverToolSurface: "codemode",
+      tools: [fakeTool],
+      sections: [
+        { id: "identity", content: "ID-SECTION", priority: 0 },
+        { id: "tool-list", content: "## Available Tools\n\n- echo", priority: 42 },
+        { id: "extra", content: "EXTRA-SECTION", priority: 80 },
+      ],
+    })
+    expect(result).toContain("INSTRUCTIONS-FROM-UPSTREAM")
+    expect(result).toContain("ID-SECTION")
+    expect(result).toContain("EXTRA-SECTION")
+    expect(result).toContain("External Tool Surface (codemode)")
+    expect(result).not.toContain("## Available Tools\n\n- echo")
   })
 })
