@@ -1,18 +1,19 @@
 /**
  * ACP protocol — close-during-pending-RPC regression.
  *
- * Counsel BLOCKER: `AcpConnection.close` previously only flipped
- * `closedRef` and interrupted I/O fibers; pending RPC `Deferred`s in
- * `pendingRef` were never failed and `updatesPubSub` was never shut
- * down. A driver invalidation mid-turn (manager `tearDown`) parked the
- * executor on `Stream.interruptWhen(promptDone)` forever — `promptDone`
- * only resolves from the `prompt` RPC, whose pending Deferred would
- * sit unsignalled.
+ * Counsel BLOCKER: `AcpConnection.close` previously left pending RPC
+ * `Deferred`s un-failed and `updatesPubSub` un-shut, so a mid-turn
+ * driver invalidation (manager `tearDown`) parked the executor on
+ * `Stream.interruptWhen(promptDone)` forever — `promptDone` only
+ * resolves from the `prompt` RPC, whose pending Deferred would sit
+ * unsignalled.
  *
- * The fix walks `pendingRef` atomically and fails each Deferred with a
- * typed `AcpClosedError` before tearing the fibers down. This test
- * exercises that contract directly at the protocol layer (no real
- * subprocess) — the agent-loop wiring is covered separately.
+ * The fix folds the closed-flag and the pending-RPC map into a single
+ * `ConnState` cell so check-open + register-pending and seal + claim
+ * are each one atomic `Ref.modify`. Both directions are race-free.
+ *
+ * This test exercises that contract directly at the protocol layer
+ * (no real subprocess) — the agent-loop wiring is covered separately.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Exit, Fiber, Scope } from "effect"

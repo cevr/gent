@@ -16,7 +16,11 @@
 
 import { Clock, Effect } from "effect"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
-import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "./oauth.js"
+import {
+  freshEnoughForUse,
+  readClaudeCodeCredentials,
+  refreshClaudeCodeCredentials,
+} from "./oauth.js"
 
 const CREDENTIAL_CACHE_TTL_MS = 30_000
 
@@ -63,13 +67,16 @@ const loadCredentialsEffect = (
       return null
     }
 
-    if (result.expiresAt <= now + 60_000) {
-      // Try refresh
-      yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-      const refreshed = yield* readClaudeCodeCredentials().pipe(
+    if (!freshEnoughForUse(result, now)) {
+      // Refresh and use the returned creds directly. The previous
+      // shape re-read keychain after refresh, which silently lost
+      // direct-OAuth tokens whenever write-back failed (counsel
+      // HIGH #1). Now write-back is best-effort inside the refresh
+      // helper and the in-memory creds are authoritative.
+      const refreshed = yield* refreshClaudeCodeCredentials().pipe(
         Effect.catchEager(() => Effect.succeed(null)),
       )
-      if (refreshed === null || refreshed.expiresAt <= now + 60_000) {
+      if (refreshed === null || !freshEnoughForUse(refreshed, now)) {
         cache.creds = null
         cache.at = 0
         return null

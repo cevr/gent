@@ -19,7 +19,18 @@ const ClaudeCredentialsWrapper = Schema.Struct({
   claudeAiOauth: ClaudeCredentials,
 })
 
-type ClaudeCredentials = typeof ClaudeCredentials.Type
+export type ClaudeCredentials = typeof ClaudeCredentials.Type
+
+/**
+ * A credential is "fresh enough to use" if it expires more than 60s
+ * from now. Below that, callers should refresh before sending it on
+ * the wire — the Anthropic auth gate rejects a token in its last
+ * minute and a refresh round-trip can take that long.
+ */
+const FRESH_ENOUGH_MS = 60_000
+
+export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolean =>
+  creds.expiresAt > now + FRESH_ENOUGH_MS
 
 const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
   Schema.decodeUnknownEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
@@ -437,14 +448,23 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
   })
 
 /**
- * Refresh the cached Claude Code credentials. Tries the direct OAuth
- * endpoint first (fast, free); falls back to spawning `claude` (slow,
- * costs Haiku tokens) only if the direct path fails. On successful
- * direct refresh, writes the new credentials back to the keychain (or
- * `~/.claude/.credentials.json` on non-darwin) so subsequent reads
- * pick up the new access_token without another HTTP round-trip.
+ * Refresh the cached Claude Code credentials and return the fresh ones
+ * directly to the caller. Tries the direct OAuth endpoint first (fast,
+ * free); falls back to spawning `claude` (slow, costs Haiku tokens)
+ * only if the direct path fails. The CLI fallback writes back via the
+ * Claude binary itself; we re-read keychain afterwards.
+ *
+ * Crucially the caller MUST use the returned value rather than
+ * re-reading keychain after the call. The previous void-returning
+ * shape silently lost direct-OAuth tokens whenever write-back failed
+ * (locked keychain, file perms, race with `claude` CLI) — counsel
+ * HIGH #1. Write-back here is best-effort; the in-memory creds are
+ * authoritative for this turn.
  */
-export const refreshClaudeCodeCredentials = (): Effect.Effect<void, ProviderAuthError> =>
+export const refreshClaudeCodeCredentials = (): Effect.Effect<
+  ClaudeCredentials,
+  ProviderAuthError
+> =>
   Effect.gen(function* () {
     const current = yield* readClaudeCodeCredentials().pipe(
       Effect.catchEager(() => Effect.succeed(undefined)),
@@ -454,14 +474,24 @@ export const refreshClaudeCodeCredentials = (): Effect.Effect<void, ProviderAuth
         Effect.catchEager(() => Effect.succeed(undefined)),
       )
       if (refreshed !== undefined) {
-        yield* writeBackCredentials(refreshed).pipe(Effect.ignore)
-        return
+        // Best-effort write-back so subsequent processes pick up the
+        // new token. A failure here doesn't lose the refresh — the
+        // caller has it in memory.
+        yield* writeBackCredentials(refreshed).pipe(
+          Effect.catchEager((e: ProviderAuthError) =>
+            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+              Effect.annotateLogs({ error: String(e) }),
+            ),
+          ),
+        )
+        return refreshed
       }
     }
-    // Fall back to the CLI spawn — second attempt of the same path
-    // historically helps when the CLI's first invocation just kicks
-    // a stale-token error.
+    // Direct path failed — fall back to the CLI spawn (second attempt
+    // historically helps when the first invocation kicks a stale-token
+    // error). The CLI persists its own credentials, so re-read after.
     yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
+    return yield* readClaudeCodeCredentials()
   })
 
 // ── Beta Management ──

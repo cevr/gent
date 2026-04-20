@@ -9,22 +9,25 @@
  */
 import { Clock, Effect } from "effect"
 import type { ProviderAuthError } from "@gent/core/extensions/api"
-import { readClaudeCodeCredentials, refreshClaudeCodeCredentials } from "../anthropic/oauth.js"
-
-const REFRESH_THRESHOLD_MS = 60_000
+import {
+  freshEnoughForUse,
+  readClaudeCodeCredentials,
+  refreshClaudeCodeCredentials,
+} from "../anthropic/oauth.js"
 
 /**
  * Read the Claude Code OAuth access token from macOS Keychain (or
  * `~/.claude/.credentials.json` on non-darwin), refreshing if it expires
- * within the next minute.
+ * within the next minute. Uses the refreshed creds returned from the
+ * refresh call directly — re-reading keychain would silently lose
+ * direct-OAuth tokens on write-back failure (counsel HIGH #1).
  */
 export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {
     let creds = yield* readClaudeCodeCredentials()
     const now = yield* Clock.currentTimeMillis
-    if (creds.expiresAt < now + REFRESH_THRESHOLD_MS) {
-      yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-      creds = yield* readClaudeCodeCredentials()
+    if (!freshEnoughForUse(creds, now)) {
+      creds = yield* refreshClaudeCodeCredentials()
     }
     return creds.accessToken
   })

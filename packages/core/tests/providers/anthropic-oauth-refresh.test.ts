@@ -9,7 +9,11 @@
  * `griffinmartin/opencode-claude-auth`'s reference implementation.
  */
 import { describe, it, expect } from "bun:test"
-import { parseOAuthResponse, updateCredentialBlob } from "@gent/extensions/anthropic/oauth"
+import {
+  freshEnoughForUse,
+  parseOAuthResponse,
+  updateCredentialBlob,
+} from "@gent/extensions/anthropic/oauth"
 
 describe("parseOAuthResponse", () => {
   it("parses a well-formed Anthropic refresh response", () => {
@@ -116,5 +120,30 @@ describe("updateCredentialBlob", () => {
       expiresAt: 0,
     })
     expect(next).toBeUndefined()
+  })
+})
+
+describe("freshEnoughForUse", () => {
+  // Counsel HIGH #1 — the gate that decides "use these creds vs.
+  // refresh first" must allow at least a 60s safety margin so a token
+  // that's about to expire isn't sent on the wire mid-refresh.
+  const now = 1_700_000_000_000
+
+  it("returns true when expiry is more than 60s away", () => {
+    expect(
+      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now + 61_000 }, now),
+    ).toBe(true)
+  })
+
+  it("returns false at exactly the 60s threshold (strict >)", () => {
+    expect(
+      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now + 60_000 }, now),
+    ).toBe(false)
+  })
+
+  it("returns false when expiry is in the past", () => {
+    expect(
+      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now - 1 }, now),
+    ).toBe(false)
   })
 })
