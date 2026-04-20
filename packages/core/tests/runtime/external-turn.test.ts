@@ -23,6 +23,7 @@ import type { AgentEvent } from "@gent/core/domain/event"
 import { EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { Agents } from "@gent/extensions/all-agents"
 
@@ -377,6 +378,107 @@ describe("external turn execution", () => {
           // Turn should complete successfully with reasoning present
           expect(tags).toContain("TurnCompleted")
           expect(tags).toContain("StreamChunk")
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+})
+
+// ── ExternalDriverContribution end-to-end ──
+//
+// Proves that `ExternalDriverContribution` wired through `DriverRegistry`
+// (not a mock) actually dispatches to the registered `TurnExecutor` AND
+// that the executor's text output lands in the stored messages.
+
+describe("ExternalDriverContribution end-to-end", () => {
+  test("text from TurnExecutor appears in stored messages via DriverRegistry dispatch", async () => {
+    const e2eSessionId = SessionId.of("e2e-session")
+    const e2eBranchId = BranchId.of("e2e-branch")
+
+    // A simple TurnExecutor that emits a known text chunk then finishes.
+    const expectedText = "hello from my-test-driver"
+    const e2eExecutor: TurnExecutor = {
+      executeTurn: () =>
+        Stream.fromIterable<TurnEvent, TurnError>([
+          { _tag: "text-delta", text: expectedText },
+          { _tag: "finished", stopReason: "stop" },
+        ]),
+    }
+
+    // Agent referencing the external driver by id.
+    const e2eAgent = new AgentDefinition({
+      name: "my-test-agent" as never,
+      driver: new ExternalDriverRef({ id: "my-test-driver" }),
+    })
+
+    // Register the contribution through resolveExtensions — the real path.
+    const e2eResolved = resolveExtensions([
+      {
+        manifest: { id: "e2e-ext" },
+        kind: "builtin" as const,
+        sourcePath: "test",
+        contributions: {
+          agents: [e2eAgent],
+          externalDrivers: [{ id: "my-test-driver", executor: e2eExecutor }],
+        },
+      },
+    ])
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+      generate: () => Effect.succeed("unused"),
+    })
+
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      providerLayer,
+      ExtensionRegistry.fromResolved(e2eResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: e2eResolved.modelDrivers,
+        externalDrivers: e2eResolved.externalDrivers,
+      }),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      // Real EventStore would need more wiring; use the counting store.
+      // Messages go through Storage directly — EventStore path is orthogonal.
+      Layer.succeed(EventStore, {
+        publish: () => Effect.succeed({ id: 0, event: {} as AgentEvent, createdAt: Date.now() }),
+        subscribe: () => Stream.empty,
+        removeSession: () => Effect.void,
+      }),
+      ToolRunner.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          yield* agentLoop.runOnce({
+            sessionId: e2eSessionId,
+            branchId: e2eBranchId,
+            agentName: "my-test-agent",
+            prompt: "trigger the external driver",
+          })
+
+          // Query the real Storage for the messages stored during the turn.
+          const storage = yield* Storage
+          const messages = yield* storage.listMessages(e2eBranchId)
+
+          // The assistant message should contain the text emitted by the executor.
+          const allText = messages.flatMap((m) =>
+            m.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])),
+          )
+          const combined = allText.join("")
+          expect(combined).toContain(expectedText)
         }).pipe(Effect.provide(layer)),
       ),
     )

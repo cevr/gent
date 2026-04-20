@@ -15,9 +15,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import {
   defineExtension,
-  definePipeline,
   defineResource,
-  defineSubscription,
   pipeline,
   resource,
   subscription,
@@ -36,18 +34,21 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("definePipeline handler MUST return Effect — async handler rejected", () => {
+  test("pipeline handler MUST return Effect — async handler rejected", () => {
     pipeline(
+      "prompt.system",
       // @ts-expect-error — async handler must not be assignable to Effect-returning pipeline
-      definePipeline("prompt.system", async (input, next) => next(input)),
+      async (input, next) => next(input),
     )
     expect(true).toBe(true)
   })
 
-  test("defineSubscription handler MUST return Effect — async handler rejected", () => {
+  test("subscription handler MUST return Effect — async handler rejected", () => {
     subscription(
+      "turn.after",
+      "isolate",
       // @ts-expect-error — async handler must not be assignable to Effect-returning subscription
-      defineSubscription("turn.after", "isolate", async () => undefined),
+      async () => undefined,
     )
     expect(true).toBe(true)
   })
@@ -97,8 +98,8 @@ describe("Effect-purity locks (compile-time)", () => {
           execute: () => Effect.succeed("ok"),
         }),
       ],
-      pipelines: [pipeline(definePipeline("prompt.system", (i, next) => next(i)))],
-      subscriptions: [subscription(defineSubscription("turn.after", "isolate", () => Effect.void))],
+      pipelines: [pipeline("prompt.system", (i, next) => next(i))],
+      subscriptions: [subscription("turn.after", "isolate", () => Effect.void)],
       resources: [
         resource(
           defineResource({

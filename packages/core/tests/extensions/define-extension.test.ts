@@ -11,7 +11,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineExtension, defineResource, tool, definePipeline } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool, pipeline } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
 import {
@@ -64,7 +64,7 @@ describe("defineExtension", () => {
         id: "all-kinds",
         capabilities: [myTool],
         agents: [Agents.cowork],
-        pipelines: [definePipeline("prompt.system", (i, next) => next(i))],
+        pipelines: [pipeline("prompt.system", (i, next) => next(i))],
         resources: [
           defineResource({
             scope: "process",
@@ -212,7 +212,7 @@ describe("defineExtension", () => {
         id: "wired",
         capabilities: [myTool],
         pipelines: [
-          definePipeline(
+          pipeline(
             "prompt.system",
             (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
               next(input).pipe(Effect.map((s) => `${s}!!`)),

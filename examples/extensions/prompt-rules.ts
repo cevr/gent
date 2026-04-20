@@ -3,12 +3,12 @@
  * the system prompt.
  */
 import { Effect } from "effect"
-import { defineExtension, definePipeline } from "@gent/core/extensions/api"
+import { defineExtension, pipeline } from "@gent/core/extensions/api"
 
 export default defineExtension({
   id: "prompt-rules",
   pipelines: [
-    definePipeline("prompt.system", (input, next) =>
+    pipeline("prompt.system", (input, next) =>
       next(input).pipe(
         Effect.map(
           (result) =>

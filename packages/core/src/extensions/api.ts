@@ -208,7 +208,6 @@ export {
   type PipelineInput,
   type PipelineOutput,
   type PipelineMap,
-  definePipeline,
 } from "../domain/pipeline.js"
 export {
   type SubscriptionContribution,
@@ -218,7 +217,6 @@ export {
   type SubscriptionEvent,
   type SubscriptionMap,
   type SubscriptionFailureMode,
-  defineSubscription,
 } from "../domain/subscription.js"
 export type {
   CapabilityContribution,

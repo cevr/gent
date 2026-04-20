@@ -3,7 +3,6 @@ import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import {
   defineExtension,
   defineResource,
-  defineSubscription,
   resource,
   subscription,
   type ExtensionHostContext,
@@ -128,7 +127,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   capabilities: [HandoffTool],
-  subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
+  subscriptions: [subscription("turn.after", "isolate", autoHandoffImpl)],
   // Cooldown machine — process-scope, no service, supervised by MachineEngine.
   resources: [
     resource(

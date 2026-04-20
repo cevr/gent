@@ -13,7 +13,6 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Data, Effect, Exit } from "effect"
-import { defineSubscription } from "@gent/core/domain/subscription"
 import type {
   ExtensionContributions,
   LoadedExtension,
@@ -53,19 +52,19 @@ describe("subscription host", () => {
   it.live('"continue": failure swallowed, next subscriber still fires', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const failing = defineSubscription("turn.after", "continue", () => {
+      const failing = subscription("turn.after", "continue", () => {
         calls.push("failing")
         return Effect.fail(new BoomError({ reason: "intentional" }))
       })
-      const after = defineSubscription("turn.after", "continue", () =>
+      const after = subscription("turn.after", "continue", () =>
         Effect.sync(() => {
           calls.push("after")
         }),
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscription(failing)] }),
-        ext("b", "builtin", { subscriptions: [subscription(after)] }),
+        ext("a", "builtin", { subscriptions: [failing] }),
+        ext("b", "builtin", { subscriptions: [after] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -77,19 +76,19 @@ describe("subscription host", () => {
   it.live('"isolate": failure swallowed with warning, next subscriber still fires', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const failing = defineSubscription("turn.after", "isolate", () => {
+      const failing = subscription("turn.after", "isolate", () => {
         calls.push("failing")
         return Effect.fail(new BoomError({ reason: "intentional" }))
       })
-      const after = defineSubscription("turn.after", "isolate", () =>
+      const after = subscription("turn.after", "isolate", () =>
         Effect.sync(() => {
           calls.push("after")
         }),
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscription(failing)] }),
-        ext("b", "builtin", { subscriptions: [subscription(after)] }),
+        ext("a", "builtin", { subscriptions: [failing] }),
+        ext("b", "builtin", { subscriptions: [after] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -101,19 +100,19 @@ describe("subscription host", () => {
   it.live('"halt": failure surfaces as defect; subsequent subscribers DO NOT fire', () =>
     Effect.gen(function* () {
       const calls: string[] = []
-      const halting = defineSubscription("turn.after", "halt", () => {
+      const halting = subscription("turn.after", "halt", () => {
         calls.push("halting")
         return Effect.fail(new BoomError({ reason: "critical" }))
       })
-      const afterHalt = defineSubscription("turn.after", "continue", () =>
+      const afterHalt = subscription("turn.after", "continue", () =>
         Effect.sync(() => {
           calls.push("after-halt")
         }),
       )
 
       const compiled = compileSubscriptions([
-        ext("a", "builtin", { subscriptions: [subscription(halting)] }),
-        ext("b", "builtin", { subscriptions: [subscription(afterHalt)] }),
+        ext("a", "builtin", { subscriptions: [halting] }),
+        ext("b", "builtin", { subscriptions: [afterHalt] }),
       ])
 
       const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
@@ -130,17 +129,17 @@ describe("subscription host", () => {
     Effect.gen(function* () {
       const calls: string[] = []
       const make = (label: string) =>
-        defineSubscription("turn.after", "continue", () =>
+        subscription("turn.after", "continue", () =>
           Effect.sync(() => {
             calls.push(label)
           }),
         )
 
       const compiled = compileSubscriptions([
-        // pass out of order to prove sorting
-        ext("z-project", "project", { subscriptions: [subscription(make("project"))] }),
-        ext("a-builtin", "builtin", { subscriptions: [subscription(make("builtin"))] }),
-        ext("m-user", "user", { subscriptions: [subscription(make("user"))] }),
+        // pass out of order to calls sorting
+        ext("z-project", "project", { subscriptions: [make("project")] }),
+        ext("a-builtin", "builtin", { subscriptions: [make("builtin")] }),
+        ext("m-user", "user", { subscriptions: [make("user")] }),
       ])
 
       yield* compiled.emit("turn.after", stubEvent, stubCtx)

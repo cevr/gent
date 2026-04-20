@@ -24,12 +24,13 @@
 import type { AgentDefinition } from "./agent.js"
 import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type { AnyPipelineContribution, PipelineContribution, PipelineKey } from "./pipeline.js"
+import type { AnyPipelineContribution, PipelineHandler, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
 import type {
   AnySubscriptionContribution,
-  SubscriptionContribution,
+  SubscriptionFailureMode,
+  SubscriptionHandler,
   SubscriptionKey,
 } from "./subscription.js"
 
@@ -80,26 +81,29 @@ export interface ExtensionContributions {
 // `domain/capability/{tool,request,action}.ts`.
 
 /**
- * Identity smart constructor for the Pipeline primitive. Generic over
- * `<K, E, R>` so authors keep their typed handler shape; the leaf is
- * widened to `AnyPipelineContribution` at the bucket boundary.
+ * Pipeline smart constructor. Takes `(hook, handler)` directly. Generic over
+ * `<K, E, R>` so authors keep their typed handler shape; widened to
+ * `AnyPipelineContribution` at the bucket boundary.
  */
 export const pipeline = <K extends PipelineKey, E, R>(
-  p: PipelineContribution<K, E, R>,
+  hook: K,
+  handler: PipelineHandler<K, E, R>,
 ): AnyPipelineContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  p as unknown as AnyPipelineContribution
+  ({ hook, handler }) as unknown as AnyPipelineContribution
 
 /**
- * Identity smart constructor for the Subscription primitive. Generic over
- * `<K, E, R>` so authors keep their typed handler shape; the leaf is
- * widened to `AnySubscriptionContribution` at the bucket boundary.
+ * Subscription smart constructor. Takes `(event, failureMode, handler)`
+ * directly. Generic over `<K, E, R>` so authors keep their typed handler
+ * shape; widened to `AnySubscriptionContribution` at the bucket boundary.
  */
 export const subscription = <K extends SubscriptionKey, E, R>(
-  s: SubscriptionContribution<K, E, R>,
+  event: K,
+  failureMode: SubscriptionFailureMode,
+  handler: SubscriptionHandler<K, E, R>,
 ): AnySubscriptionContribution =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  s as unknown as AnySubscriptionContribution
+  ({ event, handler, failureMode }) as unknown as AnySubscriptionContribution
 
 // `query` and `mutation` smart constructors deleted in B11.5d. Authors
 // use the unified `request({ intent: "read" | "write", ... })` factory

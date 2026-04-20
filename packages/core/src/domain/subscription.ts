@@ -60,11 +60,3 @@ export interface SubscriptionContribution<
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySubscriptionContribution = SubscriptionContribution<SubscriptionKey, any, any>
-
-/** Smart constructor for a `SubscriptionContribution` — keeps `K` inferred so
- *  the handler signature is type-checked at the authoring site. */
-export const defineSubscription = <K extends SubscriptionKey, E = never, R = never>(
-  event: K,
-  failureMode: SubscriptionFailureMode,
-  handler: SubscriptionHandler<K, E, R>,
-): SubscriptionContribution<K, E, R> => ({ event, handler, failureMode })

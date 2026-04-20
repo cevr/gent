@@ -217,9 +217,17 @@ export const makeEventPublisherRouter = (): {
               return
             }
 
-            // Different cwd — resolve per-cwd profile if cache is available
+            // Different cwd — resolve per-cwd profile. If profile cache
+            // is unavailable or resolution fails, persist the event but
+            // skip runtime dispatch (fail closed). Falling back to the
+            // primary cwd's MachineEngine would be silent wrong-runtime
+            // delivery.
             if (handle.profileCache === undefined) {
-              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              yield* baseEventStore.publish(event)
+              yield* logDeliveryFailure("event-publisher.profile-cache.unavailable", {
+                sessionId,
+                sessionCwd,
+              })
               return
             }
 
@@ -237,7 +245,10 @@ export const makeEventPublisherRouter = (): {
             )
 
             if (profile === undefined) {
-              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              // Profile resolution failed — event already persisted by
+              // the catchCause path above, but publishInner wasn't called.
+              // Persist here to ensure storage consistency.
+              yield* baseEventStore.publish(event)
               return
             }
 

@@ -8,20 +8,20 @@
  * see the same counter.
  */
 import { Effect } from "effect"
-import { defineExtension, definePipeline, defineSubscription } from "@gent/core/extensions/api"
+import { defineExtension, pipeline, subscription } from "@gent/core/extensions/api"
 
 let turns = 0
 
 export default defineExtension({
   id: "turn-counter",
   subscriptions: [
-    defineSubscription("turn.after", "continue", () => {
+    subscription("turn.after", "continue", () => {
       turns++
       return Effect.void
     }),
   ],
   pipelines: [
-    definePipeline("prompt.system", (input, next) =>
+    pipeline("prompt.system", (input, next) =>
       next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns + 1}.` }),
     ),
   ],

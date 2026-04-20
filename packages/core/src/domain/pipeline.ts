@@ -62,10 +62,3 @@ export interface PipelineContribution<K extends PipelineKey = PipelineKey, E = n
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPipelineContribution = PipelineContribution<PipelineKey, any, any>
-
-/** Smart constructor for a `PipelineContribution` — keeps `K` inferred so the
- *  handler signature is type-checked at the authoring site. */
-export const definePipeline = <K extends PipelineKey, E = never, R = never>(
-  hook: K,
-  handler: PipelineHandler<K, E, R>,
-): PipelineContribution<K, E, R> => ({ hook, handler })

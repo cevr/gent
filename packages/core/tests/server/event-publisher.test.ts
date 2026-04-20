@@ -463,14 +463,18 @@ describe("EventPublisher per-cwd router", () => {
     expect(secondaryBusChannels).toEqual(["agent:EventB"])
   })
 
-  test("unset handle falls back to primary cwd dispatch", async () => {
+  test("unset handle persists event but skips runtime dispatch (fail closed)", async () => {
     const primaryDelivered: string[] = []
+    const persisted: string[] = []
 
     const primaryCwd = "/primary"
     const sessionB = SessionId.of("session-secondary")
 
     const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
+      publish: (event: AgentEvent) =>
+        Effect.sync(() => {
+          persisted.push(event._tag)
+        }),
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
     })
@@ -511,11 +515,14 @@ describe("EventPublisher per-cwd router", () => {
 
     await Effect.gen(function* () {
       const publisher = yield* EventPublisher
-      // handle.profileCache is never set — should fall back to primary
+      // handle.profileCache is never set — event should persist but
+      // NOT dispatch through primary engine (fail closed)
       yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    // Primary engine received the event (fallback)
-    expect(primaryDelivered).toEqual(["FallbackEvent"])
+    // Event was persisted to storage
+    expect(persisted).toEqual(["FallbackEvent"])
+    // Primary engine did NOT receive it (fail closed, not fall-through)
+    expect(primaryDelivered).toEqual([])
   })
 })

@@ -361,6 +361,6 @@ export interface GentExtension {
   ) => Effect.Effect<ExtensionContributions, ExtensionLoadError>
 }
 
-// Pipeline / Subscription factories — see `pipeline.ts` and `subscription.ts`.
+// Pipeline / Subscription factories live in `domain/contribution.ts`.
 // `defineInterceptor` (legacy single shape) was deleted in C6 — use
-// `definePipeline` for transformers and `defineSubscription` for observers.
+// `pipeline(hook, handler)` for transformers and `subscription(event, failureMode, handler)` for observers.

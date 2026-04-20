@@ -11,7 +11,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { definePipeline } from "@gent/core/domain/pipeline"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { pipeline } from "@gent/core/domain/contribution"
@@ -43,20 +42,16 @@ describe("pipeline composition", () => {
   it.live("short-circuit: skipping next prevents inner chain from running", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipeline(
-        definePipeline("prompt.system", (input, next) => {
-          log.push("inner")
-          return next(input)
-        }),
-      ),
+      pipeline("prompt.system", (input, next) => {
+        log.push("inner")
+        return next(input)
+      }),
     ])
     const outer = makeExt("outer", "project", [
-      pipeline(
-        definePipeline("prompt.system", (_input, _next) => {
-          log.push("outer-short-circuit")
-          return Effect.succeed("override")
-        }),
-      ),
+      pipeline("prompt.system", (_input, _next) => {
+        log.push("outer-short-circuit")
+        return Effect.succeed("override")
+      }),
     ])
 
     const compiled = compilePipelines([inner, outer])
@@ -83,14 +78,12 @@ describe("pipeline composition", () => {
   it.live("multiple next() calls re-runs inner chain (retry semantics allowed)", () => {
     let baseCalls = 0
     const retrying = makeExt("retrier", "project", [
-      pipeline(
-        definePipeline("prompt.system", (input, next) =>
-          Effect.gen(function* () {
-            const first = yield* next(input)
-            const second = yield* next(input)
-            return `${first}|${second}`
-          }),
-        ),
+      pipeline("prompt.system", (input, next) =>
+        Effect.gen(function* () {
+          const first = yield* next(input)
+          const second = yield* next(input)
+          return `${first}|${second}`
+        }),
       ),
     ])
 
@@ -118,10 +111,9 @@ describe("pipeline composition", () => {
   it.live("typed errors from inner chain propagate to outer", () => {
     const passThrough = makeExt("pass", "project", [
       pipeline(
-        definePipeline("prompt.system", (input, next) =>
-          // outer doesn't catch — error must propagate
-          next(input),
-        ),
+        "prompt.system",
+        // outer doesn't catch — error must propagate
+        (input, next) => next(input),
       ),
     ])
 
@@ -143,28 +135,22 @@ describe("pipeline composition", () => {
   it.live("defect in middle pipeline falls through to outer's previous", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipeline(
-        definePipeline("prompt.system", (input, next) => {
-          log.push("inner")
-          return next(input)
-        }),
-      ),
+      pipeline("prompt.system", (input, next) => {
+        log.push("inner")
+        return next(input)
+      }),
     ])
     const middle = makeExt("middle", "user", [
-      pipeline(
-        definePipeline("prompt.system", () => {
-          log.push("middle-defect")
-          throw new Error("middle blew up")
-        }),
-      ),
+      pipeline("prompt.system", () => {
+        log.push("middle-defect")
+        throw new Error("middle blew up")
+      }),
     ])
     const outer = makeExt("outer", "project", [
-      pipeline(
-        definePipeline("prompt.system", (input, next) => {
-          log.push("outer")
-          return next(input).pipe(Effect.map((r) => `${r}!`))
-        }),
-      ),
+      pipeline("prompt.system", (input, next) => {
+        log.push("outer")
+        return next(input).pipe(Effect.map((r) => `${r}!`))
+      }),
     ])
 
     const compiled = compilePipelines([inner, middle, outer])

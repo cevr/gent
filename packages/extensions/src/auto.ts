@@ -17,9 +17,7 @@ import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   defineExtension,
-  definePipeline,
   defineResource,
-  defineSubscription,
   isRecord,
   pipeline,
   subscription,
@@ -665,8 +663,8 @@ export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   projections: [AutoProjection],
   capabilities: [AutoCheckpointTool],
-  pipelines: [pipeline(definePipeline("tool.result", journalInterceptorImpl))],
-  subscriptions: [subscription(defineSubscription("turn.after", "isolate", autoHandoffImpl))],
+  pipelines: [pipeline("tool.result", journalInterceptorImpl)],
+  subscriptions: [subscription("turn.after", "isolate", autoHandoffImpl)],
   // Single Resource carries the AutoJournal service layer AND the auto
   // workflow machine. The machine declares `AutoJournal` in its `slots`
   // requirements; the `layer` here provides it. C3.5b merge per the

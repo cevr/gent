@@ -14,7 +14,6 @@ import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { definePipeline } from "@gent/core/domain/pipeline"
 import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { pipeline } from "@gent/core/domain/contribution"
@@ -174,17 +173,15 @@ describe("scope precedence", () => {
       const make = (id: string, kind: "builtin" | "user" | "project") =>
         ext(id, kind, {
           pipelines: [
-            pipeline(
-              definePipeline("prompt.system", (input, next) => {
-                log.push(`${kind}-before`)
-                return next(input).pipe(
-                  Effect.map((r) => {
-                    log.push(`${kind}-after`)
-                    return r
-                  }),
-                )
-              }),
-            ),
+            pipeline("prompt.system", (input, next) => {
+              log.push(`${kind}-before`)
+              return next(input).pipe(
+                Effect.map((r) => {
+                  log.push(`${kind}-after`)
+                  return r
+                }),
+              )
+            }),
           ],
         })
 
