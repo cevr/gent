@@ -127,10 +127,41 @@ describe("composePromptWithTranscript", () => {
       { role: "user", parts: [{ type: "text", text: "live" }] },
     ]
     const result = composePromptWithTranscript(messages, "live")
-    // The image part renders to <image />; first user message had no text
-    // so it's omitted entirely.
+    // Image part with no src/mediaType still renders the bare element so
+    // the prior turn's existence is visible to the rebuilt session.
     expect(result).toContain("<assistant>\n<image />\n</assistant>")
     expect(result).not.toContain("<user>\n\n</user>")
+  })
+
+  test("renders image parts with mediaType and a URL src", () => {
+    const messages = [
+      { role: "user", parts: [{ type: "text", text: "look" }] },
+      {
+        role: "user",
+        parts: [{ type: "image", image: "https://example.com/cat.png", mediaType: "image/png" }],
+      },
+      { role: "assistant", parts: [{ type: "text", text: "saw it" }] },
+      { role: "user", parts: [{ type: "text", text: "again" }] },
+    ]
+    const result = composePromptWithTranscript(messages, "again")
+    expect(result).toContain('<image mediaType="image/png" src="https://example.com/cat.png" />')
+  })
+
+  test("truncates oversized inline base64 image payloads", () => {
+    const big = "A".repeat(2_000)
+    const messages = [
+      { role: "user", parts: [{ type: "text", text: "see" }] },
+      {
+        role: "user",
+        parts: [{ type: "image", image: big, mediaType: "image/jpeg" }],
+      },
+      { role: "user", parts: [{ type: "text", text: "carry" }] },
+    ]
+    const result = composePromptWithTranscript(messages, "carry")
+    expect(result).toContain('mediaType="image/jpeg"')
+    expect(result).toContain("…(truncated, 2000 chars)")
+    // The literal 2000-char run never lands in the prompt — bounded by cap.
+    expect(result).not.toContain(big)
   })
 
   test("returns live text unchanged when history has no renderable content", () => {

@@ -26,6 +26,20 @@ interface TranscriptPart {
   readonly toolName?: string
   readonly input?: unknown
   readonly output?: { readonly type: string; readonly value: unknown }
+  readonly image?: string
+  readonly mediaType?: string
+}
+
+// Cap inline base64 payloads in the historical transcript — multi-MB
+// screenshots blow context faster than they help. URLs and short data
+// URIs render in full; longer payloads keep the head + a length marker
+// so the model can still reference "the prior image" by media type and
+// position.
+const IMAGE_PAYLOAD_MAX = 256
+
+const renderImagePayload = (raw: string): string => {
+  if (raw.length <= IMAGE_PAYLOAD_MAX) return raw
+  return `${raw.slice(0, IMAGE_PAYLOAD_MAX)}…(truncated, ${raw.length} chars)`
 }
 
 interface MessageLike {
@@ -59,32 +73,52 @@ const stringifyForAttr = (value: unknown): string => {
   }
 }
 
+const renderText = (part: TranscriptPart): string | undefined => {
+  const text = part.text ?? ""
+  return text.length === 0 ? undefined : escapeXml(text)
+}
+
+const renderReasoning = (part: TranscriptPart): string | undefined => {
+  const text = part.text ?? ""
+  return text.length === 0 ? undefined : `<thinking>${escapeXml(text)}</thinking>`
+}
+
+const renderToolCall = (part: TranscriptPart): string => {
+  const name = part.toolName ?? "unknown"
+  const id = part.toolCallId ?? ""
+  const input = stringifyForAttr(part.input ?? null)
+  return `<tool name="${escapeXml(name)}" tool_id="${escapeXml(id)}" input="${escapeXml(input)}" />`
+}
+
+const renderToolResult = (part: TranscriptPart): string => {
+  const id = part.toolCallId ?? ""
+  const status = part.output?.type === "error-json" ? "error" : "ok"
+  const value = stringifyForAttr(part.output?.value ?? null)
+  return `<result tool_id="${escapeXml(id)}" status="${escapeXml(status)}">${escapeXml(value)}</result>`
+}
+
+const renderImage = (part: TranscriptPart): string => {
+  const mediaAttr =
+    part.mediaType !== undefined && part.mediaType.length > 0
+      ? ` mediaType="${escapeXml(part.mediaType)}"`
+      : ""
+  const src = part.image
+  if (src === undefined || src.length === 0) return `<image${mediaAttr} />`
+  return `<image${mediaAttr} src="${escapeXml(renderImagePayload(src))}" />`
+}
+
 const renderPart = (part: TranscriptPart): string | undefined => {
   switch (part.type) {
-    case "text": {
-      const text = part.text ?? ""
-      if (text.length === 0) return undefined
-      return escapeXml(text)
-    }
-    case "reasoning": {
-      const text = part.text ?? ""
-      if (text.length === 0) return undefined
-      return `<thinking>${escapeXml(text)}</thinking>`
-    }
-    case "tool-call": {
-      const name = part.toolName ?? "unknown"
-      const id = part.toolCallId ?? ""
-      const input = stringifyForAttr(part.input ?? null)
-      return `<tool name="${escapeXml(name)}" tool_id="${escapeXml(id)}" input="${escapeXml(input)}" />`
-    }
-    case "tool-result": {
-      const id = part.toolCallId ?? ""
-      const status = part.output?.type === "error-json" ? "error" : "ok"
-      const value = stringifyForAttr(part.output?.value ?? null)
-      return `<result tool_id="${escapeXml(id)}" status="${escapeXml(status)}">${escapeXml(value)}</result>`
-    }
+    case "text":
+      return renderText(part)
+    case "reasoning":
+      return renderReasoning(part)
+    case "tool-call":
+      return renderToolCall(part)
+    case "tool-result":
+      return renderToolResult(part)
     case "image":
-      return `<image />`
+      return renderImage(part)
     default:
       return undefined
   }
