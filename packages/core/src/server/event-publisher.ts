@@ -28,7 +28,6 @@ const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
 interface InnerPublisherDeps {
   readonly baseEventStore: EventStoreService
   readonly stateRuntime: MachineEngineService
-  readonly registryService: ExtensionRegistryService
   readonly bus: SubscriptionEngineService | undefined
 }
 
@@ -136,12 +135,7 @@ export const EventPublisherLive: Layer.Layer<
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
-    const deps: InnerPublisherDeps = {
-      baseEventStore,
-      stateRuntime,
-      registryService: registry,
-      bus,
-    }
+    const deps: InnerPublisherDeps = { baseEventStore, stateRuntime, bus }
     const pulseByTag = buildPulseIndex(registry)
 
     return EventPublisher.of({
@@ -200,7 +194,6 @@ export const makeEventPublisherRouter = (): {
       const primaryDeps: InnerPublisherDeps = {
         baseEventStore,
         stateRuntime: primaryStateRuntime,
-        registryService: primaryRegistry,
         bus: primaryBus,
       }
       const primaryPulseByTag = buildPulseIndex(primaryRegistry)
@@ -251,7 +244,6 @@ export const makeEventPublisherRouter = (): {
             const cwdDeps: InnerPublisherDeps = {
               baseEventStore,
               stateRuntime: profile.extensionStateRuntime,
-              registryService: profile.registryService,
               bus: profile.subscriptionEngine,
             }
 

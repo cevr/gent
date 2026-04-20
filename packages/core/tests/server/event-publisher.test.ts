@@ -363,4 +363,159 @@ describe("EventPublisher per-cwd router", () => {
     // Secondary engine got only the secondary event
     expect(secondaryDelivered).toEqual(["SecondaryEvent"])
   })
+
+  test("per-cwd SubscriptionEngine receives only its cwd's events", async () => {
+    const primaryBusChannels: string[] = []
+    const secondaryBusChannels: string[] = []
+
+    const primaryCwd = "/primary"
+    const secondaryCwd = "/secondary"
+    const sessionA = SessionId.of("session-primary")
+    const sessionB = SessionId.of("session-secondary")
+
+    const baseLayer = Layer.succeed(BaseEventStore, {
+      publish: () => Effect.void,
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
+    })
+
+    const noopEngine = {
+      publish: () => Effect.succeed([] as ReadonlyArray<string>),
+      send: () => Effect.void,
+      execute: () => Effect.die("not implemented") as never,
+      getActorStatuses: () => Effect.succeed([] as ReadonlyArray<never>),
+      terminateAll: () => Effect.void,
+    }
+
+    // Primary bus tracks channels it receives
+    const primaryBusLayer = Layer.succeed(SubscriptionEngine, {
+      emit: (envelope) =>
+        Effect.sync(() => {
+          primaryBusChannels.push(envelope.channel)
+        }),
+      on: () => Effect.succeed(() => {}),
+    })
+
+    // Secondary bus tracks channels it receives
+    const secondaryBus = {
+      emit: (envelope: { channel: string }) =>
+        Effect.sync(() => {
+          secondaryBusChannels.push(envelope.channel)
+        }),
+      on: () => Effect.succeed(() => {}),
+    }
+
+    const secondaryResolved = resolveExtensions([])
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const secondaryProfile = {
+      cwd: secondaryCwd,
+      extensions: [],
+      resolved: secondaryResolved,
+      registryService: { getResolved: () => secondaryResolved } as never,
+      driverRegistryService: {} as never,
+      extensionStateRuntime: noopEngine,
+      subscriptionEngine: secondaryBus,
+      baseSections: [],
+      instructions: "",
+    } as SessionProfile
+
+    const cwdRegistryLayer = SessionCwdRegistry.Test(
+      new Map([
+        [sessionA, primaryCwd],
+        [sessionB, secondaryCwd],
+      ]),
+    )
+
+    const profileCacheLayer = SessionProfileCache.Test(new Map([[secondaryCwd, secondaryProfile]]))
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: primaryCwd,
+      home: "/tmp",
+      platform: "test",
+    })
+
+    const primaryEngineLayer = Layer.succeed(MachineEngine, noopEngine)
+    const { handle, layer: routerLayer } = makeEventPublisherRouter()
+
+    const layer = Layer.provide(
+      routerLayer,
+      Layer.mergeAll(
+        baseLayer,
+        primaryEngineLayer,
+        primaryBusLayer,
+        registryLayer,
+        cwdRegistryLayer,
+        runtimePlatformLayer,
+      ),
+    )
+
+    await Effect.gen(function* () {
+      const profileCache = yield* SessionProfileCache
+      handle.profileCache = profileCache
+      const publisher = yield* EventPublisher
+
+      yield* publisher.publish(makeEvent("EventA", "session-primary", "branch-1"))
+      yield* publisher.publish(makeEvent("EventB", "session-secondary", "branch-2"))
+    }).pipe(Effect.provide(Layer.merge(layer, profileCacheLayer)), Effect.runPromise)
+
+    // Primary bus got only primary cwd's event
+    expect(primaryBusChannels).toEqual(["agent:EventA"])
+    // Secondary bus got only secondary cwd's event
+    expect(secondaryBusChannels).toEqual(["agent:EventB"])
+  })
+
+  test("unset handle falls back to primary cwd dispatch", async () => {
+    const primaryDelivered: string[] = []
+
+    const primaryCwd = "/primary"
+    const sessionB = SessionId.of("session-secondary")
+
+    const baseLayer = Layer.succeed(BaseEventStore, {
+      publish: () => Effect.void,
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
+    })
+
+    const primaryEngineLayer = Layer.succeed(MachineEngine, {
+      publish: (event) =>
+        Effect.sync(() => {
+          primaryDelivered.push(event._tag)
+          return [] as ReadonlyArray<string>
+        }),
+      send: () => Effect.void,
+      execute: () => Effect.die("not implemented"),
+      getActorStatuses: () => Effect.succeed([]),
+      terminateAll: () => Effect.void,
+    })
+
+    // Session maps to a different cwd, but handle is never set
+    const cwdRegistryLayer = SessionCwdRegistry.Test(new Map([[sessionB, "/other-cwd"]]))
+
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: primaryCwd,
+      home: "/tmp",
+      platform: "test",
+    })
+
+    const { layer: routerLayer } = makeEventPublisherRouter()
+
+    const layer = Layer.provide(
+      routerLayer,
+      Layer.mergeAll(
+        baseLayer,
+        primaryEngineLayer,
+        registryLayer,
+        cwdRegistryLayer,
+        runtimePlatformLayer,
+      ),
+    )
+
+    await Effect.gen(function* () {
+      const publisher = yield* EventPublisher
+      // handle.profileCache is never set — should fall back to primary
+      yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
+    }).pipe(Effect.provide(layer), Effect.runPromise)
+
+    // Primary engine received the event (fallback)
+    expect(primaryDelivered).toEqual(["FallbackEvent"])
+  })
 })
