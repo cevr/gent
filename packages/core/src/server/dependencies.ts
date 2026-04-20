@@ -36,7 +36,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
-import { EventPublisherLive } from "./event-publisher.js"
+import { makeEventPublisherRouter } from "./event-publisher.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
@@ -213,9 +213,20 @@ export const createDependencies = (config: DependenciesConfig) => {
   // creation; reads fall back to Storage on cache miss.
   const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
 
+  // Per-cwd EventPublisher router — dispatches events through the correct
+  // cwd's MachineEngine + pulseTags + SubscriptionEngine. The handle
+  // receives the SessionProfileCache after it's constructed (breaks
+  // circular dep: EventPublisher → baseServicesLive → allDeps → SessionProfileCache).
+  const { handle: publisherRouterHandle, layer: eventPublisherRouterLayer } =
+    makeEventPublisherRouter()
   const eventPublisherLive = Layer.provide(
-    EventPublisherLive,
-    Layer.mergeAll(baseEventStoreLive, extensionRegistryLive, runtimePlatformLive),
+    eventPublisherRouterLayer,
+    Layer.mergeAll(
+      baseEventStoreLive,
+      extensionRegistryLive,
+      runtimePlatformLive,
+      sessionCwdRegistryLive,
+    ),
   )
 
   const baseServicesLive = Layer.mergeAll(
@@ -356,18 +367,29 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
   // client opens a session. No eager wake on startup.
 
-  // SessionProfileCache — lazy per-cwd extension/config/prompt profiles
+  // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
+  // After construction, wire the profile cache into the EventPublisher
+  // router handle so per-cwd dispatch can resolve profiles.
   const sessionProfileCacheLive = Layer.provide(
-    SessionProfileCache.Live({
-      home: config.home,
-      platform: config.platform,
-      shell: config.shell,
-      osVersion: config.osVersion,
-      disabledExtensions: config.disabledExtensions,
-      scheduledJobCommand: config.scheduledJobCommand,
-      scheduledJobEnv: scheduledJobEnv(config),
-      extensions: config.extensions,
-    }),
+    Layer.effectDiscard(
+      Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        publisherRouterHandle.profileCache = cache
+      }),
+    ).pipe(
+      Layer.provideMerge(
+        SessionProfileCache.Live({
+          home: config.home,
+          platform: config.platform,
+          shell: config.shell,
+          osVersion: config.osVersion,
+          disabledExtensions: config.disabledExtensions,
+          scheduledJobCommand: config.scheduledJobCommand,
+          scheduledJobEnv: scheduledJobEnv(config),
+          extensions: config.extensions,
+        }),
+      ),
+    ),
     allDeps,
   )
 

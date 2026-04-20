@@ -32,6 +32,10 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "./extensions/resource-host/machine-engine.js"
+import {
+  SubscriptionEngine,
+  type SubscriptionEngineService,
+} from "./extensions/resource-host/subscription-engine.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
@@ -46,6 +50,8 @@ export interface SessionProfile {
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly extensionStateRuntime: MachineEngineService
+  /** Per-cwd subscription bus. Used by EventPublisher router for per-cwd dispatch. */
+  readonly subscriptionEngine: SubscriptionEngineService | undefined
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
 }
@@ -153,6 +159,9 @@ export class SessionProfileCache extends Context.Service<
             const registryService = Context.get(combinedCtx, ExtensionRegistry)
             const driverRegistryService = Context.get(combinedCtx, DriverRegistry)
             const stateRuntime = Context.get(combinedCtx, MachineEngine)
+            const subscriptionEngineOpt = Context.getOption(combinedCtx, SubscriptionEngine)
+            const subscriptionEngine =
+              subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
 
             // Compile base sections inside the built layer's runtime so any
             // dynamic prompt section (e.g. `Skills`) can read its required
@@ -173,6 +182,7 @@ export class SessionProfileCache extends Context.Service<
               registryService,
               driverRegistryService,
               extensionStateRuntime: stateRuntime,
+              subscriptionEngine,
               baseSections,
               instructions,
             }
@@ -268,6 +278,7 @@ export class SessionProfileCache extends Context.Service<
               ),
               MachineEngine,
             ),
+            subscriptionEngine: undefined,
             baseSections: [],
             instructions: "",
           }

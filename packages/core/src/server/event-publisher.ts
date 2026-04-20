@@ -5,32 +5,123 @@ import {
   ExtensionStateChanged,
   getEventBranchId,
   getEventSessionId,
+  type AgentEvent,
+  type EventStoreService,
 } from "../domain/event.js"
+import type { MachineEngineService } from "../runtime/extensions/resource-host/machine-engine.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
-import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import {
+  SubscriptionEngine,
+  type SubscriptionEngineService,
+} from "../runtime/extensions/resource-host/subscription-engine.js"
+import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
+import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
+import type { SessionProfileCacheService } from "../runtime/session-profile.js"
+import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
   Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
 
+// ── Inner publisher logic ──
+
+interface InnerPublisherDeps {
+  readonly baseEventStore: EventStoreService
+  readonly stateRuntime: MachineEngineService
+  readonly registryService: ExtensionRegistryService
+  readonly bus: SubscriptionEngineService | undefined
+}
+
 /**
- * EventPublisher routes agent events to storage + extension state runtime.
+ * Build the pulseByTag index from an extension registry's resolved set.
+ * Maps event `_tag` → set of extension IDs that declared `pulseTags`.
+ */
+const buildPulseIndex = (registryService: ExtensionRegistryService) => {
+  const pulseByTag = new Map<string, Set<string>>()
+  const resolved = registryService.getResolved()
+  for (const ext of resolved.extensions) {
+    const tags = ext.contributions.pulseTags ?? []
+    for (const tag of tags) {
+      const set = pulseByTag.get(tag) ?? new Set<string>()
+      set.add(ext.manifest.id)
+      pulseByTag.set(tag, set)
+    }
+  }
+  return pulseByTag
+}
+
+/**
+ * Inner publish logic. Dispatches an event through storage, machine engine,
+ * pulse index, and subscription bus. Used by both `EventPublisherLive`
+ * (single-profile, ephemeral children) and the router (per-cwd dispatch).
+ */
+const publishInner = (
+  event: AgentEvent,
+  deps: InnerPublisherDeps,
+  pulseByTag: Map<string, Set<string>>,
+) =>
+  Effect.gen(function* () {
+    yield* deps.baseEventStore.publish(event)
+    const sessionId = getEventSessionId(event)
+    if (sessionId === undefined) return
+
+    const branchId = getEventBranchId(event)
+    const extensionSession = { sessionId }
+    const transitioned = yield* deps.stateRuntime.publish(event, { sessionId, branchId })
+
+    if (branchId !== undefined && event._tag !== "ExtensionStateChanged") {
+      const subscribers = pulseByTag.get(event._tag)
+      const pulseTargets = new Set<string>(transitioned)
+      if (subscribers !== undefined) {
+        for (const id of subscribers) pulseTargets.add(id)
+      }
+      for (const extensionId of pulseTargets) {
+        const pulse = new ExtensionStateChanged({
+          sessionId,
+          branchId,
+          extensionId,
+        })
+        yield* deps.baseEventStore.publish(pulse).pipe(
+          Effect.catchEager((error) =>
+            logDeliveryFailure("extension.state-changed.publish.failed", {
+              sessionId,
+              branchId,
+              extensionId,
+              error: String(error),
+            }),
+          ),
+        )
+      }
+    }
+
+    if (deps.bus !== undefined) {
+      yield* deps.bus
+        .emit({
+          channel: `agent:${event._tag}`,
+          payload: event,
+          sessionId,
+          ...(branchId !== undefined ? { branchId } : {}),
+        })
+        .pipe(
+          Effect.provideService(CurrentExtensionSession, extensionSession),
+          Effect.catchEager((error) =>
+            logDeliveryFailure("extension.subscription.emit.failed", {
+              sessionId,
+              event: event._tag,
+              error: String(error),
+            }),
+          ),
+        )
+    }
+  })
+
+// ── Single-profile EventPublisher (ephemeral children, tests) ──
+
+/**
+ * EventPublisher for single-profile contexts (ephemeral children, tests).
  *
- * Pulse policy: `ExtensionStateChanged` is emitted for two distinct sources,
- * combined and deduped per (sessionId, branchId, extensionId):
- *   1. Workflow transitions — extensions whose machine actually transitioned
- *      in response to the published event (per `MachineEngine.publish`).
- *   2. `pulseTags` declarations — query-backed / projection-only extensions
- *      that declared which event tags invalidate their snapshot via the
- *      `pulseTags: [...]` bucket on `defineExtension`. These never have an
- *      actor, so without explicit declaration they would silently stale.
- *
- * No blanket per-event-per-observable fan-out. Pulses are surgical.
- *
- * NOTE: Currently uses the server-wide MachineEngine. In multi-cwd
- * shared mode (future), this would need profile-aware routing via SessionProfileCache.
- * For V1 (one cwd per server), the server-wide engine matches the active profile.
+ * Yields MachineEngine + ExtensionRegistry + optional SubscriptionEngine
+ * once at construction and dispatches all events through them.
  */
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
@@ -45,84 +136,138 @@ export const EventPublisherLive: Layer.Layer<
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
     const bus = busOpt._tag === "Some" ? busOpt.value : undefined
 
-    // Pre-compute event-tag → extensionIds index from `pulseTags` bucket
-    // declarations. Built once at startup; the loaded extension set is fixed
-    // for the runtime lifetime.
-    const pulseByTag = new Map<string, Set<string>>()
-    {
-      const resolved = registry.getResolved()
-      for (const ext of resolved.extensions) {
-        const tags = ext.contributions.pulseTags ?? []
-        for (const tag of tags) {
-          const set = pulseByTag.get(tag) ?? new Set<string>()
-          set.add(ext.manifest.id)
-          pulseByTag.set(tag, set)
-        }
-      }
+    const deps: InnerPublisherDeps = {
+      baseEventStore,
+      stateRuntime,
+      registryService: registry,
+      bus,
     }
+    const pulseByTag = buildPulseIndex(registry)
 
     return EventPublisher.of({
-      publish: (event) =>
-        Effect.gen(function* () {
-          yield* baseEventStore.publish(event)
-          const sessionId = getEventSessionId(event)
-          if (sessionId === undefined) return
-
-          const branchId = getEventBranchId(event)
-          const extensionSession = { sessionId }
-          // Drive workflow state machines. The returned list contains only
-          // extensions whose machine genuinely transitioned — used below to
-          // emit `ExtensionStateChanged` pulses with surgical precision.
-          const transitioned = yield* stateRuntime.publish(event, { sessionId, branchId })
-
-          // Defense in depth: never fan out pulses for the pulse itself.
-          if (branchId !== undefined && event._tag !== "ExtensionStateChanged") {
-            const subscribers = pulseByTag.get(event._tag)
-            const pulseTargets = new Set<string>(transitioned)
-            if (subscribers !== undefined) {
-              for (const id of subscribers) pulseTargets.add(id)
-            }
-            for (const extensionId of pulseTargets) {
-              const pulse = new ExtensionStateChanged({
-                sessionId,
-                branchId,
-                extensionId,
-              })
-              yield* baseEventStore.publish(pulse).pipe(
-                Effect.catchEager((error) =>
-                  logDeliveryFailure("extension.state-changed.publish.failed", {
-                    sessionId,
-                    branchId,
-                    extensionId,
-                    error: String(error),
-                  }),
-                ),
-              )
-            }
-          }
-
-          if (bus !== undefined) {
-            yield* bus
-              .emit({
-                channel: `agent:${event._tag}`,
-                payload: event,
-                sessionId,
-                ...(branchId !== undefined ? { branchId } : {}),
-              })
-              .pipe(
-                Effect.provideService(CurrentExtensionSession, extensionSession),
-                Effect.catchEager((error) =>
-                  logDeliveryFailure("extension.subscription.emit.failed", {
-                    sessionId,
-                    event: event._tag,
-                    error: String(error),
-                  }),
-                ),
-              )
-          }
-        }),
-
+      publish: (event) => publishInner(event, deps, pulseByTag),
       terminateSession: (_sessionId) => Effect.void,
     })
   }),
 )
+
+// ── Per-cwd EventPublisher router (server composition root) ──
+
+/**
+ * Mutable handle for late-binding SessionProfileCache into the router.
+ *
+ * Breaks the circular dependency: EventPublisher is in `baseServicesLive`
+ * but SessionProfileCache depends on `allDeps` (which includes baseServicesLive).
+ * The handle is set by `createDependencies` after profile cache construction.
+ */
+export interface EventPublisherRouterHandle {
+  profileCache: SessionProfileCacheService | undefined
+}
+
+/**
+ * Create a per-cwd EventPublisher router + a handle for late-binding
+ * the SessionProfileCache.
+ *
+ * Dispatches events through the correct cwd's MachineEngine, pulseTags
+ * index, and SubscriptionEngine. Falls back to the primary cwd when the
+ * session's cwd is unknown or matches the primary.
+ *
+ * Storage (BaseEventStore.publish) is shared — events go into one store
+ * regardless of cwd. Only the extension runtime dispatch is per-cwd.
+ */
+export const makeEventPublisherRouter = (): {
+  readonly handle: EventPublisherRouterHandle
+  readonly layer: Layer.Layer<
+    EventPublisher,
+    never,
+    BaseEventStore | MachineEngine | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
+  >
+} => {
+  const handle: EventPublisherRouterHandle = { profileCache: undefined }
+
+  const layer = Layer.effect(
+    EventPublisher,
+    Effect.gen(function* () {
+      const baseEventStore = yield* BaseEventStore
+      const primaryStateRuntime = yield* MachineEngine
+      const primaryRegistry = yield* ExtensionRegistry
+      const primaryBusOpt = yield* Effect.serviceOption(SubscriptionEngine)
+      const primaryBus = primaryBusOpt._tag === "Some" ? primaryBusOpt.value : undefined
+      const cwdRegistry = yield* SessionCwdRegistry
+      const platform = yield* RuntimePlatform
+
+      const primaryCwd = platform.cwd
+      const primaryDeps: InnerPublisherDeps = {
+        baseEventStore,
+        stateRuntime: primaryStateRuntime,
+        registryService: primaryRegistry,
+        bus: primaryBus,
+      }
+      const primaryPulseByTag = buildPulseIndex(primaryRegistry)
+
+      // Per-cwd pulse index cache — built lazily on first event for a cwd.
+      const cwdPulseCache = new Map<string, Map<string, Set<string>>>()
+
+      return EventPublisher.of({
+        publish: (event) =>
+          Effect.gen(function* () {
+            const sessionId = getEventSessionId(event)
+            if (sessionId === undefined) {
+              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              return
+            }
+
+            const sessionCwd = yield* cwdRegistry.lookup(sessionId)
+
+            if (sessionCwd === undefined || sessionCwd === primaryCwd) {
+              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              return
+            }
+
+            // Different cwd — resolve per-cwd profile if cache is available
+            if (handle.profileCache === undefined) {
+              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              return
+            }
+
+            const profile = yield* handle.profileCache.resolve(sessionCwd).pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  yield* logDeliveryFailure("event-publisher.profile-resolve.failed", {
+                    sessionId,
+                    sessionCwd,
+                    error: String(cause),
+                  })
+                  return undefined
+                }),
+              ),
+            )
+
+            if (profile === undefined) {
+              yield* publishInner(event, primaryDeps, primaryPulseByTag)
+              return
+            }
+
+            const cwdDeps: InnerPublisherDeps = {
+              baseEventStore,
+              stateRuntime: profile.extensionStateRuntime,
+              registryService: profile.registryService,
+              bus: profile.subscriptionEngine,
+            }
+
+            let pulseByTag = cwdPulseCache.get(sessionCwd)
+            if (pulseByTag === undefined) {
+              pulseByTag = buildPulseIndex(profile.registryService)
+              cwdPulseCache.set(sessionCwd, pulseByTag)
+            }
+
+            yield* publishInner(event, cwdDeps, pulseByTag)
+          }),
+
+        terminateSession: (_sessionId) => Effect.void,
+      })
+    }),
+  )
+
+  return { handle, layer }
+}

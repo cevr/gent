@@ -6,8 +6,10 @@ import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host/
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { CurrentExtensionSession } from "@gent/core/runtime/extensions/extension-actor-shared"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive, makeEventPublisherRouter } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
+import { SessionProfileCache, type SessionProfile } from "@gent/core/runtime/session-profile"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -241,5 +243,124 @@ describe("EventPublisher", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(delivered).toEqual(["OuterEvent", "BusNestedEvent"])
+  })
+})
+
+describe("EventPublisher per-cwd router", () => {
+  test("two cwds firing events dispatch through different MachineEngines", async () => {
+    const primaryDelivered: string[] = []
+    const secondaryDelivered: string[] = []
+
+    const primaryCwd = "/primary"
+    const secondaryCwd = "/secondary"
+    const sessionA = SessionId.of("session-primary")
+    const sessionB = SessionId.of("session-secondary")
+    const branchA = BranchId.of("branch-primary")
+    const branchB = BranchId.of("branch-secondary")
+
+    const baseLayer = Layer.succeed(BaseEventStore, {
+      publish: () => Effect.void,
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
+    })
+
+    // Primary MachineEngine tracks events dispatched to it
+    const primaryEngineLayer = Layer.succeed(MachineEngine, {
+      publish: (event) =>
+        Effect.sync(() => {
+          primaryDelivered.push(event._tag)
+          return [] as ReadonlyArray<string>
+        }),
+      send: () => Effect.void,
+      execute: () => Effect.die("not implemented"),
+      getActorStatuses: () => Effect.succeed([]),
+      terminateAll: () => Effect.void,
+    })
+
+    // Secondary MachineEngine tracks events dispatched to it
+    const secondaryEngine = {
+      publish: (event: AgentEvent) =>
+        Effect.sync(() => {
+          secondaryDelivered.push(event._tag)
+          return [] as ReadonlyArray<string>
+        }),
+      send: () => Effect.void,
+      execute: () => Effect.die("not implemented") as never,
+      getActorStatuses: () => Effect.succeed([] as ReadonlyArray<never>),
+      terminateAll: () => Effect.void,
+    }
+
+    // Build a SessionProfile for the secondary cwd. Only the fields
+    // used by the router's inner publish path need real values: the
+    // engine, registry's getResolved, and subscriptionEngine.
+    const secondaryResolved = resolveExtensions([])
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const secondaryProfile = {
+      cwd: secondaryCwd,
+      extensions: [],
+      resolved: secondaryResolved,
+      registryService: { getResolved: () => secondaryResolved } as never,
+      driverRegistryService: {} as never,
+      extensionStateRuntime: secondaryEngine,
+      subscriptionEngine: undefined,
+      baseSections: [],
+      instructions: "",
+    } as SessionProfile
+
+    // SessionCwdRegistry knows which session belongs to which cwd
+    const cwdRegistryLayer = SessionCwdRegistry.Test(
+      new Map([
+        [sessionA, primaryCwd],
+        [sessionB, secondaryCwd],
+      ]),
+    )
+
+    const profileCacheLayer = SessionProfileCache.Test(new Map([[secondaryCwd, secondaryProfile]]))
+
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: primaryCwd,
+      home: "/tmp",
+      platform: "test",
+    })
+
+    const { handle, layer: routerLayer } = makeEventPublisherRouter()
+
+    const layer = Layer.provide(
+      routerLayer,
+      Layer.mergeAll(
+        baseLayer,
+        primaryEngineLayer,
+        registryLayer,
+        cwdRegistryLayer,
+        runtimePlatformLayer,
+      ),
+    )
+
+    await Effect.gen(function* () {
+      // Set the profile cache handle (simulates what createDependencies does)
+      const profileCache = yield* SessionProfileCache
+      handle.profileCache = profileCache
+
+      const publisher = yield* EventPublisher
+
+      // Publish event for session in primary cwd
+      yield* publisher.publish({
+        _tag: "PrimaryEvent",
+        sessionId: sessionA,
+        branchId: branchA,
+      } as unknown as AgentEvent)
+
+      // Publish event for session in secondary cwd
+      yield* publisher.publish({
+        _tag: "SecondaryEvent",
+        sessionId: sessionB,
+        branchId: branchB,
+      } as unknown as AgentEvent)
+    }).pipe(Effect.provide(Layer.merge(layer, profileCacheLayer)), Effect.runPromise)
+
+    // Primary engine got only the primary event
+    expect(primaryDelivered).toEqual(["PrimaryEvent"])
+    // Secondary engine got only the secondary event
+    expect(secondaryDelivered).toEqual(["SecondaryEvent"])
   })
 })
