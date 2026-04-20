@@ -24,6 +24,13 @@ import { buildBillingHeaderValue } from "./signing.js"
 const MCP_PREFIX = "mcp_"
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header"
 
+// Counsel C7 — opencode parity. Models that don't accept the
+// `output_config.effort` knob: Anthropic rejects haiku requests with the
+// effort param set. Match by prefix so future haiku versions roll
+// forward automatically. (opencode reference uses a richer per-model
+// override map, ported in C8.)
+const HAIKU_PREFIX = "claude-haiku"
+
 // ── Payload Transforms (outgoing) ──
 
 /**
@@ -74,6 +81,70 @@ const transformToolChoice = (toolChoice: unknown): unknown => {
     return { ...toolChoice, name: prefixName(toolChoice["name"]) }
   }
   return toolChoice
+}
+
+/**
+ * Counsel C7 (opencode parity B) — drop orphan `tool_use` blocks (no
+ * matching downstream `tool_result`) and orphan `tool_result` blocks
+ * (no matching upstream `tool_use`) from message history. Anthropic
+ * rejects requests with mismatched pairs (HTTP 400), and a partial turn
+ * failure or mid-stream cancel can easily strand one half of a pair.
+ *
+ * After filtering, messages whose `content` array empties out are
+ * dropped entirely so the API doesn't see `{ role, content: [] }`.
+ */
+export const repairToolPairs = (
+  messages: ReadonlyArray<Record<string, unknown>>,
+): ReadonlyArray<Record<string, unknown>> => {
+  const toolUseIds = new Set<string>()
+  const toolResultIds = new Set<string>()
+
+  for (const message of messages) {
+    if (!isRecordArray(message["content"])) continue
+    for (const block of message["content"]) {
+      const id = block["id"]
+      if (block["type"] === "tool_use" && typeof id === "string") {
+        toolUseIds.add(id)
+      }
+      const toolUseId = block["tool_use_id"]
+      if (block["type"] === "tool_result" && typeof toolUseId === "string") {
+        toolResultIds.add(toolUseId)
+      }
+    }
+  }
+
+  const orphanedUses = new Set<string>()
+  for (const id of toolUseIds) {
+    if (!toolResultIds.has(id)) orphanedUses.add(id)
+  }
+  const orphanedResults = new Set<string>()
+  for (const id of toolResultIds) {
+    if (!toolUseIds.has(id)) orphanedResults.add(id)
+  }
+
+  if (orphanedUses.size === 0 && orphanedResults.size === 0) return messages
+
+  const filtered: Record<string, unknown>[] = []
+  for (const message of messages) {
+    if (!isRecordArray(message["content"])) {
+      filtered.push(message)
+      continue
+    }
+    const next = message["content"].filter((block) => {
+      const id = block["id"]
+      if (block["type"] === "tool_use" && typeof id === "string") {
+        return !orphanedUses.has(id)
+      }
+      const toolUseId = block["tool_use_id"]
+      if (block["type"] === "tool_result" && typeof toolUseId === "string") {
+        return !orphanedResults.has(toolUseId)
+      }
+      return true
+    })
+    if (next.length === 0) continue
+    filtered.push({ ...message, content: next })
+  }
+  return filtered
 }
 
 /**
@@ -183,21 +254,118 @@ export const transformSystem = (system: unknown): unknown => {
 }
 
 /**
+ * Counsel C7 (opencode parity A) — Anthropic's OAuth-billing path
+ * validates the `system[]` array against the Claude Code identity
+ * prefix. Third-party system content sitting alongside the prefix
+ * trips a 400 "out of extra usage" rejection. This relocator pulls
+ * any non-billing, non-identity system blocks out of `system[]` and
+ * prepends them to the first user message as a single text block
+ * (functionally equivalent because Anthropic's LLM concatenates
+ * system + first-user anyway, but the validator now sees a clean
+ * Claude-Code-shaped system array).
+ *
+ * Returns the new messages array; mutates nothing.
+ */
+const relocateSystemContent = (
+  systemBlocks: ReadonlyArray<Record<string, unknown>>,
+  messages: ReadonlyArray<Record<string, unknown>>,
+): {
+  readonly system: ReadonlyArray<Record<string, unknown>>
+  readonly messages: ReadonlyArray<Record<string, unknown>>
+} => {
+  const kept: Record<string, unknown>[] = []
+  const movedTexts: string[] = []
+  for (const block of systemBlocks) {
+    const text = block["text"]
+    const txt = typeof text === "string" ? text : ""
+    if (txt.startsWith(BILLING_HEADER_PREFIX) || txt.startsWith(SYSTEM_IDENTITY_PREFIX)) {
+      kept.push(block)
+    } else if (txt.length > 0) {
+      movedTexts.push(txt)
+    } else {
+      // Non-text blocks (cache_control sentinels, etc.) ride along
+      // with `kept` — we only relocate text content.
+      kept.push(block)
+    }
+  }
+  if (movedTexts.length === 0) return { system: systemBlocks, messages }
+
+  const firstUserIdx = messages.findIndex((m) => m["role"] === "user")
+  if (firstUserIdx === -1) return { system: systemBlocks, messages }
+
+  const prefix = movedTexts.join("\n\n")
+  const firstUser = messages[firstUserIdx]
+  if (firstUser === undefined) return { system: systemBlocks, messages }
+  const content = firstUser["content"]
+  let newContent: unknown
+  if (typeof content === "string") {
+    newContent = `${prefix}\n\n${content}`
+  } else if (isRecordArray(content)) {
+    newContent = [{ type: "text", text: prefix }, ...content]
+  } else {
+    // Unknown content shape — bail out rather than mangling it.
+    return { system: systemBlocks, messages }
+  }
+
+  const nextMessages = messages.slice()
+  nextMessages[firstUserIdx] = { ...firstUser, content: newContent }
+  return { system: kept, messages: nextMessages }
+}
+
+/**
+ * Counsel C7 (opencode parity C) — strip `output_config.effort` for
+ * models that don't support it (haiku family). Anthropic returns 400
+ * if effort is sent with a haiku model. The caller (`anthropic/index.ts`
+ * `buildAnthropicConfig`) sets `output_config.effort` from the gent
+ * reasoning level; we surgically remove it for haiku rather than
+ * making the caller model-aware.
+ */
+const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const model = payload["model"]
+  if (typeof model !== "string" || !model.startsWith(HAIKU_PREFIX)) return payload
+  const outputConfig = payload["output_config"]
+  if (!isRecord(outputConfig) || !("effort" in outputConfig)) return payload
+  const { effort: _effort, ...rest } = outputConfig
+  const next = { ...payload }
+  if (Object.keys(rest).length === 0) {
+    delete next["output_config"]
+  } else {
+    next["output_config"] = rest
+  }
+  return next
+}
+
+/**
  * Apply every outgoing OAuth-billing transform. Order is load-bearing:
  *   1. Tools first — billing sees the `tools` array indirectly via the
  *      messages, but PascalCase prefix must be applied so the wire
  *      format matches what Claude Code itself sends.
- *   2. Messages next — same reason; tool_use blocks in history need
- *      PascalCase prefixing before billing inspects the user text.
- *   3. tool_choice — independent.
- *   4. system LAST — depends on the (already-prefixed) messages array
- *      to compute the billing hash from the first user message text.
+ *   2. repairToolPairs (counsel C7 / opencode parity B) — drop orphan
+ *      tool_use / tool_result blocks BEFORE PascalCase prefixing so we
+ *      don't compute billing from a message that the API would reject.
+ *   3. Messages next — same reason as tools; tool_use blocks in
+ *      history need PascalCase prefixing before billing inspects the
+ *      user text.
+ *   4. tool_choice — independent.
+ *   5. system — depends on the (already-prefixed) messages array to
+ *      compute the billing hash.
+ *   6. relocateSystemContent (counsel C7 / opencode parity A) — pull
+ *      third-party system blocks into the first user message AFTER
+ *      buildSystemArray attaches the billing + identity entries, so
+ *      the relocator only sees post-attach state and never moves the
+ *      billing/identity blocks out by mistake.
+ *   7. stripHaikuEffort (counsel C7 / opencode parity C) — final
+ *      payload-shape correction independent of the others.
  */
 export const transformPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
-  const result: Record<string, unknown> = { ...payload }
+  let result: Record<string, unknown> = { ...payload }
 
   if (isRecordArray(result["tools"])) {
     result["tools"] = transformTools(result["tools"])
+  }
+
+  if (isRecordArray(result["messages"])) {
+    result["messages"] = repairToolPairs(result["messages"])
   }
 
   if (isRecordArray(result["messages"])) {
@@ -209,7 +377,12 @@ export const transformPayload = (payload: Record<string, unknown>): Record<strin
   }
 
   const messages = isRecordArray(result["messages"]) ? result["messages"] : []
-  result["system"] = buildSystemArray(result["system"], messages)
+  const systemAfterBuild = buildSystemArray(result["system"], messages)
+  const relocated = relocateSystemContent(systemAfterBuild, messages)
+  result["system"] = relocated.system
+  result["messages"] = relocated.messages
+
+  result = stripHaikuEffort(result)
 
   return result
 }
