@@ -187,6 +187,13 @@ function makeLiveService(): ClaudeSdkServiceShape {
           // are off; the only tool surface is the codemode MCP `execute`
           // proxy passed via `mcpServers`. Plan invariant.
           tools: [],
+          // Bare-mode isolation. The original plan target was a hypothetical
+          // `claude acp --bare` CLI; the SDK has no equivalent flag, but
+          // omitting `settingSources` puts the SDK in "isolation mode" — no
+          // user/project/local settings, no CLAUDE.md, no project-defined
+          // agents/hooks/mcp servers leak in. Set to `[]` explicitly so the
+          // intent is visible and survives a future SDK default change.
+          settingSources: [],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           // Token-by-token deltas via `SDKPartialAssistantMessage` —
