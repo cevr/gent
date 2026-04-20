@@ -863,37 +863,77 @@ const fetchWithBetaRetry = (
   )
 }
 
-export const createAnthropicKeychainFetch = (
-  loadCredentials: () => Promise<ClaudeCredentials | null>,
-): typeof fetch => {
-  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const latest = await loadCredentials()
+/**
+ * Two-callback boundary for the Anthropic SDK fetcher: `load` produces
+ * cached/refreshed credentials, `invalidate` busts the cache so the
+ * next `load` re-reads. The fetcher uses `invalidate` on a 401 mid-
+ * flight to recover from a token that expired between the cache check
+ * and the wire send (the credential cache TTL is 30s; a token's last
+ * minute can fall inside that window).
+ *
+ * Defined as a local interface mirror of `runtime-boundary.ts`'s
+ * `CredentialLoader` so this module avoids importing from
+ * `runtime-boundary.ts` and creating a circular dependency
+ * (runtime-boundary already imports `freshEnoughForUse` etc. from here).
+ */
+export interface AnthropicCredentialLoader {
+  readonly load: () => Promise<ClaudeCredentials | null>
+  readonly invalidate: () => void
+}
+
+export const createAnthropicKeychainFetch = (loader: AnthropicCredentialLoader): typeof fetch => {
+  const requireFreshCreds = async (): Promise<ClaudeCredentials> => {
+    const latest = await loader.load()
     if (latest === null) {
       throw new Error(
         "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
       )
     }
+    return latest
+  }
 
-    const requestInit = init ?? {}
-
-    // Extract model ID from body for header construction
-    const bodyStr = typeof requestInit.body === "string" ? requestInit.body : undefined
-    let modelId = "unknown"
-    if (bodyStr !== undefined) {
-      try {
-        const body: unknown = JSON.parse(bodyStr)
-        if (typeof body === "object" && body !== null && "model" in body) {
-          const m = (body as Record<string, unknown>)["model"]
-          if (typeof m === "string") modelId = m
-        }
-      } catch {
-        // ignore
+  const extractModelId = (init: RequestInit): string => {
+    const bodyStr = typeof init.body === "string" ? init.body : undefined
+    if (bodyStr === undefined) return "unknown"
+    try {
+      const body: unknown = JSON.parse(bodyStr)
+      if (typeof body === "object" && body !== null && "model" in body) {
+        const m = (body as Record<string, unknown>)["model"]
+        if (typeof m === "string") return m
       }
+    } catch {
+      // ignore — modelId stays "unknown"
+    }
+    return "unknown"
+  }
+
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestInit = init ?? {}
+    const modelId = extractModelId(requestInit)
+
+    let creds = await requireFreshCreds()
+    // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-
+    // returning function (typeof fetch). Promise edge lives in
+    // `fetch-boundary.ts`.
+    let response = await runAnthropicFetcher(
+      fetchWithBetaRetry(input, requestInit, creds.accessToken, modelId),
+    )
+
+    // 401 recovery: cache TTL (30s) can outlive the token's last minute,
+    // and a token can be revoked server-side between cache fill and
+    // wire send. Bust the cache once and retry — `loader.load()` then
+    // re-reads from keychain or forces a refresh. One retry only; a
+    // 401 on the second attempt is a real auth failure (revoked
+    // session, missing scope) and needs to surface to the caller.
+    if (response.status === 401) {
+      loader.invalidate()
+      creds = await requireFreshCreds()
+      response = await runAnthropicFetcher(
+        fetchWithBetaRetry(input, requestInit, creds.accessToken, modelId),
+      )
     }
 
-    // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-returning
-    // function (typeof fetch). Promise edge lives in `fetch-boundary.ts`.
-    return runAnthropicFetcher(fetchWithBetaRetry(input, requestInit, latest.accessToken, modelId))
+    return response
   }
   return Object.assign(fetcher, {
     preconnect: fetch.preconnect?.bind(fetch),

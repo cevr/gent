@@ -111,14 +111,36 @@ const loadCredentialsEffect = (
   })
 
 /**
- * Build the loader thunk the Anthropic SDK invokes. The thunk crosses
- * Effect→Promise via `Effect.runPromise`; the loader's body has its
- * context channel fully provided (only Clock + closure state).
+ * Two-callback shape for the Anthropic SDK boundary. `load` returns
+ * cached/refreshed credentials (Promise edge); `invalidate` busts the
+ * cache so the next `load` re-reads from keychain or forces a refresh.
+ *
+ * The split keeps cache *invalidation* a separate concern from
+ * credential *loading* — the fetcher detects staleness (401 mid-flight)
+ * and calls `invalidate()` without knowing the cache shape, then retries
+ * once. Equivalent shapes considered + rejected:
+ *   - `load(forceRefresh?: boolean)`: callers thread the flag through
+ *     every layer; the boundary loses one-job-per-callback.
+ *   - exposing `cache` directly: leaks the cell shape across the
+ *     Effect→Promise edge.
  */
-export const buildAnthropicCredentialLoader =
-  (
-    cache: CredentialCache,
-    authInfo?: ProviderAuthInfo,
-  ): (() => Promise<ClaudeCredentials | null>) =>
-  () =>
-    Effect.runPromise(loadCredentialsEffect(cache, authInfo))
+export interface CredentialLoader {
+  readonly load: () => Promise<ClaudeCredentials | null>
+  readonly invalidate: () => void
+}
+
+/**
+ * Build the loader pair the Anthropic SDK + keychain fetcher consume.
+ * The thunks cross Effect→Promise via `Effect.runPromise`; the loader
+ * body has its context fully provided (only Clock + closure state).
+ */
+export const buildAnthropicCredentialLoader = (
+  cache: CredentialCache,
+  authInfo?: ProviderAuthInfo,
+): CredentialLoader => ({
+  load: () => Effect.runPromise(loadCredentialsEffect(cache, authInfo)),
+  invalidate: () => {
+    cache.creds = null
+    cache.at = 0
+  },
+})

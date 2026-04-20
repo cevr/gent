@@ -91,8 +91,8 @@ export const AnthropicExtension = defineExtension({
         // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
         // system identity injection, and cache control at the structured payload level.
         // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
-        const loadCredentials = buildAnthropicCredentialLoader(credentialCache, authInfo)
-        const keychainFetch = createAnthropicKeychainFetch(loadCredentials)
+        const credentialLoader = buildAnthropicCredentialLoader(credentialCache, authInfo)
+        const keychainFetch = createAnthropicKeychainFetch(credentialLoader)
 
         const customFetchLayer = Layer.succeed(
           FetchHttpClient.Fetch,
