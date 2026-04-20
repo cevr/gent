@@ -14,7 +14,9 @@ import {
   SessionStarted,
   SessionSettingsUpdated,
 } from "../domain/event.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
 import { Provider } from "../providers/provider.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
@@ -62,7 +64,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
   static Live = Layer.effect(
     SessionCommands,
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessionStorage = yield* SessionStorage
+      const branchStorage = yield* BranchStorage
+      const messageStorage = yield* MessageStorage
       const actorProcess = yield* ActorProcess
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
@@ -73,7 +77,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
       ) {
-        const messages = yield* storage.listMessages(branchId)
+        const messages = yield* messageStorage.listMessages(branchId)
         if (messages.length === 0) return ""
         const firstMessage = messages[0]
         if (firstMessage === undefined) return ""
@@ -126,7 +130,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) {
         const sessionId = SessionId.of(Bun.randomUUIDv7())
         if (input.parentSessionId !== undefined) {
-          const parent = yield* storage.getSession(input.parentSessionId)
+          const parent = yield* sessionStorage.getSession(input.parentSessionId)
           if (parent === undefined) {
             return yield* new NotFoundError({
               message: `Parent session not found: ${input.parentSessionId}`,
@@ -154,8 +158,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        yield* storage.createSession(session)
-        yield* storage.createBranch(branch)
+        yield* sessionStorage.createSession(session)
+        yield* branchStorage.createBranch(branch)
         // Pre-record the (sessionId → cwd) binding BEFORE the first event
         // publish so the per-cwd EventPublisher router can dispatch the
         // SessionStarted pulse to the right SessionProfile without falling
@@ -196,7 +200,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* storage.createBranch(branch)
+        yield* branchStorage.createBranch(branch)
         yield* eventPublisher.publish(
           new BranchCreated({
             sessionId: branch.sessionId,
@@ -215,11 +219,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const switchBranch = Effect.fn("SessionCommands.switchBranch")(function* (
         input: SwitchBranchInput,
       ) {
-        const fromBranch = yield* storage.getBranch(input.fromBranchId)
+        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({ message: "From branch not found", entity: "branch" })
         }
-        const toBranch = yield* storage.getBranch(input.toBranchId)
+        const toBranch = yield* branchStorage.getBranch(input.toBranchId)
         if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({ message: "To branch not found", entity: "branch" })
         }
@@ -229,7 +233,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             Effect.catchEager(() => Effect.succeed("")),
           )
           if (summary !== "") {
-            yield* storage.updateBranchSummary(input.fromBranchId, summary)
+            yield* branchStorage.updateBranchSummary(input.fromBranchId, summary)
             yield* eventPublisher.publish(
               new BranchSummarized({
                 sessionId: input.sessionId,
@@ -241,9 +245,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         // Persist active branch pointer before publishing event
-        const session = yield* storage.getSession(input.sessionId)
+        const session = yield* sessionStorage.getSession(input.sessionId)
         if (session !== undefined) {
-          yield* storage.updateSession(
+          yield* sessionStorage.updateSession(
             new Session({
               ...session,
               activeBranchId: input.toBranchId,
@@ -264,12 +268,12 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const forkBranch = Effect.fn("SessionCommands.forkBranch")(function* (
         input: ForkBranchInput,
       ) {
-        const fromBranch = yield* storage.getBranch(input.fromBranchId)
+        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
-        const messages = yield* storage.listMessages(input.fromBranchId)
+        const messages = yield* messageStorage.listMessages(input.fromBranchId)
         const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
         if (targetIndex === -1) {
           return yield* new NotFoundError({
@@ -286,10 +290,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* storage.createBranch(branch)
+        yield* branchStorage.createBranch(branch)
 
         for (const message of messages.slice(0, targetIndex + 1)) {
-          yield* storage.createMessage(
+          yield* messageStorage.createMessage(
             new Message({
               id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: message.sessionId,
@@ -348,7 +352,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             Effect.catchDefect(() => Effect.void),
             Effect.tap(() => eventPublisher.terminateSession(sessionId)),
             Effect.tap(() => eventStore.removeSession(sessionId)),
-            Effect.tap(() => storage.deleteSession(sessionId)),
+            Effect.tap(() => sessionStorage.deleteSession(sessionId)),
             Effect.tap(() => sessionCwdRegistry.forget(sessionId)),
             Effect.tap(() =>
               Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId })),
@@ -365,11 +369,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
         updateSessionReasoningLevel: Effect.fn("SessionCommands.updateSessionReasoningLevel")(
           function* (input: UpdateSessionReasoningLevelInput) {
-            const session = yield* storage.getSession(input.sessionId)
+            const session = yield* sessionStorage.getSession(input.sessionId)
             if (session === undefined) {
               return yield* new NotFoundError({ message: "Session not found", entity: "session" })
             }
-            yield* storage.updateSession(
+            yield* sessionStorage.updateSession(
               new Session({
                 ...session,
                 reasoningLevel: input.reasoningLevel,

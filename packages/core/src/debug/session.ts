@@ -13,7 +13,9 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "../domain/message.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 
 export interface DebugSessionInfo {
@@ -38,7 +40,9 @@ const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown
 const nowPlus = (offsetMs: number) => new Date(Date.now() + offsetMs)
 
 export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) {
-  const storage = yield* Storage
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const messages = yield* MessageStorage
   const sessionId = SessionId.of(Bun.randomUUIDv7())
   const branchId = BranchId.of(Bun.randomUUIDv7())
 
@@ -55,8 +59,8 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-60_000),
   })
 
-  yield* storage.createSession(session)
-  yield* storage.createBranch(branch)
+  yield* sessions.createSession(session)
+  yield* branches.createBranch(branch)
 
   const user1 = new Message({
     id: MessageId.of(Bun.randomUUIDv7()),
@@ -334,7 +338,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   ]
 
   for (const message of seedMessages) {
-    yield* storage.createMessage(message)
+    yield* messages.createMessage(message)
   }
 
   return {

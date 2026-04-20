@@ -44,7 +44,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -206,6 +206,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       const baseDeps = Layer.mergeAll(
         BunServices.layer,
         storageLayer,
+        subTagLayers(storageLayer),
         config.providerLayer,
         extensionRegistryLive,
         driverRegistryLive,

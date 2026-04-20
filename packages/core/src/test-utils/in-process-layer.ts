@@ -30,7 +30,7 @@ import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
@@ -71,8 +71,10 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
   // through `ProjectionRegistry`'s failure isolation.
   const machineExecuteLive = MachineExecute.Live.pipe(Layer.provideMerge(extensionRuntimeLive))
 
+  const memoryStorage = Storage.MemoryWithSql()
   const baseDeps = Layer.mergeAll(
-    Storage.MemoryWithSql(),
+    memoryStorage,
+    subTagLayers(memoryStorage),
     providerLive,
     extensionRegistryLive,
     extensionRuntimeLive,

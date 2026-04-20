@@ -23,7 +23,9 @@ import {
   ToolResultPart,
 } from "@gent/core/domain/message.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
-import { Storage } from "@gent/core/storage/sqlite-storage.js"
+import { SessionStorage } from "@gent/core/storage/session-storage.js"
+import { BranchStorage } from "@gent/core/storage/branch-storage.js"
+import { MessageStorage } from "@gent/core/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
@@ -181,7 +183,7 @@ const createParentTurnMessages = (
 
 const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
     const user = new Message({
       id: MessageId.of(Bun.randomUUIDv7()),
@@ -193,7 +195,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
       createdAt: yield* DateTime.nowAsDate,
     })
 
-    yield* storage.createMessage(user)
+    yield* messageStorage.createMessage(user)
     yield* eventStore.publish(
       new MessageReceived({
         sessionId: params.sessionId,
@@ -206,12 +208,13 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
 
 const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const sessionStorage = yield* SessionStorage
+    const branchStorage = yield* BranchStorage
     const sessionId = SessionId.of(Bun.randomUUIDv7())
     const branchId = BranchId.of(Bun.randomUUIDv7())
     const now = yield* DateTime.nowAsDate
 
-    yield* storage.createSession(
+    yield* sessionStorage.createSession(
       new Session({
         id: sessionId,
         name: `debug child ${iteration}`,
@@ -222,7 +225,7 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
         updatedAt: now,
       }),
     )
-    yield* storage.createBranch(
+    yield* branchStorage.createBranch(
       new Branch({
         id: branchId,
         sessionId,
@@ -333,7 +336,7 @@ const persistDebugTurn = (
   readSessionToolCallId: ToolCallId,
 ) =>
   Effect.gen(function* () {
-    const storage = yield* Storage
+    const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
     const { assistant, tool } = createParentTurnMessages(
       params,
@@ -344,7 +347,7 @@ const persistDebugTurn = (
       readSessionToolCallId,
     )
 
-    yield* storage.createMessage(assistant)
+    yield* messageStorage.createMessage(assistant)
     yield* eventStore.publish(
       new MessageReceived({
         sessionId: params.sessionId,
@@ -353,7 +356,7 @@ const persistDebugTurn = (
         role: "assistant",
       }),
     )
-    yield* storage.createMessage(tool)
+    yield* messageStorage.createMessage(tool)
     yield* eventStore.publish(
       new MessageReceived({
         sessionId: params.sessionId,

@@ -31,7 +31,7 @@ import {
 } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -228,9 +228,11 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
   )
 
+  const storageSubTags = subTagLayers(storageLive)
   const baseServicesLive = Layer.mergeAll(
     runtimePlatformLive,
     storageLive,
+    storageSubTags,
     baseEventStoreLive,
     eventPublisherLive,
     sessionCwdRegistryLive,

@@ -104,10 +104,10 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 
 ### Test philosophy
 
-- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `createSequenceProvider` for LLM responses.
+- **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `Provider.Sequence` for LLM responses.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
-- **Mock at system boundaries**: only the LLM provider (via `createSequenceProvider` / `DebugProvider`). Use real services inside the boundary.
-- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `createSequenceProvider` or `DebugProvider()` for provider mocking, `EventStore.Memory` for in-memory event stores.
+- **Mock at system boundaries**: only the LLM provider (via `Provider.Sequence` / `Provider.Debug`). Use real services inside the boundary.
+- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `Provider.Sequence([...])` or `Provider.Debug()` for provider mocking, `EventStore.Memory` for in-memory event stores. Step builders (`textStep`, `toolCallStep`, etc.) are exported from `@gent/core/providers/provider`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -127,7 +127,7 @@ New extension tests should include at least one RPC acceptance test via `createR
 ```typescript
 // Sequence provider for deterministic LLM responses
 const { layer: providerLayer, controls } =
-  yield * createSequenceProvider([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
+  yield * Provider.Sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
 // Full in-process stack (AppServicesLive + real event store + real storage)
 import { baseLocalLayer } from "@gent/core/test-utils/in-process-layer"

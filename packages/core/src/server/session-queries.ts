@@ -3,7 +3,11 @@ import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
+import { EventStorage } from "../storage/event-storage.js"
+import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
@@ -46,37 +50,41 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
   static Live = Layer.effect(
     SessionQueries,
     Effect.gen(function* () {
-      const storage = yield* Storage
+      const sessionStorage = yield* SessionStorage
+      const branchStorage = yield* BranchStorage
+      const messageStorage = yield* MessageStorage
+      const eventStorage = yield* EventStorage
+      const relationshipStorage = yield* RelationshipStorage
       const actorProcess = yield* ActorProcess
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
-        const sessions = yield* storage.listSessions()
-        const firstBranches = yield* storage.listFirstBranches()
+        const sessions = yield* sessionStorage.listSessions()
+        const firstBranches = yield* sessionStorage.listFirstBranches()
         const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
         return sessions.map((session) => sessionToInfo(session, branchMap.get(session.id)))
       })
 
       const getSession = Effect.fn("SessionQueries.getSession")(function* (sessionId: SessionId) {
-        const session = yield* storage.getSession(sessionId)
+        const session = yield* sessionStorage.getSession(sessionId)
         if (session === undefined) return null
-        const branches = yield* storage.listBranches(sessionId)
+        const branches = yield* branchStorage.listBranches(sessionId)
         return sessionToInfo(session, branches[0]?.id)
       })
 
       const getLastSessionByCwd = Effect.fn("SessionQueries.getLastSessionByCwd")(function* (
         cwd: string,
       ) {
-        const session = yield* storage.getLastSessionByCwd(cwd)
+        const session = yield* sessionStorage.getLastSessionByCwd(cwd)
         if (session === undefined) return null
-        const branches = yield* storage.listBranches(session.id)
+        const branches = yield* branchStorage.listBranches(session.id)
         return sessionToInfo(session, branches[0]?.id)
       })
 
       const getChildSessions = Effect.fn("SessionQueries.getChildSessions")(function* (
         parentSessionId: SessionId,
       ) {
-        const children = yield* storage.getChildSessions(parentSessionId)
-        const firstBranches = yield* storage.listFirstBranches()
+        const children = yield* relationshipStorage.getChildSessions(parentSessionId)
+        const firstBranches = yield* sessionStorage.listFirstBranches()
         const branchMap = new Map(firstBranches.map((row) => [row.sessionId, row.branchId]))
         return children.map((session) => sessionToInfo(session, branchMap.get(session.id)))
       })
@@ -85,7 +93,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         session: Session,
       ): Effect.Effect<SessionTreeNode, AppServiceError> =>
         Effect.gen(function* () {
-          const children = yield* storage.getChildSessions(session.id)
+          const children = yield* relationshipStorage.getChildSessions(session.id)
           return {
             session,
             children: yield* Effect.forEach(children, buildSessionTreeNode, { concurrency: 5 }),
@@ -95,7 +103,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const getSessionTree = Effect.fn("SessionQueries.getSessionTree")(function* (
         rootSessionId: SessionId,
       ) {
-        const rootSession = yield* storage.getSession(rootSessionId)
+        const rootSession = yield* sessionStorage.getSession(rootSessionId)
         if (rootSession === undefined) {
           return yield* new NotFoundError({
             message: `Session not found: ${rootSessionId}`,
@@ -108,8 +116,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const getBranchTree = Effect.fn("SessionQueries.getBranchTree")(function* (
         sessionId: SessionId,
       ) {
-        const branches = yield* storage.listBranches(sessionId)
-        const messageCounts = yield* storage.countMessagesByBranches(
+        const branches = yield* branchStorage.listBranches(sessionId)
+        const messageCounts = yield* branchStorage.countMessagesByBranches(
           branches.map((branch) => branch.id),
         )
         return buildBranchTree(branches, messageCounts)
@@ -118,17 +126,17 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")(function* (
         input: GetSessionSnapshotInput,
       ) {
-        const session = yield* storage.getSession(input.sessionId)
+        const session = yield* sessionStorage.getSession(input.sessionId)
         if (session === undefined) {
           return yield* new NotFoundError({ message: "Session not found", entity: "session" })
         }
-        const branch = yield* storage.getBranch(input.branchId)
+        const branch = yield* branchStorage.getBranch(input.branchId)
         if (branch === undefined || branch.sessionId !== input.sessionId) {
           return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
-        const messages = yield* storage.listMessages(input.branchId)
-        const lastEventId = yield* storage.getLatestEventId({
+        const messages = yield* messageStorage.listMessages(input.branchId)
+        const lastEventId = yield* eventStorage.getLatestEventId({
           sessionId: input.sessionId,
           branchId: input.branchId,
         })
@@ -176,10 +184,10 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         getChildSessions,
         getSessionTree,
         listBranches: (sessionId) =>
-          storage.listBranches(sessionId).pipe(Effect.map((xs) => xs.map(branchToInfo))),
+          branchStorage.listBranches(sessionId).pipe(Effect.map((xs) => xs.map(branchToInfo))),
         getBranchTree,
         listMessages: (branchId) =>
-          storage.listMessages(branchId).pipe(Effect.map((xs) => xs.map(messageToInfo))),
+          messageStorage.listMessages(branchId).pipe(Effect.map((xs) => xs.map(messageToInfo))),
         getQueuedMessages: ({ sessionId, branchId }) =>
           actorProcess
             .getQueuedMessages({ sessionId, branchId })

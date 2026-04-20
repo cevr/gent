@@ -892,6 +892,31 @@ const makeStorage = Effect.gen(function* () {
  * sub-Tags alongside the existing Storage Tag. NOT wired inside Storage
  * class methods to prevent ephemeral compositor leakage.
  */
+/** Build 6 sub-Tag layers from a StorageService value (no extra scope). */
+const subTagLayersFromService = (
+  s: StorageService,
+): Layer.Layer<
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | ExtensionStateStorage
+> =>
+  Layer.mergeAll(
+    SessionStorage.fromStorage(s),
+    BranchStorage.fromStorage(s),
+    MessageStorage.fromStorage(s),
+    EventStorage.fromStorage(s),
+    RelationshipStorage.fromStorage(s),
+    ExtensionStateStorage.fromStorage(s),
+  )
+
+/**
+ * Build 6 focused sub-Tag layers from a layer that provides Storage.
+ * Called at composition roots (dependencies.ts, test layers) to wire
+ * sub-Tags alongside the existing Storage Tag.
+ */
 export const subTagLayers = <E, R>(
   base: Layer.Layer<Storage, E, R>,
 ): Layer.Layer<
@@ -907,19 +932,33 @@ export const subTagLayers = <E, R>(
   Layer.unwrap(
     Effect.gen(function* () {
       const s = yield* Storage
-      return Layer.mergeAll(
-        SessionStorage.fromStorage(s),
-        BranchStorage.fromStorage(s),
-        MessageStorage.fromStorage(s),
-        EventStorage.fromStorage(s),
-        RelationshipStorage.fromStorage(s),
-        ExtensionStateStorage.fromStorage(s),
-      )
+      return subTagLayersFromService(s)
     }).pipe(
       // @effect-diagnostics-next-line strictEffectProvide:off — layer composition helper, not a runtime call
       Effect.provide(base),
     ),
   )
+
+/**
+ * Layer that derives sub-Tags from Storage already in context.
+ * Use with `Layer.provideMerge` when Storage is already provided — this
+ * avoids double-instantiating the base layer (no `base` argument needed).
+ */
+const subTagsFromContext: Layer.Layer<
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | ExtensionStateStorage,
+  never,
+  Storage
+> = Layer.unwrap(
+  Effect.gen(function* () {
+    const s = yield* Storage
+    return subTagLayersFromService(s)
+  }),
+)
 
 export class Storage extends Context.Service<Storage, StorageService>()(
   "@gent/core/src/storage/sqlite-storage/Storage",
@@ -942,7 +981,17 @@ export class Storage extends Context.Service<Storage, StorageService>()(
   static LiveWithSql = (
     dbPath: string,
   ): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage,
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -959,6 +1008,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
+      Layer.provide(subTagsFromContext, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
@@ -973,7 +1023,17 @@ export class Storage extends Context.Service<Storage, StorageService>()(
 
   /** Memory layer that also exposes SqlClient and focused storage services */
   static MemoryWithSql = (): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
@@ -981,6 +1041,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
     const interactionStorage = Layer.provide(InteractionStorage.Live, base)
     return Layer.mergeAll(
       base,
+      Layer.provide(subTagsFromContext, base),
       Layer.provide(CheckpointStorage.Live, base),
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
@@ -992,6 +1053,16 @@ export class Storage extends Context.Service<Storage, StorageService>()(
 
   /** Test layer that also exposes SqlClient and focused storage services */
   static TestWithSql = (): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage
   > => Storage.MemoryWithSql()
 }

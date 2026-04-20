@@ -17,6 +17,11 @@ import {
 import { RuntimeComposer, ownService } from "@gent/core/runtime/composer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
+import { BranchStorage } from "@gent/core/storage/branch-storage"
+import { MessageStorage } from "@gent/core/storage/message-storage"
+import { EventStorage } from "@gent/core/storage/event-storage"
+import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
+import { ExtensionStateStorage } from "@gent/core/storage/extension-state-storage"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
@@ -126,16 +131,21 @@ describe("scope brand type fences", () => {
         // Should be child's, not parent's
         expect((result as unknown as { sentinel: string }).sentinel).toBe("child-storage")
 
-        // SessionStorage should NOT be present (omitted from parent,
+        // All 6 sub-Tags should NOT be present (omitted from parent,
         // not provided by child's layer). The child only provided
-        // Storage, not SessionStorage. The key test: SessionStorage
-        // from the PARENT was stripped by the omit-set.
-        const sessionResult = yield* Effect.gen(function* () {
-          return yield* Effect.serviceOption(SessionStorage)
-        }).pipe(Effect.provide(composed.layer))
-
-        // Parent's SessionStorage was omitted, child didn't provide it
-        expect(sessionResult._tag).toBe("None")
+        // Storage, not the sub-Tags. The key test: sub-Tags from the
+        // PARENT were stripped by the OVERRIDE_TAG_SETS omit-set.
+        const omitted = (r: { _tag: string }) => expect(r._tag).toBe("None")
+        omitted(yield* Effect.serviceOption(SessionStorage).pipe(Effect.provide(composed.layer)))
+        omitted(yield* Effect.serviceOption(BranchStorage).pipe(Effect.provide(composed.layer)))
+        omitted(yield* Effect.serviceOption(MessageStorage).pipe(Effect.provide(composed.layer)))
+        omitted(yield* Effect.serviceOption(EventStorage).pipe(Effect.provide(composed.layer)))
+        omitted(
+          yield* Effect.serviceOption(RelationshipStorage).pipe(Effect.provide(composed.layer)),
+        )
+        omitted(
+          yield* Effect.serviceOption(ExtensionStateStorage).pipe(Effect.provide(composed.layer)),
+        )
       }),
     )
   })
