@@ -27,12 +27,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import {
-  DebugProvider,
-  createSequenceProvider,
-  textStep,
-  toolCallStep,
-} from "@gent/core/debug/provider"
+import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
   MachineEngine,
   type MachineEngineService,
@@ -138,7 +133,7 @@ describe("RunSpec", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: (input) => {
@@ -212,7 +207,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.void,
@@ -298,7 +293,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.fail(new AgentRunError({ message: "permanent failure" })),
@@ -361,7 +356,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.sleep("50 millis"),
@@ -671,7 +666,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       Layer.succeed(AgentLoop, {
         runOnce: () => Effect.void,
@@ -766,7 +761,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
@@ -848,7 +843,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
@@ -925,7 +920,7 @@ describe("AgentRunner", () => {
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
-      DebugProvider(),
+      Provider.Debug(),
       ToolRunner.Test(),
       mockLoop,
       eventStoreLayer,
@@ -1139,9 +1134,7 @@ describe("ephemeral service propagation", () => {
 
   test("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* createSequenceProvider([
-        textStep("ephemeral text output"),
-      ])
+      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ephemeral text output")])
       const layer = makeEphemeralLayer(providerLayer)
 
       yield* Effect.gen(function* () {
@@ -1199,7 +1192,7 @@ describe("ephemeral service propagation", () => {
         ]),
       )
 
-      const { layer: providerLayer } = yield* createSequenceProvider([
+      const { layer: providerLayer } = yield* Provider.Sequence([
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])

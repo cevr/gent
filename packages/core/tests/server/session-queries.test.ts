@@ -5,7 +5,7 @@ import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { DebugProvider } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionQueries } from "@gent/core/server/session-queries"
@@ -44,7 +44,7 @@ describe("Session Snapshot", () => {
     })
     const baseWithEventStore = Layer.mergeAll(
       Storage.TestWithSql(),
-      DebugProvider(),
+      Provider.Debug(),
       eventStoreLayer,
       actorProcessLayer,
       MachineEngine.Test(),
@@ -92,7 +92,7 @@ describe("Session Tree", () => {
     const eventStoreLayer = EventStore.Memory
     const baseWithEventStore = Layer.mergeAll(
       Storage.TestWithSql(),
-      DebugProvider(),
+      Provider.Debug(),
       eventStoreLayer,
       ActorProcess.Test(),
       MachineEngine.Test(),

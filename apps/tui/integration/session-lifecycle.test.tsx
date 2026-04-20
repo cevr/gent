@@ -12,12 +12,12 @@ import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+import { Provider } from "@gent/core/providers/provider.js"
+import { Gent } from "@gent/sdk"
+import { waitForFrame, repoRoot } from "./helpers"
 
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
-import { DebugProvider } from "@gent/core/debug/provider.js"
-import { Gent } from "@gent/sdk"
-import { waitForFrame, repoRoot } from "./helpers"
 
 function StateProbe(props: {
   readonly onReady: (ctx: { client: ClientContextValue; router: RouterContextValue }) => void
@@ -36,7 +36,7 @@ describe("session lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client, runtime } = yield* Gent.test(
-            baseLocalLayerWithProvider(DebugProvider({ retries: false })),
+            baseLocalLayerWithProvider(Provider.Debug({ retries: false })),
           )
           let ctx: { client: ClientContextValue; router: RouterContextValue } | undefined
 
@@ -106,7 +106,7 @@ describe("session lifecycle", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client, runtime } = yield* Gent.test(
-            baseLocalLayerWithProvider(DebugProvider({ retries: false })),
+            baseLocalLayerWithProvider(Provider.Debug({ retries: false })),
           )
           let ctx: { client: ClientContextValue; router: RouterContextValue } | undefined
 

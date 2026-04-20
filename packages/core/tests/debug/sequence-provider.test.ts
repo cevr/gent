@@ -1,7 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Fiber, Stream } from "effect"
 import {
-  createSequenceProvider,
   textStep,
   toolCallStep,
   textThenToolCallStep,
@@ -29,7 +28,7 @@ const callProvider = Effect.gen(function* () {
 describe("createSequenceProvider", () => {
   it.scoped("single text step emits correctly", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* createSequenceProvider([textStep("hello")])
+      const { layer, controls } = yield* Provider.Sequence([textStep("hello")])
       const chunks = yield* Effect.provide(callProvider, layer)
 
       expect(chunks.length).toBe(2)
@@ -44,7 +43,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("multi-step returns correct chunks per call", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* createSequenceProvider([
+      const { layer, controls } = yield* Provider.Sequence([
         textStep("first"),
         textStep("second"),
         toolCallStep("my_tool", { key: "value" }),
@@ -65,7 +64,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("waitForCall resolves on stream() #n", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* createSequenceProvider([textStep("a"), textStep("b")])
+      const { layer, controls } = yield* Provider.Sequence([textStep("a"), textStep("b")])
 
       // Start waiting for call 1 (hasn't happened yet)
       const fiber = yield* Effect.forkScoped(controls.waitForCall(1))
@@ -84,7 +83,7 @@ describe("createSequenceProvider", () => {
   it.scoped("gated step holds until emitAll", () =>
     Effect.gen(function* () {
       const gatedStep: SequenceStep = { ...textStep("gated"), gated: true }
-      const { layer, controls } = yield* createSequenceProvider([gatedStep])
+      const { layer, controls } = yield* Provider.Sequence([gatedStep])
 
       // Start stream — will block on gate
       const collectFiber = yield* Effect.forkScoped(Effect.provide(callProvider, layer))
@@ -103,7 +102,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("extra stream() call fails", () =>
     Effect.gen(function* () {
-      const { layer } = yield* createSequenceProvider([textStep("only")])
+      const { layer } = yield* Provider.Sequence([textStep("only")])
 
       // Consume the one step
       yield* Effect.provide(callProvider, layer)
@@ -126,7 +125,7 @@ describe("createSequenceProvider", () => {
           if (req.model !== "expected/model") throw new Error("wrong model")
         },
       }
-      const { layer } = yield* createSequenceProvider([step])
+      const { layer } = yield* Provider.Sequence([step])
 
       const exit = yield* Effect.exit(Effect.provide(callProvider, layer))
       expect(exit._tag).toBe("Failure")
@@ -139,7 +138,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("assertDone fails on unconsumed steps", () =>
     Effect.gen(function* () {
-      const { controls } = yield* createSequenceProvider([textStep("a"), textStep("b")])
+      const { controls } = yield* Provider.Sequence([textStep("a"), textStep("b")])
 
       const result = yield* Effect.exit(controls.assertDone())
       expect(result._tag).toBe("Failure")
@@ -148,7 +147,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("callCount tracks calls", () =>
     Effect.gen(function* () {
-      const { layer, controls } = yield* createSequenceProvider([textStep("a"), textStep("b")])
+      const { layer, controls } = yield* Provider.Sequence([textStep("a"), textStep("b")])
 
       expect(yield* controls.callCount).toBe(0)
       yield* Effect.provide(callProvider, layer)
@@ -160,9 +159,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("toolCallStep emits ToolCallChunk + FinishChunk", () =>
     Effect.gen(function* () {
-      const { layer } = yield* createSequenceProvider([
-        toolCallStep("my_tool", { status: "continue" }),
-      ])
+      const { layer } = yield* Provider.Sequence([toolCallStep("my_tool", { status: "continue" })])
       const chunks = yield* Effect.provide(callProvider, layer)
 
       expect(chunks.length).toBe(2)
@@ -174,7 +171,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("textThenToolCallStep emits text + tool call + finish", () =>
     Effect.gen(function* () {
-      const { layer } = yield* createSequenceProvider([
+      const { layer } = yield* Provider.Sequence([
         textThenToolCallStep("thinking...", "my_tool", { ok: true }),
       ])
       const chunks = yield* Effect.provide(callProvider, layer)
@@ -188,7 +185,7 @@ describe("createSequenceProvider", () => {
 
   it.scoped("multiToolCallStep emits multiple tool calls + finish", () =>
     Effect.gen(function* () {
-      const { layer } = yield* createSequenceProvider([
+      const { layer } = yield* Provider.Sequence([
         multiToolCallStep(
           { toolName: "tool_a", input: {} },
           { toolName: "tool_b", input: { x: 1 } },

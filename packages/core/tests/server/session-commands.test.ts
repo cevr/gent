@@ -4,7 +4,7 @@ import { EventStore } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Permission } from "@gent/core/domain/permission"
-import { DebugProvider } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
@@ -26,7 +26,7 @@ describe("SessionCommands", () => {
       const baseEventStore = EventStore.Memory
       const baseDeps = Layer.mergeAll(
         Storage.TestWithSql(),
-        DebugProvider(),
+        Provider.Debug(),
         baseEventStore,
         ActorProcess.Test(),
         AgentLoop.Test(),

@@ -11,7 +11,8 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import type { LoadedExtension, ReduceResult, RequestResult } from "@gent/core/domain/extension"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { createRpcHarness } from "./helpers/rpc-harness"
@@ -87,7 +88,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* createRpcHarness({
             providerLayer,
             extensions: [counterExtension],
@@ -121,7 +122,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* createRpcHarness({
             providerLayer,
             extensions: [counterExtension],
@@ -157,7 +158,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* createSequenceProvider([
+          const { layer: providerLayer } = yield* Provider.Sequence([
             textStep("session reply"),
             textStep("message reply"),
           ])

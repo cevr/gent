@@ -10,22 +10,22 @@ import {
   destroyRenderSetup,
   renderWithProviders,
 } from "../tests/render-harness"
-import { createSignalProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
 import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core/test-utils/in-process-layer.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
+import { Provider } from "@gent/core/providers/provider.js"
+import { Gent } from "@gent/sdk"
+import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents, extraLayers: [GitReader.Test] })
-import { Gent } from "@gent/sdk"
-import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 
 describe("session feed boundary", () => {
   test("projects streaming state and assistant output", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: signalLayer, controls } = yield* createSignalProvider(
+          const { layer: signalLayer, controls } = yield* Provider.Signal(
             "cowork debug response. Latest user message: queued. This turn is flowing through the real agent loop with a scripted provider.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
@@ -81,7 +81,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: signalLayer, controls } = yield* createSignalProvider(
+          const { layer: signalLayer, controls } = yield* Provider.Signal(
             "cowork debug response. First turn complete.",
           )
           const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(signalLayer))
@@ -154,9 +154,7 @@ describe("session feed boundary", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { client, runtime } = yield* Gent.test(
-            baseLocalLayerWithProvider(DebugFailingProvider),
-          )
+          const { client, runtime } = yield* Gent.test(baseLocalLayerWithProvider(Provider.Failing))
 
           const created = yield* client.session.create({ cwd: repoRoot })
 

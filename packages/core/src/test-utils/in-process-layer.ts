@@ -12,10 +12,9 @@ import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { Permission } from "../domain/permission.js"
-import { DebugProvider } from "../debug/provider.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import type { Provider } from "../providers/provider.js"
+import { Provider } from "../providers/provider.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -126,7 +125,7 @@ export const baseLocalLayer = (
   providerMode: HarnessProviderMode = "debug-scripted",
 ) =>
   buildLayer(
-    providerMode === "debug-slow" ? DebugProvider({ delayMs: 10 }) : DebugProvider(),
+    providerMode === "debug-slow" ? Provider.Debug({ delayMs: 10 }) : Provider.Debug(),
     config,
   )
 

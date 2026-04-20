@@ -26,9 +26,8 @@ import { ConnectionTracker } from "@gent/core/server/connection-tracker.js"
 import { ServerIdentity } from "@gent/core/server/server-identity.js"
 import { buildServerRoutes } from "@gent/core/server/server-routes.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
-import { DebugProvider, DebugFailingProvider } from "@gent/core/debug/provider.js"
 import { seedDebugSession } from "@gent/core/debug/session.js"
-import type { Provider } from "@gent/core/providers/provider.js"
+import { Provider } from "@gent/core/providers/provider.js"
 import { resolveBuildFingerprint } from "@gent/core/server/build-fingerprint.js"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
 import {
@@ -119,8 +118,8 @@ const resolveProviderLayer = (
   spec: ProviderSpec,
 ): Layer.Layer<Provider, never, never> | undefined => {
   if (spec._tag === "live") return undefined
-  if (spec.failing === true) return DebugFailingProvider
-  return DebugProvider({
+  if (spec.failing === true) return Provider.Failing
+  return Provider.Debug({
     delayMs: spec.delayMs,
     retries: spec.retries,
   })

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId } from "../domain/ids.js"
@@ -358,6 +358,358 @@ export const toStreamChunk =
     }
   }
 
+// ── Debug / test providers ──
+//
+// Formerly in `debug/provider.ts`. Inlined here so the static methods
+// on Provider (`Provider.Debug`, `Provider.Sequence`, etc.) avoid a
+// circular ESM import.
+
+const _extractLatestUserText = (messages: ReadonlyArray<Message>): string => {
+  const latest = [...messages].reverse().find((message) => message.role === "user")
+  if (latest === undefined) return ""
+  return latest.parts
+    .filter((part): part is TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+}
+
+const _retryBudgetFor = (text: string): number => {
+  if (text.trim().length === 0) return 0
+  const hash = [...text].reduce((total, ch) => total + ch.charCodeAt(0), 0)
+  if (hash % 3 === 0) return 2
+  if (hash % 2 === 0) return 1
+  return 0
+}
+
+const _buildReply = (request: ProviderRequest, latestUserText: string): string => {
+  const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
+  const modelLabel = request.model.startsWith("openai/") ? "deepwork" : "cowork"
+
+  if (lineCount > 1) {
+    return [
+      `${modelLabel} processed a merged queued turn.`,
+      `Received ${lineCount} lines in one message block.`,
+      `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
+    ].join(" ")
+  }
+
+  return [
+    `${modelLabel} debug response.`,
+    `Latest user message: ${latestUserText || "(empty)"}.`,
+    "This turn is flowing through the real agent loop with a scripted provider.",
+  ].join(" ")
+}
+
+const _makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
+  const chunks = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
+  const stream = Stream.fromIterable([
+    ...chunks.map((text) => new TextChunk({ text: `${text} ` })),
+    new FinishChunk({
+      finishReason: "stop",
+      usage: {
+        inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
+        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
+      },
+    }),
+  ])
+
+  if (delayMs <= 0) return stream
+
+  return stream.pipe(
+    Stream.flatMap((chunk) =>
+      Stream.fromEffect(Effect.sleep(Duration.millis(delayMs)).pipe(Effect.as(chunk))),
+    ),
+  )
+}
+
+// Forward-reference Provider class below via late binding — these
+// closures are only invoked at runtime (never during module init),
+// so `Provider` is fully defined by then.
+
+const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
+  Layer.effect(
+    Provider,
+    Effect.sync(() => {
+      const delayMs = options?.delayMs ?? 0
+      const retries = options?.retries ?? delayMs === 0
+      const attempts = new Map<string, number>()
+
+      const stream = (request: ProviderRequest) =>
+        Effect.suspend(() => {
+          const latestUserText = _extractLatestUserText(request.messages)
+          const key = `${request.model}:${latestUserText}`
+          const seen = attempts.get(key) ?? 0
+          const retryBudget = retries ? _retryBudgetFor(latestUserText) : 0
+
+          if (seen < retryBudget) {
+            attempts.set(key, seen + 1)
+            return Effect.fail(
+              new ProviderError({
+                message: "Rate limit exceeded (429)",
+                model: request.model,
+              }),
+            )
+          }
+
+          attempts.delete(key)
+          const reply = _buildReply(request, latestUserText)
+          return Effect.succeed(_makeReplyStream(latestUserText, reply, delayMs))
+        })
+
+      const generate = (_request: GenerateRequest) => Effect.succeed("debug scenario")
+
+      return { stream, generate }
+    }),
+  )
+
+// Lazy — `Provider` class is defined below; this is only evaluated when accessed.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _debugFailingProviderCache: any
+const _DebugFailingProvider = () => {
+  if (_debugFailingProviderCache === undefined) {
+    _debugFailingProviderCache = Layer.succeed(Provider, {
+      stream: (request: ProviderRequest) =>
+        Effect.fail(
+          new ProviderError({
+            message: "provider exploded",
+            model: request.model,
+          }),
+        ),
+      generate: () => Effect.succeed("debug failure"),
+    } satisfies ProviderService)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return _debugFailingProviderCache
+}
+
+export interface SignalProviderControls {
+  readonly emitNext: () => Effect.Effect<void>
+  readonly emitAll: () => Effect.Effect<void>
+  readonly waitForStreamStart: Effect.Effect<void>
+}
+
+const _createSignalProvider = (
+  reply: string,
+  options?: { inputTokens?: number; outputTokens?: number },
+) =>
+  Effect.gen(function* () {
+    const gate = yield* Queue.unbounded<null>()
+    const streamStarted = yield* Deferred.make<void>()
+
+    const chunks = reply
+      .split(/(?<=[.!?])\s+/)
+      .filter((chunk) => chunk.length > 0)
+      .map((text) => new TextChunk({ text: `${text} ` }))
+
+    const finishChunk = new FinishChunk({
+      finishReason: "stop",
+      usage: {
+        inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+        outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+      },
+    })
+
+    const allChunks = [...chunks, finishChunk]
+
+    const layer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(streamStarted, void 0)
+          return Stream.fromIterable(allChunks).pipe(
+            Stream.mapEffect((chunk) => Queue.take(gate).pipe(Effect.as(chunk))),
+          )
+        }),
+      generate: () => Effect.succeed(reply),
+    })
+
+    const controls: SignalProviderControls = {
+      emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
+      emitAll: () => Effect.forEach(allChunks, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
+      waitForStreamStart: Deferred.await(streamStarted),
+    }
+
+    return { layer, controls }
+  })
+
+export interface SequenceStep {
+  readonly chunks: ReadonlyArray<StreamChunk>
+  readonly assertRequest?: (request: ProviderRequest) => void
+  readonly gated?: boolean
+}
+
+export interface SequenceProviderControls {
+  readonly waitForCall: (index: number) => Effect.Effect<void>
+  readonly emitAll: (index: number) => Effect.Effect<void>
+  readonly callCount: Effect.Effect<number>
+  readonly assertDone: () => Effect.Effect<void>
+}
+
+const _createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
+  Effect.gen(function* () {
+    const indexRef = yield* Ref.make(0)
+
+    const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
+    const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
+
+    yield* Effect.forEach(steps, (step, i) => {
+      const gate = emitGates[i]
+      if (!step.gated && gate) return Deferred.succeed(gate, void 0)
+      return Effect.void
+    })
+
+    const layer = Layer.succeed(Provider, {
+      stream: (request: ProviderRequest) =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
+
+          if (idx >= steps.length) {
+            return yield* new ProviderError({
+              message: `Sequence provider: stream() called ${idx + 1} times but only ${steps.length} steps scripted`,
+              model: request.model,
+            })
+          }
+
+          const step = steps[idx] ?? steps[0]
+          const started = callStarted[idx] ?? callStarted[0]
+          const gate = emitGates[idx] ?? emitGates[0]
+
+          if (started) yield* Deferred.succeed(started, void 0)
+
+          if (step?.assertRequest) {
+            yield* Effect.try({
+              try: () => step.assertRequest?.(request),
+              catch: (e) =>
+                new ProviderError({
+                  message: `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
+                  model: request.model,
+                }),
+            })
+          }
+
+          if (gate) {
+            return Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.flatMap(() => Stream.fromIterable(step?.chunks ?? [])),
+            )
+          }
+          return Stream.fromIterable(step?.chunks ?? [])
+        }),
+      generate: () => Effect.succeed("sequence provider"),
+    })
+
+    const controls: SequenceProviderControls = {
+      waitForCall: (index) => {
+        const deferred = callStarted[index]
+        if (index < 0 || index >= steps.length || !deferred) {
+          return Effect.die(
+            new Error(`waitForCall: index ${index} out of range [0, ${steps.length})`),
+          )
+        }
+        return Deferred.await(deferred)
+      },
+
+      emitAll: (index) => {
+        const deferred = emitGates[index]
+        if (index < 0 || index >= steps.length || !deferred) {
+          return Effect.die(new Error(`emitAll: index ${index} out of range [0, ${steps.length})`))
+        }
+        return Deferred.succeed(deferred, void 0)
+      },
+
+      callCount: Ref.get(indexRef),
+
+      assertDone: () =>
+        Effect.gen(function* () {
+          const consumed = yield* Ref.get(indexRef)
+          if (consumed < steps.length) {
+            return yield* Effect.die(
+              new Error(
+                `Sequence provider: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
+              ),
+            )
+          }
+        }),
+    }
+
+    return { layer, controls }
+  })
+
+// ── Step builders ──
+
+let _stepCallIdCounter = 0
+
+const _makeStepToolCallId = () => ToolCallId.of(`step-tc-${++_stepCallIdCounter}`)
+
+/** A turn that emits a single text response and finishes with "stop". */
+export const textStep = (text: string): SequenceStep => ({
+  chunks: [
+    new TextChunk({ text }),
+    new FinishChunk({
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
+    }),
+  ],
+})
+
+/** A turn that emits a single tool call and finishes with "tool_calls". */
+export const toolCallStep = (
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  chunks: [
+    new ToolCallChunk({
+      toolCallId: options?.toolCallId ?? _makeStepToolCallId(),
+      toolName,
+      input,
+    }),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }),
+  ],
+})
+
+/** A turn that emits text before a tool call. */
+export const textThenToolCallStep = (
+  text: string,
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): SequenceStep => ({
+  chunks: [
+    new TextChunk({ text }),
+    new ToolCallChunk({
+      toolCallId: options?.toolCallId ?? _makeStepToolCallId(),
+      toolName,
+      input,
+    }),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
+    }),
+  ],
+})
+
+/** A turn that emits multiple tool calls and finishes with "tool_calls". */
+export const multiToolCallStep = (
+  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
+): SequenceStep => ({
+  chunks: [
+    ...calls.map(
+      (c) =>
+        new ToolCallChunk({
+          toolCallId: c.toolCallId ?? _makeStepToolCallId(),
+          toolName: c.toolName,
+          input: c.input,
+        }),
+    ),
+    new FinishChunk({
+      finishReason: "tool_calls",
+      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
+    }),
+  ],
+})
+
 // ── Provider Live ──
 
 export class Provider extends Context.Service<Provider, ProviderService>()(
@@ -461,4 +813,23 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       } satisfies ProviderService
     }),
   )
+
+  // ── Debug / test provider statics ──
+  //
+  // Inlined from the former `debug/provider.ts` to avoid a circular
+  // import (debug/provider → Provider class → debug/provider).
+
+  /** Scripted multi-turn provider. Each `stream()` call consumes the next step. */
+  static Sequence = _createSequenceProvider
+
+  /** Debug provider — canned text responses, optional delays/retries. */
+  static Debug = _DebugProvider
+
+  /** Signal-controlled provider for lifecycle assertions. */
+  static Signal = _createSignalProvider
+
+  /** Always-failing provider for error path tests. */
+  static get Failing() {
+    return _DebugFailingProvider()
+  }
 }

@@ -6,7 +6,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Message } from "@gent/core/domain/message"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { DebugProvider } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
@@ -107,7 +107,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       storageDeps,
       eventPublisherLayer,
       actorProcessLayer,
-      DebugProvider(),
+      Provider.Debug(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
@@ -207,7 +207,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       storageDeps,
       eventPublisherLayer,
       actorProcessLayer,
-      DebugProvider(),
+      Provider.Debug(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )

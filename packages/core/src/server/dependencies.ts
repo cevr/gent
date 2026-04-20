@@ -7,7 +7,6 @@ import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { DebugFailingProvider, DebugProvider } from "../debug/provider.js"
 import type { GentExtension } from "../domain/extension.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
@@ -201,11 +200,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   if (config.providerLayerOverride !== undefined) {
     providerLive = config.providerLayerOverride
   } else if (providerMode === "debug-scripted") {
-    providerLive = DebugProvider()
+    providerLive = Provider.Debug()
   } else if (providerMode === "debug-failing") {
-    providerLive = DebugFailingProvider
+    providerLive = Provider.Failing
   } else if (providerMode === "debug-slow") {
-    providerLive = DebugProvider({ delayMs: 10 })
+    providerLive = Provider.Debug({ delayMs: 10 })
   }
 
   // SessionCwdRegistry — fast (sessionId → cwd) cache for the per-cwd

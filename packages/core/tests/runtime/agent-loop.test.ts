@@ -31,12 +31,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
-import {
-  createSequenceProvider,
-  toolCallStep,
-  textStep,
-  DebugProvider,
-} from "@gent/core/debug/provider"
+import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   assistantMessageIdForTurn,
@@ -733,7 +728,7 @@ describe("streaming", () => {
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
-      DebugProvider(),
+      Provider.Debug(),
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -918,7 +913,7 @@ describe("continuation", () => {
 
   test("tool call auto-continues to next LLM call", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "hello" }),
         textStep("Done with tools."),
       ])
@@ -934,7 +929,7 @@ describe("continuation", () => {
 
   test("text-only response does not trigger continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         textStep("Just text, no tools."),
       ])
 
@@ -949,7 +944,7 @@ describe("continuation", () => {
 
   test("multi-hop tool calls chain until text response", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         toolCallStep("echo", { text: "step 3" }),
@@ -967,7 +962,7 @@ describe("continuation", () => {
 
   test("TurnCompleted fires once per turn, not per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Done."),
@@ -990,7 +985,7 @@ describe("continuation", () => {
 
   test("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("Continuation response."), gated: true },
       ])
@@ -1026,7 +1021,7 @@ describe("continuation", () => {
 
   test("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "tool" }),
         textStep("Continuation reached."),
       ])
@@ -1047,7 +1042,7 @@ describe("continuation", () => {
 
   test("GUARD: multi-hop persists distinct messages per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* createSequenceProvider([
+      const { layer: providerLayer } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Final answer."),
@@ -1087,7 +1082,7 @@ describe("continuation", () => {
 
   test("queued follow-up executes normally after interrupt", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("gated response"), gated: true },
         textStep("follow-up response"),

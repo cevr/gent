@@ -11,7 +11,8 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
-import { textStep, createSequenceProvider } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { TaskCreateRef, TaskUpdateRef, TaskDeleteRef } from "@gent/extensions/task-tools/mutations"
@@ -34,7 +35,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
@@ -106,7 +107,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
@@ -133,7 +134,7 @@ describe("TaskExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupTaskExt
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* createRpcHarness({ providerLayer, extensions: [ext] })
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
