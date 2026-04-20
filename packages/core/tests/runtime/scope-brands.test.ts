@@ -15,6 +15,8 @@ import {
   ServerProfileService,
 } from "@gent/core/runtime/scope-brands"
 import { RuntimeComposer, ownService } from "@gent/core/runtime/composer"
+import { Storage } from "@gent/core/storage/sqlite-storage"
+import { SessionStorage } from "@gent/core/storage/session-storage"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
@@ -88,6 +90,54 @@ describe("scope brand type fences", () => {
     const _typed: Layer.Layer<FakeService, never, never> = composed.layer
     void _typed
     expect(composed.profile.cwd).toBe("/tmp")
+  })
+
+  test("withOverrides omits Storage sub-Tags from parent context", () => {
+    // Construct a parent context with Storage + SessionStorage.
+    // After withOverrides({ storage: ... }), the parent's versions
+    // must be stripped — the child's in-memory layer should win.
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        // Build a parent with a sentinel Storage + SessionStorage
+        const sentinelStorage = { sentinel: "parent-storage" } as never
+        const sentinelSession = { sentinel: "parent-session" } as never
+        const parentServices = Context.empty().pipe(
+          Context.add(Storage, sentinelStorage),
+          Context.add(SessionStorage, sentinelSession),
+        ) as Context.Context<never>
+
+        const serverParent = {
+          cwd: "/tmp",
+          resolved: { kinds: {} } as never,
+          __brand: undefined as never,
+        } as ServerProfile
+
+        const childStorageLayer = Layer.succeed(Storage, { sentinel: "child-storage" } as never)
+
+        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
+          .withOverrides({ storage: childStorageLayer })
+          .build()
+
+        // Resolve Storage from the composed layer — should be the child's
+        const result = yield* Effect.gen(function* () {
+          return yield* Storage
+        }).pipe(Effect.provide(composed.layer))
+
+        // Should be child's, not parent's
+        expect((result as unknown as { sentinel: string }).sentinel).toBe("child-storage")
+
+        // SessionStorage should NOT be present (omitted from parent,
+        // not provided by child's layer). The child only provided
+        // Storage, not SessionStorage. The key test: SessionStorage
+        // from the PARENT was stripped by the omit-set.
+        const sessionResult = yield* Effect.gen(function* () {
+          return yield* Effect.serviceOption(SessionStorage)
+        }).pipe(Effect.provide(composed.layer))
+
+        // Parent's SessionStorage was omitted, child didn't provide it
+        expect(sessionResult._tag).toBe("None")
+      }),
+    )
   })
 
   test("provide(layer) leaves a missing-service requirement in `R` for unprovided consumers", () => {

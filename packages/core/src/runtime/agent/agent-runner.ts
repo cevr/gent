@@ -40,10 +40,10 @@ import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
 import { EventPublisherLive } from "../../server/event-publisher.js"
-import { ResourceManager, ResourceManagerLive } from "../resource-manager.js"
+import { ResourceManagerLive } from "../resource-manager.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
-import { RuntimeComposer, ownService } from "../composer.js"
+import { RuntimeComposer } from "../composer.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -454,11 +454,7 @@ const buildEphemeralLayer = (params: {
   const resolved = params.extensionRegistry.getResolved()
   const extensionLayers = buildExtensionLayers(resolved)
 
-  // Pre-resolve each owned service's layer so the composer can compose
-  // them without surfacing extra requirements. Parent services those
-  // layers depend on come from the parent context; the composer's omit-set
-  // keeps the parent's *instance* of the OWNED service from bleeding
-  // through.
+  // Parent context as a Layer — deps that owned layers need resolve from here.
   const parentLayer = Layer.succeedContext(params.parentServices)
 
   const storageLayer = Storage.MemoryWithSql()
@@ -467,9 +463,7 @@ const buildEphemeralLayer = (params: {
 
   // EventPublisher reaches into bus + state runtime + registry so extension
   // subscriptions fire on local events. Parent first so locally-built
-  // `MachineEngine`, `SubscriptionEngine`, registry win — otherwise the
-  // child silently uses the parent's state runtime and child events leak
-  // into parent reduction.
+  // MachineEngine, SubscriptionEngine, registry win.
   const eventPublisherLayer = Layer.provide(
     EventPublisherLive,
     Layer.mergeAll(parentLayer, eventStoreLayer, extensionLayers),
@@ -495,32 +489,24 @@ const buildEphemeralLayer = (params: {
     Layer.provide(Layer.merge(parentLayer, Layer.merge(coreDeps, toolRunnerLayer))),
   )
 
-  // Composer:
-  //   - .own(...) services drive the parent-omit set AND override parent on conflict
-  //   - .merge(...) layers contribute services without claiming a parent-omit slot
-  //
-  // The omit-list is now derived from this single declaration; adding a new
-  // ephemeral-local service requires only one update site.
+  // withOverrides maps each named field to ALL Tags that should be omitted
+  // from the parent (e.g., storage → Storage + 6 sub-Tags). This makes
+  // the sub-Tag problem structural — adding a new sub-Tag updates one
+  // mapping in the compositor, not every callsite.
   const composed = RuntimeComposer.ephemeral({
     parent: params.parentProfile,
     parentServices: params.parentServices,
   })
-    .own(
-      ownService(Storage, storageLayer),
-      ownService(BaseEventStore, eventStoreLayer),
-      ownService(EventStore, eventStoreLayer),
-      ownService(EventPublisher, eventPublisherLayer),
-      ownService(ApprovalService, approvalLayer),
-      ownService(PromptPresenter, promptPresenterLayer),
-      ownService(ResourceManager, ResourceManagerLive),
-      ownService(ToolRunner, toolRunnerLayer),
-      ownService(AgentLoop, loopLayer),
-    )
-    // Extension-side wiring fans out into many service identifiers
-    // (registry, workflow runtime, subscription engine, driver registry,
-    // plus each extension's setup.layer). The whole bundle merges as one — parent's
-    // versions of any of these would be the wrong runtime, but they're
-    // overwritten by extensionLayers' merge order.
+    .withOverrides({
+      storage: storageLayer,
+      eventStore: eventStoreLayer,
+      eventPublisher: eventPublisherLayer,
+      approval: approvalLayer,
+      promptPresenter: promptPresenterLayer,
+      resourceManager: ResourceManagerLive,
+      toolRunner: toolRunnerLayer,
+      loop: loopLayer,
+    })
     .merge(extensionLayers)
     .build()
 

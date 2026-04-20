@@ -38,6 +38,20 @@
 
 import { Context, Layer } from "effect"
 import { brandEphemeralScope, type EphemeralProfile, type ServerProfile } from "./scope-brands.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { SessionStorage } from "../storage/session-storage.js"
+import { BranchStorage } from "../storage/branch-storage.js"
+import { MessageStorage } from "../storage/message-storage.js"
+import { EventStorage } from "../storage/event-storage.js"
+import { RelationshipStorage } from "../storage/relationship-storage.js"
+import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
+import { BaseEventStore, EventStore } from "../domain/event.js"
+import { EventPublisher } from "../domain/event-publisher.js"
+import { ApprovalService } from "./approval-service.js"
+import { PromptPresenter } from "../domain/prompt-presenter.js"
+import { ResourceManager } from "./resource-manager.js"
+import { ToolRunner } from "./agent/tool-runner.js"
+import { AgentLoop } from "./agent/agent-loop.js"
 
 /**
  * A typed handle to a service-layer pair. Pairs a `Context.Key` with the
@@ -91,6 +105,93 @@ type ProvidesOf<Services extends ReadonlyArray<OwnedService<any, any, any, any>>
   [K in keyof Services]: Services[K] extends OwnedService<infer I, any, any, any> ? I : never
 }[number]
 
+/**
+ * Named override fields for `.withOverrides(...)`. Each field maps to one
+ * or more Context.Service Tags that the compositor omits from the parent.
+ *
+ * The Tag-set mapping lives in `OVERRIDE_TAG_SETS` — callers only provide
+ * layers, the compositor derives the omit list. This is what makes the
+ * sub-Tag problem structural: adding a Storage sub-Tag requires updating
+ * ONE mapping, not every callsite that constructs an ephemeral layer.
+ */
+export interface EphemeralOverrides {
+  /** In-memory storage for ephemeral child. Omits Storage + all 6 sub-Tags. */
+  readonly storage?: OpaqueLayer
+  /** Event store for ephemeral child. Omits EventStore + BaseEventStore. */
+  readonly eventStore?: OpaqueLayer
+  /** Event publisher wired to local bus. Omits EventPublisher. */
+  readonly eventPublisher?: OpaqueLayer
+  /** Approval service (typically auto-resolve for child agents). Omits ApprovalService. */
+  readonly approval?: OpaqueLayer
+  /** Prompt presenter wired to local approval. Omits PromptPresenter. */
+  readonly promptPresenter?: OpaqueLayer
+  /** Resource manager (named semaphores). Omits ResourceManager. */
+  readonly resourceManager?: OpaqueLayer
+  /** Tool runner wired to local deps. Omits ToolRunner. */
+  readonly toolRunner?: OpaqueLayer
+  /** Agent loop wired to local deps. Omits AgentLoop. */
+  readonly loop?: OpaqueLayer
+}
+
+/**
+ * Union of all service identifiers that `withOverrides` can contribute.
+ * Used to widen the builder's `Provides` channel so consumers that
+ * yield overridden services have their `R` channel correctly satisfied.
+ */
+type EphemeralOverrideProvides =
+  | Storage
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | ExtensionStateStorage
+  | EventStore
+  | BaseEventStore
+  | EventPublisher
+  | ApprovalService
+  | PromptPresenter
+  | ResourceManager
+  | ToolRunner
+  | AgentLoop
+
+/**
+ * Maps each override field to the complete set of Tags it should omit from
+ * the parent context. This is the single source of truth for sub-Tag
+ * awareness — the compositor derives the omit set from this mapping.
+ */
+const OVERRIDE_TAG_SETS: Record<
+  keyof EphemeralOverrides,
+  ReadonlyArray<Context.Key<unknown, unknown>>
+> = {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  storage: [
+    Storage,
+    SessionStorage,
+    BranchStorage,
+    MessageStorage,
+    EventStorage,
+    RelationshipStorage,
+    ExtensionStateStorage,
+  ] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  eventStore: [EventStore, BaseEventStore] as unknown as ReadonlyArray<
+    Context.Key<unknown, unknown>
+  >,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  eventPublisher: [EventPublisher] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  approval: [ApprovalService] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  promptPresenter: [PromptPresenter] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  resourceManager: [ResourceManager] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  toolRunner: [ToolRunner] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  loop: [AgentLoop] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+}
+
 export interface EphemeralComposerBuilder<Provides> {
   /**
    * Claim one or more services as ephemeral-local. Each entry contributes
@@ -126,6 +227,21 @@ export interface EphemeralComposerBuilder<Provides> {
    * provide time.
    */
   readonly merge: <I, E, R>(layer: Layer.Layer<I, E, R>) => EphemeralComposerBuilder<Provides | I>
+
+  /**
+   * Declare ephemeral-local overrides by named field. Each field maps to a
+   * layer AND the complete set of Tags to omit from the parent — including
+   * sub-Tags (e.g., `storage` omits `Storage` + all 6 sub-Tag services).
+   *
+   * This is the high-level API; `.own(...)` is low-level. Use
+   * `.withOverrides(...)` for standard ephemeral child construction.
+   *
+   * Widens `Provides` with ALL override Tags so downstream consumers that
+   * yield overridden services have their `R` channel correctly satisfied.
+   */
+  readonly withOverrides: (
+    overrides: EphemeralOverrides,
+  ) => EphemeralComposerBuilder<Provides | EphemeralOverrideProvides>
 
   /**
    * Build the merged `Layer` and produce an {@link EphemeralProfile} handle.
@@ -188,6 +304,32 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         mergedLayers: [...state.mergedLayers, layer as OpaqueLayer],
       }),
+    withOverrides: (overrides) => {
+      const extraKeys: Context.Key<unknown, unknown>[] = []
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
+      const extraLayers: OpaqueLayer[] = []
+      const addOverride = (field: keyof EphemeralOverrides) => {
+        const layer = overrides[field]
+        if (layer === undefined) return
+        extraKeys.push(...OVERRIDE_TAG_SETS[field])
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
+        extraLayers.push(layer)
+      }
+      addOverride("storage")
+      addOverride("eventStore")
+      addOverride("eventPublisher")
+      addOverride("approval")
+      addOverride("promptPresenter")
+      addOverride("resourceManager")
+      addOverride("toolRunner")
+      addOverride("loop")
+      return makeBuilder({
+        ...state,
+        ownedKeys: [...state.ownedKeys, ...extraKeys],
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
+        ownedLayers: [...state.ownedLayers, ...extraLayers],
+      })
+    },
     build: () => {
       const { parent, parentServices, ownedKeys, ownedLayers, mergedLayers } = state
       // Strip owned keys AND `Layer.CurrentMemoMap` from the parent's
