@@ -9,6 +9,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
@@ -95,6 +96,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       MachineEngine.Test(),
       ResourceManagerLive,
+      SessionCwdRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
@@ -191,6 +193,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       MachineEngine.Test(),
       ResourceManagerLive,
+      SessionCwdRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,
@@ -257,6 +260,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       ToolRunner.Test(),
       MachineEngine.Test(),
       ResourceManagerLive,
+      SessionCwdRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(
       EventPublisherLive,

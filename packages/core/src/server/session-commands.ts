@@ -1,5 +1,6 @@
 import { DateTime, Effect, Layer, Context, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
+import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
@@ -67,6 +68,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
       const extensionStateRuntime = yield* MachineEngine
+      const sessionCwdRegistry = yield* SessionCwdRegistry
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -154,6 +156,15 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         yield* storage.createSession(session)
         yield* storage.createBranch(branch)
+        // Pre-record the (sessionId → cwd) binding BEFORE the first event
+        // publish so the per-cwd EventPublisher router can dispatch the
+        // SessionStarted pulse to the right SessionProfile without falling
+        // back to a storage read. `input.cwd` is optional in the schema for
+        // legacy callers; sessions without a cwd fall through to the
+        // server's primary cwd routing in the publisher.
+        if (input.cwd !== undefined) {
+          yield* sessionCwdRegistry.record(sessionId, input.cwd)
+        }
         yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({
@@ -338,6 +349,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             Effect.tap(() => eventPublisher.terminateSession(sessionId)),
             Effect.tap(() => eventStore.removeSession(sessionId)),
             Effect.tap(() => storage.deleteSession(sessionId)),
+            Effect.tap(() => sessionCwdRegistry.forget(sessionId)),
             Effect.tap(() =>
               Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId })),
             ),

@@ -16,6 +16,7 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
@@ -51,6 +52,7 @@ describe("Session Snapshot", () => {
       ConfigService.Test(),
       emptyRegistryLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      SessionCwdRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(
@@ -98,6 +100,7 @@ describe("Session Tree", () => {
       ConfigService.Test(),
       emptyRegistryLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      SessionCwdRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(

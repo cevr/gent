@@ -29,6 +29,7 @@ import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
+import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
@@ -92,6 +93,9 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     // tests don't construct a real server composition root, so the test
     // layer fakes the brand with an empty extension set.
     ServerProfileService.Test(),
+    // SessionCwdRegistry — fast (sessionId → cwd) cache used by the
+    // per-cwd EventPublisher router (B11.6c). In-memory Test variant.
+    SessionCwdRegistry.Test(),
     ...(config.extraLayers ?? []),
   )
 

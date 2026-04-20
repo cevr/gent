@@ -9,6 +9,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionCommands } from "@gent/core/server/session-commands"
 import { LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
@@ -68,6 +69,7 @@ const makeTestLayer = (logs: {
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ResourceManagerLive,
+    SessionCwdRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
   const actorProcessLayer = Layer.provide(

@@ -42,6 +42,7 @@ import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
+import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import {
@@ -221,6 +222,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         providerAuthLive,
         Layer.provide(FallbackFileIndexLive, BunServices.layer),
         ResourceManagerLive,
+        // SessionCwdRegistry — fast (sessionId → cwd) cache used by the
+        // per-cwd EventPublisher router (B11.6c). Tests use the in-memory
+        // Test variant — there is no SessionProfileCache wired here, so
+        // the eventual router will fall back to its primary-cwd path.
+        SessionCwdRegistry.Test(),
         ...extensionLayers,
         ...(config.extraLayers ?? []),
       )

@@ -38,6 +38,7 @@ import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "./event-publisher.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
+import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
 
 /** Marker service — construction triggers recovery of pending interaction requests */
@@ -207,6 +208,11 @@ export const createDependencies = (config: DependenciesConfig) => {
     providerLive = DebugProvider({ delayMs: 10 })
   }
 
+  // SessionCwdRegistry — fast (sessionId → cwd) cache for the per-cwd
+  // EventPublisher router (B11.6c). Registry writes happen at session
+  // creation; reads fall back to Storage on cache miss.
+  const sessionCwdRegistryLive = Layer.provide(SessionCwdRegistry.Live, storageLive)
+
   const eventPublisherLive = Layer.provide(
     EventPublisherLive,
     Layer.mergeAll(baseEventStoreLive, extensionRegistryLive, runtimePlatformLive),
@@ -217,6 +223,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     storageLive,
     baseEventStoreLive,
     eventPublisherLive,
+    sessionCwdRegistryLive,
     authStorageLive,
     authStoreLive,
     authGuardLive,
