@@ -129,6 +129,31 @@ const readFromKeychain = (
   )
 
 /**
+ * Pure policy: should a keychain miss for `source` fall back to the
+ * on-disk credentials file? Only when we're not on darwin (no
+ * keychain at all) or the request is for the primary account. For
+ * non-primary sources on darwin, source means source — silently
+ * returning the disk credential would leak the primary into a
+ * multi-account picker.
+ *
+ * Exported so the policy can be unit-tested without spawning
+ * `security`. Counsel C4 review surfaced this as a real defect.
+ */
+export const shouldFallBackToCredentialsFile = (platform: string, source: string): boolean =>
+  platform !== "darwin" || source === PRIMARY_CLAUDE_SERVICE
+
+/**
+ * Pure policy: when direct OAuth refresh fails, should we spawn the
+ * `claude` CLI as a fallback? Only safe for the primary source — the
+ * CLI persists to whichever account it considers active, so a
+ * non-primary spawn could refresh the wrong account.
+ *
+ * Exported so the policy can be unit-tested without spawning a
+ * subprocess. Counsel C4 review.
+ */
+export const shouldFallBackToCli = (source: string): boolean => source === PRIMARY_CLAUDE_SERVICE
+
+/**
  * Read Claude Code credentials for `source` (the keychain service name).
  * Use `PRIMARY_CLAUDE_SERVICE` for the default account; pass another
  * service from `listClaudeCodeKeychainServices()` for additional ones.
@@ -136,6 +161,11 @@ const readFromKeychain = (
  * On non-darwin (no keychain), `source` is ignored and the on-disk
  * `.credentials.json` is read instead — that file holds only one
  * credential, mirroring the CLI's behaviour.
+ *
+ * On darwin, the on-disk fallback is gated to PRIMARY only. A
+ * non-primary keychain miss propagates `ProviderAuthError` rather
+ * than silently returning the disk credential as if it belonged to
+ * the requested source (counsel C4 review).
  */
 export const readClaudeCodeCredentials = (
   source: string,
@@ -144,7 +174,15 @@ export const readClaudeCodeCredentials = (
     return readCredentialsFile()
   }
   return readFromKeychain(source).pipe(
-    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile()),
+    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
+      shouldFallBackToCredentialsFile(process.platform, source)
+        ? readCredentialsFile()
+        : Effect.fail(
+            new ProviderAuthError({
+              message: `No Claude credentials found in keychain for source: ${source}`,
+            }),
+          ),
+    ),
   )
 }
 
@@ -539,7 +577,19 @@ export const refreshClaudeCodeCredentials = (
     }
     // Direct path failed — fall back to the CLI spawn (second attempt
     // historically helps when the first invocation kicks a stale-token
-    // error). The CLI persists its own credentials, so re-read after.
+    // error). The CLI persists its own credentials to whichever
+    // account it considers active, so this fallback is ONLY safe for
+    // the primary source. For non-primary accounts a CLI spawn could
+    // refresh the wrong account; surface a typed failure instead so
+    // the picker can prompt the user to refresh that account
+    // explicitly (counsel C4 review).
+    if (!shouldFallBackToCli(source)) {
+      return yield* Effect.fail(
+        new ProviderAuthError({
+          message: `Direct OAuth refresh failed for ${source}; CLI fallback would target the active account, not this one. Refresh the account in Claude Code directly.`,
+        }),
+      )
+    }
     yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
     return yield* readClaudeCodeCredentials(source)
   })

@@ -13,6 +13,8 @@ import {
   freshEnoughForUse,
   parseOAuthResponse,
   PRIMARY_CLAUDE_SERVICE,
+  shouldFallBackToCli,
+  shouldFallBackToCredentialsFile,
   updateCredentialBlob,
 } from "@gent/extensions/anthropic/oauth"
 
@@ -132,6 +134,42 @@ describe("PRIMARY_CLAUDE_SERVICE", () => {
   // updating.
   it("is the canonical Claude Code keychain service name", () => {
     expect(PRIMARY_CLAUDE_SERVICE).toBe("Claude Code-credentials")
+  })
+})
+
+describe("source-policy gates (counsel C4 review)", () => {
+  // Counsel C4 review surfaced two real defects: a non-primary
+  // keychain miss silently fell through to the on-disk file (which
+  // holds only the primary credential), and the CLI refresh fallback
+  // ran for any source (the CLI persists to whichever account is
+  // active, not the requested one). Both policies extracted into
+  // pure helpers so the gate is unit-testable without spawning
+  // `security` or `claude`.
+  describe("shouldFallBackToCredentialsFile", () => {
+    it("returns true on non-darwin (no keychain at all)", () => {
+      expect(shouldFallBackToCredentialsFile("linux", PRIMARY_CLAUDE_SERVICE)).toBe(true)
+      expect(shouldFallBackToCredentialsFile("linux", "Claude Code-credentials-abc123")).toBe(true)
+    })
+
+    it("returns true for the primary source on darwin", () => {
+      expect(shouldFallBackToCredentialsFile("darwin", PRIMARY_CLAUDE_SERVICE)).toBe(true)
+    })
+
+    it("returns false for non-primary sources on darwin", () => {
+      expect(shouldFallBackToCredentialsFile("darwin", "Claude Code-credentials-abc123")).toBe(
+        false,
+      )
+    })
+  })
+
+  describe("shouldFallBackToCli", () => {
+    it("returns true for the primary source", () => {
+      expect(shouldFallBackToCli(PRIMARY_CLAUDE_SERVICE)).toBe(true)
+    })
+
+    it("returns false for non-primary sources", () => {
+      expect(shouldFallBackToCli("Claude Code-credentials-abc123")).toBe(false)
+    })
   })
 })
 
