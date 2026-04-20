@@ -50,7 +50,17 @@ const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => 
 // ConfigService
 
 export interface ConfigServiceService {
-  readonly get: () => Effect.Effect<UserConfig>
+  /**
+   * Resolve the merged user + project config. Pass `cwd` whenever the
+   * consumer is acting *on behalf of a specific session* — a multi-cwd
+   * server (sessions in /a, /b, /c) cannot rely on the launch-cwd's
+   * `.gent/config.json` to carry project overrides for everyone
+   * (counsel HIGH #1). The in-memory user config is reused; only the
+   * project file changes between cwds, falling back to an empty
+   * project config if the file is missing or unparsable. Without `cwd`,
+   * returns the cached project config from the server's launch cwd.
+   */
+  readonly get: (cwd?: string) => Effect.Effect<UserConfig>
   readonly set: (config: Partial<UserConfig>) => Effect.Effect<void>
   readonly getPermissionRules: () => Effect.Effect<ReadonlyArray<PermissionRule>>
   readonly addPermissionRule: (rule: PermissionRule) => Effect.Effect<void>
@@ -152,10 +162,33 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       yield* ensureUserConfig
       yield* loadConfig
 
+      // Read a project config from an arbitrary cwd. Used by `getForCwd`
+      // so consumers acting on behalf of a session in `<sessionCwd>` see
+      // the right per-project overrides instead of the server's launch
+      // cwd. Falls back to an empty UserConfig on missing / unparsable
+      // file so a misconfigured project never blocks dispatch.
+      const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> => {
+        const filePath = path.join(cwd, ConfigService.PROJECT_CONFIG_RELATIVE)
+        return fs.exists(filePath).pipe(
+          Effect.flatMap((exists) => (exists ? fs.readFileString(filePath) : Effect.succeed("{}"))),
+          Effect.flatMap((content) =>
+            Schema.decodeUnknownEffect(Schema.fromJsonString(UserConfig))(content),
+          ),
+          Effect.catchEager(() => Effect.succeed(new UserConfig({}))),
+        )
+      }
+
       const service: ConfigServiceService = {
-        get: Effect.fn("ConfigService.get")(function* () {
+        get: Effect.fn("ConfigService.get")(function* (cwd) {
           const user = yield* Ref.get(userConfigRef)
-          const project = yield* Ref.get(projectConfigRef)
+          // No cwd, or cwd matches the server's launch cwd: short-circuit
+          // to the cached project ref so launch-cwd callers don't pay an
+          // extra disk read per request.
+          if (cwd === undefined || cwd === runtimePlatform.cwd) {
+            const project = yield* Ref.get(projectConfigRef)
+            return mergeConfigs(user, project)
+          }
+          const project = yield* readProjectConfigAt(cwd)
           return mergeConfigs(user, project)
         }),
 
@@ -285,6 +318,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
     const projectConfigRef = Ref.makeUnsafe(new UserConfig({}))
 
     return Layer.succeed(ConfigService, {
+      // Test impl: `cwd` is ignored — no filesystem to read. Tests that
+      // need per-cwd behavior should drive it through `Live` with a
+      // tmpdir cwd, since `Test` is for hermetic units.
       get: () =>
         Effect.gen(function* () {
           const user = yield* Ref.get(userConfigRef)

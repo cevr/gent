@@ -254,6 +254,7 @@ const resolveTurnContext = (params: {
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
+  sessionCwd?: string
 }): Effect.Effect<ResolvedTurnContext | undefined, StorageError, ConfigService> =>
   Effect.gen(function* () {
     const currentAgent = params.agentOverride ?? params.currentAgent ?? DEFAULT_AGENT_NAME
@@ -281,7 +282,12 @@ const resolveTurnContext = (params: {
     // it optional here let test layers omit it and silently fall through
     // to the default driver, hiding wiring bugs (codex MEDIUM #1).
     const configService = yield* ConfigService
-    const driverOverrides = (yield* configService.get()).driverOverrides ?? undefined
+    // Read driver overrides from the session's cwd. Without per-session
+    // resolution, a multi-cwd server's project overrides would all
+    // come from the launch cwd (counsel HIGH #1). `get(undefined)`
+    // falls back to the launch-cwd cached config.
+    const sessionConfig = yield* configService.get(params.sessionCwd)
+    const driverOverrides = sessionConfig.driverOverrides ?? undefined
     const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
     // If config-routed and the agent had no hardcoded driver, the
     // override replaces it — `effectiveAgent` is otherwise unchanged.
@@ -660,6 +666,10 @@ const resolveTurnPhase = (params: {
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
+  /** Session cwd — used to read project-level driver overrides from the
+   *  *session's* `.gent/config.json` rather than the server's launch
+   *  cwd (counsel HIGH #1). Undefined for sessions without a cwd. */
+  sessionCwd?: string
 }) =>
   Effect.gen(function* () {
     const existing = yield* params.storage.getMessage(params.message.id)
@@ -1823,6 +1833,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   turnExtensionStateRuntime: profile.extensionStateRuntime,
                   turnBaseSections: profile.baseSections,
                   turnHostCtx,
+                  turnSessionCwd: sessionCwd,
                 }
               }
 
@@ -1832,6 +1843,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 turnExtensionStateRuntime: extensionStateRuntime as MachineEngineService,
                 turnBaseSections: config.baseSections,
                 turnHostCtx: defaultHostCtx,
+                turnSessionCwd: sessionCwd,
               }
             })
 
@@ -1890,6 +1902,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 turnExtensionStateRuntime,
                 turnBaseSections,
                 turnHostCtx,
+                turnSessionCwd,
               } = yield* resolveTurnProfile
 
               let step = 0
@@ -1986,6 +1999,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   baseSections: turnBaseSections,
                   interactive: state.interactive,
                   hostCtx: turnHostCtx,
+                  ...(turnSessionCwd !== undefined ? { sessionCwd: turnSessionCwd } : {}),
                 }).pipe(Effect.provideService(ConfigService, configServiceForRun))
                 if (resolved === undefined) break
 

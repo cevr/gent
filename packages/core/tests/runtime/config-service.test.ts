@@ -3,10 +3,15 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {
@@ -251,6 +256,88 @@ describe("ConfigService", () => {
         const result = yield* cfg.get()
         expect(result.driverOverrides?.["cowork"]).toBeDefined()
       }).pipe(Effect.provide(ConfigService.Test())),
+    )
+  })
+
+  describe("get(cwd) — per-session project config (counsel HIGH #1)", () => {
+    // Shared scratch dirs: server launch cwd + two distinct project cwds,
+    // each with a different `.gent/config.json`. The Live ConfigService
+    // is built against the launch cwd, but every `get(otherCwd)` call
+    // should resolve project overrides from THAT cwd, not the launch one.
+    const launch = mkdtempSync(join(tmpdir(), "gent-config-launch-"))
+    const projectA = mkdtempSync(join(tmpdir(), "gent-config-projectA-"))
+    const projectB = mkdtempSync(join(tmpdir(), "gent-config-projectB-"))
+    const home = mkdtempSync(join(tmpdir(), "gent-config-home-"))
+
+    const writeProjectConfig = (cwd: string, agent: string, driverId: string): void => {
+      mkdirSync(join(cwd, ".gent"), { recursive: true })
+      writeFileSync(
+        join(cwd, ".gent", "config.json"),
+        JSON.stringify({
+          driverOverrides: { [agent]: { _tag: "external", id: driverId } },
+        }),
+      )
+    }
+
+    writeProjectConfig(launch, "cowork", "acp-launch-driver")
+    writeProjectConfig(projectA, "cowork", "acp-projectA-driver")
+    writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
+
+    // Cleanup after the suite. mkdtempSync paths are tmpdir() children
+    // so this is safe even on test interruption.
+    const cleanup = () => {
+      for (const dir of [launch, projectA, projectB, home]) {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    const live = ConfigService.Live.pipe(
+      Layer.provide(RuntimePlatform.Live({ cwd: launch, home, platform: "darwin" })),
+      Layer.provide(BunServices.layer),
+    )
+
+    const expectExternalOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
+      const override = cfg.driverOverrides?.[agent]
+      if (override === undefined) throw new Error(`expected ${agent} override`)
+      if (override._tag !== "external") throw new Error("expected external driver")
+      expect(override.id).toBe(expectedId)
+    }
+
+    it.live("get() returns the launch-cwd project config", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        const result = yield* cfg.get()
+        expectExternalOverride(result, "cowork", "acp-launch-driver")
+      }).pipe(Effect.provide(live)),
+    )
+
+    it.live("get(projectA) reads projectA's .gent/config.json, not the launch cwd", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        const result = yield* cfg.get(projectA)
+        expectExternalOverride(result, "cowork", "acp-projectA-driver")
+      }).pipe(Effect.provide(live)),
+    )
+
+    it.live("get(projectB) is independent of get(projectA) — no cross-contamination", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        const a = yield* cfg.get(projectA)
+        const b = yield* cfg.get(projectB)
+        expectExternalOverride(a, "cowork", "acp-projectA-driver")
+        expectExternalOverride(b, "cowork", "acp-projectB-driver")
+      }).pipe(Effect.provide(live)),
+    )
+
+    it.live("get(unknownCwd) falls back to user-only config when no project file exists", () =>
+      Effect.gen(function* () {
+        const cfg = yield* ConfigService
+        const empty = mkdtempSync(join(tmpdir(), "gent-config-empty-"))
+        const result = yield* cfg.get(empty)
+        expect(result.driverOverrides?.["cowork"]).toBeUndefined()
+        rmSync(empty, { recursive: true, force: true })
+        cleanup()
+      }).pipe(Effect.provide(live)),
     )
   })
 })
