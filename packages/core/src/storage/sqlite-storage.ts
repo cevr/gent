@@ -11,6 +11,12 @@ import { CheckpointStorage } from "./checkpoint-storage.js"
 import { InteractionStorage } from "./interaction-storage.js"
 import { InteractionPendingReader } from "./interaction-pending-reader.js"
 import { SearchStorage } from "./search-storage.js"
+import { SessionStorage } from "./session-storage.js"
+import { BranchStorage } from "./branch-storage.js"
+import { MessageStorage } from "./message-storage.js"
+import { EventStorage } from "./event-storage.js"
+import { RelationshipStorage } from "./relationship-storage.js"
+import { ExtensionStateStorage } from "./extension-state-storage.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -880,6 +886,33 @@ const makeStorage = Effect.gen(function* () {
   } satisfies StorageService
 })
 
+/** Build 6 focused sub-Tag layers from a layer that provides Storage. */
+const subTagLayers = <E, R>(
+  base: Layer.Layer<Storage, E, R>,
+): Layer.Layer<
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | EventStorage
+  | RelationshipStorage
+  | ExtensionStateStorage,
+  E,
+  R
+> =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const s = yield* Storage
+      return Layer.mergeAll(
+        SessionStorage.fromStorage(s),
+        BranchStorage.fromStorage(s),
+        MessageStorage.fromStorage(s),
+        EventStorage.fromStorage(s),
+        RelationshipStorage.fromStorage(s),
+        ExtensionStateStorage.fromStorage(s),
+      )
+    }).pipe(Effect.provide(base)),
+  )
+
 export class Storage extends Context.Service<Storage, StorageService>()(
   "@gent/core/src/storage/sqlite-storage/Storage",
 ) {
@@ -897,11 +930,21 @@ export class Storage extends Context.Service<Storage, StorageService>()(
       }),
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
 
-  /** Live layer that also exposes SqlClient and focused storage services */
+  /** Live layer that also exposes SqlClient, focused storage services, and 6 sub-Tags */
   static LiveWithSql = (
     dbPath: string,
   ): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage,
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage,
     PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path
   > => {
@@ -922,6 +965,7 @@ export class Storage extends Context.Service<Storage, StorageService>()(
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
       Layer.provide(SearchStorage.Live, base),
+      subTagLayers(base),
     )
   }
 
@@ -930,9 +974,19 @@ export class Storage extends Context.Service<Storage, StorageService>()(
       Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
     )
 
-  /** Memory layer that also exposes SqlClient and focused storage services */
+  /** Memory layer that also exposes SqlClient, focused storage services, and 6 sub-Tags */
   static MemoryWithSql = (): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage
   > => {
     const base = Layer.effect(Storage, makeStorage).pipe(
       Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
@@ -944,13 +998,24 @@ export class Storage extends Context.Service<Storage, StorageService>()(
       interactionStorage,
       Layer.provide(InteractionPendingReader.Live, interactionStorage),
       Layer.provide(SearchStorage.Live, base),
+      subTagLayers(base),
     )
   }
 
   static Test = (): Layer.Layer<Storage> => Storage.Memory()
 
-  /** Test layer that also exposes SqlClient and focused storage services */
+  /** Test layer that also exposes SqlClient, focused storage services, and 6 sub-Tags */
   static TestWithSql = (): Layer.Layer<
-    Storage | SqlClient.SqlClient | CheckpointStorage | InteractionStorage | SearchStorage
+    | Storage
+    | SqlClient.SqlClient
+    | CheckpointStorage
+    | InteractionStorage
+    | SearchStorage
+    | SessionStorage
+    | BranchStorage
+    | MessageStorage
+    | EventStorage
+    | RelationshipStorage
+    | ExtensionStateStorage
   > => Storage.MemoryWithSql()
 }
