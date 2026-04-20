@@ -126,7 +126,13 @@ describe("updateCredentialBlob", () => {
 describe("freshEnoughForUse", () => {
   // Counsel HIGH #1 — the gate that decides "use these creds vs.
   // refresh first" must allow at least a 60s safety margin so a token
-  // that's about to expire isn't sent on the wire mid-refresh.
+  // that's about to expire isn't sent on the wire mid-refresh. Note:
+  // this only tests the *threshold*, not the integration. The full
+  // regression ("refresh returns fresh creds → caller uses them in
+  // memory even when write-back failed") is verified at the call
+  // sites (runtime-boundary, claude-code-auth, anthropic/index)
+  // through code review — none of them re-read keychain after
+  // refresh anymore.
   const now = 1_700_000_000_000
 
   it("returns true when expiry is more than 60s away", () => {

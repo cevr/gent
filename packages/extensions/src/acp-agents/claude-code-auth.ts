@@ -8,7 +8,7 @@
  * @module
  */
 import { Clock, Effect } from "effect"
-import type { ProviderAuthError } from "@gent/core/extensions/api"
+import { ProviderAuthError } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
   readClaudeCodeCredentials,
@@ -21,6 +21,10 @@ import {
  * within the next minute. Uses the refreshed creds returned from the
  * refresh call directly — re-reading keychain would silently lose
  * direct-OAuth tokens on write-back failure (counsel HIGH #1).
+ *
+ * If the refreshed creds are still inside the freshness window, fail
+ * with ProviderAuthError rather than send a token that will expire
+ * mid-flight — matches runtime-boundary's policy.
  */
 export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {
@@ -28,6 +32,14 @@ export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthEr
     const now = yield* Clock.currentTimeMillis
     if (!freshEnoughForUse(creds, now)) {
       creds = yield* refreshClaudeCodeCredentials()
+      if (!freshEnoughForUse(creds, now)) {
+        return yield* Effect.fail(
+          new ProviderAuthError({
+            message:
+              "Refreshed Claude Code credentials are still near expiry — try again in a moment.",
+          }),
+        )
+      }
     }
     return creds.accessToken
   })

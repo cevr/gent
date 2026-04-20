@@ -8,6 +8,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   createAnthropicKeychainFetch,
+  freshEnoughForUse,
   initAnthropicKeychainEnv,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
@@ -115,9 +116,12 @@ export const AnthropicExtension = defineExtension({
           Effect.gen(function* () {
             if (ctx.methodIndex !== 0) return undefined
             let creds = yield* readClaudeCodeCredentials()
-            if (creds.expiresAt < (yield* Clock.currentTimeMillis) + 60_000) {
-              yield* refreshClaudeCodeCredentials().pipe(Effect.catchEager(() => Effect.void))
-              creds = yield* readClaudeCodeCredentials()
+            const now = yield* Clock.currentTimeMillis
+            if (!freshEnoughForUse(creds, now)) {
+              // Use the returned creds — the previous shape re-read
+              // keychain after refresh and silently lost direct-OAuth
+              // tokens whenever write-back failed (counsel HIGH #1).
+              creds = yield* refreshClaudeCodeCredentials()
             }
             // Persist keychain creds to AuthStore
             yield* ctx.persist({
