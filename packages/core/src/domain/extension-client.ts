@@ -1,9 +1,13 @@
 // TUI Extension Client Module
 //
-// Extensions export a setup(ctx) factory that returns a flat
+// Extensions export an Effect-typed `setup` that returns a flat
 // `ClientContribution[]` array. The TUI discovers *.client.{tsx,ts,js,mjs}
-// files from extension directories, imports them, and resolves contributions
-// with scope precedence (project > user > builtin).
+// files from extension directories, imports them, runs each `setup` against
+// the per-provider `clientRuntime`, and resolves contributions with scope
+// precedence (project > user > builtin). Setups yield typed services from
+// the runtime (`ClientTransport`, `ClientShell`, `ClientWorkspace`,
+// `ClientComposer`, `ClientLifecycle`, `FileSystem`, `Path`) — there is no
+// `(ctx) => Array` arm and no imperative context bag.
 //
 // The `ClientContribution` union is the foundational data structure here —
 // adding a new kind requires registering it in the resolver's HANDLED_KINDS set
@@ -22,7 +26,6 @@
 
 import type { Effect } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
-import type { AnyExtensionCommandMessage } from "./extension-protocol.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 
 /** Widget placement slots in the session view */
@@ -283,21 +286,4 @@ function standaloneClientModule<TComponent = unknown, R = unknown>(
 /** Namespace for client-module factories. Currently exposes `tui` only. */
 export const ExtensionPackage = {
   tui: standaloneClientModule,
-}
-
-// Sender-only context retained for callers that pass an imperative `ctx`
-// at the loader/test boundary; the production loader does NOT call
-// extension setups with this value (it provides services through the
-// runtime). Tests that need to instantiate one for legacy assertions can
-// still construct it directly.
-export interface ExtensionClientContext {
-  readonly cwd: string
-  readonly home: string
-  readonly openOverlay: (id: OverlayId) => void
-  readonly closeOverlay: () => void
-  readonly sessionId?: string
-  readonly branchId?: string
-  readonly send: (message: AnyExtensionCommandMessage) => void
-  readonly sendMessage: (content: string) => void
-  readonly composerState: () => ComposerState
 }

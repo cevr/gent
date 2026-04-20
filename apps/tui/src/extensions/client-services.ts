@@ -65,3 +65,27 @@ export class ClientComposer extends Context.Service<ClientComposer, ClientCompos
 export const makeClientComposerLayer = (
   payload: ClientComposerShape,
 ): Layer.Layer<ClientComposer> => Layer.succeed(ClientComposer, payload)
+
+// ── ClientLifecycle ──────────────────────────────────────────────────────
+
+export interface ClientLifecycleShape {
+  /**
+   * Register a cleanup callback to run when the surrounding
+   * `ExtensionUIProvider` unmounts (i.e. when the per-provider runtime is
+   * disposed). Use for Solid `createRoot(dispose)` disposers, pulse
+   * unsubscribes, and any other resource a widget setup detaches.
+   *
+   * Setups call this synchronously during `Effect.gen`; cleanups fire in
+   * registration order. Failures inside a cleanup are swallowed so one
+   * broken disposer cannot block the rest.
+   */
+  readonly addCleanup: (fn: () => void) => void
+}
+
+export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLifecycleShape>()(
+  "@gent/tui/src/extensions/client-services/ClientLifecycle",
+) {}
+
+export const makeClientLifecycleLayer = (
+  payload: ClientLifecycleShape,
+): Layer.Layer<ClientLifecycle> => Layer.succeed(ClientLifecycle, payload)

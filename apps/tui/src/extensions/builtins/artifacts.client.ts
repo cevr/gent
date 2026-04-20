@@ -7,10 +7,10 @@
  * `ExtensionStateChanged` pulses for `@gent/artifacts`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
- * `runtime.runPromise`, which has no lasting scope. The Solid `createRoot`
- * + pulse subscription leak for the lifetime of the provider mount; in
- * production that is the lifetime of the app (one-shot mount). A future
- * remount-capable provider would need a per-extension scope.
+ * `runtime.runPromise`. The Solid `createRoot` disposer and the pulse
+ * unsubscribe are registered with `ClientLifecycle.addCleanup`; the
+ * provider's `onCleanup` runs them when it unmounts, so this widget
+ * leaves no detached root behind.
  */
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
@@ -18,12 +18,14 @@ import { ExtensionPackage, borderLabelContribution } from "@gent/core/domain/ext
 import type { Artifact } from "@gent/extensions/artifacts-protocol.js"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol.js"
 import { ClientTransport } from "../client-transport"
+import { ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
 
 export default ExtensionPackage.tui(EXT_ID, {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
+    const lifecycle = yield* ClientLifecycle
 
     type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
 
@@ -77,7 +79,7 @@ export default ExtensionPackage.tui(EXT_ID, {
     }
 
     yield* Effect.sync(() => {
-      createRoot(() => {
+      createRoot((dispose) => {
         const [s, set] = createSignal<Keyed | undefined>(undefined)
         getState = s
         setState = set
@@ -90,15 +92,17 @@ export default ExtensionPackage.tui(EXT_ID, {
           if (session === undefined) return
           void runRefetch(session)
         })
+        lifecycle.addCleanup(dispose)
       })
     })
 
-    transport.onExtensionStateChanged((p) => {
+    const unsubscribePulse = transport.onExtensionStateChanged((p) => {
       if (p.extensionId !== EXT_ID) return
       const session = transport.currentSession()
       if (session === undefined) return
       void runRefetch(session)
     })
+    lifecycle.addCleanup(unsubscribePulse)
 
     return [
       borderLabelContribution({

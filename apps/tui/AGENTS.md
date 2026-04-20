@@ -169,14 +169,16 @@ Extension pipeline: `context.tsx` (static builtin imports) + `discovery.ts` → 
 
 - Builtins are statically imported in `context.tsx` for Bun compiled binary compatibility
 - User/project extensions discovered via filesystem scan (`discovery.ts`, Effect-typed)
-- `loader-boundary.ts` accepts `disabled` list — skips `setup()` for disabled extensions
-- Loader supports two setup shapes (legacy sync `(ctx) => Array`, Effect-typed `Effect<Array, E, R>`); Effect setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientSnapshots`
+- `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
+- One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`
+- **Transport-only widgets (B11.6)**: there is no in-process snapshot cache. Widgets subscribe to `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.ask(extId, GetSnapshot)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so stale data from the prior session can never render. Read accessors like `liveModel()` gate on `(sid, bid)` match against the live session. `auto.client.ts` / `artifacts.client.ts` / `tasks.client.tsx` are the canonical examples.
+- **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
-- `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime` (per-extension snapshots come via `ClientSnapshots` service or legacy `ctx.getSnapshotRaw()`)
+- `useExtensionUI()` provides `sessionId()`, `branchId()`, `clientRuntime`
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
-- `composerState` reactive signal available in `ExtensionClientContext`: `{ draft, mode, inputFocused, autocompleteOpen }`
+- `ClientComposer.state()` exposes the reactive composer snapshot: `{ draft, mode, inputFocused, autocompleteOpen }`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
-- `cwd` available on `ExtensionClientContext` for workspace-relative operations
+- `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations
 
 ## Key Files (Composer + Session)
 

@@ -15,35 +15,9 @@ import {
   makeClientWorkspaceLayer,
   makeClientShellLayer,
   makeClientComposerLayer,
+  makeClientLifecycleLayer,
 } from "../src/extensions/client-services"
 import { makeClientTransportLayer } from "../src/extensions/client-transport"
-// applyExtensionSnapshot is gone in C2 — provide a local stub so the legacy
-// "snapshot ordering" tests still load. TODO(c2): port to ExtensionStateChanged.
-const applyExtensionSnapshot = (
-  map: Map<string, unknown>,
-  snap: {
-    readonly extensionId: string
-    readonly epoch: number
-    readonly sessionId: string
-    readonly branchId: string
-    readonly model: unknown
-  },
-): Map<string, unknown> => {
-  const existing = map.get(snap.extensionId) as
-    | { sessionId: string; branchId: string; epoch: number }
-    | undefined
-  if (
-    existing !== undefined &&
-    existing.sessionId === snap.sessionId &&
-    existing.branchId === snap.branchId &&
-    existing.epoch >= snap.epoch
-  ) {
-    return map
-  }
-  const next = new Map(map)
-  next.set(snap.extensionId, snap)
-  return next
-}
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import {
   autocompleteContribution,
@@ -51,11 +25,33 @@ import {
   clientCommandContribution,
   composerSurfaceContribution,
   interactionRendererContribution,
-  type ExtensionClientContext,
 } from "@gent/core/domain/extension-client.js"
 
 // B11.6a: loadTuiExtensions now takes a single opts arg (no makeCtx second arg).
 // This shim makes `runtime` optional in tests, defaulting to _testRuntime.
+//
+// Transport stub: pure load tests must not invoke any RPC. Build a Proxy
+// that throws on any method access so an accidental call fails with
+// "unexpected transport call in pure load test", not an opaque TypeError.
+const throwOnAccess = (label: string): never => {
+  throw new Error(`unexpected transport call in pure load test: ${label}`)
+}
+const stubClient = new Proxy(
+  {},
+  {
+    get: (_t, prop) =>
+      new Proxy(
+        {},
+        { get: (_t2, method) => () => throwOnAccess(`client.${String(prop)}.${String(method)}`) },
+      ),
+  },
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+) as Parameters<typeof makeClientTransportLayer>[0]["client"]
+const stubRuntime = new Proxy(
+  {},
+  { get: (_t, method) => () => throwOnAccess(`runtime.${String(method)}`) },
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+) as Parameters<typeof makeClientTransportLayer>[0]["runtime"]
 const _testRuntime = ManagedRuntime.make(
   Layer.mergeAll(
     BunFileSystem.layer,
@@ -77,16 +73,18 @@ const _testRuntime = ManagedRuntime.make(
     }),
     // B11.6: builtin widgets that migrated off the paired-package
     // snapshot cache (auto, artifacts, tasks) yield `ClientTransport`
-    // from setup. Test runtime stubs the surface; pure-load tests do
-    // not invoke any of these methods so failures bubble loudly if hit.
+    // from setup. The throwing Proxy stubs above guarantee any
+    // accidental RPC in pure load tests surfaces with a useful message.
     makeClientTransportLayer({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      client: {} as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      runtime: {} as any,
+      client: stubClient,
+      runtime: stubRuntime,
       currentSession: () => undefined,
       onExtensionStateChanged: () => () => {},
     }),
+    // ClientLifecycle: pure load tests don't unmount, so cleanups
+    // accumulate harmlessly. Real disposal is exercised by integration
+    // tests that mount/unmount the provider.
+    makeClientLifecycleLayer({ addCleanup: () => {} }),
   ),
 )
 const loadTuiExtensions = (
@@ -102,21 +100,6 @@ const USER_DIR = join(TEST_DIR, "user")
 const PROJECT_DIR = join(TEST_DIR, "project")
 // Use the same barrel as production context.tsx
 import { builtinClientModules } from "../src/extensions/builtins/index"
-
-const noopCtx: ExtensionClientContext = {
-  cwd: TEST_DIR,
-  home: "/tmp",
-  openOverlay: () => {},
-  closeOverlay: () => {},
-  send: () => {},
-  sendMessage: () => {},
-  composerState: () => ({
-    draft: "",
-    mode: "editing",
-    inputFocused: false,
-    autocompleteOpen: false,
-  }),
-}
 
 beforeAll(() => {
   mkdirSync(USER_DIR, { recursive: true })
@@ -720,60 +703,10 @@ export default {
   })
 })
 
-describe("snapshot ordering", () => {
-  test("older extension snapshots do not overwrite newer ones", () => {
-    const latest = applyExtensionSnapshot(new Map(), {
-      sessionId: "s-1",
-      branchId: "b-1",
-      extensionId: "@test/shared",
-      epoch: 2,
-      model: { status: "latest" },
-    })
-
-    const merged = applyExtensionSnapshot(latest, {
-      sessionId: "s-1",
-      branchId: "b-1",
-      extensionId: "@test/shared",
-      epoch: 1,
-      model: { status: "stale" },
-    })
-
-    expect(merged).toBe(latest)
-    expect(merged.get("@test/shared")).toEqual({
-      sessionId: "s-1",
-      branchId: "b-1",
-      extensionId: "@test/shared",
-      epoch: 2,
-      model: { status: "latest" },
-    })
-  })
-
-  test("new branch snapshots replace older snapshots even when epoch resets", () => {
-    const previousBranch = applyExtensionSnapshot(new Map(), {
-      sessionId: "s-1",
-      branchId: "b-old",
-      extensionId: "@test/shared",
-      epoch: 9,
-      model: { status: "old-branch" },
-    })
-
-    const merged = applyExtensionSnapshot(previousBranch, {
-      sessionId: "s-1",
-      branchId: "b-new",
-      extensionId: "@test/shared",
-      epoch: 1,
-      model: { status: "new-branch" },
-    })
-
-    expect(merged.get("@test/shared")).toEqual({
-      sessionId: "s-1",
-      branchId: "b-new",
-      extensionId: "@test/shared",
-      epoch: 1,
-      model: { status: "new-branch" },
-    })
-  })
-})
+// B11.6a counsel: snapshot-ordering tests deleted along with the
+// `applyExtensionSnapshot` stub. Per-cwd EventPublisher (B11.6c) covers
+// the real pulse-routing concern; widget-level stale-data gating is
+// exercised by the keyed `(sessionId, branchId)` state in each builtin.
 
 describe("border label resolution", () => {
   test("resolves bottom-left and bottom-right border labels", () => {
@@ -1043,16 +976,6 @@ describe("resolution semantics", () => {
 })
 
 describe("composerState contract", () => {
-  test("composerState is available on ExtensionClientContext", () => {
-    const state = noopCtx.composerState()
-    expect(state).toEqual({
-      draft: "",
-      mode: "editing",
-      inputFocused: false,
-      autocompleteOpen: false,
-    })
-  })
-
   test("extension setup can register commands (Effect-typed setup)", async () => {
     const composerDir = join(TEST_DIR, "composer-ext")
     mkdirSync(composerDir, { recursive: true })
@@ -1190,6 +1113,7 @@ describe("B11.6 transport-only widgets — startup with active session", () => {
           }),
           onExtensionStateChanged: () => () => {},
         }),
+        makeClientLifecycleLayer({ addCleanup: () => {} }),
       ),
     )
 

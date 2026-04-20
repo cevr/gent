@@ -7,11 +7,10 @@
  * `ExtensionStateChanged` pulses for `@gent/task-tools`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
- * `runtime.runPromise`, which has no lasting scope. The Solid `createRoot`
- * + pulse subscription leak for the lifetime of the provider mount; in
- * production that is the lifetime of the app (one-shot mount). A future
- * remount-capable provider would need a per-extension scope; for now this
- * is a bounded, app-lifetime leak.
+ * `runtime.runPromise`. The Solid `createRoot` disposer and the pulse
+ * unsubscribe are registered with `ClientLifecycle.addCleanup`; the
+ * provider's `onCleanup` runs them when it unmounts, so this widget
+ * leaves no detached root behind.
  */
 import { createSignal, createMemo, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
@@ -26,7 +25,7 @@ import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
 import { ClientTransport } from "../client-transport"
-import { ClientShell, ClientComposer } from "../client-services"
+import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"
 import { useScopedKeyboard } from "../../keyboard/context"
 
 const EXT_ID = "@gent/task-tools"
@@ -37,6 +36,7 @@ export default ExtensionPackage.tui("@gent/task-tools", {
     const transport = yield* ClientTransport
     const shell = yield* ClientShell
     const composer = yield* ClientComposer
+    const lifecycle = yield* ClientLifecycle
 
     type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
 
@@ -103,10 +103,11 @@ export default ExtensionPackage.tui("@gent/task-tools", {
       }
     }
 
-    // Detached Solid root — see header lifecycle note. We never call
-    // dispose; provider mount is one-shot.
+    // Solid root + pulse subscription — both disposers registered with
+    // `ClientLifecycle.addCleanup` so the provider's `onCleanup` reaps
+    // them when the surrounding `ExtensionUIProvider` unmounts.
     yield* Effect.sync(() => {
-      createRoot(() => {
+      createRoot((dispose) => {
         const [s, set] = createSignal<Keyed | undefined>(undefined)
         getState = s
         setState = set
@@ -122,16 +123,17 @@ export default ExtensionPackage.tui("@gent/task-tools", {
           if (session === undefined) return
           void runRefetch(session)
         })
+        lifecycle.addCleanup(dispose)
       })
     })
 
-    // Pulse subscription — leak intentional per header note.
-    transport.onExtensionStateChanged((p) => {
+    const unsubscribePulse = transport.onExtensionStateChanged((p) => {
       if (p.extensionId !== EXT_ID) return
       const session = transport.currentSession()
       if (session === undefined) return
       void runRefetch(session)
     })
+    lifecycle.addCleanup(unsubscribePulse)
 
     const runningCount = (): number =>
       liveTasks().filter((t) => t.status === "in_progress" || t.status === "pending").length

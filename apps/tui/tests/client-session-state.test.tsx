@@ -6,24 +6,12 @@ import { onMount } from "solid-js"
 import { Effect, Stream } from "effect"
 import { createMockClient, renderWithProviders } from "./render-harness"
 import { useClient } from "../src/client"
-import { useExtensionUI, type ExtensionUIContextValue } from "../src/extensions/context"
 import type { ClientContextValue, SessionState } from "../src/client/context"
 
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
     props.onReady(client)
-  })
-  return <box />
-}
-
-function ClientAndExtensionProbe(props: {
-  readonly onReady: (client: ClientContextValue, ext: ExtensionUIContextValue) => void
-}) {
-  const client = useClient()
-  const ext = useExtensionUI()
-  onMount(() => {
-    props.onReady(client, ext)
   })
   return <box />
 }
@@ -169,157 +157,13 @@ describe("ClientProvider session lifecycle", () => {
     expect(ctx.sessionState()).toEqual({ status: "none" })
   })
 
-  test.skip("stale snapshot hydration does not overwrite the active session after switch", async () => {
-    // TODO(c2): rewrite without ext.snapshots() — the per-extension snapshot accessor
-    // moved to per-extension `getSnapshotRaw()` bindings in the loader; the TUI-level
-    // shared snapshot map is gone in C2.
-    let ctx: ClientContextValue | undefined
-    let ext: ExtensionUIContextValue | undefined
-    let resolveOldSnapshot:
-      | ((snapshot: {
-          sessionId: SessionId
-          branchId: BranchId
-          messages: []
-          lastEventId: null
-          reasoningLevel: "high"
-          runtime: {
-            phase: "running"
-            status: "running"
-            agent: "deepwork"
-            queue: { steering: []; followUp: [] }
-          }
-          extensionSnapshots: [
-            {
-              extensionId: "@test/shared"
-              epoch: 9
-              model: { status: "old-branch" }
-            },
-          ]
-        }) => void)
-      | undefined
-
-    const oldSnapshot = new Promise<{
-      sessionId: SessionId
-      branchId: BranchId
-      messages: []
-      lastEventId: null
-      reasoningLevel: "high"
-      runtime: {
-        phase: "running"
-        status: "running"
-        agent: "deepwork"
-        queue: { steering: []; followUp: [] }
-      }
-      extensionSnapshots: [
-        {
-          extensionId: "@test/shared"
-          epoch: 9
-          model: { status: "old-branch" }
-        },
-      ]
-    }>((resolve) => {
-      resolveOldSnapshot = resolve
-    })
-
-    const client = createMockClient({
-      session: {
-        getSnapshot: ({ sessionId }: { sessionId: SessionId; branchId: BranchId }) => {
-          if (sessionId === SessionId.of("session-a")) {
-            return Effect.promise(() => oldSnapshot)
-          }
-          return Effect.succeed({
-            sessionId: SessionId.of("session-b"),
-            branchId: BranchId.of("branch-b"),
-            messages: [],
-            lastEventId: null,
-            reasoningLevel: "low" as const,
-            runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
-              agent: "cowork" as const,
-              queue: { steering: [], followUp: [] },
-            },
-            extensionSnapshots: [
-              {
-                extensionId: "@test/shared",
-                epoch: 1,
-                model: { status: "new-branch" },
-              },
-            ],
-          })
-        },
-      },
-    })
-
-    const setup = await renderWithProviders(
-      () => <ClientAndExtensionProbe onReady={(client, ui) => ((ctx = client), (ext = ui))} />,
-      {
-        client,
-        initialSession: {
-          id: SessionId.of("session-a"),
-          branchId: BranchId.of("branch-a"),
-          name: "A",
-          createdAt: 0,
-          updatedAt: 0,
-        },
-      },
-    )
-    if (ctx === undefined || ext === undefined) {
-      throw new Error("client or extension context not ready")
-    }
-
-    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
-    await setup.renderOnce()
-    await setup.renderOnce()
-
-    expect(ctx.agent()).toBe("cowork")
-    expect(ctx.sessionState()).toEqual({
-      status: "active",
-      session: {
-        sessionId: "session-b",
-        branchId: "branch-b",
-        name: "B",
-        reasoningLevel: "low",
-      },
-    })
-    expect(ext.snapshots().get("@test/shared")?.model).toEqual({ status: "new-branch" })
-
-    resolveOldSnapshot?.({
-      sessionId: SessionId.of("session-a"),
-      branchId: BranchId.of("branch-a"),
-      messages: [],
-      lastEventId: null,
-      reasoningLevel: "high",
-      runtime: {
-        phase: "running",
-        status: "running",
-        agent: "deepwork",
-        queue: { steering: [], followUp: [] },
-      },
-      extensionSnapshots: [
-        {
-          extensionId: "@test/shared",
-          epoch: 9,
-          model: { status: "old-branch" },
-        },
-      ],
-    })
-    await Promise.resolve()
-    await setup.renderOnce()
-    await setup.renderOnce()
-
-    expect(ctx.agent()).toBe("cowork")
-    expect(ctx.sessionState()).toEqual({
-      status: "active",
-      session: {
-        sessionId: "session-b",
-        branchId: "branch-b",
-        name: "B",
-        reasoningLevel: "low",
-      },
-    })
-    expect(ext.snapshots().get("@test/shared")?.model).toEqual({ status: "new-branch" })
-  })
+  // B11.6a counsel: deleted skipped `stale snapshot hydration` test.
+  // It targeted the in-process `ext.snapshots()` map and `getSnapshotRaw`
+  // — both removed when the paired-package wrapper died. Widget-level
+  // stale-data gating is now exercised by the keyed `(sessionId,
+  // branchId)` state in `auto.client.ts`, `artifacts.client.ts`, and
+  // `tasks.client.tsx`; per-cwd EventPublisher (B11.6c) covers
+  // pulse-routing isolation.
 
   test("stale snapshot failures do not repopulate connection issues after switch", async () => {
     let ctx: ClientContextValue | undefined

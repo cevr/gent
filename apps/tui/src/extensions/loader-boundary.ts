@@ -93,9 +93,6 @@ export const loadTuiExtensions = async (opts: {
   readonly userDir: string
   readonly projectDir: string
   readonly disabled?: ReadonlyArray<string>
-  /** Called once per discovered module (builtin or external) before setup runs. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly onModuleLoaded?: (module: ExtensionClientModule<unknown, any>) => void
   /** ManagedRuntime that satisfies the union of services any Effect-typed
    *  setup may yield, plus `FileSystem | Path` for discovery. The TUI
    *  shell builds this with the full client-services Layer. */
@@ -115,11 +112,6 @@ export const loadTuiExtensions = async (opts: {
   const enabled = imported
     .filter((r): r is ImportedExtension => r !== undefined)
     .filter((r) => !disabledSet.has(r.module.id))
-
-  // Notify caller of every enabled discovered module before setup runs.
-  for (const r of enabled) {
-    opts.onModuleLoaded?.(r.module)
-  }
 
   // Builtins: pre-imported, just filter disabled and call setup()
   const builtinLoaded: LoadedTuiExtension[] = await Promise.all(

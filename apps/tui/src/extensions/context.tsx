@@ -35,6 +35,7 @@ import {
   makeClientWorkspaceLayer,
   makeClientShellLayer,
   makeClientComposerLayer,
+  makeClientLifecycleLayer,
 } from "./client-services"
 import { useWorkspace } from "../workspace/index"
 import { useClient } from "../client/context"
@@ -124,6 +125,16 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
     setComposerStateProviderSignal(() => provider)
   }
 
+  // Provider-scoped cleanup registry. Widget setups that detach Solid
+  // roots or subscribe to pulses register their disposers here; the
+  // `onCleanup` below runs them in order when the provider unmounts.
+  // Without this, Solid `createRoot` disposers and pulse unsubscribes
+  // would leak past provider remount.
+  const cleanups: Array<() => void> = []
+  const addCleanup = (fn: () => void): void => {
+    cleanups.push(fn)
+  }
+
   // Per-provider ManagedRuntime that augments the shared platform layer
   // (FileSystem, Path) with the TUI client services Effect-typed
   // extensions may yield: `ClientTransport` (typed RPC client + pulse
@@ -179,13 +190,24 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
           return provider()
         },
       }),
+      makeClientLifecycleLayer({ addCleanup }),
     ),
   )
 
-  // Dispose the per-provider runtime on unmount so layer finalizers run and
-  // any in-flight Effects are interrupted. Without this, provider remount
-  // and shutdown leak runtime resources (counsel C9.3 finding 3).
+  // Run widget-registered cleanups (Solid root disposers, pulse
+  // unsubscribes) FIRST, then dispose the per-provider runtime so layer
+  // finalizers run and any in-flight Effects are interrupted. Without
+  // this ordering, runtime disposal would yank `ClientTransport` out
+  // from under widget cleanups that still need it.
   onCleanup(() => {
+    for (const fn of cleanups) {
+      try {
+        fn()
+      } catch {
+        // Swallow — one broken disposer must not block the rest.
+      }
+    }
+    cleanups.length = 0
     void clientRuntime.dispose()
   })
 
