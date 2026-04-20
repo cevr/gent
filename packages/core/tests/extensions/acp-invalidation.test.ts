@@ -124,6 +124,60 @@ describe("AcpConnection.close", () => {
     }
   })
 
+  test("racing rpcRaw + close cannot leak a parked Deferred (counsel BLOCKER)", async () => {
+    // Race coverage: a naive layout (separate closedRef + pendingRef)
+    // permits this interleaving: rpcRaw reads closed=false → close
+    // drains pending → rpcRaw inserts into the now-empty map → rpcRaw
+    // parks forever. The fix folds both into ConnState behind one
+    // Ref.modify. This test fires N RPCs concurrently with close and
+    // asserts every fiber terminates within the timeout — no parks.
+    const program = Effect.gen(function* () {
+      const scope = yield* Scope.make()
+      const { proc } = makeFakeProc()
+      const conn = yield* makeAcpConnection(proc).pipe(Effect.provideService(Scope.Scope, scope))
+
+      const initParams = {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+        },
+        clientInfo: { name: "gent-test", version: "0.0.0" },
+      } as const
+
+      // Fork 50 RPCs back-to-back into the connection scope. Each
+      // either registers and is later failed, or finds the state
+      // already closed and fails immediately. Neither path parks.
+      const fibers = yield* Effect.forEach(
+        Array.from({ length: 50 }, (_, i) => i),
+        () => Effect.forkIn(conn.initialize(initParams), scope),
+      )
+
+      // Race the close against the in-flight registrations. No sleep
+      // here — we want the close to land at an arbitrary point in the
+      // RPC sequence to exercise the interleaving.
+      yield* conn.close("racing close")
+
+      // Each fiber must terminate within the bound. A single park
+      // would surface as a timeout.
+      const exits = yield* Effect.forEach(fibers, (f) =>
+        Fiber.await(f).pipe(Effect.timeout("2 seconds")),
+      )
+
+      yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+      return exits
+    })
+
+    const exits = await Effect.runPromise(program)
+    expect(exits.length).toBe(50)
+    for (const exit of exits) {
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(JSON.stringify(exit.cause)).toContain("AcpClosedError")
+      }
+    }
+  })
+
   test("close is idempotent — second call is a no-op", async () => {
     const program = Effect.gen(function* () {
       const scope = yield* Scope.make()

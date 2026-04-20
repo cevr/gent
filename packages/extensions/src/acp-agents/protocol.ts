@@ -61,6 +61,21 @@ type PendingRequest = {
   readonly resolve: Deferred.Deferred<unknown, AcpError | AcpClosedError>
 }
 
+/**
+ * The closed-flag and the pending-RPC map MUST be one atomic cell. A
+ * naive layout (separate `closedRef` + `pendingRef`) leaks Deferreds
+ * through this interleaving:
+ *   1. rpcRaw reads closedRef = false
+ *   2. close flips closedRef = true and drains pendingRef
+ *   3. rpcRaw inserts its Deferred into the now-empty pendingRef
+ *   4. rpcRaw awaits forever — never failed, never replied to
+ * Folding both into `ConnState` lets `Ref.modify` make
+ * "check-open-and-register" a single transaction.
+ */
+type ConnState =
+  | { readonly _tag: "open"; readonly pending: HashMap.HashMap<RequestId, PendingRequest> }
+  | { readonly _tag: "closed" }
+
 type IncomingRequestHandler = (method: string, params: unknown) => Effect.Effect<unknown, AcpError>
 
 // ── JSON-RPC wire helpers ──
@@ -85,10 +100,12 @@ export const makeAcpConnection = (
 ) =>
   Effect.gen(function* () {
     const nextIdRef = yield* Ref.make(1 as RequestId)
-    const pendingRef = yield* Ref.make(HashMap.empty<RequestId, PendingRequest>())
+    const stateRef = yield* Ref.make<ConnState>({
+      _tag: "open",
+      pending: HashMap.empty<RequestId, PendingRequest>(),
+    })
     const updatesPubSub = yield* PubSub.unbounded<SessionNotification>()
     const writeQueue = yield* Queue.unbounded<string>()
-    const closedRef = yield* Ref.make(false)
 
     const write = (msg: string) => Queue.offer(writeQueue, msg).pipe(Effect.asVoid)
 
@@ -100,16 +117,24 @@ export const makeAcpConnection = (
     )
 
     // Parse incoming lines
-    // Handle a response to one of our pending requests
+    // Handle a response to one of our pending requests. Atomic
+    // claim-and-remove via Ref.modify so a concurrent `close` either
+    // sees the entry (and fails it) or this handler sees it — never
+    // both, never neither.
     const handleResponse = (parsed: Record<string, unknown>) =>
       Effect.gen(function* () {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         const id = parsed["id"] as RequestId
-        const pending = yield* Ref.get(pendingRef)
-        const entry = HashMap.get(pending, id)
-        if (entry._tag === "None") return
-
-        yield* Ref.update(pendingRef, HashMap.remove(id))
+        const claimed = yield* Ref.modify(
+          stateRef,
+          (s): [PendingRequest | undefined, ConnState] => {
+            if (s._tag === "closed") return [undefined, s]
+            const found = HashMap.get(s.pending, id)
+            if (found._tag === "None") return [undefined, s]
+            return [found.value, { _tag: "open", pending: HashMap.remove(s.pending, id) }]
+          },
+        )
+        if (claimed === undefined) return
 
         if ("error" in parsed) {
           const err = parsed["error"]
@@ -117,9 +142,9 @@ export const makeAcpConnection = (
             typeof err === "object" && err !== null && "message" in err
               ? String((err as Record<string, unknown>)["message"])
               : "Unknown ACP error"
-          yield* Deferred.fail(entry.value.resolve, new AcpError({ message }))
+          yield* Deferred.fail(claimed.resolve, new AcpError({ message }))
         } else {
-          yield* Deferred.succeed(entry.value.resolve, parsed["result"])
+          yield* Deferred.succeed(claimed.resolve, parsed["result"])
         }
       })
 
@@ -221,8 +246,8 @@ export const makeAcpConnection = (
       Stream.runDrain,
       Effect.catchEager((err: AcpError) =>
         Effect.gen(function* () {
-          const closed = yield* Ref.get(closedRef)
-          if (!closed) {
+          const state = yield* Ref.get(stateRef)
+          if (state._tag !== "closed") {
             yield* Effect.logWarning("acp: reader error").pipe(
               Effect.annotateLogs({ error: String(err) }),
             )
@@ -233,17 +258,29 @@ export const makeAcpConnection = (
     )
 
     // RPC helper — sends request, waits for response.
-    // Refuses new requests after `close` so a late caller doesn't park
-    // forever on a Deferred that the close-walker already drained.
+    //
+    // The closed-check and the pending-Deferred registration are folded
+    // into a single `Ref.modify` so a concurrent `close` cannot drain
+    // the pending map *between* "is open?" and "register pending".
+    // Without this fold, a late RPC could write its Deferred into the
+    // post-drain map and park forever.
     const rpcRaw = (method: string, params: unknown) =>
       Effect.gen(function* () {
-        const closed = yield* Ref.get(closedRef)
-        if (closed) {
-          return yield* Effect.fail(new AcpClosedError({ reason: "connection closed" }))
-        }
         const id = yield* Ref.getAndUpdate(nextIdRef, (n) => (n + 1) as RequestId)
         const deferred = yield* Deferred.make<unknown, AcpError | AcpClosedError>()
-        yield* Ref.update(pendingRef, HashMap.set(id, { resolve: deferred } as PendingRequest))
+        const registered = yield* Ref.modify(stateRef, (s): [boolean, ConnState] => {
+          if (s._tag === "closed") return [false, s]
+          return [
+            true,
+            {
+              _tag: "open",
+              pending: HashMap.set(s.pending, id, { resolve: deferred } as PendingRequest),
+            },
+          ]
+        })
+        if (!registered) {
+          return yield* Effect.fail(new AcpClosedError({ reason: "connection closed" }))
+        }
         yield* write(encodeRequest(id, method, params))
         return yield* Deferred.await(deferred)
       })
@@ -263,20 +300,22 @@ export const makeAcpConnection = (
         ),
       cancel: (sessionId) => write(encodeNotification("session/cancel", { sessionId })),
       updates: Stream.fromPubSub(updatesPubSub),
-      // Order matters: flip closedRef → atomically claim pending map →
-      // fail each Deferred with AcpClosedError → shut down updatesPubSub
-      // → interrupt I/O fibers. Failing the Deferreds *before* killing
-      // the reader makes invalidation surface as a typed error in the
-      // executor, not an interrupt.
+      // Atomically seal the state and claim the pending map in one
+      // Ref.modify so a concurrent rpcRaw cannot leak a Deferred into
+      // the post-drain map. Then fail each claimed Deferred with the
+      // typed error *before* fiber interrupts so invalidation surfaces
+      // as a typed error in the executor, not an interrupt.
       close: (reason = "connection closed") =>
         Effect.gen(function* () {
-          const wasClosed = yield* Ref.getAndSet(closedRef, true)
-          if (wasClosed) return
-          const drained = yield* Ref.getAndSet(
-            pendingRef,
-            HashMap.empty<RequestId, PendingRequest>(),
+          const claimed = yield* Ref.modify(
+            stateRef,
+            (s): [HashMap.HashMap<RequestId, PendingRequest> | undefined, ConnState] => {
+              if (s._tag === "closed") return [undefined, s]
+              return [s.pending, { _tag: "closed" }]
+            },
           )
-          for (const [, entry] of drained) {
+          if (claimed === undefined) return
+          for (const [, entry] of claimed) {
             yield* Deferred.fail(entry.resolve, new AcpClosedError({ reason }))
           }
           yield* PubSub.shutdown(updatesPubSub)
