@@ -210,7 +210,22 @@ export const makeEventPublisherRouter = (): {
               return
             }
 
-            const sessionCwd = yield* cwdRegistry.lookup(sessionId)
+            const sessionCwd = yield* cwdRegistry.lookup(sessionId).pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  // Storage lookup failed — persist event but don't guess
+                  // which runtime to dispatch to (fail-closed).
+                  yield* baseEventStore.publish(event)
+                  yield* logDeliveryFailure("event-publisher.cwd-lookup.failed", {
+                    sessionId,
+                    error: String(cause),
+                  })
+                  return "__cwd_lookup_failed__" as const
+                }),
+              ),
+            )
+
+            if (sessionCwd === "__cwd_lookup_failed__") return
 
             if (sessionCwd === undefined || sessionCwd === primaryCwd) {
               yield* publishInner(event, primaryDeps, primaryPulseByTag)

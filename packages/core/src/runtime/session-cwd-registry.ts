@@ -19,7 +19,7 @@
 
 import { Context, Effect, Layer, Ref } from "effect"
 import type { SessionId } from "../domain/ids.js"
-import { Storage, type StorageService } from "../storage/sqlite-storage.js"
+import { Storage, type StorageService, type StorageError } from "../storage/sqlite-storage.js"
 
 export interface SessionCwdRegistryService {
   /** Record the cwd for a sessionId (idempotent — last writer wins). */
@@ -27,9 +27,10 @@ export interface SessionCwdRegistryService {
   /**
    * Resolve the cwd for a sessionId. Synchronous when the cache is warm;
    * falls back to a single storage read on miss and memoizes the result.
-   * Returns `undefined` only if the storage row genuinely does not exist.
+   * Returns `undefined` if the storage row does not exist.
+   * Propagates `StorageError` on transient failures (fail-closed).
    */
-  readonly lookup: (sessionId: SessionId) => Effect.Effect<string | undefined>
+  readonly lookup: (sessionId: SessionId) => Effect.Effect<string | undefined, StorageError>
   /** Drop the cached entry for a sessionId (paired with session deletion). */
   readonly forget: (sessionId: SessionId) => Effect.Effect<void>
 }
@@ -88,11 +89,12 @@ const makeRegistry = (
       const cache = yield* Ref.get(cacheRef)
       const cached = cache.get(sessionId)
       if (cached !== undefined) return cached
-      // Cold cache — single storage read, memoize on hit. Errors swallow to
-      // undefined: the router treats undefined as "fall back to primary cwd".
-      const sessionOpt = yield* storage.getSession(sessionId).pipe(Effect.option)
-      if (sessionOpt._tag === "None") return undefined
-      const cwd = sessionOpt.value?.cwd
+      // Cold cache — single storage read, memoize on hit. Storage errors
+      // propagate (fail-closed): the caller must distinguish "not found"
+      // from "storage failed" to avoid wrong-runtime delivery.
+      const session = yield* storage.getSession(sessionId)
+      if (session === undefined || session === null) return undefined
+      const cwd = session.cwd
       if (cwd === undefined || cwd === null) return undefined
       yield* Ref.update(cacheRef, (m) => {
         const next = new Map(m)

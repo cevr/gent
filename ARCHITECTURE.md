@@ -22,7 +22,7 @@ apps/
 packages/
 ├── core/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
-│   ├── storage/   # SQLite persistence (focused services: SessionStorage, BranchStorage, MessageStorage, EventStorage, RelationshipStorage, ExtensionStateStorage)
+│   ├── storage/   # SQLite persistence (Storage + 6 sub-Tags: SessionStorage, BranchStorage, MessageStorage, EventStorage, RelationshipStorage, ExtensionStateStorage)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
 │   ├── runtime/   # actor-process, agent-loop, task/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
@@ -342,7 +342,7 @@ Other notes:
 - Builtins are individual `.client.{ts,tsx}` files in `apps/tui/src/extensions/builtins/`
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
-- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument and no sync `(ctx) => Array` arm. `ExtensionClientContext`, `getSnapshotRaw`, `SnapshotSource`, `ClientSnapshots`, `defineExtensionPackage`, and `ExtensionPackage.tui()` were all deleted in B11.6.
+- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument and no sync `(ctx) => Array` arm. `ExtensionClientContext`, `getSnapshotRaw`, `SnapshotSource`, `ClientSnapshots`, and `defineExtensionPackage` were deleted in B11.6. `ExtensionPackage.tui()` remains as the standalone TUI extension factory (no longer paired with a server extension).
 - Widgets are transport-only: subscribe to `ClientTransport.onExtensionStateChanged` for invalidation pulses and call `client.extension.ask(extId, GetSnapshot)` via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins/{auto,artifacts,tasks}.client.{ts,tsx}` for the canonical pattern.
 - `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and pulse unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
@@ -427,7 +427,7 @@ One test file per source file. No god tests. Names match source owners.
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder`, recording layers
 - `packages/core/src/test-utils/in-process-layer.ts` — `baseLocalLayer`
 - `packages/core/src/test-utils/e2e-layer.ts` — `createE2ELayer`
-- `packages/core/src/debug/provider.ts` — `DebugProvider`, `createSignalProvider`, `createSequenceProvider`
+- `packages/core/src/providers/provider.ts` — `Provider.Debug`, `Provider.Sequence`, `Provider.Signal`, `Provider.Failing` + step builders
 - `apps/tui/tests/render-harness.tsx` — TUI render test harness
 - `packages/e2e/tests/transport-harness.ts` — shared worker + transport cases
 
