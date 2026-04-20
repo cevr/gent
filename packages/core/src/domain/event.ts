@@ -461,15 +461,6 @@ const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean =
 
 // EventStore Service
 
-/**
- * BaseEventStore — raw storage-backed publisher.
- * Used directly for synthetic events (ExtensionStateChanged) to avoid recursion.
- * Production code should use EventStore which wraps this with extension reduce.
- */
-export class BaseEventStore extends Context.Service<BaseEventStore, EventStoreService>()(
-  "@gent/core/src/domain/event/BaseEventStore",
-) {}
-
 const getOrCreateSessionPubSub = (
   sessions: Map<SessionId, PubSub.PubSub<EventEnvelope>>,
   sessionId: SessionId,
@@ -542,22 +533,9 @@ const makeMemoryEventStore = Effect.gen(function* () {
 export class EventStore extends Context.Service<EventStore, EventStoreService>()(
   "@gent/core/src/domain/event/EventStore",
 ) {
-  static Memory: Layer.Layer<EventStore | BaseEventStore> = Layer.unwrap(
-    makeMemoryEventStore.pipe(
-      Effect.map((service) =>
-        Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service)),
-      ),
-    ),
+  static Memory: Layer.Layer<EventStore> = Layer.unwrap(
+    makeMemoryEventStore.pipe(Effect.map((service) => Layer.succeed(EventStore, service))),
   )
 
-  static Live: Layer.Layer<EventStore | BaseEventStore> = EventStore.Memory
-
-  static Test = (): Layer.Layer<EventStore | BaseEventStore> => {
-    const noop: EventStoreService = {
-      publish: () => Effect.void,
-      subscribe: (_params) => Stream.empty,
-      removeSession: () => Effect.void,
-    }
-    return Layer.merge(Layer.succeed(EventStore, noop), Layer.succeed(BaseEventStore, noop))
-  }
+  static Live: Layer.Layer<EventStore> = EventStore.Memory
 }

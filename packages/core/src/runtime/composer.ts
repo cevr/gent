@@ -45,7 +45,7 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
-import { BaseEventStore, EventStore } from "../domain/event.js"
+import { EventStore } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -117,7 +117,7 @@ type ProvidesOf<Services extends ReadonlyArray<OwnedService<any, any, any, any>>
 export interface EphemeralOverrides {
   /** In-memory storage for ephemeral child. Omits Storage + all 6 sub-Tags. */
   readonly storage?: OpaqueLayer
-  /** Event store for ephemeral child. Omits EventStore + BaseEventStore. */
+  /** Event store for ephemeral child. Omits EventStore. */
   readonly eventStore?: OpaqueLayer
   /** Event publisher wired to local bus. Omits EventPublisher. */
   readonly eventPublisher?: OpaqueLayer
@@ -147,7 +147,6 @@ type EphemeralOverrideProvides =
   | RelationshipStorage
   | ExtensionStateStorage
   | EventStore
-  | BaseEventStore
   | EventPublisher
   | ApprovalService
   | PromptPresenter
@@ -175,9 +174,7 @@ const OVERRIDE_TAG_SETS: Record<
     ExtensionStateStorage,
   ] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  eventStore: [EventStore, BaseEventStore] as unknown as ReadonlyArray<
-    Context.Key<unknown, unknown>
-  >,
+  eventStore: [EventStore] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   eventPublisher: [EventPublisher] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion

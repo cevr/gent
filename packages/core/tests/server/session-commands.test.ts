@@ -23,7 +23,7 @@ describe("SessionCommands", () => {
     Effect.gen(function* () {
       const terminatedRef = yield* Ref.make<ReadonlyArray<SessionId>>([])
 
-      const baseEventStore = EventStore.Test()
+      const baseEventStore = EventStore.Memory
       const baseDeps = Layer.mergeAll(
         Storage.TestWithSql(),
         Provider.Test([]),

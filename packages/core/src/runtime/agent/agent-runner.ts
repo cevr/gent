@@ -6,7 +6,6 @@ import {
   AgentRunSucceeded,
   AgentRunFailed,
   AgentRunSpawned,
-  BaseEventStore,
   EventStore,
   getEventBranchId,
   getEventSessionId,
@@ -733,7 +732,6 @@ export const InProcessRunner = (
   AgentRunnerService,
   never,
   | Storage
-  | BaseEventStore
   | EventStore
   | EventPublisher
   | AgentLoop
@@ -745,7 +743,7 @@ export const InProcessRunner = (
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
-      const baseEventStore = yield* BaseEventStore
+      const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const loop = yield* AgentLoop
       const extensionRegistry = yield* ExtensionRegistry
@@ -935,19 +933,13 @@ export const SubprocessRunner = (
 ): Layer.Layer<
   AgentRunnerService,
   never,
-  | Storage
-  | BaseEventStore
-  | EventStore
-  | EventPublisher
-  | ExtensionRegistry
-  | Provider
-  | ServerProfileService
+  Storage | EventStore | EventPublisher | ExtensionRegistry | Provider | ServerProfileService
 > =>
   Layer.effect(
     AgentRunnerService,
     Effect.gen(function* () {
       const storage = yield* Storage
-      const baseEventStore = yield* BaseEventStore
+      const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(SubscriptionEngine)

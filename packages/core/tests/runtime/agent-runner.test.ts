@@ -331,7 +331,7 @@ describe("AgentRunner", () => {
   })
 
   test("fails with timeout", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
@@ -393,7 +393,7 @@ describe("AgentRunner", () => {
   })
 
   test("ephemeral helper runs do not persist child sessions", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
@@ -641,7 +641,7 @@ describe("AgentRunner", () => {
   })
 
   test("durable override persists child sessions for helper agents", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
     const deps = Layer.mergeAll(
       Storage.Test(),
@@ -709,7 +709,7 @@ describe("AgentRunner", () => {
   })
 
   test("reasoning-only assistant response surfaces reasoning as text", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
     // Mock AgentLoop that writes a reasoning-only assistant message
@@ -789,7 +789,7 @@ describe("AgentRunner", () => {
   })
 
   test("mixed text+reasoning returns text, not reasoning", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
     const mockLoop = Layer.succeed(AgentLoop, {
@@ -866,7 +866,7 @@ describe("AgentRunner", () => {
   })
 
   test("agent run output is saved to /tmp/gent/outputs/", async () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
     const mockLoop = Layer.succeed(AgentLoop, {

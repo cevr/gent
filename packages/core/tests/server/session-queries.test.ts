@@ -22,7 +22,7 @@ const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
 describe("Session Snapshot", () => {
   it.live("getSessionSnapshot only returns persisted state", () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const actorProcessLayer = Layer.succeed(ActorProcess, {
       sendUserMessage: () => Effect.void,
       sendToolResult: () => Effect.void,
@@ -89,7 +89,7 @@ describe("Session Snapshot", () => {
 
 describe("Session Tree", () => {
   const makeTestLayer = () => {
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const baseWithEventStore = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Test([]),

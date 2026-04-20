@@ -20,7 +20,7 @@ import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
-import { BaseEventStore, EventStore } from "@gent/core/domain/event"
+import { EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
@@ -91,24 +91,14 @@ const makeDriverRegistry = (executor: TurnExecutor) =>
 
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
-  Layer.merge(
-    Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Ref.update(eventsRef, (events) => [...events, event]).pipe(
-          Effect.as({ id: 0, event, createdAt: Date.now() }),
-        ),
-      subscribe: () => Stream.empty,
-      removeSession: () => Effect.void,
-    }),
-    Layer.succeed(BaseEventStore, {
-      publish: (event: AgentEvent) =>
-        Ref.update(eventsRef, (events) => [...events, event]).pipe(
-          Effect.as({ id: 0, event, createdAt: Date.now() }),
-        ),
-      subscribe: () => Stream.empty,
-      removeSession: () => Effect.void,
-    }),
-  )
+  Layer.succeed(EventStore, {
+    publish: (event: AgentEvent) =>
+      Ref.update(eventsRef, (events) => [...events, event]).pipe(
+        Effect.as({ id: 0, event, createdAt: Date.now() }),
+      ),
+    subscribe: () => Stream.empty,
+    removeSession: () => Effect.void,
+  })
 
 const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEvent[]>) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it

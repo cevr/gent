@@ -25,12 +25,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
 import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
-import {
-  BaseEventStore,
-  EventStore,
-  type AgentEvent,
-  type EventEnvelope,
-} from "@gent/core/domain/event"
+import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -101,7 +96,7 @@ const makeLayer = (
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    EventStore.Test(),
+    EventStore.Memory,
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
@@ -148,7 +143,7 @@ const makeLiveToolLayer = (
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-    EventStore.Test(),
+    EventStore.Memory,
     ApprovalService.Test(),
     Permission.Live([], "allow"),
     BunServices.layer,
@@ -163,24 +158,14 @@ const makeLiveToolLayer = (
 }
 
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
-  Layer.merge(
-    Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Ref.update(eventsRef, (events) => [...events, event]).pipe(
-          Effect.as({ id: 0, event, createdAt: Date.now() } as EventEnvelope),
-        ),
-      subscribe: () => Stream.empty,
-      removeSession: () => Effect.void,
-    }),
-    Layer.succeed(BaseEventStore, {
-      publish: (event: AgentEvent) =>
-        Ref.update(eventsRef, (events) => [...events, event]).pipe(
-          Effect.as({ id: 0, event, createdAt: Date.now() } as EventEnvelope),
-        ),
-      subscribe: () => Stream.empty,
-      removeSession: () => Effect.void,
-    }),
-  )
+  Layer.succeed(EventStore, {
+    publish: (event: AgentEvent) =>
+      Ref.update(eventsRef, (events) => [...events, event]).pipe(
+        Effect.as({ id: 0, event, createdAt: Date.now() } as EventEnvelope),
+      ),
+    subscribe: () => Stream.empty,
+    removeSession: () => Effect.void,
+  })
 
 const makeLayerWithEvents = (
   providerLayer: Layer.Layer<Provider>,
@@ -323,7 +308,7 @@ describe("streaming", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      EventStore.Test(),
+      EventStore.Memory,
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
@@ -1343,7 +1328,7 @@ describe("interaction", () => {
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      EventStore.Test(),
+      EventStore.Memory,
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,

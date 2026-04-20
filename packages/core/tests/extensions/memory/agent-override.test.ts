@@ -62,7 +62,7 @@ const makeTestLayer = (logs: {
 
   const storageDeps = Layer.mergeAll(
     Storage.TestWithSql(),
-    EventStore.Test(),
+    EventStore.Memory,
     agentLoopLayer,
     ExtensionRegistry.fromResolved(testExtensions),
     MachineEngine.Live([]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),

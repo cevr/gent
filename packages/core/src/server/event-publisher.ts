@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
 import {
-  BaseEventStore,
+  EventStore,
   ExtensionStateChanged,
   getEventBranchId,
   getEventSessionId,
@@ -125,11 +125,11 @@ const publishInner = (
 export const EventPublisherLive: Layer.Layer<
   EventPublisher,
   never,
-  BaseEventStore | MachineEngine | ExtensionRegistry
+  EventStore | MachineEngine | ExtensionRegistry
 > = Layer.effect(
   EventPublisher,
   Effect.gen(function* () {
-    const baseEventStore = yield* BaseEventStore
+    const baseEventStore = yield* EventStore
     const stateRuntime = yield* MachineEngine
     const registry = yield* ExtensionRegistry
     const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
@@ -166,7 +166,7 @@ export interface EventPublisherRouterHandle {
  * index, and SubscriptionEngine. Falls back to the primary cwd when the
  * session's cwd is unknown or matches the primary.
  *
- * Storage (BaseEventStore.publish) is shared — events go into one store
+ * Storage (EventStore.publish) is shared — events go into one store
  * regardless of cwd. Only the extension runtime dispatch is per-cwd.
  */
 export const makeEventPublisherRouter = (): {
@@ -174,7 +174,7 @@ export const makeEventPublisherRouter = (): {
   readonly layer: Layer.Layer<
     EventPublisher,
     never,
-    BaseEventStore | MachineEngine | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
+    EventStore | MachineEngine | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
   >
 } => {
   const handle: EventPublisherRouterHandle = { profileCache: undefined }
@@ -182,7 +182,7 @@ export const makeEventPublisherRouter = (): {
   const layer = Layer.effect(
     EventPublisher,
     Effect.gen(function* () {
-      const baseEventStore = yield* BaseEventStore
+      const baseEventStore = yield* EventStore
       const primaryStateRuntime = yield* MachineEngine
       const primaryRegistry = yield* ExtensionRegistry
       const primaryBusOpt = yield* Effect.serviceOption(SubscriptionEngine)

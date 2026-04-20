@@ -10,7 +10,6 @@ import {
   type StreamChunk,
 } from "../providers/provider.js"
 import {
-  BaseEventStore,
   EventStore,
   EventEnvelope,
   matchesEventFilter,
@@ -94,11 +93,7 @@ export const RecordingProvider = (
 
 // Recording EventStore
 
-export const RecordingEventStore: Layer.Layer<
-  EventStore | BaseEventStore,
-  never,
-  SequenceRecorder
-> = Layer.unwrap(
+export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorder> = Layer.unwrap(
   Effect.gen(function* () {
     const recorder = yield* SequenceRecorder
     const events: EventEnvelope[] = []
@@ -131,7 +126,7 @@ export const RecordingEventStore: Layer.Layer<
       removeSession: () => Effect.void,
     }
 
-    return Layer.merge(Layer.succeed(EventStore, service), Layer.succeed(BaseEventStore, service))
+    return Layer.succeed(EventStore, service)
   }),
 )
 

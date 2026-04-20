@@ -87,7 +87,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       }),
     )
 
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const storageDeps = Layer.mergeAll(
       Storage.TestWithSql(),
       eventStoreLayer,
@@ -184,7 +184,7 @@ describe("SessionCommands → ActorProcess integration", () => {
         }),
     })
 
-    const eventStoreLayer = EventStore.Test()
+    const eventStoreLayer = EventStore.Memory
     const storageDeps = Layer.mergeAll(
       Storage.TestWithSql(),
       eventStoreLayer,
@@ -254,7 +254,7 @@ describe("SessionCommands → ActorProcess integration", () => {
 
     const storageDeps = Layer.mergeAll(
       Storage.TestWithSql(),
-      EventStore.Test(),
+      EventStore.Memory,
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),

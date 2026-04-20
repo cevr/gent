@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
-import { type AgentEvent, BaseEventStore } from "@gent/core/domain/event"
+import { type AgentEvent, EventStore } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host/subscription-engine"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -27,7 +27,7 @@ describe("EventPublisher", () => {
     const delivered: string[] = []
     const persisted: string[] = []
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: (event: AgentEvent) =>
         Effect.sync(() => {
           persisted.push(event._tag)
@@ -67,7 +67,7 @@ describe("EventPublisher", () => {
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
@@ -115,7 +115,7 @@ describe("EventPublisher", () => {
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: (event: AgentEvent) =>
         Effect.sync(() => {
           persisted.push(event._tag)
@@ -163,7 +163,7 @@ describe("EventPublisher", () => {
   test("events without sessionId skip queued delivery", async () => {
     let delivered = 0
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
@@ -199,7 +199,7 @@ describe("EventPublisher", () => {
     const busNested = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
@@ -258,7 +258,7 @@ describe("EventPublisher per-cwd router", () => {
     const branchA = BranchId.of("branch-primary")
     const branchB = BranchId.of("branch-secondary")
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
@@ -373,7 +373,7 @@ describe("EventPublisher per-cwd router", () => {
     const sessionA = SessionId.of("session-primary")
     const sessionB = SessionId.of("session-secondary")
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
@@ -469,7 +469,7 @@ describe("EventPublisher per-cwd router", () => {
     const primaryCwd = "/primary"
     const sessionB = SessionId.of("session-secondary")
 
-    const baseLayer = Layer.succeed(BaseEventStore, {
+    const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
       subscribe: () => Effect.void as never,
       removeSession: () => Effect.void,
