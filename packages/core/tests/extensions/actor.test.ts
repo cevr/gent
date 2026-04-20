@@ -273,6 +273,92 @@ describe("MachineEngine", () => {
       }
     }).pipe(Effect.provide(layer))
   })
+
+  it.live("concurrent requests to the same actor both resolve correctly", () => {
+    const GetCount = ExtensionMessage.reply(
+      "concurrent-counter",
+      "GetCount",
+      {},
+      Schema.Struct({ count: Schema.Number }),
+    )
+    const IncrementAndGet = ExtensionMessage.reply(
+      "concurrent-counter",
+      "IncrementAndGet",
+      {},
+      Schema.Struct({ count: Schema.Number }),
+    )
+
+    const layer = makeRuntimeLayer([
+      {
+        manifest: { id: "concurrent-counter" },
+        kind: "builtin",
+        sourcePath: "builtin",
+        contributions: {
+          resources: [
+            defineResource({
+              scope: "process",
+              layer: Layer.empty as Layer.Layer<unknown>,
+              machine: {
+                ...reducerActor<
+                  { count: number },
+                  never,
+                  ReturnType<typeof GetCount> | ReturnType<typeof IncrementAndGet>
+                >({
+                  id: "concurrent-counter",
+                  initial: { count: 0 },
+                  stateSchema: Schema.Struct({ count: Schema.Number }),
+                  reduce: (state) => ({ state }),
+                  request: (state, message) => {
+                    if (message._tag === "IncrementAndGet") {
+                      return Effect.succeed({
+                        state: { count: state.count + 1 },
+                        reply: { count: state.count + 1 },
+                      })
+                    }
+                    return Effect.succeed({ state, reply: { count: state.count } })
+                  },
+                }),
+                protocols: { GetCount, IncrementAndGet },
+              },
+            }),
+          ],
+        },
+      },
+    ])
+
+    return Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      // Fire two requests concurrently — both must resolve correctly
+      const [r1, r2] = yield* Effect.all([
+        runtime.execute(sessionId, IncrementAndGet({}), branchId),
+        runtime.execute(sessionId, GetCount({}), branchId),
+      ])
+      // Machine processes requests sequentially, so IncrementAndGet runs
+      // first (count → 1), then GetCount sees count=1.
+      expect(r1).toEqual({ count: 1 })
+      expect(r2).toEqual({ count: 1 })
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("request to non-existent extension returns protocol error", () => {
+    const Ping = ExtensionMessage.reply("does-not-exist", "Ping", {}, Schema.Void)
+
+    // No extensions registered
+    const layer = makeRuntimeLayer([])
+
+    return Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      const exit = yield* runtime.execute(sessionId, Ping({}), branchId).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const error = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(error)).toBe(true)
+        if (Option.isSome(error)) {
+          expect(error.value).toBeInstanceOf(ExtensionProtocolError)
+        }
+      }
+    }).pipe(Effect.provide(layer))
+  })
 })
 
 // ============================================================================
