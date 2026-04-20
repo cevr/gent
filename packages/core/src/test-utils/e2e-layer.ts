@@ -20,9 +20,8 @@ import {
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
-import type { LoadedExtension } from "../domain/extension.js"
+import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
-import type { ExtensionInput } from "../domain/extension-package.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
@@ -57,7 +56,7 @@ export interface E2ELayerConfig {
   /** Agents to register in the extension registry */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extension inputs for setup */
-  readonly extensionInputs: ReadonlyArray<ExtensionInput>
+  readonly extensionInputs: ReadonlyArray<GentExtension>
   /** Pre-loaded extensions to wire directly (bypasses setup). Mutually exclusive with extensionInputs. */
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** AgentRunner mock. Default: returns success with empty text */

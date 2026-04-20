@@ -22,11 +22,7 @@
 
 import type { Effect } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "./event"
-import type {
-  AnyExtensionCommandMessage,
-  AnyExtensionRequestMessage,
-} from "./extension-protocol.js"
-import type { QueryRef } from "./query.js"
+import type { AnyExtensionCommandMessage } from "./extension-protocol.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 
 /** Widget placement slots in the session view */
@@ -241,65 +237,21 @@ export interface ComposerState {
 }
 
 /**
- * Runtime API provided to legacy `(ctx) => Array` setups. Effect-typed
- * setups read these values via TUI services (`ClientWorkspace`, `ClientShell`,
- * `ClientComposer`, `ClientSnapshots`) instead.
+ * A client extension's setup is an Effect that yields its dependencies
+ * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
+ * default, widened by every TUI service the extension yields
+ * (`ClientWorkspace`, `ClientShell`, `ClientComposer`, `ClientTransport`).
  *
- * C9.3 deleted the Promise-typed `fs` (AsyncFileSystem), Promise-typed `ask`,
- * and `path` fields. Effect-typed setups yield `FileSystem.FileSystem` /
- * `Path.Path` from the runtime; for `ask`-style RPCs they yield the TUI's
- * `ClientTransport` and call `askExtension(message)`.
+ * The TUI shell publishes its typed `ClientTransport` tag at
+ * `apps/tui/src/extensions/client-transport.ts`; an extension that needs
+ * the transport yields it and the per-provider `ManagedRuntime` provides
+ * it. Errors flow on the typed `ClientSetupError` channel.
  */
-export interface ExtensionClientContext {
-  /** Working directory for the current workspace */
-  readonly cwd: string
-  /** User home directory */
-  readonly home: string
-  readonly openOverlay: (id: OverlayId) => void
-  readonly closeOverlay: () => void
-  /** Current session ID (reactive — may be undefined before session is active) */
-  readonly sessionId?: string
-  /** Current branch ID (reactive — may be undefined before session is active) */
-  readonly branchId?: string
-  /** Send a protocol command to a server-side extension actor (fire-and-forget) */
-  readonly send: (message: AnyExtensionCommandMessage) => void
-  /** Sync read of the latest cached snapshot for this extension, if the
-   *  package declared a `snapshotRequest` or `snapshotQuery`. The cache is
-   *  populated by the TUI provider on every `ExtensionStateChanged` pulse.
-   *  Returns `undefined` if the package did not declare a snapshot source or
-   *  no pulse has been received yet. */
-  readonly getSnapshotRaw: () => unknown
-  /** Send a user message to the active session */
-  readonly sendMessage: (content: string) => void
-  /** Reactive composer state */
-  readonly composerState: () => ComposerState
-}
-
-/**
- * A client extension's setup signature.
- *
- * Two shapes are accepted during the C9 transition:
- *   - **Legacy** (Promise surface): `(ctx) => ReadonlyArray<ClientContribution>`.
- *     Reads dependencies off the imperative `ExtensionClientContext` (with
- *     `AsyncFileSystem`, Promise-typed `ask`, etc.). Sync only — async work
- *     must happen inside contributions, not during setup.
- *   - **Effect** (C9 target): `ClientEffect<ReadonlyArray<ClientContribution>>`.
- *     Reads dependencies off `ClientDeps` (Effect's `FileSystem`, `Path`)
- *     plus any extra services the extension widens `R` with. The TUI shell
- *     publishes its typed `ClientTransport` tag at
- *     `apps/tui/src/extensions/client-transport.ts`; an extension that
- *     needs the transport yields it from its setup and the TUI's
- *     per-provider `ManagedRuntime` provides it. Errors flow on the typed
- *     `ClientSetupError` channel.
- *
- * The loader detects which shape was returned and dispatches accordingly.
- * C9.2 proved the Effect shape with `skills.client.ts`; C9.3 deletes
- * `AsyncFileSystem` and the Promise-typed `ask` and migrates the
- * remaining builtins.
- */
-export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> =
-  | ((ctx: ExtensionClientContext) => ReadonlyArray<ClientContribution<TComponent>>)
-  | ClientEffect<ReadonlyArray<ClientContribution<TComponent>>, ClientSetupError, R>
+export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> = ClientEffect<
+  ReadonlyArray<ClientContribution<TComponent>>,
+  ClientSetupError,
+  R
+>
 
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
@@ -310,13 +262,42 @@ export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> =
 export interface ExtensionClientModule<TComponent = unknown, R = ClientDeps> {
   readonly id: string
   readonly setup: ExtensionClientSetup<TComponent, R>
-  /** Optional snapshot source published by the paired `defineExtensionPackage`.
-   *  The TUI provider uses this to refetch on `ExtensionStateChanged` pulses
-   *  and populate the cache that backs `ctx.getSnapshotRaw()`.
-   *  Exactly one of `request` / `query` is set when present. */
-  readonly snapshotSource?: SnapshotSource
 }
 
-export type SnapshotSource =
-  | { readonly _tag: "request"; readonly request: () => AnyExtensionRequestMessage }
-  | { readonly _tag: "query"; readonly query: QueryRef }
+/**
+ * Standalone factory for TUI client modules. Server extensions and TUI
+ * client modules share an id by convention — the TUI loader looks up the
+ * module by id when wiring contributions.
+ *
+ * The setup is an Effect; legacy sync `(ctx) => Array` shape is gone (B11.6).
+ * Read the typed transport via `yield* ClientTransport` and the other
+ * services via `yield* ClientShell` / `ClientComposer` / `ClientWorkspace`.
+ */
+function standaloneClientModule<TComponent = unknown, R = unknown>(
+  id: string,
+  spec: { readonly setup: ExtensionClientSetup<TComponent, R> },
+): ExtensionClientModule<TComponent, R> {
+  return { id, setup: spec.setup }
+}
+
+/** Namespace for client-module factories. Currently exposes `tui` only. */
+export const ExtensionPackage = {
+  tui: standaloneClientModule,
+}
+
+// Sender-only context retained for callers that pass an imperative `ctx`
+// at the loader/test boundary; the production loader does NOT call
+// extension setups with this value (it provides services through the
+// runtime). Tests that need to instantiate one for legacy assertions can
+// still construct it directly.
+export interface ExtensionClientContext {
+  readonly cwd: string
+  readonly home: string
+  readonly openOverlay: (id: OverlayId) => void
+  readonly closeOverlay: () => void
+  readonly sessionId?: string
+  readonly branchId?: string
+  readonly send: (message: AnyExtensionCommandMessage) => void
+  readonly sendMessage: (content: string) => void
+  readonly composerState: () => ComposerState
+}

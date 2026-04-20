@@ -1,14 +1,7 @@
 /**
- * C9.1/C9.3 lock: `loadTuiExtensions` accepts both legacy sync `setup(ctx)` AND
- * Effect-typed `setup` shapes via the new `runtime: ManagedRuntime` opt.
- *
- * This proves the bridge in `loader-boundary.ts` (`invokeSetup`) routes
- * correctly based on `Effect.isEffect` and that an Effect-typed setup whose
- * deps are `FileSystem | Path` resolves through the platform runtime.
- *
- * C9.3: the loader no longer takes `fs`/`path` parameters — discovery runs
- * through the runtime so any runtime that satisfies `FileSystem | Path`
- * works. The legacy `AsyncFileSystem` proxy is gone.
+ * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
+ * provided `runtime: ManagedRuntime`. C9.1's legacy sync `setup(ctx)` arm
+ * was deleted in B11.6 — only the Effect shape is accepted now.
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
@@ -18,7 +11,6 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   type AutocompleteContribution,
   autocompleteContribution,
-  type ExtensionClientContext,
   type ExtensionClientModule,
 } from "@gent/core/domain/extension-client.js"
 import type { ClientEffect } from "@gent/core/domain/client-effect.js"
@@ -26,53 +18,7 @@ import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 
 const runtime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
 
-const noopCtx = (cwd = "/tmp"): ExtensionClientContext =>
-  ({
-    cwd,
-    home: "/tmp",
-    openOverlay: () => {},
-    closeOverlay: () => {},
-    send: () => {},
-    getSnapshotRaw: () => undefined,
-    sendMessage: () => {},
-    composerState: () => ({
-      draft: "",
-      mode: "editing",
-      inputFocused: false,
-      autocompleteOpen: false,
-    }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  }) as any
-
-describe("loadTuiExtensions setup-shape bridge (C9.1/C9.3)", () => {
-  test("legacy sync setup(ctx) returning array is invoked with the ctx", async () => {
-    const seen: ExtensionClientContext[] = []
-    const legacy: ExtensionClientModule = {
-      id: "@test/legacy",
-      setup: (ctx) => {
-        seen.push(ctx)
-        return [
-          autocompleteContribution({
-            prefix: "?",
-            title: "legacy",
-            items: () => [{ id: "x", label: "x" }],
-          }),
-        ]
-      },
-    }
-    const result = await loadTuiExtensions(
-      {
-        builtins: [legacy],
-        userDir: "/tmp/u-c9-1",
-        projectDir: "/tmp/p-c9-1",
-        runtime,
-      },
-      noopCtx,
-    )
-    expect(seen).toHaveLength(1)
-    expect(result.autocompleteItems.map((c) => c.prefix)).toContain("?")
-  })
-
+describe("loadTuiExtensions Effect setup", () => {
   test("Effect setup is run through the runtime; FileSystem is provided", async () => {
     const fxSetup: ClientEffect<ReadonlyArray<AutocompleteContribution>> = Effect.gen(function* () {
       // Prove we can reach a FileSystem from the runtime.
@@ -90,23 +36,19 @@ describe("loadTuiExtensions setup-shape bridge (C9.1/C9.3)", () => {
       ]
     })
     const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
-    const result = await loadTuiExtensions(
-      {
-        builtins: [ext],
-        userDir: "/tmp/u-c9-1-fx",
-        projectDir: "/tmp/p-c9-1-fx",
-        runtime,
-      },
-      noopCtx,
-    )
+    const result = await loadTuiExtensions({
+      builtins: [ext],
+      userDir: "/tmp/u-c9-1-fx",
+      projectDir: "/tmp/p-c9-1-fx",
+      runtime,
+    })
     expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
   })
 
   // C9.1 codex BLOCK 1 lock — discovered (not pre-imported) modules with an
   // Effect-valued `setup` must pass `importExtension`'s shape validator. The
-  // bridge in `invokeSetup` is only reachable if the validator accepts the
-  // value; rejecting non-functions silently dropped the entire discovered
-  // population for the new shape.
+  // bridge is only reachable if the validator accepts the value; rejecting
+  // non-functions silently dropped the entire discovered population.
   describe("discovered Effect-setup modules", () => {
     const tmpRoot = join(import.meta.dir, ".tmp-c9-1-discovery")
     const userDir = join(tmpRoot, "user")
@@ -144,7 +86,7 @@ export default {
     })
 
     test("imports + runs an Effect-valued setup discovered from userDir", async () => {
-      const result = await loadTuiExtensions({ userDir, projectDir, runtime }, noopCtx)
+      const result = await loadTuiExtensions({ userDir, projectDir, runtime })
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("#")
     })
   })

@@ -16,12 +16,12 @@
 import { createSignal, createMemo, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import {
+  ExtensionPackage,
   borderLabelContribution,
   clientCommandContribution,
   overlayContribution,
   widgetContribution,
 } from "@gent/core/domain/extension-client.js"
-import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"

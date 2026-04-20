@@ -19,8 +19,7 @@ import {
   type Scope as ScopeType,
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { ExtensionInput } from "../domain/extension-package.js"
-import type { LoadedExtension } from "../domain/extension.js"
+import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
   type ExtensionRegistryService,
@@ -61,7 +60,7 @@ export interface SessionProfileCacheConfig {
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>
-  readonly extensions: ReadonlyArray<ExtensionInput>
+  readonly extensions: ReadonlyArray<GentExtension>
 }
 
 export interface SessionProfileCacheService {

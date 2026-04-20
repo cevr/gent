@@ -23,13 +23,13 @@ import {
 import type {
   ExtensionTurnContext,
   ExtensionReduceContext,
+  GentExtension,
   LoadedExtension,
   ReduceResult,
   TurnProjection,
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
-import type { ExtensionInput } from "../domain/extension-package.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -199,7 +199,7 @@ export interface ToolTestLayerConfig {
   /** Agents to register */
   readonly agents: ReadonlyArray<AgentDefinition>
   /** Extensions to load */
-  readonly extensions?: ReadonlyArray<ExtensionInput>
+  readonly extensions?: ReadonlyArray<GentExtension>
   /** Extra capabilities to register (typically authored via `tool({...})`) */
   readonly tools?: ReadonlyArray<AnyCapabilityContribution>
   /** AgentRunner mock — default returns success with empty text */

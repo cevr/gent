@@ -1,5 +1,4 @@
-import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
-import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import { ExtensionPackage, autocompleteContribution } from "@gent/core/domain/extension-client.js"
 import { Effect } from "effect"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { askExtension } from "../client-transport"

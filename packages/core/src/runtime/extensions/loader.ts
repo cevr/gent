@@ -5,7 +5,6 @@ import type { ExtensionKind, GentExtension, LoadedExtension } from "../../domain
 import { ExtensionLoadError } from "../../domain/extension.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import type { PromptSection } from "../../domain/prompt.js"
-import type { ExtensionPackage } from "../../domain/extension-package.js"
 
 /** Static prompt sections live on `Capability.prompt` (folded by the
  *  `tool()` smart constructor or declared directly). Surface them here for
@@ -147,20 +146,10 @@ const isGentExtension = (value: unknown): value is GentExtension => {
   return true
 }
 
-/** Type guard for ExtensionPackage shape — has `id` + `server` (which is a GentExtension). */
-const isExtensionPackageShape = (value: unknown): value is ExtensionPackage => {
-  if (typeof value !== "object" || value === null) return false
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const obj = value as Record<string, unknown>
-  if (!("id" in obj) || typeof obj["id"] !== "string") return false
-  if (!("server" in obj) || !isGentExtension(obj["server"])) return false
-  return true
-}
-
-/** Extract GentExtension from either shape. */
+/** Extract GentExtension from a module export. Paired-package wrapping
+ *  is gone (B11.6); only raw `GentExtension` values are valid now. */
 const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
   if (isGentExtension(value)) return value
-  if (isExtensionPackageShape(value)) return value.server
   return undefined
 }
 

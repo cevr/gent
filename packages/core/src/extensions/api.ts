@@ -85,6 +85,7 @@ export {
   type AgentRunResult,
 } from "../domain/agent.js"
 export {
+  type GentExtension,
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type TurnProjection,
@@ -175,11 +176,6 @@ export { isRecord, isRecordArray } from "../domain/guards.js"
 export { EventPublisher } from "../domain/event-publisher.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
-export {
-  defineExtensionPackage,
-  type ExtensionPackage,
-  type ExtensionInput,
-} from "../domain/extension-package.js"
 export {
   type ExtensionContributions,
   // Smart constructors — return bare leaf values; the bucket they're placed

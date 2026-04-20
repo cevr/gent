@@ -4,6 +4,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type {
   FailedExtension,
   FailedExtensionPhase,
+  GentExtension,
   LoadedExtension,
 } from "../../domain/extension.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
@@ -14,7 +15,6 @@ const hasMachine = (contribs: ExtensionContributions): boolean =>
 
 const modelToolCount = (contribs: ExtensionContributions): number =>
   (contribs.capabilities ?? []).filter((c) => c.audiences.includes("model")).length
-import { type ExtensionInput, resolveExtensionInput } from "../../domain/extension-package.js"
 import { resolveExtensions, type ResolvedExtensions } from "./registry.js"
 import type { DiscoveredExtension } from "./loader.js"
 import { setupExtension } from "./loader.js"
@@ -56,7 +56,7 @@ const formatFailure = (error: unknown): string =>
     : String(error)
 
 export const setupBuiltinExtensions = (params: {
-  readonly extensions: ReadonlyArray<ExtensionInput>
+  readonly extensions: ReadonlyArray<GentExtension>
   readonly cwd: string
   readonly home: string
   readonly disabled: ReadonlySet<string>
@@ -70,7 +70,7 @@ export const setupBuiltinExtensions = (params: {
     const failed: FailedExtension[] = []
 
     for (const input of params.extensions) {
-      const extension = resolveExtensionInput(input)
+      const extension = input
       if (params.disabled.has(extension.manifest.id)) {
         yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
           Effect.annotateLogs({ extensionId: extension.manifest.id, kind: "builtin" }),

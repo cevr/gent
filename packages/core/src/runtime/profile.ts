@@ -24,7 +24,7 @@
  */
 
 import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
-import type { ExtensionInput } from "../domain/extension-package.js"
+import type { GentExtension } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
@@ -63,7 +63,7 @@ export interface RuntimeProfileInputs {
   readonly platform: string
   readonly shell?: string
   readonly osVersion?: string
-  readonly extensions: ReadonlyArray<ExtensionInput>
+  readonly extensions: ReadonlyArray<GentExtension>
   readonly disabledExtensions?: ReadonlyArray<string>
   readonly scheduledJobCommand?: ScheduledJobCommand
   readonly scheduledJobEnv?: Readonly<Record<string, string>>

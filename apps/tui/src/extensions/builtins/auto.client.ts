@@ -15,11 +15,11 @@
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import {
+  ExtensionPackage,
   borderLabelContribution,
   clientCommandContribution,
   overlayContribution,
 } from "@gent/core/domain/extension-client.js"
-import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
 import type { AutoSnapshotReply } from "@gent/extensions/auto-protocol.js"
 import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"

@@ -8,8 +8,7 @@
  */
 
 import { Effect, FileSystem } from "effect"
-import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
-import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import { ExtensionPackage, autocompleteContribution } from "@gent/core/domain/extension-client.js"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
 import { searchFiles, trackSelection } from "../../utils/file-finder"

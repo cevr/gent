@@ -1,4 +1,4 @@
-import { type ExtensionInput } from "@gent/core/extensions/api"
+import { type GentExtension } from "@gent/core/extensions/api"
 import { FsToolsExtension } from "./fs-tools/index.js"
 import { ExecToolsExtension } from "./exec-tools/index.js"
 import { NetworkToolsExtension } from "./network-tools/index.js"
@@ -54,7 +54,7 @@ export {
 
 export { AllBuiltinAgents, Agents } from "./all-agents.js"
 
-export const BuiltinExtensions: ReadonlyArray<ExtensionInput> = [
+export const BuiltinExtensions: ReadonlyArray<GentExtension> = [
   HandoffExtension,
   FsToolsExtension,
   ExecToolsExtension,

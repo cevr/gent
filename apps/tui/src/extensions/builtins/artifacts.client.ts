@@ -14,8 +14,7 @@
  */
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
-import { borderLabelContribution } from "@gent/core/domain/extension-client.js"
-import { ExtensionPackage } from "@gent/core/domain/extension-package.js"
+import { ExtensionPackage, borderLabelContribution } from "@gent/core/domain/extension-client.js"
 import type { Artifact } from "@gent/extensions/artifacts-protocol.js"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol.js"
 import { ClientTransport } from "../client-transport"
