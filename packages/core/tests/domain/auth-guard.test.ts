@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect } from "effect-bun-test"
-import { AuthGuard } from "@gent/core/domain/auth-guard"
+import { test as bunTest } from "bun:test"
+import { AuthGuard, AuthProviderQuery } from "@gent/core/domain/auth-guard"
 import { AuthApi, AuthStore } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -11,7 +12,7 @@ import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 
 const testProviders: ModelDriverContribution[] = [
   { id: "anthropic", name: "Anthropic", resolveModel: () => ({}) },
@@ -197,5 +198,36 @@ describe("AuthGuard", () => {
       })
       expect(result).toEqual([])
     }).pipe(Effect.provide(layer))
+  })
+})
+
+describe("AuthProviderQuery schema (counsel HIGH #2)", () => {
+  // The RPC handler resolves project config from the session's cwd,
+  // not the launch cwd. The query schema must carry sessionId so the
+  // TUI can opt into per-session resolution. Without this, a session
+  // whose project config routes `cowork` to an external driver would
+  // still be UX-blocked by model auth from the launch cwd.
+  //
+  // Plain `bunTest` here: these are pure schema decode checks with
+  // no Effect context, so the `effect-bun-test` `it.live`/`it.effect`
+  // ceremony isn't needed (and the bare `it` from that lib is an
+  // object, not a function).
+  const decode = Schema.decodeUnknownSync(AuthProviderQuery)
+
+  bunTest("accepts a sessionId field", () => {
+    const query = decode({ sessionId: "019d-test-session-id" })
+    expect(query.sessionId).toBe("019d-test-session-id")
+  })
+
+  bunTest("accepts agentName + sessionId together", () => {
+    const query = decode({ agentName: "cowork", sessionId: "019d-test-session-id" })
+    expect(query.agentName).toBe("cowork")
+    expect(query.sessionId).toBe("019d-test-session-id")
+  })
+
+  bunTest("accepts neither (back-compat with launch-cwd default)", () => {
+    const query = decode({})
+    expect(query.agentName).toBeUndefined()
+    expect(query.sessionId).toBeUndefined()
   })
 })

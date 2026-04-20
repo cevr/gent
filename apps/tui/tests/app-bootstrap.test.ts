@@ -7,7 +7,7 @@ import { createMockClient } from "./render-harness"
 
 describe("resolveStartupAuthState", () => {
   test("uses the session snapshot agent for interactive startup", async () => {
-    const calls: Array<{ agentName?: AgentName }> = []
+    const calls: Array<{ agentName?: AgentName; sessionId?: string }> = []
     const client = createMockClient({
       session: {
         getSnapshot: () =>
@@ -26,7 +26,7 @@ describe("resolveStartupAuthState", () => {
           }),
       },
       auth: {
-        listProviders: (input: { agentName?: AgentName }) => {
+        listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
           calls.push(input)
           return Effect.succeed([
             {
@@ -66,11 +66,11 @@ describe("resolveStartupAuthState", () => {
 
     expect(auth.initialAgent).toBe("deepwork")
     expect(auth.missingProviders).toEqual(["openai"])
-    expect(calls).toEqual([{ agentName: "deepwork" }])
+    expect(calls).toEqual([{ agentName: "deepwork", sessionId: "session-a" }])
   })
 
   test("uses the requested agent for headless auth checks", async () => {
-    const calls: Array<{ agentName?: AgentName }> = []
+    const calls: Array<{ agentName?: AgentName; sessionId?: string }> = []
     const client = createMockClient({
       session: {
         getSnapshot: () =>
@@ -89,7 +89,7 @@ describe("resolveStartupAuthState", () => {
           }),
       },
       auth: {
-        listProviders: (input: { agentName?: AgentName }) => {
+        listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
           calls.push(input)
           return Effect.succeed([])
         },
@@ -121,14 +121,14 @@ describe("resolveStartupAuthState", () => {
     )
 
     expect(auth.initialAgent).toBeUndefined()
-    expect(calls).toEqual([{ agentName: "deepwork" }])
+    expect(calls).toEqual([{ agentName: "deepwork", sessionId: "session-a" }])
   })
 
   test("skips pre-auth gating while the user is choosing a branch", async () => {
-    const calls: Array<{ agentName?: AgentName }> = []
+    const calls: Array<{ agentName?: AgentName; sessionId?: string }> = []
     const client = createMockClient({
       auth: {
-        listProviders: (input: { agentName?: AgentName }) =>
+        listProviders: (input: { agentName?: AgentName; sessionId?: string }) =>
           Effect.sync(() => {
             calls.push(input)
             return []

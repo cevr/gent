@@ -4,6 +4,7 @@ import { ProviderId, parseModelProvider } from "./model"
 import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
+import { SessionId } from "./ids.js"
 
 export const AuthSource = Schema.Literal("stored")
 export type AuthSource = typeof AuthSource.Type
@@ -19,6 +20,17 @@ export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
 export const AuthProviderQuery = Schema.Struct({
   agentName: Schema.optional(AgentName),
+  /**
+   * Session whose cwd should resolve project-level driverOverrides.
+   * The RPC handler looks up the session via SessionStorage and threads
+   * the resulting `driverOverrides` from `configService.get(cwd)`.
+   *
+   * Without this, a multi-cwd server's auth gate always reads launch-cwd
+   * config — so a session whose project config routes `cowork` to an
+   * external driver would still be UX-blocked by model auth from launch
+   * cwd (counsel HIGH #2).
+   */
+  sessionId: Schema.optional(SessionId),
   /**
    * Per-agent driver routing overrides (from `UserConfig.driverOverrides`).
    * When the resolved driver for `agentName` is external, model auth is

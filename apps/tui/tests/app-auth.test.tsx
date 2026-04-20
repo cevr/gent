@@ -91,10 +91,10 @@ describe("App auth gate", () => {
   })
 
   test("seeds startup auth gating from the initial selected agent", async () => {
-    const calls: Array<{ agentName?: string }> = []
+    const calls: Array<{ agentName?: string; sessionId?: string }> = []
     const client = createMockClient({
       auth: {
-        listProviders: (input: { agentName?: string }) => {
+        listProviders: (input: { agentName?: string; sessionId?: string }) => {
           calls.push(input)
           if (input.agentName === "deepwork") {
             return Effect.succeed([
@@ -136,7 +136,7 @@ describe("App auth gate", () => {
       "API Keys from initial agent",
     )
 
-    expect(calls[0]).toEqual({ agentName: "deepwork" })
+    expect(calls[0]).toEqual({ agentName: "deepwork", sessionId: "test-session" })
     expect(frame).toContain("API Keys")
     setup.renderer.destroy()
   })

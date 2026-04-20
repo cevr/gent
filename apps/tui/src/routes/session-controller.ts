@@ -169,7 +169,7 @@ export function createSessionController(props: {
         const version = ++authCheckVersion
         setAuthGateState("checking")
         client.runtime.cast(
-          client.client.auth.listProviders({ agentName }).pipe(
+          client.client.auth.listProviders({ agentName, sessionId: props.sessionId }).pipe(
             Effect.tap((providers) =>
               Effect.sync(() => {
                 if (version !== authCheckVersion) return

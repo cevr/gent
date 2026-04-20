@@ -170,9 +170,16 @@ export const resolveStartupAuthState = (input: {
     const authAgent =
       input.state._tag === "headless" ? (input.requestedAgent ?? sessionAgent) : sessionAgent
 
-    const providers = yield* input.client.auth.listProviders(
-      authAgent !== undefined ? { agentName: authAgent } : {},
-    )
+    // Thread sessionId so per-session cwd resolves project-level
+    // driverOverrides (counsel HIGH #2). Branch-picker has no session.
+    const sessionIdForAuth =
+      input.state._tag === "session" || input.state._tag === "headless"
+        ? input.state.session.id
+        : undefined
+    const providers = yield* input.client.auth.listProviders({
+      ...(authAgent !== undefined ? { agentName: authAgent } : {}),
+      ...(sessionIdForAuth !== undefined ? { sessionId: sessionIdForAuth } : {}),
+    })
 
     return {
       initialAgent: input.state._tag === "headless" ? undefined : authAgent,

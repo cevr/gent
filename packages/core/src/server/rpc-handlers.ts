@@ -356,15 +356,25 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       // -- auth --
-      "auth.listProviders": ({ agentName }) =>
+      "auth.listProviders": ({ agentName, sessionId }) =>
         Effect.gen(function* () {
-          // Thread `driverOverrides` from config so external-routed agents
-          // skip model auth requirements (Commit 2 — runtime driver
-          // override). Resolved here rather than in AuthGuard.Live so the
-          // service stays free of a ConfigService dep.
-          const config = yield* configService.get()
+          // Resolve config from the session's cwd when the caller knows
+          // it (counsel HIGH #2 — without per-session resolution, a
+          // multi-cwd server always reads launch-cwd config and gates
+          // a session whose project config routes through an external
+          // driver). Falls back to launch cwd if the lookup fails or
+          // sessionId is absent.
+          let cwd: string | undefined
+          if (sessionId !== undefined && storageForProfile._tag === "Some") {
+            const session = yield* storageForProfile.value
+              .getSession(SessionId.of(sessionId))
+              .pipe(Effect.orElseSucceed(() => undefined))
+            cwd = session?.cwd
+          }
+          const config = yield* configService.get(cwd)
           return yield* authGuard.listProviders({
             ...(agentName !== undefined ? { agentName } : {}),
+            ...(sessionId !== undefined ? { sessionId } : {}),
             ...(config.driverOverrides !== undefined
               ? { driverOverrides: config.driverOverrides }
               : {}),
