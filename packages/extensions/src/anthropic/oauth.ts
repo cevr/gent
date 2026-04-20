@@ -6,7 +6,13 @@ import { runAnthropicFetcher } from "./fetch-boundary.js"
 
 // ── Claude Code Keychain Reader ──
 
-const CLAUDE_CODE_SERVICE = "Claude Code-credentials"
+/**
+ * Default keychain service name and on-disk file path. Counsel K2
+ * called out that hard-coding the primary service silently broke any
+ * future multi-account UI consumer — every credential helper now takes
+ * an explicit `source` so callers spell out which account they mean.
+ */
+export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
 const CREDENTIALS_FILE = `${os.homedir()}/.claude/.credentials.json`
 
 const ClaudeCredentials = Schema.Struct({
@@ -115,22 +121,29 @@ const spawnSecurity = (
     },
   })
 
-const readFromKeychain = (): Effect.Effect<
-  ClaudeCredentials,
-  ProviderAuthError | ClaudeKeychainNotFoundError
-> =>
-  spawnSecurity(["find-generic-password", "-s", CLAUDE_CODE_SERVICE, "-w"]).pipe(
+const readFromKeychain = (
+  source: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError | ClaudeKeychainNotFoundError> =>
+  spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
     Effect.flatMap(decodeCredentials),
   )
 
-export const readClaudeCodeCredentials = (): Effect.Effect<
-  ClaudeCredentials,
-  ProviderAuthError
-> => {
+/**
+ * Read Claude Code credentials for `source` (the keychain service name).
+ * Use `PRIMARY_CLAUDE_SERVICE` for the default account; pass another
+ * service from `listClaudeCodeKeychainServices()` for additional ones.
+ *
+ * On non-darwin (no keychain), `source` is ignored and the on-disk
+ * `.credentials.json` is read instead — that file holds only one
+ * credential, mirroring the CLI's behaviour.
+ */
+export const readClaudeCodeCredentials = (
+  source: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError> => {
   if (process.platform !== "darwin") {
     return readCredentialsFile()
   }
-  return readFromKeychain().pipe(
+  return readFromKeychain(source).pipe(
     Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile()),
   )
 }
@@ -153,7 +166,7 @@ export const listClaudeCodeKeychainServices = (): Effect.Effect<
 > =>
   Effect.tryPromise({
     try: async () => {
-      if (process.platform !== "darwin") return [CLAUDE_CODE_SERVICE]
+      if (process.platform !== "darwin") return [PRIMARY_CLAUDE_SERVICE]
       const proc = Bun.spawn(["security", "dump-keychain"], {
         stdout: "pipe",
         stderr: "pipe",
@@ -161,7 +174,7 @@ export const listClaudeCodeKeychainServices = (): Effect.Effect<
       })
       const raw = await new Response(proc.stdout).text()
       const code = await proc.exited
-      if (code !== 0) return [CLAUDE_CODE_SERVICE]
+      if (code !== 0) return [PRIMARY_CLAUDE_SERVICE]
       const services: string[] = []
       const seen = new Set<string>()
       const re = /"Claude Code-credentials(?:-[0-9a-f]+)?"/g
@@ -175,17 +188,56 @@ export const listClaudeCodeKeychainServices = (): Effect.Effect<
         m = re.exec(raw)
       }
       const ordered: string[] = []
-      if (seen.has(CLAUDE_CODE_SERVICE)) ordered.push(CLAUDE_CODE_SERVICE)
+      if (seen.has(PRIMARY_CLAUDE_SERVICE)) ordered.push(PRIMARY_CLAUDE_SERVICE)
       for (const svc of services) {
-        if (svc !== CLAUDE_CODE_SERVICE) ordered.push(svc)
+        if (svc !== PRIMARY_CLAUDE_SERVICE) ordered.push(svc)
       }
-      return ordered.length > 0 ? ordered : [CLAUDE_CODE_SERVICE]
+      return ordered.length > 0 ? ordered : [PRIMARY_CLAUDE_SERVICE]
     },
     catch: (e) =>
       new ProviderAuthError({
         message: `Failed to enumerate Claude keychain services: ${e instanceof Error ? e.message : String(e)}`,
         cause: e,
       }),
+  })
+
+/**
+ * One Claude account discovered on this machine. `source` is the
+ * keychain service name (or `"file"` on non-darwin) and is what every
+ * source-aware credential helper expects. `label` is the
+ * human-readable account name (the keychain `acct` field, e.g.
+ * `"alice@example.com"`) — this is what the auth picker UI displays.
+ */
+export interface ClaudeAccount {
+  readonly source: string
+  readonly label: string
+  readonly credentials: ClaudeCredentials
+}
+
+/**
+ * Discover every Claude Code account on this machine: enumerate the
+ * keychain services, read each credential, and pair it with its
+ * keychain `acct` label. Accounts whose credentials fail to decode
+ * are dropped (the slot may exist but be empty / corrupted) — the
+ * list returned is ready to render in a picker.
+ *
+ * Foundation for the multi-account auth UI; see counsel K2.
+ */
+export const listClaudeAccounts = (): Effect.Effect<ReadonlyArray<ClaudeAccount>> =>
+  Effect.gen(function* () {
+    const sources = yield* listClaudeCodeKeychainServices().pipe(
+      Effect.catchEager(() => Effect.succeed([PRIMARY_CLAUDE_SERVICE] as ReadonlyArray<string>)),
+    )
+    const accounts: ClaudeAccount[] = []
+    for (const source of sources) {
+      const credentials = yield* readClaudeCodeCredentials(source).pipe(
+        Effect.catchEager(() => Effect.succeed(undefined)),
+      )
+      if (credentials === undefined) continue
+      const label = (yield* getKeychainAccountName(source)) ?? source
+      accounts.push({ source, label, credentials })
+    }
+    return accounts
   })
 
 // ── Write-back (counsel keychain alignment K2) ──
@@ -273,17 +325,19 @@ export const updateCredentialBlob = (
 }
 
 /**
- * Persist refreshed credentials back to the source they were read from
- * (keychain entry on darwin, `~/.claude/.credentials.json` elsewhere).
- * Without this, every direct OAuth refresh is wasted — the next read
- * pulls the stale `accessToken` straight back from disk/keychain. The
+ * Persist refreshed credentials back to the keychain entry named by
+ * `source` (or `~/.claude/.credentials.json` on non-darwin). Without
+ * this, every direct OAuth refresh is wasted — the next read pulls
+ * the stale `accessToken` straight back from disk/keychain. The
  * `acct` field is preserved by reading the existing entry first.
  *
- * Errors are swallowed; the caller has the new credentials in memory
- * and a write-back failure should not kill the in-flight request.
+ * Errors are surfaced as `ProviderAuthError` for the caller to log
+ * (per C2: write-back is best-effort; the in-memory creds are
+ * authoritative for the in-flight request).
  */
 export const writeBackCredentials = (
   creds: ClaudeCredentials,
+  source: string,
 ): Effect.Effect<void, ProviderAuthError> =>
   Effect.gen(function* () {
     if (process.platform !== "darwin") {
@@ -305,17 +359,14 @@ export const writeBackCredentials = (
       return
     }
 
-    const raw = yield* spawnSecurity([
-      "find-generic-password",
-      "-s",
-      CLAUDE_CODE_SERVICE,
-      "-w",
-    ]).pipe(Effect.catchEager(() => Effect.succeed("")))
+    const raw = yield* spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
+      Effect.catchEager(() => Effect.succeed("")),
+    )
     if (raw === "") return
     const updated = updateCredentialBlob(raw, creds)
     if (updated === undefined) return
-    const accountName = (yield* getKeychainAccountName(CLAUDE_CODE_SERVICE)) ?? CLAUDE_CODE_SERVICE
-    yield* writeKeychainEntry(CLAUDE_CODE_SERVICE, accountName, updated)
+    const accountName = (yield* getKeychainAccountName(source)) ?? source
+    yield* writeKeychainEntry(source, accountName, updated)
   })
 
 // ── Token Refresh ──
@@ -461,12 +512,11 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
  * HIGH #1. Write-back here is best-effort; the in-memory creds are
  * authoritative for this turn.
  */
-export const refreshClaudeCodeCredentials = (): Effect.Effect<
-  ClaudeCredentials,
-  ProviderAuthError
-> =>
+export const refreshClaudeCodeCredentials = (
+  source: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
   Effect.gen(function* () {
-    const current = yield* readClaudeCodeCredentials().pipe(
+    const current = yield* readClaudeCodeCredentials(source).pipe(
       Effect.catchEager(() => Effect.succeed(undefined)),
     )
     if (current?.refreshToken !== undefined && current.refreshToken !== "") {
@@ -477,10 +527,10 @@ export const refreshClaudeCodeCredentials = (): Effect.Effect<
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        yield* writeBackCredentials(refreshed).pipe(
+        yield* writeBackCredentials(refreshed, source).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-              Effect.annotateLogs({ error: String(e) }),
+              Effect.annotateLogs({ error: String(e), source }),
             ),
           ),
         )
@@ -491,7 +541,7 @@ export const refreshClaudeCodeCredentials = (): Effect.Effect<
     // historically helps when the first invocation kicks a stale-token
     // error). The CLI persists its own credentials, so re-read after.
     yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
-    return yield* readClaudeCodeCredentials()
+    return yield* readClaudeCodeCredentials(source)
   })
 
 // ── Beta Management ──

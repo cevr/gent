@@ -10,6 +10,7 @@ import {
   createAnthropicKeychainFetch,
   freshEnoughForUse,
   initAnthropicKeychainEnv,
+  PRIMARY_CLAUDE_SERVICE,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
   type AnthropicKeychainEnv,
@@ -115,13 +116,18 @@ export const AnthropicExtension = defineExtension({
         authorize: (ctx) =>
           Effect.gen(function* () {
             if (ctx.methodIndex !== 0) return undefined
-            let creds = yield* readClaudeCodeCredentials()
+            // The Claude Code authorize flow targets the primary
+            // account by default. PRIMARY_CLAUDE_SERVICE is spelled
+            // out here so a future audit-grep finds every "default"
+            // site (counsel K2 — multi-account picker UI is the
+            // next consumer).
+            let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
             const now = yield* Clock.currentTimeMillis
             if (!freshEnoughForUse(creds, now)) {
               // Use the returned creds — the previous shape re-read
               // keychain after refresh and silently lost direct-OAuth
               // tokens whenever write-back failed (counsel HIGH #1).
-              creds = yield* refreshClaudeCodeCredentials()
+              creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
             }
             // Persist keychain creds to AuthStore
             yield* ctx.persist({

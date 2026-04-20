@@ -11,6 +11,7 @@ import { Clock, Effect } from "effect"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
+  PRIMARY_CLAUDE_SERVICE,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
 } from "../anthropic/oauth.js"
@@ -28,10 +29,14 @@ import {
  */
 export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {
-    let creds = yield* readClaudeCodeCredentials()
+    // The ACP/SDK path always uses the primary account. Multi-account
+    // routing happens at the picker UI level (which doesn't exist
+    // yet); this caller spells out PRIMARY_CLAUDE_SERVICE so a future
+    // refactor can audit-grep all the places that assume primary.
+    let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
     const now = yield* Clock.currentTimeMillis
     if (!freshEnoughForUse(creds, now)) {
-      creds = yield* refreshClaudeCodeCredentials()
+      creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
       if (!freshEnoughForUse(creds, now)) {
         return yield* Effect.fail(
           new ProviderAuthError({

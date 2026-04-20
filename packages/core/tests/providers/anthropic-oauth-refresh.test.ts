@@ -12,6 +12,7 @@ import { describe, it, expect } from "bun:test"
 import {
   freshEnoughForUse,
   parseOAuthResponse,
+  PRIMARY_CLAUDE_SERVICE,
   updateCredentialBlob,
 } from "@gent/extensions/anthropic/oauth"
 
@@ -120,6 +121,17 @@ describe("updateCredentialBlob", () => {
       expiresAt: 0,
     })
     expect(next).toBeUndefined()
+  })
+})
+
+describe("PRIMARY_CLAUDE_SERVICE", () => {
+  // Counsel K2 — the primary service name was hard-coded inside the
+  // module. Exposing it as a named export forces every caller that
+  // assumes "the default account" to spell it out, so a future
+  // multi-account picker UI can audit-grep all the places that need
+  // updating.
+  it("is the canonical Claude Code keychain service name", () => {
+    expect(PRIMARY_CLAUDE_SERVICE).toBe("Claude Code-credentials")
   })
 })
 

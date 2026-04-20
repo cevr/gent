@@ -18,6 +18,7 @@ import { Clock, Effect } from "effect"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
   freshEnoughForUse,
+  PRIMARY_CLAUDE_SERVICE,
   readClaudeCodeCredentials,
   refreshClaudeCodeCredentials,
 } from "./oauth.js"
@@ -57,8 +58,11 @@ const loadCredentialsEffect = (
       return cache.creds
     }
 
-    // Read fresh from keychain
-    const result = yield* readClaudeCodeCredentials().pipe(
+    // The provider-side credential loader always uses the primary
+    // account (multi-account picker UI doesn't exist yet). Spell out
+    // PRIMARY_CLAUDE_SERVICE so a future audit-grep finds every site
+    // that still assumes one account.
+    const result = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE).pipe(
       Effect.catchEager(() => Effect.succeed(null)),
     )
     if (result === null) {
@@ -73,7 +77,7 @@ const loadCredentialsEffect = (
       // direct-OAuth tokens whenever write-back failed (counsel
       // HIGH #1). Now write-back is best-effort inside the refresh
       // helper and the in-memory creds are authoritative.
-      const refreshed = yield* refreshClaudeCodeCredentials().pipe(
+      const refreshed = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE).pipe(
         Effect.catchEager(() => Effect.succeed(null)),
       )
       if (refreshed === null || !freshEnoughForUse(refreshed, now)) {
