@@ -389,7 +389,7 @@ Use the smallest honest boundary:
 - TUI render/capture: OpenTUI renderer tests
 - runtime ordering/turn semantics: recording layers + runtime tests
 
-**Banned test primitives**: `Provider.Test` and `EventStore.Test` are deleted. Use `DebugProvider()` (or `createSequenceProvider`) for provider mocking and `EventStore.Memory` for in-memory event stores.
+**Banned test primitives**: `Provider.Test` and `EventStore.Test` are deleted. Use `Provider.Debug()` or `Provider.Sequence([...])` for provider mocking and `EventStore.Memory` for in-memory event stores.
 
 ### Commands
 
