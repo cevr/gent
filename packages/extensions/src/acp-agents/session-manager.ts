@@ -1,13 +1,16 @@
 /**
- * ACP Session Manager — subprocess lifecycle + session caching.
+ * ACP Session Manager — subprocess lifecycle + session caching for
+ * ACP-protocol agents (opencode / gemini-cli). Claude Code lives on the
+ * SDK path; see `claude-code-executor.ts`.
  *
  * One ACP subprocess per gent session, reused across turns.
- * Lifecycle: spawn → start codemode MCP → initialize → newSession → cache → reuse.
+ * Lifecycle: spawn → start codemode MCP → initialize → newSession (with
+ * `_meta.systemPrompt`) → cache → reuse.
  *
  * @module
  */
 import { Effect, Exit, Scope } from "effect"
-import type { AcpAgentConfig } from "./config.js"
+import type { AcpProtocolAgentConfig } from "./config.js"
 import { makeAcpConnection, type AcpConnection, type AcpError } from "./protocol.js"
 import type { AcpManagedSession, AcpSessionManager } from "./executor.js"
 import { startCodemodeServer, type CodemodeServer, type CodemodeConfig } from "./mcp-codemode.js"
@@ -25,8 +28,9 @@ export const createAcpSessionManager = (): AcpSessionManager => {
 
   const getOrCreate = (
     gentSessionId: string,
-    config: AcpAgentConfig,
+    config: AcpProtocolAgentConfig,
     cwd: string,
+    systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
   ): Effect.Effect<AcpManagedSession, AcpError> =>
     Effect.gen(function* () {
@@ -82,11 +86,19 @@ export const createAcpSessionManager = (): AcpSessionManager => {
         })
         .pipe(Effect.tapError(() => cleanup))
 
-      // Create session with cwd and codemode MCP server
+      // Create session with cwd, codemode MCP server, and system prompt via
+      // ACP's `_meta` channel. The wire format is open per agent — the
+      // claude-agent-acp reference impl recognises `_meta.systemPrompt`
+      // (string = replace, `{append}` = append). Agents that don't
+      // recognise it ignore the field.
       const mcpServers: unknown[] =
         codemode !== undefined ? [{ type: "http", name: "gent", url: `${codemode.url}/mcp` }] : []
       const sessionResponse = yield* conn
-        .newSession({ cwd, mcpServers })
+        .newSession({
+          cwd,
+          mcpServers,
+          _meta: { systemPrompt },
+        })
         .pipe(Effect.tapError(() => cleanup))
 
       const entry: AcpProcess = {
@@ -107,16 +119,28 @@ export const createAcpSessionManager = (): AcpSessionManager => {
     return { conn: entry.conn, acpSessionId: entry.acpSessionId }
   }
 
+  const tearDown = (id: string, entry: AcpProcess): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* entry.conn.close.pipe(Effect.ignore)
+      yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
+      entry.proc.kill()
+      entry.codemode?.stop()
+      sessions.delete(id)
+    })
+
+  const invalidate = (gentSessionId: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const entry = sessions.get(gentSessionId)
+      if (entry === undefined) return
+      yield* tearDown(gentSessionId, entry)
+    })
+
   const disposeAll = (): Effect.Effect<void> =>
     Effect.gen(function* () {
       for (const [id, entry] of sessions) {
-        yield* entry.conn.close.pipe(Effect.ignore)
-        yield* Scope.close(entry.scope, Exit.void).pipe(Effect.ignore)
-        entry.proc.kill()
-        entry.codemode?.stop()
-        sessions.delete(id)
+        yield* tearDown(id, entry)
       }
     })
 
-  return { getOrCreate, get, disposeAll }
+  return { getOrCreate, get, invalidate, disposeAll }
 }

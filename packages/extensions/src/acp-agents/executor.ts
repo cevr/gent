@@ -16,7 +16,7 @@ import {
   type TurnEvent,
   type TurnExecutor,
 } from "@gent/core/extensions/api"
-import type { AcpAgentConfig } from "./config.js"
+import type { AcpProtocolAgentConfig } from "./config.js"
 import type { AcpConnection } from "./protocol.js"
 import { AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
@@ -33,11 +33,13 @@ export interface AcpManagedSession {
 export interface AcpSessionManager {
   readonly getOrCreate: (
     gentSessionId: string,
-    config: AcpAgentConfig,
+    config: AcpProtocolAgentConfig,
     cwd: string,
+    systemPrompt: string,
     codemodeConfig?: CodemodeConfig,
   ) => Effect.Effect<AcpManagedSession, AcpError>
   readonly get: (gentSessionId: string) => AcpManagedSession | undefined
+  readonly invalidate: (gentSessionId: string) => Effect.Effect<void>
   readonly disposeAll: () => Effect.Effect<void>
 }
 
@@ -119,7 +121,7 @@ const extractLastUserMessage = (
 // ── Turn Executor Factory ──
 
 export const makeAcpTurnExecutor = (
-  config: AcpAgentConfig,
+  config: AcpProtocolAgentConfig,
   manager: AcpSessionManager,
 ): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
@@ -141,7 +143,7 @@ export const makeAcpTurnExecutor = (
       }
 
       const session = yield* manager
-        .getOrCreate(ctx.sessionId, config, ctx.cwd, codemodeConfig)
+        .getOrCreate(ctx.sessionId, config, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(Effect.mapError((e) => new TurnError({ message: e.message })))
 
       // Signal for when the prompt completes

@@ -105,6 +105,13 @@ export class InitializeResponse extends Schema.Class<InitializeResponse>("AcpIni
 export class NewSessionRequest extends Schema.Class<NewSessionRequest>("AcpNewSessionRequest")({
   cwd: Schema.String,
   mcpServers: Schema.optional(Schema.Array(Schema.Unknown)),
+  /**
+   * Out-of-band metadata. ACP agents that recognise it use
+   * `_meta.systemPrompt: string` to replace the default system prompt
+   * (or `{ append: string }` to append). Treated as `Schema.Unknown` —
+   * the wire format is open and per-agent.
+   */
+  _meta: Schema.optional(Schema.Unknown),
 }) {}
 
 export class NewSessionResponse extends Schema.Class<NewSessionResponse>("AcpNewSessionResponse")({

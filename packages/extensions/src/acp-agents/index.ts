@@ -2,15 +2,22 @@
  * ACP Agents Extension — external agents (Claude Code, OpenCode, Gemini CLI)
  * as first-class gent agents via the ExternalDriver primitive.
  *
- * The "session manager" here is a per-extension subprocess + ACP-session
- * cache, not a state machine with declared effects — no `WorkflowContribution`
- * is appropriate. C9 collapses the old `TurnExecutor` slot into
- * `ExternalDriverContribution`; agents reference the driver via
- * `driver: new ExternalDriverRef({ id: "acp-<name>" })`.
+ * Two transport paths share this extension:
+ *
+ * 1. Claude Code goes through `@anthropic-ai/claude-agent-sdk` directly.
+ *    The `ClaudeSdk` service owns the SDK lifecycle; the
+ *    `ClaudeCodeSessionManager` caches one SDK session per gent session.
+ *
+ * 2. opencode and gemini-cli go through hand-rolled ACP JSON-RPC over
+ *    stdio (`protocol.ts` + `schema.ts`); the `AcpSessionManager` owns
+ *    one subprocess per gent session.
+ *
+ * Both managers are module-scope singletons created at extension setup, with
+ * disposal hung off a `process`-scoped `defineResource` `stop` finalizer.
  *
  * @module
  */
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import {
   defineAgent,
   defineExtension,
@@ -18,42 +25,73 @@ import {
   ExternalDriverRef,
   resource,
 } from "@gent/core/extensions/api"
-import { ACP_AGENTS } from "./config.js"
+import { ACP_PROTOCOL_AGENTS, CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import { makeAcpTurnExecutor } from "./executor.js"
 import { createAcpSessionManager } from "./session-manager.js"
+import {
+  createClaudeCodeSessionManager,
+  makeClaudeCodeTurnExecutor,
+} from "./claude-code-executor.js"
+import { ClaudeSdk } from "./claude-sdk.js"
 
-// Module-scope singleton — created once at extension setup, shared across
-// agents and externalDrivers factory calls.
-let _sharedManager: ReturnType<typeof createAcpSessionManager> | undefined
-const getManager = () => {
-  if (_sharedManager === undefined) _sharedManager = createAcpSessionManager()
-  return _sharedManager
+// Module-scope singletons — created once at extension setup, shared across
+// agents and `externalDrivers` factory calls. The Claude Code manager
+// captures the SDK service shape directly (rather than yielding it
+// per-turn) so the executor's `executeTurn` Stream stays free of an
+// `R = ClaudeSdk` requirement.
+let _sharedAcpManager: ReturnType<typeof createAcpSessionManager> | undefined
+const getAcpManager = () => {
+  if (_sharedAcpManager === undefined) _sharedAcpManager = createAcpSessionManager()
+  return _sharedAcpManager
 }
+
+let _sharedClaudeCodeManager: ReturnType<typeof createClaudeCodeSessionManager> | undefined
+const getClaudeCodeManager = () => {
+  if (_sharedClaudeCodeManager === undefined) {
+    _sharedClaudeCodeManager = createClaudeCodeSessionManager(ClaudeSdk.liveImpl)
+  }
+  return _sharedClaudeCodeManager
+}
+
+const claudeCodeAgent = defineAgent({
+  name: CLAUDE_CODE_AGENT_NAME,
+  description: "Claude Code via Claude Agent SDK",
+  driver: new ExternalDriverRef({ id: `acp-${CLAUDE_CODE_AGENT_NAME}` }),
+})
+
+const protocolAgents = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) =>
+  defineAgent({
+    name,
+    description: `${config.command} via ACP`,
+    driver: new ExternalDriverRef({ id: `acp-${name}` }),
+  }),
+)
 
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
-  agents: Object.entries(ACP_AGENTS).map(([name, config]) =>
-    defineAgent({
-      name,
-      description: `${config.command} via ACP`,
-      driver: new ExternalDriverRef({ id: `acp-${name}` }),
-    }),
-  ),
-  externalDrivers: () =>
-    Object.entries(ACP_AGENTS).map(([name, config]) => ({
+  agents: [claudeCodeAgent, ...protocolAgents],
+  externalDrivers: () => {
+    const claudeCode = {
+      id: `acp-${CLAUDE_CODE_AGENT_NAME}`,
+      executor: makeClaudeCodeTurnExecutor(getClaudeCodeManager()),
+    }
+    const protocolDrivers = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) => ({
       id: `acp-${name}`,
-      executor: makeAcpTurnExecutor(config, getManager()),
-    })),
-  // Per-process lifecycle-only Resource that owns the ACP session
-  // manager's disposal. The manager is accessed via getManager() by the
-  // executors above; its `disposeAll()` runs as the Resource's `stop`
-  // finalizer at process-scope teardown. No service is contributed.
+      executor: makeAcpTurnExecutor(config, getAcpManager()),
+    }))
+    return [claudeCode, ...protocolDrivers]
+  },
+  // Per-process lifecycle Resource: dispose both managers (ACP-protocol
+  // subprocesses and SDK sessions) at process-scope teardown.
   resources: () => [
     resource(
       defineResource({
         scope: "process",
         layer: Layer.empty,
-        stop: getManager().disposeAll(),
+        stop: Effect.gen(function* () {
+          yield* getAcpManager().disposeAll()
+          yield* getClaudeCodeManager().disposeAll
+        }),
       }),
     ),
   ],
