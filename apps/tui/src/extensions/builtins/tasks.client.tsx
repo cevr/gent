@@ -4,9 +4,14 @@
  * B11.6: migrated off the paired-package snapshot cache. The widget owns
  * its own Solid signal inside an Effect-typed setup, fetched via the
  * typed transport (`client.extension.query`) and refreshed on
- * `ExtensionStateChanged` pulses for `@gent/task-tools`. Reactive
- * lifecycle is rooted in `createRoot` and disposed when the
- * `clientRuntime` scope finalizes (provider unmount).
+ * `ExtensionStateChanged` pulses for `@gent/task-tools`.
+ *
+ * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
+ * `runtime.runPromise`, which has no lasting scope. The Solid `createRoot`
+ * + pulse subscription leak for the lifetime of the provider mount; in
+ * production that is the lifetime of the app (one-shot mount). A future
+ * remount-capable provider would need a per-extension scope; for now this
+ * is a bounded, app-lifetime leak.
  */
 import { createSignal, createMemo, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
@@ -33,42 +38,34 @@ export default ExtensionPackage.tui("@gent/task-tools", {
     const shell = yield* ClientShell
     const composer = yield* ClientComposer
 
-    // Own the reactive root for setup-scoped signals + effects. Solid
-    // requires `createRoot` whenever `createEffect` is used outside a
-    // component render. We keep `dispose` so the runtime scope cleans
-    // up on provider unmount.
-    // Setup-scoped Solid root — owns the signal + the session/branch
-    // refetch effect. `clientRuntime.dispose()` (at provider unmount,
-    // see `apps/tui/src/extensions/context.tsx:onCleanup`) does not run
-    // detached Solid roots; provider mount is a one-shot lifetime in
-    // production so the leak is bounded to app lifetime.
-    type RootApi = {
-      tasks: () => readonly TaskEntry[]
-      setTasks: (next: readonly TaskEntry[]) => void
-    }
-    const api: RootApi = yield* Effect.sync(() => {
-      let captured!: RootApi
-      createRoot(() => {
-        const [tasks, setTasks] = createSignal<readonly TaskEntry[]>([])
-        captured = { tasks, setTasks }
-        // React to session/branch changes — refetch on every transition.
-        // `transport.currentSession()` reads a Solid signal upstream, so
-        // this `createEffect` re-runs whenever it changes.
-        createEffect(() => {
-          const session = transport.currentSession()
-          if (session === undefined) {
-            setTasks([])
-            return
-          }
-          void runRefetch(session)
-        })
-      })
-      return captured
-    })
-
-    // Refetch keyed by the captured session. Drop stale results — if the
-    // active session changed during the request, we don't poison the new one.
     type ActiveSession = NonNullable<ReturnType<typeof transport.currentSession>>
+
+    // State owns its (sid, bid) key. The `produce`/component readers gate
+    // on key match against the live session, so a stale leftover from the
+    // prior session never renders or drives commands. The signal is set
+    // up inside the detached `createRoot` below so its reactive scope
+    // matches the lifecycle of the refetch effect.
+    type Keyed = {
+      readonly sessionId: string
+      readonly branchId: string
+      readonly tasks: readonly TaskEntry[]
+    }
+    let getState!: () => Keyed | undefined
+    let setState!: (next: Keyed | undefined) => void
+
+    const liveTasks = (): readonly TaskEntry[] => {
+      const s = getState()
+      const cur = transport.currentSession()
+      if (s === undefined || cur === undefined) return []
+      if (s.sessionId !== cur.sessionId || s.branchId !== cur.branchId) return []
+      return s.tasks
+    }
+
+    // Refetch keyed by the captured session. Two-stage stale check:
+    // (a) drop the response if the active session changed during the
+    //     request — otherwise late responses overwrite the new session;
+    // (b) `liveTasks()` re-checks at render — covers the gap between
+    //     state set and the next session change.
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const out = await transport.runtime.run(
@@ -90,37 +87,66 @@ export default ExtensionPackage.tui("@gent/task-tools", {
         }
         // The query returns `readonly Task[]`; widget reads only `subject`
         // and `status` (subset of `TaskEntry`). Cast is structurally safe.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        api.setTasks(out as readonly TaskEntry[])
-      } catch {
-        // Silent: leave the last known list in place.
+        setState({
+          sessionId: captured.sessionId,
+          branchId: captured.branchId,
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          tasks: out as readonly TaskEntry[],
+        })
+      } catch (err) {
+        // Visible refresh failures matter — surface to console (the only
+        // log surface available pre-render). Last good state stays.
+        console.warn(
+          `[${EXT_ID}] task list refresh failed:`,
+          err instanceof Error ? err.message : String(err),
+        )
       }
     }
 
-    // Subscribe to pulses for our extension. Auto-clean on scope finalize.
-    const unsub = transport.onExtensionStateChanged((p) => {
+    // Detached Solid root — see header lifecycle note. We never call
+    // dispose; provider mount is one-shot.
+    yield* Effect.sync(() => {
+      createRoot(() => {
+        const [s, set] = createSignal<Keyed | undefined>(undefined)
+        getState = s
+        setState = set
+        // Refetch on session/branch transition AND clear stale state on
+        // every transition so a no-data window between sessions never
+        // shows the prior session's tasks.
+        createEffect(() => {
+          const session = transport.currentSession()
+          // Clear immediately on key change (or undefined) — `liveTasks`
+          // also gates by key, but explicit clear avoids transient
+          // mismatched-key state lingering until the next refetch.
+          setState(undefined)
+          if (session === undefined) return
+          void runRefetch(session)
+        })
+      })
+    })
+
+    // Pulse subscription — leak intentional per header note.
+    transport.onExtensionStateChanged((p) => {
       if (p.extensionId !== EXT_ID) return
       const session = transport.currentSession()
       if (session === undefined) return
       void runRefetch(session)
     })
-    // Same one-shot lifetime — see note above.
-    void unsub // mark as intentionally unused
 
     const runningCount = (): number =>
-      api.tasks().filter((t) => t.status === "in_progress" || t.status === "pending").length
+      liveTasks().filter((t) => t.status === "in_progress" || t.status === "pending").length
 
     const TasksDialogOverlay = (overlayProps: { open: boolean; onClose: () => void }) => (
       <BackgroundTasksDialog
         open={overlayProps.open}
         onClose={overlayProps.onClose}
-        tasks={api.tasks()}
+        tasks={liveTasks()}
       />
     )
 
     const TrackedTaskWidget = () => {
       const previews = createMemo((): TaskPreview[] =>
-        api.tasks().map((t) => ({ subject: t.subject, status: t.status })),
+        liveTasks().map((t) => ({ subject: t.subject, status: t.status })),
       )
       return <TaskWidget previewTasks={previews()} />
     }

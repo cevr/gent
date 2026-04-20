@@ -1315,3 +1315,89 @@ describe("autocompleteItems resolution", () => {
     expect(prefixes.has("@")).toBe(true)
   })
 })
+
+// B11.6 regression: when the TUI starts with `--continue` or `--session`,
+// `currentSession()` returns a real session BEFORE setup runs. The migrated
+// auto/artifacts/tasks widgets must not crash in their session-change
+// `createEffect` (caught one TDZ bug here in counsel; this test pins the
+// invariant so future migrations can't reintroduce it).
+describe("B11.6 transport-only widgets — startup with active session", () => {
+  test("loadTuiExtensions does not throw when currentSession() returns a session at setup time", async () => {
+    const activeSessionRuntime = ManagedRuntime.make(
+      Layer.mergeAll(
+        BunFileSystem.layer,
+        BunServices.layer,
+        makeClientWorkspaceLayer({ cwd: "/tmp/test-cwd", home: "/tmp/test-home" }),
+        makeClientShellLayer({
+          send: () => {},
+          sendMessage: () => {},
+          openOverlay: () => {},
+          closeOverlay: () => {},
+        }),
+        makeClientComposerLayer({
+          state: () => ({
+            draft: "",
+            mode: "editing" as const,
+            inputFocused: false,
+            autocompleteOpen: false,
+          }),
+        }),
+        makeClientSnapshotsLayer({ read: () => undefined }),
+        makeClientTransportLayer({
+          // Stub client+runtime — refetch will fail loudly if invoked
+          // (no `extension.query`/`ask`), but the widget's createEffect
+          // schedules the call asynchronously via void runRefetch(...) so
+          // the synchronous setup path completes successfully and the
+          // failing async call is swallowed by the widget's catch.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          client: { extension: {} } as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          runtime: { run: () => Promise.reject(new Error("no transport in test")) } as any,
+          // The key bit: a session is already active when setup runs.
+          currentSession: () => ({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            sessionId: "test-session-id" as never,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            branchId: "test-branch-id" as never,
+          }),
+          onExtensionStateChanged: () => () => {},
+        }),
+      ),
+    )
+
+    const emptyUser = join(TEST_DIR, "active-session-test-user")
+    const emptyProject = join(TEST_DIR, "active-session-test-project")
+    mkdirSync(emptyUser, { recursive: true })
+    mkdirSync(emptyProject, { recursive: true })
+
+    // Capture console.warn so the swallowed refetch errors don't pollute
+    // the test output noise.
+    const originalWarn = console.warn
+    console.warn = () => {}
+    try {
+      const resolved = await loadTuiExtensions(
+        {
+          builtins: builtinClientModules,
+          userDir: emptyUser,
+          projectDir: emptyProject,
+          runtime: activeSessionRuntime,
+        },
+        noopCtx,
+      )
+      // Sanity: widgets we explicitly migrated to transport-only loaded.
+      const widgetIds = new Set(resolved.widgets.map((w) => w.id))
+      expect(widgetIds.has("tasks")).toBe(true)
+      // Auto + artifacts contribute border labels rather than widgets.
+      // If their setup threw, none of the resolved bundle exists.
+      const borderPositions = new Set(resolved.borderLabels.map((b) => b.position))
+      expect(borderPositions.has("top-left")).toBe(true) // auto
+      expect(borderPositions.has("bottom-right")).toBe(true) // artifacts
+      expect(borderPositions.has("bottom-left")).toBe(true) // tasks
+    } finally {
+      console.warn = originalWarn
+      rmSync(emptyUser, { recursive: true, force: true })
+      rmSync(emptyProject, { recursive: true, force: true })
+      await activeSessionRuntime.dispose()
+    }
+  })
+})
