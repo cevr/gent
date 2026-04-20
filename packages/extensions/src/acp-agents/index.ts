@@ -32,7 +32,7 @@ import {
   createClaudeCodeSessionManager,
   makeClaudeCodeTurnExecutor,
 } from "./claude-code-executor.js"
-import { ClaudeSdk } from "./claude-sdk.js"
+import { live as claudeSdkLive } from "./claude-sdk.js"
 
 // Module-scope singletons — created once at extension setup, shared across
 // agents and `externalDrivers` factory calls. The Claude Code manager
@@ -48,7 +48,7 @@ const getAcpManager = () => {
 let _sharedClaudeCodeManager: ReturnType<typeof createClaudeCodeSessionManager> | undefined
 const getClaudeCodeManager = () => {
   if (_sharedClaudeCodeManager === undefined) {
-    _sharedClaudeCodeManager = createClaudeCodeSessionManager(ClaudeSdk.liveImpl)
+    _sharedClaudeCodeManager = createClaudeCodeSessionManager(claudeSdkLive)
   }
   return _sharedClaudeCodeManager
 }

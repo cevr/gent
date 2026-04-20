@@ -10,7 +10,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import { AgentDefinition } from "@gent/core/domain/agent"
+import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Effect, Layer } from "effect"
 
 const testProviders: ModelDriverContribution[] = [
@@ -175,6 +175,27 @@ describe("AuthGuard", () => {
       expect(result).toContain("anthropic")
       expect(result).toContain("openai")
       expect(result).toContain("google")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("agent routed externally via driverOverrides skips model auth requirements", () => {
+    const layer = AuthGuard.Live.pipe(
+      Layer.provide(AuthStore.Live),
+      Layer.provide(AuthStorage.Test()),
+      Layer.provide(testRegistryLayer),
+    )
+    return Effect.gen(function* () {
+      const guard = yield* AuthGuard
+      // cowork is an anthropic-modeled agent, but config-routes through
+      // an external driver (e.g. Claude Code SDK). The external driver
+      // owns its own auth, so model providers should not be required.
+      const result = yield* guard.requiredProviders({
+        agentName: "cowork",
+        driverOverrides: {
+          cowork: new ExternalDriverRef({ id: "acp-claude-code" }),
+        },
+      })
+      expect(result).toEqual([])
     }).pipe(Effect.provide(layer))
   })
 })

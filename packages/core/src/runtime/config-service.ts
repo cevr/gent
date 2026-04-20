@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
+import { DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -7,7 +8,44 @@ import { RuntimePlatform } from "./runtime-platform.js"
 export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   permissions: Schema.optional(Schema.Array(PermissionRule)),
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Per-agent driver routing overrides. Keyed by agent name; the value is
+   * a `DriverRef` (model or external). Project config shadows user config
+   * key-by-key — see `mergeConfigs`.
+   *
+   * Used by `resolveAgentDriver` (domain/agent.ts) to route an agent
+   * through an alternative backend without editing its definition. E.g.
+   * `{ cowork: { _tag: "external", id: "acp-claude-code" } }` makes
+   * `cowork` dispatch through the Claude Code SDK executor.
+   */
+  driverOverrides: Schema.optional(Schema.Record(Schema.String, DriverRef)),
 }) {}
+
+/**
+ * Merge user + project configs. Per-field semantics:
+ *   - permissions: concatenated (project first, then user — historical order).
+ *   - disabledExtensions: concatenated (user first — historical order).
+ *   - driverOverrides: object spread; project entries shadow user entries
+ *     key-by-key. Idempotent set/clear is the load-bearing property —
+ *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
+ *     map directly to `record[name] = ref` / `delete record[name]`.
+ */
+const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => {
+  const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
+  const disabledExtensions = [
+    ...(user.disabledExtensions ?? []),
+    ...(project.disabledExtensions ?? []),
+  ]
+  const driverOverrides: Record<string, DriverRef> = {
+    ...(user.driverOverrides ?? {}),
+    ...(project.driverOverrides ?? {}),
+  }
+  return new UserConfig({
+    permissions: permissions.length > 0 ? permissions : undefined,
+    disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
+    driverOverrides: Object.keys(driverOverrides).length > 0 ? driverOverrides : undefined,
+  })
+}
 
 // ConfigService
 
@@ -52,17 +90,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const userConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
       const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
 
-      const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
-        const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-        const disabledExtensions = [
-          ...(user.disabledExtensions ?? []),
-          ...(project.disabledExtensions ?? []),
-        ]
-        return new UserConfig({
-          permissions: permissions.length > 0 ? permissions : undefined,
-          disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
-        })
-      }
+      const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
+        mergeConfigsImpl(user, project)
 
       const ensureUserConfig = Effect.gen(function* () {
         const exists = yield* fs.exists(userConfigPath)
@@ -128,6 +157,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           const updated = new UserConfig({
             permissions: partial.permissions ?? current.permissions,
             disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
+            driverOverrides: partial.driverOverrides ?? current.driverOverrides,
           })
           yield* Ref.set(userConfigRef, updated)
           yield* saveUserConfig(updated)
@@ -216,24 +246,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
     const userConfigRef = Ref.makeUnsafe(initialConfig)
     const projectConfigRef = Ref.makeUnsafe(new UserConfig({}))
 
-    const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig => {
-      const permissions = [...(project.permissions ?? []), ...(user.permissions ?? [])]
-      const disabledExtensions = [
-        ...(user.disabledExtensions ?? []),
-        ...(project.disabledExtensions ?? []),
-      ]
-      return new UserConfig({
-        permissions: permissions.length > 0 ? permissions : undefined,
-        disabledExtensions: disabledExtensions.length > 0 ? disabledExtensions : undefined,
-      })
-    }
-
     return Layer.succeed(ConfigService, {
       get: () =>
         Effect.gen(function* () {
           const user = yield* Ref.get(userConfigRef)
           const project = yield* Ref.get(projectConfigRef)
-          return mergeConfigs(user, project)
+          return mergeConfigsImpl(user, project)
         }),
       set: (partial) =>
         Ref.update(
@@ -242,6 +260,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             new UserConfig({
               permissions: partial.permissions ?? current.permissions,
               disabledExtensions: partial.disabledExtensions ?? current.disabledExtensions,
+              driverOverrides: partial.driverOverrides ?? current.driverOverrides,
             }),
         ),
       getPermissionRules: () =>

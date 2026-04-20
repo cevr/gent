@@ -1,13 +1,27 @@
 /**
  * Claude Code Turn Executor — uses `@anthropic-ai/claude-agent-sdk` directly.
  *
- * This is the SDK-based path, distinct from `executor.ts` (the ACP protocol
- * path used by opencode / gemini-cli). The Claude SDK is session-shaped, not
+ * SDK-based path, distinct from `executor.ts` (the ACP protocol path used
+ * by opencode / gemini-cli). The Claude SDK is session-shaped, not
  * per-turn: one `query()` per gent session, prompts pushed across the
- * shared Pushable input stream.
+ * shared input stream.
  *
- * Tool authority — gent owns tools exclusively. SDK runs with `tools: []`,
- * the only tool the model sees is the codemode MCP `execute` proxy.
+ * Tool authority — gent owns tools exclusively. SDK runs with `tools: []`
+ * (set in claude-sdk.ts), the only tool the model sees is the codemode
+ * MCP `execute` proxy.
+ *
+ * Lifecycle (per codex review of Commit 1):
+ *   - Per-turn cancel: `ctx.abortSignal` is forwarded into
+ *     `session.prompt(text, signal)`, which calls `q.interrupt()` on
+ *     abort. The SDK session itself stays cached for the next turn.
+ *   - Process death: any stream error during `prompt` is treated as
+ *     session-fatal — the manager evicts the cached session via
+ *     `tapErrorCause` so the next turn rebuilds.
+ *
+ * Streaming: `mapSdkMessage` consumes both full `assistant` messages
+ * (for tool_use blocks; text/thinking are taken from the partial
+ * stream_event path so we don't double-emit) and `stream_event`
+ * partial deltas (for token-level text/thinking).
  *
  * @module
  */
@@ -27,11 +41,7 @@ import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 // ── SDK message → TurnEvent mapping ──
 
 /**
- * Map a single SDK message to a TurnEvent. Returns `undefined` for
- * messages gent doesn't surface (system, status, hooks, etc.).
- *
- * Block-bearing messages (`assistant`) yield multiple events — handled
- * by `mapAssistantMessage`, called inline by `mapSdkMessageStream`.
+ * Map a `result` message to the terminal `finished` event.
  */
 const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEvent => ({
   _tag: "finished",
@@ -45,6 +55,13 @@ const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEve
       : undefined,
 })
 
+/**
+ * Map a full `assistant` message. Text/thinking are emitted via the
+ * partial `stream_event` path (`mapStreamEvent`) — we only surface
+ * `tool_use` here so we don't double-emit text. (Reference impl in
+ * `claude-agent-acp` does the same: stream_event for deltas, full
+ * assistant message for tool_use only.)
+ */
 const mapAssistantMessage = (
   msg: Extract<SDKMessage, { type: "assistant" }>,
 ): ReadonlyArray<TurnEvent> => {
@@ -54,29 +71,16 @@ const mapAssistantMessage = (
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const blocks = rawBlocks as ReadonlyArray<Record<string, unknown>>
   for (const block of blocks) {
-    const t = block["type"]
-    if (t === "text") {
-      const text = typeof block["text"] === "string" ? block["text"] : ""
-      if (text !== "") events.push({ _tag: "text-delta", text })
-      continue
-    }
-    if (t === "thinking") {
-      const text = typeof block["thinking"] === "string" ? block["thinking"] : ""
-      if (text !== "") events.push({ _tag: "reasoning-delta", text })
-      continue
-    }
-    if (t === "tool_use") {
-      const id = typeof block["id"] === "string" ? block["id"] : undefined
-      const name = typeof block["name"] === "string" ? block["name"] : "unknown"
-      if (id !== undefined) {
-        events.push({
-          _tag: "tool-started",
-          toolCallId: id,
-          toolName: name,
-          input: block["input"],
-        })
-      }
-      continue
+    if (block["type"] !== "tool_use") continue
+    const id = typeof block["id"] === "string" ? block["id"] : undefined
+    const name = typeof block["name"] === "string" ? block["name"] : "unknown"
+    if (id !== undefined) {
+      events.push({
+        _tag: "tool-started",
+        toolCallId: id,
+        toolName: name,
+        input: block["input"],
+      })
     }
   }
   return events
@@ -102,6 +106,32 @@ const mapUserMessage = (msg: Extract<SDKMessage, { type: "user" }>): ReadonlyArr
   return events
 }
 
+/**
+ * Map a `stream_event` partial assistant delta — token-level text and
+ * thinking. Handles `content_block_delta` events with `text_delta` and
+ * `thinking_delta` shapes.
+ */
+const mapStreamEvent = (
+  msg: Extract<SDKMessage, { type: "stream_event" }>,
+): ReadonlyArray<TurnEvent> => {
+  const rawEvent: unknown = msg.event
+  if (typeof rawEvent !== "object" || rawEvent === null) return []
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const e = rawEvent as Record<string, unknown>
+  if (e["type"] !== "content_block_delta") return []
+  const delta = e["delta"]
+  if (typeof delta !== "object" || delta === null) return []
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const d = delta as Record<string, unknown>
+  if (d["type"] === "text_delta" && typeof d["text"] === "string" && d["text"] !== "") {
+    return [{ _tag: "text-delta", text: d["text"] }]
+  }
+  if (d["type"] === "thinking_delta" && typeof d["thinking"] === "string" && d["thinking"] !== "") {
+    return [{ _tag: "reasoning-delta", text: d["thinking"] }]
+  }
+  return []
+}
+
 const stringifyContent = (content: unknown): string | undefined => {
   if (typeof content === "string") return content
   if (Array.isArray(content)) {
@@ -119,6 +149,7 @@ export const mapSdkMessage = (msg: SDKMessage): ReadonlyArray<TurnEvent> => {
   if (msg.type === "result") return [mapResultMessage(msg)]
   if (msg.type === "assistant") return mapAssistantMessage(msg)
   if (msg.type === "user") return mapUserMessage(msg)
+  if (msg.type === "stream_event") return mapStreamEvent(msg)
   return []
 }
 
@@ -144,33 +175,37 @@ export interface ClaudeCodeSessionManager {
     cwd: string,
     systemPrompt: string,
     codemodeConfig: CodemodeConfig | undefined,
-    abortSignal?: AbortSignal,
   ) => Effect.Effect<ClaudeSdkSession, ClaudeSdkError>
   readonly invalidate: (gentSessionId: string) => Effect.Effect<void>
   readonly disposeAll: Effect.Effect<void>
 }
 
 /**
- * In-memory, per-process map of gent session id → SDK session. Created at
- * extension setup time; lives under a `process`-scoped `defineResource`
- * `stop` finalizer so subprocesses are torn down when the host shuts down.
+ * In-memory, per-process map of gent session id → SDK session. Created
+ * at extension setup time; lives under a `process`-scoped
+ * `defineResource` `stop` finalizer so subprocesses are torn down when
+ * the host shuts down.
  *
- * The SDK service is captured at construction time (rather than yielded
- * per-turn) so the executor's `executeTurn` Stream stays free of any
- * service requirement — `TurnExecutor.executeTurn` returns a Stream
- * without a context channel.
+ * The SDK service is captured at construction time so the executor's
+ * `executeTurn` Stream stays free of any service requirement —
+ * `TurnExecutor.executeTurn` returns a Stream without a context channel.
  */
 export const createClaudeCodeSessionManager = (
   sdk: ClaudeSdkServiceShape,
 ): ClaudeCodeSessionManager => {
   const sessions = new Map<string, ClaudeCodeProcess>()
 
+  const tearDown = (entry: ClaudeCodeProcess): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      yield* entry.session.close
+      entry.codemode?.stop()
+    })
+
   const getOrCreate = (
     gentSessionId: string,
     cwd: string,
     systemPrompt: string,
     codemodeConfig: CodemodeConfig | undefined,
-    abortSignal?: AbortSignal,
   ): Effect.Effect<ClaudeSdkSession, ClaudeSdkError> =>
     Effect.gen(function* () {
       const existing = sessions.get(gentSessionId)
@@ -180,6 +215,7 @@ export const createClaudeCodeSessionManager = (
         Effect.mapError(
           (err) =>
             new ClaudeSdkError({
+              kind: "init",
               message: `Failed to read Claude Code OAuth token: ${err.message}`,
               cause: err,
             }),
@@ -199,7 +235,6 @@ export const createClaudeCodeSessionManager = (
           oauthToken,
           systemPrompt,
           ...(mcpServers !== undefined ? { mcpServers } : {}),
-          ...(abortSignal !== undefined ? { abortSignal } : {}),
         })
         .pipe(
           Effect.tapError(() =>
@@ -218,14 +253,12 @@ export const createClaudeCodeSessionManager = (
       const entry = sessions.get(gentSessionId)
       if (entry === undefined) return
       sessions.delete(gentSessionId)
-      yield* entry.session.close
-      entry.codemode?.stop()
+      yield* tearDown(entry)
     })
 
   const disposeAll: Effect.Effect<void> = Effect.gen(function* () {
     for (const [id, entry] of sessions) {
-      yield* entry.session.close.pipe(Effect.ignore)
-      entry.codemode?.stop()
+      yield* tearDown(entry).pipe(Effect.ignore)
       sessions.delete(id)
     }
   })
@@ -238,10 +271,6 @@ export const createClaudeCodeSessionManager = (
 export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): TurnExecutor => ({
   executeTurn: (ctx: TurnContext) => {
     const runTurn = Effect.gen(function* () {
-      // Tool runner adapter — mirrors `makeAcpTurnExecutor`. The codemode JS
-      // sandbox calls `runTool` as a Promise function; the only Effect that
-      // crosses that boundary is `toolRunner.run(...)`, pinned by
-      // `makeAcpRunTool`.
       const services = yield* Effect.context<never>()
       const runTool: CodemodeConfig["runTool"] = makeAcpRunTool({
         services,
@@ -252,35 +281,26 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
         ctx.tools.length > 0 ? { tools: ctx.tools, runTool } : undefined
 
       const session = yield* manager
-        .getOrCreate(ctx.sessionId, ctx.cwd, ctx.systemPrompt, codemodeConfig, ctx.abortSignal)
+        .getOrCreate(ctx.sessionId, ctx.cwd, ctx.systemPrompt, codemodeConfig)
         .pipe(Effect.mapError((err) => new TurnError({ message: err.message, cause: err.cause })))
 
-      // Wire upstream abort → SDK interrupt. The SDK's abortController option
-      // (passed to createSession) tears down on signal too; this extra hook
-      // is belt-and-braces for prompts started after the controller was set.
-      if (ctx.abortSignal !== undefined) {
-        ctx.abortSignal.addEventListener(
-          "abort",
-          () => {
-            Effect.runFork(session.interrupt.pipe(Effect.ignore))
-          },
-          { once: true },
-        )
-      }
-
       const lastUser = extractLastUserMessage(ctx.messages)
-      return mapSdkMessageStream(session.prompt(lastUser))
+
+      // Per-prompt cancel — `session.prompt` calls `q.interrupt()` when
+      // the signal aborts. The SDK session stays cached.
+      // Stream-level errors evict the cached session (process death,
+      // auth expiry, etc.) so the next turn starts fresh.
+      const stream = mapSdkMessageStream(session.prompt(lastUser, ctx.abortSignal)).pipe(
+        Stream.tapError(() => manager.invalidate(ctx.sessionId)),
+      )
+      return stream
     }).pipe(
       Effect.mapError((e) => (e instanceof TurnError ? e : new TurnError({ message: String(e) }))),
     )
     return Stream.unwrap(runTurn)
   },
-  // The driver's `cancel` is per-turn. The agent loop already wires
-  // `ctx.abortSignal` to the SDK abort controller in `executeTurn`, so
-  // there's nothing extra to do here — the in-flight prompt aborts via the
-  // signal, and the SDK session itself stays cached for the next turn.
-  // (Use `manager.invalidate(sessionId)` if you need to recycle the
-  // subprocess entirely.)
+  // The agent loop already wires `ctx.abortSignal`; the executor's
+  // `cancel` per-driver hook is unused for the SDK path.
   cancel: () => Effect.void,
 })
 

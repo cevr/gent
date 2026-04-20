@@ -28,6 +28,7 @@ import {
   AgentRunError,
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
+  resolveAgentDriver,
   resolveAgentModel,
   type AgentRunOverrides,
   type RunSpec,
@@ -65,6 +66,7 @@ import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { SearchStorage } from "../../storage/search-storage.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ApprovalService } from "../approval-service.js"
+import { ConfigService } from "../config-service.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -252,6 +254,25 @@ const resolveTurnContext = (params: {
     }
     const effectiveAgent = applyAgentOverrides(agent, params.runSpec?.overrides)
 
+    // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
+    // then `UserConfig.driverOverrides[agent.name]`, else default.
+    // ConfigService is yielded as an Effect — best-effort: if the
+    // service isn't provided in this context (rare; some test layers),
+    // the resolution falls through to default. The `driverSource` is
+    // threaded into `prompt.system` (Commit 3) so ACP-aware hooks can
+    // detect external dispatch.
+    const config = yield* Effect.serviceOption(ConfigService)
+    const driverOverrides = Option.isSome(config)
+      ? ((yield* config.value.get()).driverOverrides ?? undefined)
+      : undefined
+    const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
+    // If config-routed and the agent had no hardcoded driver, the
+    // override replaces it — `effectiveAgent` is otherwise unchanged.
+    const dispatchAgent =
+      driverResolution.source === "config"
+        ? new AgentDefinition({ ...effectiveAgent, driver: driverResolution.driver })
+        : effectiveAgent
+
     // Run context.messages pipeline — extensions can inject hidden context or filter messages
     const interceptedMessages = yield* params.extensionRegistry.pipelines.runPipeline(
       "context.messages",
@@ -332,13 +353,14 @@ const resolveTurnContext = (params: {
     return {
       currentTurnAgent: currentAgent,
       messages,
-      agent: effectiveAgent,
+      agent: dispatchAgent,
       tools,
       systemPrompt,
-      modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(effectiveAgent),
-      reasoning: resolveReasoning(effectiveAgent, session?.reasoningLevel),
-      temperature: effectiveAgent.temperature,
-      driver: effectiveAgent.driver,
+      modelId: params.runSpec?.overrides?.modelId ?? resolveAgentModel(dispatchAgent),
+      reasoning: resolveReasoning(dispatchAgent, session?.reasoningLevel),
+      temperature: dispatchAgent.temperature,
+      driver: dispatchAgent.driver,
+      driverSource: driverResolution.source,
     }
   })
 
@@ -635,6 +657,7 @@ const resolveTurnPhase = (params: {
       ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
       ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
       ...(resolved.driver !== undefined ? { driver: resolved.driver } : {}),
+      ...(resolved.driverSource !== undefined ? { driverSource: resolved.driverSource } : {}),
     } satisfies ResolvedTurn
   })
 

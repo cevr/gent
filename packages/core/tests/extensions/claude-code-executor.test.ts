@@ -13,7 +13,35 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 const stubBase = { uuid: "u-1", session_id: "s-1", parent_tool_use_id: null }
 
 describe("mapSdkMessage", () => {
-  test("assistant text block → text-delta", () => {
+  test("stream_event content_block_delta text_delta → text-delta", () => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const msg = {
+      type: "stream_event",
+      ...stubBase,
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "hello" },
+      },
+    } as unknown as SDKMessage
+    expect(mapSdkMessage(msg)).toEqual([{ _tag: "text-delta", text: "hello" }])
+  })
+
+  test("stream_event content_block_delta thinking_delta → reasoning-delta", () => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const msg = {
+      type: "stream_event",
+      ...stubBase,
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "ponder" },
+      },
+    } as unknown as SDKMessage
+    expect(mapSdkMessage(msg)).toEqual([{ _tag: "reasoning-delta", text: "ponder" }])
+  })
+
+  test("assistant text block does NOT emit (stream_event is the source)", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     const msg = {
       type: "assistant",
@@ -23,21 +51,7 @@ describe("mapSdkMessage", () => {
         content: [{ type: "text", text: "hello" }],
       },
     } as unknown as SDKMessage
-    const events = mapSdkMessage(msg)
-    expect(events).toEqual([{ _tag: "text-delta", text: "hello" }])
-  })
-
-  test("assistant thinking block → reasoning-delta", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const msg = {
-      type: "assistant",
-      ...stubBase,
-      message: {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "ponder" }],
-      },
-    } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([{ _tag: "reasoning-delta", text: "ponder" }])
+    expect(mapSdkMessage(msg)).toEqual([])
   })
 
   test("assistant tool_use block → tool-started", () => {

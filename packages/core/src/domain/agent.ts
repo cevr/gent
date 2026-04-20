@@ -109,6 +109,51 @@ export const DEFAULT_MODEL_ID = ModelId.of("openai/gpt-5.4-mini")
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
+// ── Runtime driver routing ──
+
+/**
+ * Where the resolved driver came from. Pipeline hooks (e.g. ACP system
+ * prompt rewrite) read this to decide whether to apply external-driver
+ * formatting.
+ */
+export const DriverSource = Schema.Literals(["agent", "config", "default"])
+export type DriverSource = typeof DriverSource.Type
+
+export interface ResolvedAgentDriver {
+  /** The driver to dispatch through. `undefined` ⇒ default model path
+   *  (the loop derives a model driver from the agent's model id). */
+  readonly driver: DriverRef | undefined
+  readonly source: DriverSource
+}
+
+/**
+ * Resolve which driver an agent should dispatch through. Precedence:
+ *
+ *   1. `AgentDefinition.driver`        — hardcoded by the extension author.
+ *      Not overridable (the author opted into a specific backend).
+ *   2. `overrides[agent.name]`         — runtime config (`UserConfig.driverOverrides`,
+ *      project shadows user). Used by the `/driver` command.
+ *   3. `undefined`                     — default; the loop derives a model
+ *      driver from `agent.model`.
+ *
+ * Pure function — no Effect, no service dependency. Callers thread the
+ * `overrides` map in from `ConfigService` (the loop yields it once at
+ * `resolveTurnPhase`; auth-guard takes it as a param).
+ */
+export const resolveAgentDriver = (
+  agent: AgentDefinition,
+  overrides?: Readonly<Record<string, DriverRef>>,
+): ResolvedAgentDriver => {
+  if (agent.driver !== undefined) {
+    return { driver: agent.driver, source: "agent" }
+  }
+  const fromConfig = overrides?.[agent.name]
+  if (fromConfig !== undefined) {
+    return { driver: fromConfig, source: "config" }
+  }
+  return { driver: undefined, source: "default" }
+}
+
 // ── RunSpec — per-run dispatch configuration ──
 //
 // Per `composability-not-flags`, separates per-run concerns from agent identity:

@@ -256,8 +256,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       // -- auth --
       "auth.listProviders": ({ agentName }) =>
-        authGuard.listProviders({
-          ...(agentName !== undefined ? { agentName } : {}),
+        Effect.gen(function* () {
+          // Thread `driverOverrides` from config so external-routed agents
+          // skip model auth requirements (Commit 2 — runtime driver
+          // override). Resolved here rather than in AuthGuard.Live so the
+          // service stays free of a ConfigService dep.
+          const config = yield* configService.get()
+          return yield* authGuard.listProviders({
+            ...(agentName !== undefined ? { agentName } : {}),
+            ...(config.driverOverrides !== undefined
+              ? { driverOverrides: config.driverOverrides }
+              : {}),
+          })
         }),
 
       "auth.setKey": ({ provider, key }) =>

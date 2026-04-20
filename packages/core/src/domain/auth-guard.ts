@@ -1,7 +1,7 @@
 import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { AuthStore, AuthType } from "./auth-store"
 import { ProviderId, parseModelProvider } from "./model"
-import { AgentName, resolveAgentModel } from "./agent.js"
+import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { DriverRegistry } from "../runtime/extensions/driver-registry.js"
 
@@ -19,6 +19,16 @@ export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
 export const AuthProviderQuery = Schema.Struct({
   agentName: Schema.optional(AgentName),
+  /**
+   * Per-agent driver routing overrides (from `UserConfig.driverOverrides`).
+   * When the resolved driver for `agentName` is external, model auth is
+   * skipped — the external driver owns its own auth (e.g. Claude Code SDK
+   * via OAuth keychain).
+   *
+   * Passed as a parameter (not yielded as a service) so AuthGuard.Live
+   * does not gain a ConfigService dependency.
+   */
+  driverOverrides: Schema.optional(Schema.Record(Schema.String, DriverRef)),
 })
 export type AuthProviderQuery = typeof AuthProviderQuery.Type
 
@@ -54,8 +64,18 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
 
           if (query.agentName !== undefined) {
             const selectedAgent = yield* extensionRegistry.getAgent(query.agentName)
-            if (selectedAgent?.model !== undefined) {
-              modelIds.push(resolveAgentModel(selectedAgent))
+            if (selectedAgent !== undefined) {
+              // External-routed agents (ACP, etc.) own their own auth; model
+              // auth is irrelevant. Short-circuit so the missing-keys check
+              // doesn't ask for, e.g., an OpenAI key when `cowork` is
+              // routed through Claude Code via config.
+              const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
+              if (resolved.driver?._tag === "external") {
+                return providers
+              }
+              if (selectedAgent.model !== undefined) {
+                modelIds.push(resolveAgentModel(selectedAgent))
+              }
             }
           }
 
