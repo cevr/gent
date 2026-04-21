@@ -32,6 +32,11 @@ type OAuthCallback = (code?: string) => Promise<{
   accountId?: string
 }>
 
+type PendingCallbackEntry = {
+  readonly cb: OAuthCallback
+  readonly timeoutId: ReturnType<typeof setTimeout>
+}
+
 const buildOpenAiConfig = (hints?: ProviderHints) => {
   const config: Record<string, unknown> = {}
   if (hints?.maxTokens !== undefined) config["max_tokens"] = hints.maxTokens
@@ -102,7 +107,7 @@ const makeOauthOpenAILayer = (
  */
 export const buildOpenAIModelDriver = (
   credentialCellRef: Ref.Ref<CredentialCacheCell>,
-  pendingCallbacks: Map<string, OAuthCallback>,
+  pendingCallbacks: Map<string, PendingCallbackEntry>,
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
@@ -166,7 +171,17 @@ export const buildOpenAIModelDriver = (
         try: async () => {
           if (ctx.methodIndex !== 0) return undefined
           const { authorization, callback: cb } = await authorizeOpenAI()
-          pendingCallbacks.set(ctx.authorizationId, cb)
+          // Mirror oauth.ts pendingOAuth TTL (5 min). Without this an
+          // abandoned auth attempt — user starts the flow, never
+          // completes — leaves the callback closure resident until
+          // extension teardown.
+          const timeoutId = setTimeout(
+            () => {
+              pendingCallbacks.delete(ctx.authorizationId)
+            },
+            5 * 60 * 1000,
+          )
+          pendingCallbacks.set(ctx.authorizationId, { cb, timeoutId })
           return authorization
         },
         catch: (e) => ({
@@ -176,9 +191,11 @@ export const buildOpenAIModelDriver = (
       }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
     callback: (ctx) =>
       Effect.gen(function* () {
-        const cb = pendingCallbacks.get(ctx.authorizationId)
+        const entry = pendingCallbacks.get(ctx.authorizationId)
         pendingCallbacks.delete(ctx.authorizationId)
-        if (cb === undefined) return
+        if (entry === undefined) return
+        clearTimeout(entry.timeoutId)
+        const cb = entry.cb
         const result = yield* Effect.tryPromise({
           try: () => cb(ctx.code),
           catch: (e) => ({
@@ -200,15 +217,15 @@ export const buildOpenAIModelDriver = (
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
   modelDrivers: () => {
-    // Counsel C3 HIGH #1 (Anthropic precedent): the credential cache
-    // cell is hoisted to extension-closure scope so it survives across
-    // `resolveModel` calls. One extension instance → one cell that
-    // lives until the runtime tears the extension down. `Ref.makeUnsafe`
-    // is the right primitive here because `modelDrivers()` is sync
-    // (no Effect runtime).
+    // Credential cache cell hoisted to extension-closure scope so it
+    // survives across `resolveModel` calls. One extension instance →
+    // one cell that lives until the runtime tears the extension down.
+    // `Ref.makeUnsafe` is the right primitive here because
+    // `modelDrivers()` is sync (no Effect runtime).
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
-    // Pending OAuth callbacks keyed by authorizationId (closure state)
-    const pendingCallbacks = new Map<string, OAuthCallback>()
+    // Pending OAuth callbacks keyed by authorizationId. Entries
+    // self-clear on a 5-min TTL so abandoned auth attempts don't leak.
+    const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
     return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks)]
   },
