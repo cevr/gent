@@ -711,9 +711,10 @@ export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official
 // Counsel C8 — single source of truth in `model-config.ts`
 // (`MODEL_CONFIG.ccVersion`). Env-var override still wins so users can
 // pin a specific CC version without editing source.
-const getCliVersion = (): string => _env.cliVersion ?? getCcVersion()
+export const getCliVersion = (): string => _env.cliVersion ?? getCcVersion()
 
-const getUserAgent = (): string => _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
+export const getUserAgent = (): string =>
+  _env.userAgent ?? `claude-cli/${getCliVersion()} (external, cli)`
 
 /**
  * Inputs the billing-header builder needs (CLI version + entrypoint).
