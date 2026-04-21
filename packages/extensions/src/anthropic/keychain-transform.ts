@@ -58,9 +58,9 @@
  *      NOT 529, so we re-raise both as a typed `TransientResponseError`
  *      via `HttpClient.transformResponse` and let `Effect.retry` see it.
  *   2. Transport failures (`HttpClientError` from the wire) — matches
- *      legacy `fetchOnce`/`fetchWithRetry` semantics at the to-be-
- *      deleted `oauth.ts:813-838` which mapped thrown fetch errors to a
- *      synthetic 500 and retried under the same budget.
+ *      legacy `fetchOnce`/`fetchWithRetry` semantics (deleted in
+ *      Commit 4) which mapped thrown fetch errors to a synthetic 500
+ *      and retried under the same budget.
  * The catch-tag at the end folds the terminal 429/529 back into the
  * success channel; transport failures that exhaust the budget propagate
  * as `HttpClientError` (the SDK's expected error type).
@@ -350,9 +350,8 @@ export const buildKeychainTransformClient =
       // starting at 1s. Retries both:
       //   - 429/529 responses (Anthropic rate-limit + Overloaded)
       //   - Transport failures (HttpClientError from the wire), matching
-      //     the legacy `fetchOnce` semantics at the to-be-deleted
-      //     `oauth.ts:813-838` which mapped thrown fetch errors to a
-      //     synthetic 500 and retried.
+      //     the legacy `fetchOnce` semantics (deleted in Commit 4) which
+      //     mapped thrown fetch errors to a synthetic 500 and retried.
       // `transformResponse` re-raises 429/529 as a typed failure so
       // `Effect.retry` can react. The catch-tag at the end folds the
       // terminal 429/529 back into the success channel after the budget

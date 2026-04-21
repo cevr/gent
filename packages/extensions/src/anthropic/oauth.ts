@@ -1,9 +1,8 @@
-import { Effect, Schedule, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as os from "node:os"
 import * as fsPromises from "node:fs/promises"
 import { ProviderAuthError } from "@gent/core/extensions/api"
-import { runAnthropicFetcher } from "./fetch-boundary.js"
 
 // ── Claude Code Keychain Reader ──
 
@@ -638,7 +637,6 @@ let _env: AnthropicKeychainEnv = {}
 /** Call once at layer construction with values from Config */
 export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
   _env = env
-  lastBetaFlagsEnv = env.betaFlags
 }
 
 /**
@@ -648,30 +646,6 @@ export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
  * instead of leaking the variable name across modules.
  */
 export const getCurrentBetaFlagsEnv = (): string | undefined => _env.betaFlags
-
-// Session-level excluded betas per model
-const excludedBetas = new Map<string, Set<string>>()
-let lastBetaFlagsEnv: string | undefined
-let lastModelId: string | undefined
-
-export const getExcludedBetas = (modelId: string): Set<string> => {
-  const currentBetaFlags = _env.betaFlags
-  if (currentBetaFlags !== lastBetaFlagsEnv) {
-    excludedBetas.clear()
-    lastBetaFlagsEnv = currentBetaFlags
-  }
-  if (lastModelId !== undefined && lastModelId !== modelId) {
-    excludedBetas.clear()
-  }
-  lastModelId = modelId
-  return excludedBetas.get(modelId) ?? new Set()
-}
-
-export const addExcludedBeta = (modelId: string, beta: string): void => {
-  const existing = excludedBetas.get(modelId) ?? new Set()
-  existing.add(beta)
-  excludedBetas.set(modelId, existing)
-}
 
 export const isLongContextError = (responseBody: string): boolean =>
   responseBody.includes("Extra usage is required for long context requests") ||
@@ -690,12 +664,11 @@ export const isLongContextError = (responseBody: string): boolean =>
  *      second exclusion attempt never went on the wire.
  * Both are fixed by deriving candidates from the model's actual
  * outgoing betas and giving each one a retry slot.
- */
-/**
- * Pure variant of `getLongContextBetasFor` that takes the betaFlags env
- * explicitly — used by the new `keychain-transform` middleware so it
- * doesn't depend on the module-global `_env`. Keeps legacy oauth.ts
- * callers stable through the wrapper below; both delegate here.
+ *
+ * Pure variant takes the betaFlags env explicitly — used by the new
+ * `keychain-transform` middleware so it doesn't depend on the module-
+ * global `_env`. The wrapper below feeds in `_env.betaFlags` for
+ * legacy callers.
  */
 export const getLongContextBetasForWith = (
   modelId: string,
@@ -708,25 +681,12 @@ export const getLongContextBetasForWith = (
 export const getLongContextBetasFor = (modelId: string): ReadonlyArray<string> =>
   getLongContextBetasForWith(modelId, _env.betaFlags)
 
-export const getNextBetaToExclude = (modelId: string): string | null => {
-  const excluded = getExcludedBetas(modelId)
-  for (const beta of getLongContextBetasFor(modelId)) {
-    if (!excluded.has(beta)) return beta
-  }
-  return null
-}
-
 export const getModelBetas = (modelId: string, excluded?: Set<string>): ReadonlyArray<string> =>
   deriveModelBetas(modelId, _env.betaFlags, excluded)
 
 // ── System Identity (exported for keychain-client.ts) ──
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
-
-// ── Custom Fetch ──
-// Note: mcp_ tool prefixing, system identity injection, and response stream transforms
-// are handled by keychain-client.ts at the AnthropicClient layer.
-// This fetch wrapper only handles: auth, headers, beta flags, billing, retry.
 
 // Counsel C8 — single source of truth in `model-config.ts`
 // (`MODEL_CONFIG.ccVersion`). Env-var override still wins so users can
@@ -769,206 +729,4 @@ export const parseModelIdFromBody = (bodyText: string | undefined): string => {
     // ignore — modelId stays "unknown"
   }
   return "unknown"
-}
-
-const buildRequestHeaders = (
-  input: RequestInfo | URL,
-  init: RequestInit,
-  accessToken: string,
-  modelId: string,
-  excluded?: Set<string>,
-): Headers => {
-  const headers = new Headers()
-
-  if (input instanceof Request) {
-    input.headers.forEach((value, key) => headers.set(key, value))
-  }
-
-  if (init.headers instanceof Headers) {
-    init.headers.forEach((value, key) => headers.set(key, value))
-  } else if (Array.isArray(init.headers)) {
-    for (const [key, value] of init.headers) {
-      if (typeof value !== "undefined") headers.set(key, String(value))
-    }
-  } else if (init.headers !== undefined) {
-    for (const [key, value] of Object.entries(init.headers)) {
-      if (typeof value !== "undefined") headers.set(key, String(value))
-    }
-  }
-
-  const modelBetas = getModelBetas(modelId, excluded)
-  const incomingBeta = headers.get("anthropic-beta") ?? ""
-  const mergedBetas = [
-    ...new Set([
-      ...modelBetas,
-      ...incomingBeta
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ]),
-  ]
-
-  headers.set("authorization", `Bearer ${accessToken}`)
-  headers.set("anthropic-beta", mergedBetas.join(","))
-  headers.set("x-app", "cli")
-  headers.set("user-agent", getUserAgent())
-  // The billing header lives in `system[0]` (see keychain-client.ts +
-  // signing.ts), NOT as an HTTP header. The previous header path sent
-  // a hard-coded `cch=c5e82` placeholder that tripped the OAuth
-  // billing validator on every request — symptom: `InvalidKey` from
-  // the SDK on a fresh prompt.
-  headers.set("anthropic-dangerous-direct-browser-access", "true")
-  headers.delete("x-api-key")
-
-  return headers
-}
-
-// Retryable fetch — 429/529 with exponential backoff
-class FetchRetryableError extends Schema.TaggedErrorClass<FetchRetryableError>(
-  "@gent/extensions/anthropic/oauth/FetchRetryableError",
-)("FetchRetryableError", {
-  response: Schema.Any,
-}) {}
-
-const fetchOnce = (
-  input: RequestInfo | URL,
-  init: RequestInit | undefined,
-): Effect.Effect<Response, FetchRetryableError> =>
-  Effect.gen(function* () {
-    const doFetch = yield* FetchHttpClient.Fetch
-    return yield* Effect.tryPromise({
-      try: () => doFetch(input, init),
-      catch: (e) => new FetchRetryableError({ response: new Response(String(e), { status: 500 }) }),
-    })
-  }).pipe(
-    Effect.flatMap((res) =>
-      res.status === 429 || res.status === 529
-        ? Effect.fail(new FetchRetryableError({ response: res }))
-        : Effect.succeed(res),
-    ),
-  )
-
-const fetchWithRetry = (input: RequestInfo | URL, init?: RequestInit): Effect.Effect<Response> =>
-  fetchOnce(input, init).pipe(
-    Effect.retry({
-      times: 2,
-      schedule: Schedule.exponential("1 second"),
-    }),
-    Effect.catchEager((e) => Effect.succeed(e.response)),
-  )
-
-// Long-context beta error — retried by excluding offending betas
-class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>(
-  "@gent/extensions/anthropic/oauth/LongContextBetaError",
-)("LongContextBetaError", {
-  response: Schema.Any,
-}) {}
-
-const fetchWithBetaRetry = (
-  input: RequestInfo | URL,
-  init: RequestInit,
-  accessToken: string,
-  modelId: string,
-): Effect.Effect<Response> => {
-  const attempt = (): Effect.Effect<Response, LongContextBetaError> =>
-    fetchWithRetry(input, {
-      ...init,
-      headers: buildRequestHeaders(input, init, accessToken, modelId, getExcludedBetas(modelId)),
-    }).pipe(
-      Effect.flatMap((response) => {
-        if (response.status !== 400 && response.status !== 429) {
-          return Effect.succeed(response)
-        }
-        return Effect.tryPromise({
-          try: () => response.clone().text(),
-          catch: () => new LongContextBetaError({ response }),
-        }).pipe(
-          Effect.flatMap((body) => {
-            if (!isLongContextError(body)) return Effect.succeed(response)
-            const beta = getNextBetaToExclude(modelId)
-            if (beta === null) return Effect.succeed(response)
-            addExcludedBeta(modelId, beta)
-            return Effect.fail(new LongContextBetaError({ response }))
-          }),
-        )
-      }),
-    )
-
-  // Counsel C8 deep — retry budget = one slot per long-context candidate
-  // that actually rides on this model's header. Prior shape used the
-  // module-wide LONG_CONTEXT_BETAS.length - 1 which (a) under-counted by
-  // one (the second exclusion never reached the wire) and (b) didn't
-  // account for per-model overrides removing candidates entirely.
-  const candidates = getLongContextBetasFor(modelId)
-  return attempt().pipe(
-    Effect.retry({ times: candidates.length }),
-    Effect.catchEager((e) => Effect.succeed(e.response)),
-  )
-}
-
-/**
- * Two-callback boundary for the Anthropic SDK fetcher: `load` produces
- * cached/refreshed credentials, `invalidate` busts the cache so the
- * next `load` re-reads. The fetcher uses `invalidate` on a 401 mid-
- * flight to recover from a token that expired between the cache check
- * and the wire send (the credential cache TTL is 30s; a token's last
- * minute can fall inside that window).
- *
- * Defined as a local interface mirror of `runtime-boundary.ts`'s
- * `CredentialLoader` so this module avoids importing from
- * `runtime-boundary.ts` and creating a circular dependency
- * (runtime-boundary already imports `freshEnoughForUse` etc. from here).
- */
-export interface AnthropicCredentialLoader {
-  readonly load: () => Promise<ClaudeCredentials | null>
-  readonly invalidate: () => void
-}
-
-export const createAnthropicKeychainFetch = (loader: AnthropicCredentialLoader): typeof fetch => {
-  const requireFreshCreds = async (): Promise<ClaudeCredentials> => {
-    const latest = await loader.load()
-    if (latest === null) {
-      throw new Error(
-        "Claude Code credentials are unavailable or expired. Run `claude` to refresh them.",
-      )
-    }
-    return latest
-  }
-
-  const extractModelId = (init: RequestInit): string => {
-    const bodyStr = typeof init.body === "string" ? init.body : undefined
-    return parseModelIdFromBody(bodyStr)
-  }
-
-  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const requestInit = init ?? {}
-    const modelId = extractModelId(requestInit)
-
-    let creds = await requireFreshCreds()
-    // SDK boundary: Anthropic AI SDK invokes this fetcher as a Promise-
-    // returning function (typeof fetch). Promise edge lives in
-    // `fetch-boundary.ts`.
-    let response = await runAnthropicFetcher(
-      fetchWithBetaRetry(input, requestInit, creds.accessToken, modelId),
-    )
-
-    // 401 recovery: cache TTL (30s) can outlive the token's last minute,
-    // and a token can be revoked server-side between cache fill and
-    // wire send. Bust the cache once and retry — `loader.load()` then
-    // re-reads from keychain or forces a refresh. One retry only; a
-    // 401 on the second attempt is a real auth failure (revoked
-    // session, missing scope) and needs to surface to the caller.
-    if (response.status === 401) {
-      loader.invalidate()
-      creds = await requireFreshCreds()
-      response = await runAnthropicFetcher(
-        fetchWithBetaRetry(input, requestInit, creds.accessToken, modelId),
-      )
-    }
-
-    return response
-  }
-  return Object.assign(fetcher, {
-    preconnect: fetch.preconnect?.bind(fetch),
-  })
 }

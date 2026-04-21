@@ -9,8 +9,8 @@
  *
  * The cache shape (TTL 30s + 60s freshness margin + refresh-on-stale +
  * best-effort write-back via `authInfo.persist`) is a verbatim port from
- * the to-be-deleted `runtime-boundary.ts:loadCredentialsEffect`. Behavior
- * unchanged; only the interface shape differs.
+ * the (now-deleted) `runtime-boundary.ts:loadCredentialsEffect`.
+ * Behavior unchanged; only the interface shape differs.
  *
  * Why typed errors instead of `Effect<ClaudeCredentials | null>`: the
  * old shape returned `null` to mean "no creds available" because the

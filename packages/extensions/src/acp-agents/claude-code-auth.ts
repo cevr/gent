@@ -25,7 +25,7 @@ import {
  *
  * If the refreshed creds are still inside the freshness window, fail
  * with ProviderAuthError rather than send a token that will expire
- * mid-flight — matches runtime-boundary's policy.
+ * mid-flight — matches AnthropicCredentialService's policy.
  */
 export const readClaudeCodeOAuthToken = (): Effect.Effect<string, ProviderAuthError> =>
   Effect.gen(function* () {

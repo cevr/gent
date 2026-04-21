@@ -180,7 +180,7 @@ describe("freshEnoughForUse", () => {
   // this only tests the *threshold*, not the integration. The full
   // regression ("refresh returns fresh creds → caller uses them in
   // memory even when write-back failed") is verified at the call
-  // sites (runtime-boundary, claude-code-auth, anthropic/index)
+  // sites (credential-service, claude-code-auth, anthropic/index)
   // through code review — none of them re-read keychain after
   // refresh anymore.
   const now = 1_700_000_000_000

@@ -4,10 +4,10 @@
  *
  * This isn't just per-request retry state — it's session-level memory
  * so that turn N+1 doesn't include a beta turn N already learned the
- * server hates. Module-global today at the to-be-deleted
- * `oauth.ts:644-700`. Splitting into a service so it composes through
- * Layer instead of import-time mutable state, and so tests don't have
- * to thread `initAnthropicKeychainEnv` to reset between runs.
+ * server hates. Was module-global state in `oauth.ts` (deleted in
+ * Commit 4). Now a service so it composes through Layer instead of
+ * import-time mutable state, and so tests don't have to thread
+ * `initAnthropicKeychainEnv` to reset between runs.
  *
  * Two implicit clear conditions, both ported verbatim:
  *   1. `betaFlags` env changes — user toggled flags, prior learning
