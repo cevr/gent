@@ -13,6 +13,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
+import type { Cause } from "effect"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { buildCodexTransformClient } from "@gent/extensions/openai/codex-transform"
@@ -302,6 +303,24 @@ describe("codexTransformClient — auth headers (O2)", () => {
     expect(result._tag).toBe("Failure")
     // Capture stays empty — the request never hit the wire.
     expect(fakeState.captured).toHaveLength(0)
+
+    // The failure surface must be the standard transport error type
+    // (HttpClientError with a TransportError reason) so the wrapped
+    // client signature stays `With<HttpClientError, never>`. The
+    // original ProviderAuthError must be reachable as the cause so
+    // upstream error classifiers can still see it.
+    if (result._tag !== "Failure") throw new Error("expected failure")
+    const failReason = result.cause.reasons.find(
+      (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
+    )
+    expect(failReason).toBeDefined()
+    const err = failReason!.error
+    expect(err).toBeInstanceOf(HttpClientError)
+    expect(err.reason).toBeInstanceOf(TransportError)
+    const reason = err.reason as TransportError
+    expect(reason.cause).toBeInstanceOf(ProviderAuthError)
+    expect((reason.cause as ProviderAuthError).message).toBe("no usable refresh token")
+    expect(reason.description).toBe("no usable refresh token")
   })
 
   test("calls getFresh per-request (rotated cell wins on second call)", async () => {
