@@ -616,3 +616,148 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
     expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
   })
 })
+
+describe("codexTransformClient — 401 recovery (O4)", () => {
+  // The credential cache TTL (30s) can outlive a token's last minute,
+  // and OAuth tokens can be revoked server-side between cache fill and
+  // wire send. On 401: invalidate the cache + retry once. A second 401
+  // surfaces the response so the user can re-authorize.
+
+  test("stale token + 401 → invalidate + retry succeeds with rotated token", async () => {
+    // First refresh seeds with "stale-access" (expired authInfo); after
+    // the wire returns 401, the credential service is invalidated, and
+    // the next preprocess re-enters → second refresh returns
+    // "rotated-access". The retried request goes through and succeeds.
+    let refreshCount = 0
+    const rotateIO: OpenAICredentialIO = {
+      refresh: () =>
+        Effect.sync(() => {
+          refreshCount += 1
+          return refreshCount === 1
+            ? {
+                access: "stale-access",
+                refresh: "stale-refresh",
+                expires: FAR_FUTURE_MS(),
+              }
+            : {
+                access: "rotated-access",
+                refresh: "rotated-refresh",
+                expires: FAR_FUTURE_MS(),
+              }
+        }),
+    }
+    // Empty access on authInfo forces an initial refresh (otherwise the
+    // cache hits with the seed token and never calls our IO).
+    const stalAuthInfo: ProviderAuthInfo = {
+      type: "oauth",
+      access: "",
+      refresh: "seed-refresh",
+      expires: 0,
+    }
+    const creds = await buildCreds(rotateIO, stalAuthInfo)
+    const state: FakeClientState = {
+      captured: [],
+      // First call returns 401, second returns 200.
+      responder: (call) =>
+        call === 0
+          ? new Response("unauthorized", { status: 401 })
+          : new Response("ok", { status: 200 }),
+    }
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+
+    const response = await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(state.captured).toHaveLength(2)
+    // First attempt used the stale token; the retry used the rotated.
+    expect(state.captured[0]!.headers["authorization"]).toBe("Bearer stale-access")
+    expect(state.captured[1]!.headers["authorization"]).toBe("Bearer rotated-access")
+    expect(refreshCount).toBe(2)
+  })
+
+  test("double 401 surfaces the response (no infinite retry)", async () => {
+    // Both wire attempts return 401. After invalidate + retry, the
+    // second 401 must surface as a 401 response (not a typed error,
+    // not another retry) so user-facing recovery can kick in.
+    const noopRotateIO: OpenAICredentialIO = {
+      refresh: () =>
+        Effect.succeed<OpenAICredentials>({
+          access: "always-stale",
+          refresh: "always-stale-refresh",
+          expires: FAR_FUTURE_MS(),
+        }),
+    }
+    const stalAuthInfo: ProviderAuthInfo = {
+      type: "oauth",
+      access: "",
+      refresh: "seed",
+      expires: 0,
+    }
+    const creds = await buildCreds(noopRotateIO, stalAuthInfo)
+    const state: FakeClientState = {
+      captured: [],
+      responder: () => new Response("unauthorized", { status: 401 }),
+    }
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+
+    const response = await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+
+    expect(response.status).toBe(401)
+    // Exactly two attempts: original + one retry.
+    expect(state.captured).toHaveLength(2)
+  })
+
+  test("non-401 errors do NOT trigger retry", async () => {
+    // 500 (or any non-401) must pass through verbatim — only 401 is
+    // the auth-recovery signal.
+    const noopRotateIO: OpenAICredentialIO = {
+      refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+    }
+    const validInfo = validAuthInfo({ access: "fresh-access" })
+    const creds = await buildCreds(noopRotateIO, validInfo)
+    const state: FakeClientState = {
+      captured: [],
+      responder: () => new Response("server error", { status: 500 }),
+    }
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+
+    const response = await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+
+    expect(response.status).toBe(500)
+    // No retry on 500 → exactly one attempt.
+    expect(state.captured).toHaveLength(1)
+  })
+
+  test("200 OK never triggers retry", async () => {
+    const noopRotateIO: OpenAICredentialIO = {
+      refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+    }
+    const creds = await buildCreds(noopRotateIO, validAuthInfo({ access: "fresh-access" }))
+    const state: FakeClientState = {
+      captured: [],
+      responder: () => new Response("ok", { status: 200 }),
+    }
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+
+    const response = await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(state.captured).toHaveLength(1)
+  })
+})

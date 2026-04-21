@@ -31,9 +31,9 @@
  * `keychain-transform.ts:22-32`.)
  */
 
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
-import type { HttpBody } from "effect/unstable/http"
+import type { HttpBody, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import * as os from "node:os"
 import type { OpenAICredentialServiceShape } from "./credential-service.js"
@@ -231,6 +231,31 @@ const withHeaders = (
     hash: Option.getOrUndefined(req.hash),
   })
 
+// ── 401 recovery ──
+
+/**
+ * Internal error driving 401 recovery. The credential cache TTL (30s)
+ * can outlive a token's last minute, and OAuth tokens can be revoked
+ * server-side between cache fill and wire send. On 401, invalidate
+ * the cache and retry once — the next preprocess re-enters and
+ * `creds.getFresh` forces a refresh against the rotated refresh token
+ * preserved in the cell (per credential-service HIGH #1).
+ *
+ * Mirrors the Anthropic `Unauthorized401Error` (keychain-transform.ts:
+ * 132-140) — typed so the recovery fires only on this signal, not on
+ * other 4xx that callers should see verbatim.
+ */
+class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>(
+  "@gent/extensions/openai/Unauthorized401Error",
+)("Unauthorized401Error", {
+  response: Schema.Any,
+}) {
+  getResponse(): HttpClientResponse.HttpClientResponse {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return this.response as HttpClientResponse.HttpClientResponse
+  }
+}
+
 // ── transformClient factory ──
 
 /**
@@ -251,12 +276,17 @@ const withHeaders = (
  *      originator/user-agent defaults
  *   3. If the request URL matches a Codex-eligible path
  *      (`/v1/chat/completions` or `/v1/responses`):
- *        a. Set `OpenAI-Beta: responses=experimental` (preserve any
- *           upstream value — defensive against future SDK changes)
+ *        a. Ensure `OpenAI-Beta` carries `responses=experimental`
+ *           (merged with any upstream tokens — counsel O3 MEDIUM #2)
  *        b. Rewrite body shape if it carries an `input` array
  *        c. Rewrite URL to the ChatGPT Codex endpoint
  *      Non-Codex paths pass through unchanged after auth headers.
- *   - 401 recovery wraps this preprocess in O4.
+ *
+ * Response side:
+ *   - 401 recovery (outermost transformResponse): on HTTP 401 invalidate
+ *     the credential cache and retry once. A second 401 surfaces the
+ *     response to the caller so user-facing recovery (re-run
+ *     authorization from the auth picker) can kick in.
  */
 export const buildCodexTransformClient =
   (
@@ -295,5 +325,38 @@ export const buildCodexTransformClient =
           }
           return withHeaders(req, headers)
         }),
+      ),
+      // 401 recovery (outermost): invalidate the credential cache + retry
+      // ONCE. The cache TTL is 30s so it can outlive a token's last
+      // minute; tokens can also be revoked between cache fill and wire
+      // send. On the retry, `mapRequestEffect` re-enters and `creds.
+      // getFresh` re-reads the rotated refresh token (preserved across
+      // invalidate per credential-service HIGH #1) and forces a refresh.
+      // A second 401 means a real auth failure (revoked session, expired
+      // refresh token) — surface the response to the caller so the user
+      // can re-authorize from the auth picker.
+      //
+      // `tapError` runs the invalidate effect AFTER the failure but
+      // BEFORE Effect.retry decides to re-attempt — invalidate must
+      // commit before the next preprocess re-reads the cache.
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.flatMap(
+            (
+              response,
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> =>
+              response.status === 401
+                ? Effect.fail(new Unauthorized401Error({ response }))
+                : Effect.succeed(response),
+          ),
+          Effect.tapError((e) =>
+            e._tag === "Unauthorized401Error" ? creds.invalidate : Effect.void,
+          ),
+          Effect.retry({
+            while: (e) => e._tag === "Unauthorized401Error",
+            times: 1,
+          }),
+          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.getResponse())),
+        ),
       ),
     )
