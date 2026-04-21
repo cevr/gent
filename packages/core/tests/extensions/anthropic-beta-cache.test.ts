@@ -32,7 +32,7 @@ describe("AnthropicBetaCache — basic record / get", () => {
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
         yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "context-1m-2025-08-07")
+        yield* cache.recordExcluded("claude-opus-4-6", "context-1m-2025-08-07", "flag-a")
         const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
         expect(excluded.has("context-1m-2025-08-07")).toBe(true)
         expect(excluded.size).toBe(1)
@@ -45,12 +45,27 @@ describe("AnthropicBetaCache — basic record / get", () => {
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
         yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-y")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-y", "flag-a")
         const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
         expect(excluded.has("beta-x")).toBe(true)
         expect(excluded.has("beta-y")).toBe(true)
         expect(excluded.size).toBe(2)
+      }),
+    )
+  })
+
+  test("recordExcluded is standalone-safe — no prior getExcluded required", async () => {
+    // Counsel-driven contract: recordExcluded carries currentBetaFlags
+    // and applies the same env/model-change clear/seed as getExcluded.
+    // Calling record before any get must NOT lose data on the next read.
+    await run(
+      Effect.gen(function* () {
+        const cache = yield* AnthropicBetaCache
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
+        const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
+        expect(excluded.has("beta-x")).toBe(true)
+        expect(excluded.size).toBe(1)
       }),
     )
   })
@@ -62,7 +77,7 @@ describe("AnthropicBetaCache — clear-on-env-change", () => {
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
         yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
 
         // Env changes: prior learning should be discarded.
         const after = yield* cache.getExcluded("claude-opus-4-6", "flag-b")
@@ -76,11 +91,12 @@ describe("AnthropicBetaCache — clear-on-env-change", () => {
   })
 
   test("env change from undefined → defined also clears", async () => {
+    // Learn under env=undefined, then switch to env="flag-a" — prior
+    // learning must be discarded.
     await run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", undefined)
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", undefined)
         const after = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
         expect(after.size).toBe(0)
       }),
@@ -94,7 +110,7 @@ describe("AnthropicBetaCache — clear-on-model-change", () => {
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
         yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
 
         // Different model under same env → cache cleared.
         const haiku = yield* cache.getExcluded("claude-haiku-4-5", "flag-a")
@@ -111,15 +127,10 @@ describe("AnthropicBetaCache — clear-on-model-change", () => {
 
 describe("AnthropicBetaCache — same-model same-env stability", () => {
   test("repeated getExcluded with unchanged inputs is stable across many calls", async () => {
-    // Production call order: getExcluded → record → getExcluded loop.
-    // Calling record before any getExcluded would race with the cache's
-    // first-call env/model seeding — but production never does that
-    // because the retry middleware only learns AFTER reading.
     await run(
       Effect.gen(function* () {
         const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", "flag-a")
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x")
+        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", "flag-a")
         for (let i = 0; i < 5; i++) {
           const excluded = yield* cache.getExcluded("claude-opus-4-6", "flag-a")
           expect(excluded.has("beta-x")).toBe(true)

@@ -67,10 +67,16 @@ export interface AnthropicBetaCacheShape {
     currentBetaFlags: string | undefined,
   ) => Effect.Effect<ReadonlySet<string>>
   /**
-   * Record that `beta` was rejected for `modelId`. The next
-   * `getExcluded` for the same model returns a set including `beta`.
+   * Record that `beta` was rejected for `modelId` under the current
+   * `betaFlags` env. Runs the same env/model-change clear logic as
+   * `getExcluded` so the call is standalone-safe (no hidden ordering
+   * contract — see counsel finding on commit b3758a64).
    */
-  readonly recordExcluded: (modelId: string, beta: string) => Effect.Effect<void>
+  readonly recordExcluded: (
+    modelId: string,
+    beta: string,
+    currentBetaFlags: string | undefined,
+  ) => Effect.Effect<void>
 }
 
 // ── Service tag ──
@@ -94,14 +100,22 @@ export class AnthropicBetaCache extends Context.Service<
           return [excluded, next] as const
         })
 
-      const recordExcluded = (modelId: string, beta: string): Effect.Effect<void> =>
+      const recordExcluded = (
+        modelId: string,
+        beta: string,
+        currentBetaFlags: string | undefined,
+      ): Effect.Effect<void> =>
         Ref.update(cellRef, (cell) => {
-          const existing = cell.map.get(modelId) ?? new Set<string>()
+          // Apply the same clear/seed transition as getExcluded so the
+          // call is standalone-safe — no hidden contract that
+          // recordExcluded must follow a getExcluded.
+          const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
+          const existing = seeded.map.get(modelId) ?? new Set<string>()
           const updated = new Set(existing)
           updated.add(beta)
-          const nextMap = new Map(cell.map)
+          const nextMap = new Map(seeded.map)
           nextMap.set(modelId, updated)
-          return { ...cell, map: nextMap }
+          return { ...seeded, map: nextMap }
         })
 
       return AnthropicBetaCache.of({ getExcluded, recordExcluded })
