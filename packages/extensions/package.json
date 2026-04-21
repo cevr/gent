@@ -10,7 +10,7 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.114",
+    "@anthropic-ai/claude-agent-sdk": "0.2.116",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",

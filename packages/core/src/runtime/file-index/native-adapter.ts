@@ -67,14 +67,17 @@ const waitForScan = (finder: FileFinder, timeoutMs: number): Effect.Effect<boole
 // Convert FFF FileItem to IndexedFile
 // ---------------------------------------------------------------------------
 
-const toIndexedFile = (item: {
-  path: string
-  relativePath: string
-  fileName: string
-  size: number
-  modified: number
-}): IndexedFile => ({
-  path: item.path,
+const toIndexedFile = (
+  path: Path.Path,
+  basePath: string,
+  item: {
+    relativePath: string
+    fileName: string
+    size: number
+    modified: number
+  },
+): IndexedFile => ({
+  path: path.join(basePath, item.relativePath),
   relativePath: item.relativePath,
   fileName: item.fileName,
   size: item.size,
@@ -147,7 +150,7 @@ const makeNativeService = (
 
           totalFiles = result.value.totalFiles
           for (const item of result.value.items) {
-            allFiles.push(toIndexedFile(item))
+            allFiles.push(toIndexedFile(path, params.cwd, item))
           }
 
           if (allFiles.length >= totalFiles || result.value.items.length < pageSize) break
@@ -182,7 +185,7 @@ const makeNativeService = (
           })
         }
 
-        return result.value.items.map(toIndexedFile)
+        return result.value.items.map((item) => toIndexedFile(path, params.cwd, item))
       }),
 
     trackSelection: (params) =>

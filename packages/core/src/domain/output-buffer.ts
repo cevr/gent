@@ -38,8 +38,8 @@ export function headTail<T>(
 /**
  * Format head+tail arrays with truncation marker.
  */
-export function formatHeadTail<T>(
-  items: readonly T[],
+export function formatHeadTail(
+  items: readonly unknown[],
   maxItems: number = 100,
   truncatedMsg: (count: number) => string = (n) => `... [${n} lines truncated] ...`,
 ): string {

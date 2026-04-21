@@ -18,10 +18,10 @@
     "@gent/core": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*",
-    "@opentui/core": "^0.1.98",
-    "@opentui/solid": "^0.1.98",
+    "@opentui/core": "^0.1.102",
+    "@opentui/solid": "^0.1.102",
     "beautiful-mermaid": "^1.1.3",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "solid-js": "catalog:"
   },
   "devDependencies": {
