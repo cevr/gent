@@ -28,9 +28,7 @@
  * keychain transforms (or doesn't, on the API-key branch).
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
-import { FetchHttpClient } from "effect/unstable/http"
+import { Effect, Ref } from "effect"
 import { buildAnthropicModelDriver } from "@gent/extensions/anthropic"
 import {
   EMPTY_CREDENTIAL_CELL,
@@ -39,6 +37,11 @@ import {
 import { EMPTY_BETA_CELL, type BetaCacheCell } from "@gent/extensions/anthropic/beta-cache"
 import { initAnthropicKeychainEnv, SYSTEM_IDENTITY_PREFIX } from "@gent/extensions/anthropic/oauth"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
+import {
+  makeFakeFetchState,
+  oneGenerate,
+  type FakeFetchState,
+} from "@gent/core/test-utils/fake-fetch"
 
 const makeOAuthInfo = (): ProviderAuthInfo => ({
   type: "oauth",
@@ -52,93 +55,35 @@ const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   key,
 })
 
-interface CapturedRequest {
-  url: string
-  method: string
-  headers: Record<string, string>
-  body: string | undefined
-}
-
-interface FakeFetchState {
-  captured: Array<CapturedRequest>
-}
-
 /**
- * Builds a fake `typeof globalThis.fetch` that captures each call and
- * always responds with a minimal-but-schema-valid Anthropic
- * `BetaMessage` payload. `LanguageModel.generateText` parses that into
- * a successful response so the test path stays on the happy branch.
+ * Anthropic's `BetaMessage` happy-path response. `LanguageModel.generateText`
+ * parses this into a successful result so tests stay on the success branch
+ * and assertions can focus on outbound request shape.
  */
-const makeFakeFetch =
-  (state: FakeFetchState): typeof globalThis.fetch =>
-  async (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
-    let url: string
-    if (typeof input === "string") url = input
-    else if (input instanceof URL) url = input.href
-    else url = input.url
-    const headers: Record<string, string> = {}
-    const headerInit = init?.headers
-    if (headerInit instanceof Headers) {
-      headerInit.forEach((value, key) => {
-        headers[key.toLowerCase()] = value
-      })
-    } else if (Array.isArray(headerInit)) {
-      for (const [k, v] of headerInit) {
-        headers[k.toLowerCase()] = v
-      }
-    } else if (headerInit !== undefined && headerInit !== null) {
-      for (const [k, v] of Object.entries(headerInit)) {
-        if (typeof v === "string") headers[k.toLowerCase()] = v
-      }
-    }
-    let bodyText: string | undefined
-    if (typeof init?.body === "string") bodyText = init.body
-    else if (init?.body instanceof Uint8Array) bodyText = new TextDecoder().decode(init.body)
-    else bodyText = undefined
-    state.captured.push({
-      url,
-      method: init?.method ?? "GET",
-      headers,
-      body: bodyText,
-    })
-    const responseBody = JSON.stringify({
-      id: "msg_test_1",
-      type: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "ok" }],
-      model: "claude-opus-4-6",
-      stop_reason: "end_turn",
-      stop_sequence: null,
-      usage: {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation: null,
-        cache_creation_input_tokens: null,
-        cache_read_input_tokens: null,
-        inference_geo: null,
-        service_tier: null,
-      },
-    })
-    return new Response(responseBody, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })
-  }
+const anthropicHappyResponse = () => ({
+  status: 200,
+  body: JSON.stringify({
+    id: "msg_test_1",
+    type: "message",
+    role: "assistant",
+    content: [{ type: "text", text: "ok" }],
+    model: "claude-opus-4-6",
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      inference_geo: null,
+      service_tier: null,
+    },
+  }),
+})
 
-const fakeFetchLayer = (state: FakeFetchState): Layer.Layer<never, never, never> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  Layer.succeed(FetchHttpClient.Fetch, makeFakeFetch(state) as never)
-
-const runOneGenerate = async (
-  layer: Layer.Layer<LanguageModel.LanguageModel>,
-  fetchState: FakeFetchState,
-): Promise<void> => {
-  const program = Effect.gen(function* () {
-    const result = yield* LanguageModel.generateText({ prompt: "hi" })
-    return result
-  }).pipe(Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(fetchState))))
-  await Effect.runPromise(program.pipe(Effect.scoped))
-}
+const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
+  Effect.runPromise(oneGenerate(layer, state, anthropicHappyResponse))
 
 const parsePayload = (body: string | undefined): Record<string, unknown> => {
   expect(body).toBeDefined()
@@ -171,8 +116,8 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
     )
 
     const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     expect(fetchState.captured.length).toBeGreaterThan(0)
     const lastReq = fetchState.captured[fetchState.captured.length - 1]!
@@ -192,8 +137,8 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
 
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
     const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     const payload = parsePayload(fetchState.captured.at(-1)?.body)
     // keychainClient injects the SYSTEM_IDENTITY_PREFIX block. If the
@@ -222,8 +167,8 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
 
     const layer1 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
-    const fetchState1: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer1, fetchState1)
+    const fetchState1 = makeFakeFetchState()
+    await runOne(layer1, fetchState1)
     expect(fetchState1.captured.at(-1)!.headers["authorization"]).toBe("Bearer first-token")
 
     // Mutate the test-owned Ref between calls. If the second
@@ -243,8 +188,8 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
     )
 
     const layer2 = driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).layer
-    const fetchState2: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer2, fetchState2)
+    const fetchState2 = makeFakeFetchState()
+    await runOne(layer2, fetchState2)
     expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
   })
 
@@ -273,8 +218,8 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
 
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
     const { layer } = driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
     expect(sentBeta).not.toContain("context-1m-2025-08-07")
@@ -289,8 +234,8 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK (counsel C3 HI
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
 
     const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     const headers = fetchState.captured.at(-1)!.headers
     expect(headers["x-api-key"]).toBe("sk-test-1234")
@@ -304,8 +249,8 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK (counsel C3 HI
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
 
     const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     const payload = parsePayload(fetchState.captured.at(-1)?.body)
     // No keychainClient wrapper → no system block, no identity prefix
@@ -321,8 +266,8 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK (counsel C3 HI
     const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef)
 
     const { layer } = driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
-    const fetchState: FakeFetchState = { captured: [] }
-    await runOneGenerate(layer, fetchState)
+    const fetchState = makeFakeFetchState()
+    await runOne(layer, fetchState)
 
     expect(Ref.getUnsafe(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
     expect(Ref.getUnsafe(betaCellRef)).toBe(EMPTY_BETA_CELL)
