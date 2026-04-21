@@ -1,4 +1,4 @@
-import { Clock, Effect, Layer, Redacted } from "effect"
+import { Clock, Effect, Layer, Redacted, Ref } from "effect"
 import {
   defineExtension,
   AuthMethod,
@@ -18,8 +18,12 @@ import {
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { FetchHttpClient } from "effect/unstable/http"
 import { keychainClient } from "./keychain-client.js"
-import { AnthropicCredentialService } from "./credential-service.js"
-import { AnthropicBetaCache } from "./beta-cache.js"
+import {
+  AnthropicCredentialService,
+  EMPTY_CREDENTIAL_CELL,
+  type CredentialCacheCell,
+} from "./credential-service.js"
+import { AnthropicBetaCache, EMPTY_BETA_CELL, type BetaCacheCell } from "./beta-cache.js"
 import { buildKeychainTransformClient } from "./keychain-transform.js"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
@@ -59,24 +63,21 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
 // ── Layer construction helpers ──
 
 /**
- * API-key path: standard `AnthropicClient.layer` over `FetchHttpClient`.
- * No keychain, no OAuth, no custom middleware. Wrapped with
- * `keychainClient` because that wrapper handles mcp_ prefixing,
- * system identity injection, and cache control transforms — which apply
- * to both auth modes, not just OAuth.
+ * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
+ * No keychain wrapper — `keychainClient` injects Claude Code OAuth
+ * billing-header system blocks + identity prefix, which API-key users
+ * are not on the hook for. Pre-C3 code did not wrap this branch either;
+ * counsel C3 HIGH #2 caught the regression.
  */
 const makeApiKeyAnthropicLayer = (
   modelName: string,
   config: Record<string, unknown>,
   apiKey: string,
 ) => {
-  const baseClient = AnthropicClient.layer({
+  const clientLayer = AnthropicClient.layer({
     apiKey: Redacted.make(apiKey),
   }).pipe(Layer.provide(FetchHttpClient.layer))
-  const wrappedClient = keychainClient.pipe(Layer.provide(baseClient))
-  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-    Layer.provide(wrappedClient),
-  )
+  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
 }
 
 /**
@@ -87,23 +88,36 @@ const makeApiKeyAnthropicLayer = (
  * service and beta cache instances at construction time, and those
  * come from layers that the unwrapped Effect can `yield*`.
  *
- * `apiKey: "oauth-placeholder"` keeps the SDK's baseline header
- * pipeline happy — the transform deletes `x-api-key` before the wire.
+ * Counsel C3 HIGH #1: the cache cell `Ref`s for both services are
+ * passed in from extension-closure scope (built once in `modelDrivers()`
+ * via `Ref.makeUnsafe`), not allocated per layer build. Without this
+ * hoist, every `Provider.stream`/`Provider.generate` call rebuilt the
+ * service layer and reset the cache, killing cross-request beta
+ * learning and credential reuse. Legacy code achieved the same with
+ * `credentialCache: CredentialCache = { creds: null, at: 0 }` in
+ * extension-closure scope plus module-globals for beta exclusions.
+ *
+ * Counsel C3 MEDIUM: no `apiKey` is passed — the SDK's apiKey is
+ * optional and skips `x-api-key` injection when absent (verified at
+ * `~/.cache/repo/effect-ts/effect-smol/packages/ai/anthropic/src/AnthropicClient.ts:220`).
+ * Avoids a brittle "scrub-the-placeholder" coupling between SDK and
+ * middleware ordering.
  */
 const makeOauthAnthropicLayer = (
   modelName: string,
   config: Record<string, unknown>,
   authInfo: ProviderAuthInfo | undefined,
+  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  betaCellRef: Ref.Ref<BetaCacheCell>,
 ) => {
-  const credentialLayer = AnthropicCredentialService.layer(authInfo)
-  const cacheLayer = AnthropicBetaCache.layer
+  const credentialLayer = AnthropicCredentialService.layerFromRef(credentialCellRef, authInfo)
+  const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
 
   const clientLayer = Layer.unwrap(
     Effect.gen(function* () {
       const creds = yield* AnthropicCredentialService
       const cache = yield* AnthropicBetaCache
       return AnthropicClient.layer({
-        apiKey: Redacted.make("oauth-placeholder"),
         transformClient: buildKeychainTransformClient(creds, cache),
       }).pipe(Layer.provide(FetchHttpClient.layer))
     }),
@@ -125,6 +139,15 @@ export const AnthropicExtension = defineExtension({
     }
     initAnthropicKeychainEnv(env)
 
+    // Counsel C3 HIGH #1: cache cells are hoisted to extension-closure
+    // scope so they survive across `resolveModel` calls. Lifetime
+    // matches the legacy module-state-with-clear-on-change behavior:
+    // one extension instance → one cell that lives until the runtime
+    // tears the extension down. `Ref.makeUnsafe` is the right primitive
+    // here because `modelDrivers()` is sync (no Effect runtime).
+    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+    const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
+
     const anthropicProvider: ModelDriverContribution = {
       id: "anthropic",
       name: "Anthropic",
@@ -141,16 +164,21 @@ export const AnthropicExtension = defineExtension({
           return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
         }
 
-        // OAuth path: per-resolveModel call, build a fresh credential
-        // service + beta cache and weave them into the SDK client via
-        // `transformClient`. The credential cache (Ref<CacheCell> inside
-        // AnthropicCredentialService) is per-layer-instance — one per
-        // resolveModel call — which preserves the legacy "cache lives
-        // for the model lifetime" semantics. The beta cache is similarly
-        // per-instance; cross-request learning lives within one model's
-        // lifetime, matching the legacy module-state-with-clear-on-
-        // model-change behavior (now structurally enforced).
-        return { layer: makeOauthAnthropicLayer(modelName, config, authInfo) }
+        // OAuth path: per-resolveModel layer build wires the
+        // extension-closure-owned cache cells (created above) into a
+        // fresh credential service + beta cache layer pair. The Refs
+        // are shared across all calls, so cross-request beta learning
+        // and credential cache reuse survive — matching the legacy
+        // closure-cache + module-globals semantics. Counsel C3 HIGH #1.
+        return {
+          layer: makeOauthAnthropicLayer(
+            modelName,
+            config,
+            authInfo,
+            credentialCellRef,
+            betaCellRef,
+          ),
+        }
       },
       auth: {
         methods: [

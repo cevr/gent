@@ -23,23 +23,23 @@ import { Context, Effect, Layer, Ref } from "effect"
 
 // ── Internal cache cell ──
 
-interface CacheCell {
+export interface BetaCacheCell {
   readonly map: ReadonlyMap<string, ReadonlySet<string>>
   readonly lastBetaFlags: string | undefined
   readonly lastModelId: string | undefined
 }
 
-const EMPTY_CELL: CacheCell = {
+export const EMPTY_BETA_CELL: BetaCacheCell = {
   map: new Map(),
   lastBetaFlags: undefined,
   lastModelId: undefined,
 }
 
 const cellAfterMaybeClear = (
-  cell: CacheCell,
+  cell: BetaCacheCell,
   currentBetaFlags: string | undefined,
   modelId: string,
-): CacheCell => {
+): BetaCacheCell => {
   // Env betaFlags changed → clear everything. (Note: prior shape
   // tracked `lastBetaFlagsEnv` separately; here it's part of the cell.)
   if (cell.lastBetaFlags !== currentBetaFlags) {
@@ -88,37 +88,50 @@ export class AnthropicBetaCache extends Context.Service<
   static layer: Layer.Layer<AnthropicBetaCache> = Layer.effect(
     AnthropicBetaCache,
     Effect.gen(function* () {
-      const cellRef = yield* Ref.make<CacheCell>(EMPTY_CELL)
-
-      const getExcluded = (
-        modelId: string,
-        currentBetaFlags: string | undefined,
-      ): Effect.Effect<ReadonlySet<string>> =>
-        Ref.modify(cellRef, (cell) => {
-          const next = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-          const excluded = next.map.get(modelId) ?? new Set<string>()
-          return [excluded, next] as const
-        })
-
-      const recordExcluded = (
-        modelId: string,
-        beta: string,
-        currentBetaFlags: string | undefined,
-      ): Effect.Effect<void> =>
-        Ref.update(cellRef, (cell) => {
-          // Apply the same clear/seed transition as getExcluded so the
-          // call is standalone-safe — no hidden contract that
-          // recordExcluded must follow a getExcluded.
-          const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-          const existing = seeded.map.get(modelId) ?? new Set<string>()
-          const updated = new Set(existing)
-          updated.add(beta)
-          const nextMap = new Map(seeded.map)
-          nextMap.set(modelId, updated)
-          return { ...seeded, map: nextMap }
-        })
-
-      return AnthropicBetaCache.of({ getExcluded, recordExcluded })
+      const cellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      return AnthropicBetaCache.buildShape(cellRef)
     }),
   )
+
+  /**
+   * Counsel C3 fix: cell Ref provided externally so the cache can live
+   * for the extension lifetime instead of being rebuilt for every
+   * `resolveModel` call. Without this, cross-request beta learning is
+   * lost — a beta the server rejected on turn N would still appear on
+   * turn N+1 because the rebuild zeros the map.
+   */
+  static layerFromRef = (cellRef: Ref.Ref<BetaCacheCell>): Layer.Layer<AnthropicBetaCache> =>
+    Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildShape(cellRef))
+
+  private static buildShape = (cellRef: Ref.Ref<BetaCacheCell>): AnthropicBetaCacheShape => {
+    const getExcluded = (
+      modelId: string,
+      currentBetaFlags: string | undefined,
+    ): Effect.Effect<ReadonlySet<string>> =>
+      Ref.modify(cellRef, (cell) => {
+        const next = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
+        const excluded = next.map.get(modelId) ?? new Set<string>()
+        return [excluded, next] as const
+      })
+
+    const recordExcluded = (
+      modelId: string,
+      beta: string,
+      currentBetaFlags: string | undefined,
+    ): Effect.Effect<void> =>
+      Ref.update(cellRef, (cell) => {
+        // Apply the same clear/seed transition as getExcluded so the
+        // call is standalone-safe — no hidden contract that
+        // recordExcluded must follow a getExcluded.
+        const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
+        const existing = seeded.map.get(modelId) ?? new Set<string>()
+        const updated = new Set(existing)
+        updated.add(beta)
+        const nextMap = new Map(seeded.map)
+        nextMap.set(modelId, updated)
+        return { ...seeded, map: nextMap }
+      })
+
+    return AnthropicBetaCache.of({ getExcluded, recordExcluded })
+  }
 }
