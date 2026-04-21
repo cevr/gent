@@ -22,6 +22,10 @@ import type {
   AnthropicCredentialIO,
 } from "@gent/extensions/anthropic/credential-service"
 import { AnthropicCredentialService } from "@gent/extensions/anthropic/credential-service"
+import {
+  AnthropicBetaCache,
+  type AnthropicBetaCacheShape,
+} from "@gent/extensions/anthropic/beta-cache"
 import type { ClaudeCredentials } from "@gent/extensions/anthropic/oauth"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 
@@ -109,6 +113,18 @@ const buildCreds = async (io: AnthropicCredentialIO): Promise<AnthropicCredentia
   )
 }
 
+// Same instance-extraction trick for AnthropicBetaCache. Each call
+// returns a FRESH cache (the layer builds a new Ref) so tests are
+// isolated.
+const buildBetaCache = async (): Promise<AnthropicBetaCacheShape> =>
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        return yield* AnthropicBetaCache
+      }).pipe(Effect.provide(AnthropicBetaCache.layer)),
+    ),
+  )
+
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
   read: Effect.succeed(makeCreds(label)),
   refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
@@ -135,11 +151,12 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   test("injects Authorization Bearer from credential service", async () => {
     resetEnv()
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     await runOk(
@@ -155,11 +172,12 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   test("removes x-api-key (would otherwise conflict with OAuth Bearer)", async () => {
     resetEnv()
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     // Simulate the SDK's baseline by injecting x-api-key on the
@@ -179,11 +197,12 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   test("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", async () => {
     resetEnv()
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     await runOk(
@@ -201,11 +220,12 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   test("merges anthropic-beta with model defaults", async () => {
     resetEnv()
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     // Body declares claude-opus-4-6, which has model-default betas
@@ -235,11 +255,12 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
       read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
       refresh: Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
     })
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const exit = await Effect.runPromise(
@@ -279,6 +300,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   test("429 once then 200 — retry succeeds, caller sees 200", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: (call) =>
@@ -286,7 +308,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
           ? new Response("rate limited", { status: 429 })
           : new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const response = await runWithTestClock(
@@ -304,6 +326,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   test("529 once then 200 — retry includes 529 (which retryTransient does not)", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: (call) =>
@@ -311,7 +334,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
           ? new Response("overloaded", { status: 529 })
           : new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const response = await runWithTestClock(
@@ -329,11 +352,12 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   test("3 consecutive 429 — budget exhausted, final 429 surfaces", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("rate limited", { status: 429 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const response = await runWithTestClock(
@@ -357,12 +381,13 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
     // wire — preserving that resilience contract.
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: (call) =>
         call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const response = await runWithTestClock(
@@ -380,11 +405,12 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   test("3 consecutive transport failures — budget exhausted, error propagates", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => transportFailure("connection refused"),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const exit = await Effect.runPromise(
@@ -411,11 +437,12 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
   test("non-transient 4xx (e.g. 400) does not trigger retry", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("bad request", { status: 400 }),
     }
-    const transform = buildKeychainTransformClient(creds)
+    const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
     const response = await runWithTestClock(
@@ -427,6 +454,133 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
     )
 
     expect(fakeState.captured).toHaveLength(1)
+    expect(response.status).toBe(400)
+  })
+})
+
+describe("keychainTransformClient — long-context beta retry (Commit 2d)", () => {
+  // Long-context error markers Anthropic returns in the 400 body.
+  // `keychain-transform` matches via `isLongContextError(body)`.
+  const LONG_CONTEXT_BODY =
+    '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
+  const NON_LONG_CONTEXT_400 = '{"type":"error","error":{"message":"some other 400"}}'
+
+  test("400 long-context once → drops one beta → retry succeeds", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0
+          ? new Response(LONG_CONTEXT_BODY, { status: 400 })
+          : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+    // The retry sent fewer betas than the initial request (one was
+    // recorded as excluded after the 400). Compare beta cardinality.
+    const initialBetas = fakeState.captured[0]!.headers["anthropic-beta"]!.split(",").length
+    const retryBetas = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
+    expect(retryBetas).toBe(initialBetas - 1)
+  })
+
+  test("learning persists into the cache — next request starts pre-narrowed", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0
+          ? new Response(LONG_CONTEXT_BODY, { status: 400 })
+          : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    // First request: 400 → retry → 200. Two captures.
+    await runOk(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+    expect(fakeState.captured).toHaveLength(2)
+    const learnedBetaCount = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
+
+    // Second request — the cache should already have the previously
+    // rejected beta, so the FIRST attempt sends the narrower set.
+    await runOk(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+    expect(fakeState.captured).toHaveLength(3)
+    const nextRequestBetas = fakeState.captured[2]!.headers["anthropic-beta"]!.split(",").length
+    expect(nextRequestBetas).toBe(learnedBetaCount)
+  })
+
+  test("non-long-context 400 passes through without retry", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: () => new Response(NON_LONG_CONTEXT_400, { status: 400 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(1)
+    expect(response.status).toBe(400)
+  })
+
+  test("exhausted candidates surface terminal 400 (every long-context beta tried)", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      // Always return long-context 400 — middleware should give up
+      // after exhausting candidates and hand back the 400.
+      responder: () => new Response(LONG_CONTEXT_BODY, { status: 400 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    // claude-opus-4-6 emits 2 long-context betas
+    // (context-1m-2025-08-07 + interleaved-thinking-2025-05-14).
+    // Initial attempt + 2 narrowing attempts = 3 captures.
+    expect(fakeState.captured).toHaveLength(3)
     expect(response.status).toBe(400)
   })
 })

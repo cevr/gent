@@ -641,6 +641,14 @@ export const initAnthropicKeychainEnv = (env: AnthropicKeychainEnv): void => {
   lastBetaFlagsEnv = env.betaFlags
 }
 
+/**
+ * Read the currently-active `betaFlags` env. The new middleware
+ * (`keychain-transform`) reads this per-request to pass into the
+ * `AnthropicBetaCache` — keeps env knowledge co-located with `_env`
+ * instead of leaking the variable name across modules.
+ */
+export const getCurrentBetaFlagsEnv = (): string | undefined => _env.betaFlags
+
 // Session-level excluded betas per model
 const excludedBetas = new Map<string, Set<string>>()
 let lastBetaFlagsEnv: string | undefined
@@ -683,10 +691,22 @@ export const isLongContextError = (responseBody: string): boolean =>
  * Both are fixed by deriving candidates from the model's actual
  * outgoing betas and giving each one a retry slot.
  */
-export const getLongContextBetasFor = (modelId: string): ReadonlyArray<string> => {
-  const modelBetas = new Set(deriveModelBetas(modelId, _env.betaFlags))
+/**
+ * Pure variant of `getLongContextBetasFor` that takes the betaFlags env
+ * explicitly — used by the new `keychain-transform` middleware so it
+ * doesn't depend on the module-global `_env`. Keeps legacy oauth.ts
+ * callers stable through the wrapper below; both delegate here.
+ */
+export const getLongContextBetasForWith = (
+  modelId: string,
+  currentBetaFlags: string | undefined,
+): ReadonlyArray<string> => {
+  const modelBetas = new Set(deriveModelBetas(modelId, currentBetaFlags))
   return LONG_CONTEXT_BETAS.filter((beta) => modelBetas.has(beta))
 }
+
+export const getLongContextBetasFor = (modelId: string): ReadonlyArray<string> =>
+  getLongContextBetasForWith(modelId, _env.betaFlags)
 
 export const getNextBetaToExclude = (modelId: string): string | null => {
   const excluded = getExcludedBetas(modelId)

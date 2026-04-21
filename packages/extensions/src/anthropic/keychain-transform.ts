@@ -32,8 +32,20 @@
  * `Ref` cache.
  *
  * This file currently ships auth headers (Commit 2a) + 429/529 retry
- * (Commit 2b). Long-context beta retry and 401 recovery land in
- * subsequent commits.
+ * (Commit 2b) + long-context beta retry (Commit 2d). 401 recovery
+ * lands in 2e.
+ *
+ * On the long-context beta retry: the Anthropic API rejects requests
+ * that include both `context-1m-2025-08-07` and `interleaved-thinking-
+ * 2025-05-14` for some accounts/models with a 400 + a body string
+ * containing "Extra usage is required for long context requests" or
+ * "long context beta is not yet available". The fix is to retry with
+ * one of those betas removed, learning across requests so the next
+ * turn doesn't re-include it. The cross-request learning state lives
+ * in `AnthropicBetaCache` (Commit 2c); this middleware reads from it
+ * in `mapRequestEffect` (so the outgoing header reflects what we've
+ * learned) and writes to it in the beta-retry `transformResponse` (so
+ * the next attempt's preprocess sees the updated set).
  *
  * On retry: covers two failure classes with one budget (2 retries / 3
  * attempts at 1s exponential):
@@ -54,8 +66,16 @@ import { Effect, Option, Schedule, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import type { HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import type { AnthropicBetaCacheShape } from "./beta-cache.js"
 import type { AnthropicCredentialServiceShape } from "./credential-service.js"
-import { getModelBetas, getUserAgent, parseModelIdFromBody } from "./oauth.js"
+import {
+  getCurrentBetaFlagsEnv,
+  getLongContextBetasForWith,
+  getModelBetas,
+  getUserAgent,
+  isLongContextError,
+  parseModelIdFromBody,
+} from "./oauth.js"
 
 // ── Typed errors ──
 
@@ -81,6 +101,37 @@ class TransientResponseError extends Schema.TaggedErrorClass<TransientResponseEr
 }
 
 const isTransientStatus = (status: number): boolean => status === 429 || status === 529
+
+/**
+ * Internal error driving the long-context beta retry. Same Schema.Any
+ * accessor pattern as `TransientResponseError` for the same vendor-class
+ * Schema reason.
+ */
+class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>(
+  "@gent/extensions/anthropic/LongContextBetaError",
+)("LongContextBetaError", {
+  response: Schema.Any,
+}) {
+  getResponse(): HttpClientResponse.HttpClientResponse {
+    return this.response
+  }
+}
+
+/**
+ * Pick the next long-context beta to drop given the candidates the
+ * model actually emits and the set already excluded. Returns `null`
+ * when every candidate has been tried — caller must surface the 400.
+ */
+const pickNextBetaToExclude = (
+  modelId: string,
+  currentBetaFlags: string | undefined,
+  excluded: ReadonlySet<string>,
+): string | null => {
+  for (const beta of getLongContextBetasForWith(modelId, currentBetaFlags)) {
+    if (!excluded.has(beta)) return beta
+  }
+  return null
+}
 
 // ── Helpers ──
 
@@ -176,30 +227,92 @@ const buildOauthHeaders = (
 export const buildKeychainTransformClient =
   (
     creds: AnthropicCredentialServiceShape,
+    betaCache: AnthropicBetaCacheShape,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
     client.pipe(
       HttpClient.mapRequestEffect((req) =>
-        creds.getFresh.pipe(
-          // Convert ProviderAuthError → HttpClientError so the
-          // returned client type stays `With<HttpClientError, never>`
-          // (what the SDK signature requires). Surfaces credential
-          // unavailability through the standard transport channel.
-          Effect.mapError(
-            (cause) =>
-              new HttpClientError({
-                reason: new TransportError({
-                  request: req,
-                  cause,
-                  description: cause.message,
+        Effect.gen(function* () {
+          const fresh = yield* creds.getFresh.pipe(
+            // Convert ProviderAuthError → HttpClientError so the
+            // returned client type stays `With<HttpClientError, never>`
+            // (what the SDK signature requires). Surfaces credential
+            // unavailability through the standard transport channel.
+            Effect.mapError(
+              (cause) =>
+                new HttpClientError({
+                  reason: new TransportError({
+                    request: req,
+                    cause,
+                    description: cause.message,
+                  }),
                 }),
-              }),
+            ),
+          )
+          const modelId = parseModelIdFromBody(requestBodyText(req))
+          const betaFlags = getCurrentBetaFlagsEnv()
+          // Read the cross-request-learned exclusion set from the
+          // betaCache. On retry, mapRequestEffect re-runs and reads the
+          // updated set — the beta-retry transformResponse below records
+          // the rejected beta into the cache before failing to retry.
+          const excluded = yield* betaCache.getExcluded(modelId, betaFlags)
+          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, new Set(excluded))
+          return withHeaders(req, headers)
+        }),
+      ),
+      // Long-context beta retry: on 400 with the long-context marker in
+      // the body, record the offending beta into the cache and fail with
+      // LongContextBetaError so Effect.retry re-runs preprocess (which
+      // re-reads the now-larger excluded set) + postprocess. Budget = one
+      // retry slot per long-context candidate the model actually emits
+      // (Counsel C8 deep at the to-be-deleted oauth.ts:847-887 fixed
+      // the prior off-by-one + per-model-override bugs; this port
+      // preserves that fix). When candidates exhaust, the catch-tag
+      // folds the terminal 400 back into the success channel.
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.flatMap(
+            (
+              response,
+            ): Effect.Effect<
+              HttpClientResponse.HttpClientResponse,
+              LongContextBetaError | HttpClientError
+            > => {
+              if (response.status !== 400 && response.status !== 429) {
+                return Effect.succeed(response)
+              }
+              return response.text.pipe(
+                Effect.flatMap((body) => {
+                  if (!isLongContextError(body)) return Effect.succeed(response)
+                  // Body matches: try to record the next beta + retry.
+                  const modelId = parseModelIdFromBody(requestBodyText(response.request))
+                  const betaFlags = getCurrentBetaFlagsEnv()
+                  return betaCache.getExcluded(modelId, betaFlags).pipe(
+                    Effect.flatMap((excluded) => {
+                      const beta = pickNextBetaToExclude(modelId, betaFlags, excluded)
+                      if (beta === null) return Effect.succeed(response)
+                      return betaCache
+                        .recordExcluded(modelId, beta, betaFlags)
+                        .pipe(
+                          Effect.flatMap(() => Effect.fail(new LongContextBetaError({ response }))),
+                        )
+                    }),
+                  )
+                }),
+              )
+            },
           ),
-          Effect.map((fresh) => {
-            const modelId = parseModelIdFromBody(requestBodyText(req))
-            const headers = buildOauthHeaders(req, fresh.accessToken, modelId)
-            return withHeaders(req, headers)
+          // Budget: at most LONG_CONTEXT_BETAS.length retries — bounded
+          // because every retry adds one beta to the cache's excluded
+          // set, and `pickNextBetaToExclude` returns `null` once
+          // exhausted (which short-circuits to success above without
+          // re-failing). The numeric `times` is a belt-and-suspenders
+          // bound; the real terminator is the `null` short-circuit.
+          Effect.retry({
+            while: (e) => e._tag === "LongContextBetaError",
+            times: 8,
           }),
+          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.getResponse())),
         ),
       ),
       // Retry: 2 retries (3 attempts total) with exponential backoff
