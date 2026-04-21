@@ -194,7 +194,14 @@ export class OpenAICredentialService extends Context.Service<
             return cell.creds
           }
 
-          // Need to refresh. Use the most recent refresh token we have.
+          // Need to refresh. Always prefer the in-memory refresh token
+          // from the cell — that's the most recently rotated one. Only
+          // fall back to `authInfo.refresh` (the bootstrap token) when
+          // no rotation has happened yet. Counsel HIGH #1: dropping the
+          // rotated token on refresh failure or invalidate would
+          // silently roll back to a stale bootstrap that the OAuth
+          // server may have already revoked once the new one was
+          // issued.
           const refreshToken = cell.creds?.refresh ?? authInfo.refresh
           if (refreshToken === undefined || refreshToken.length === 0) {
             yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
@@ -206,14 +213,11 @@ export class OpenAICredentialService extends Context.Service<
             )
           }
 
-          const refreshed = yield* io.refresh(refreshToken).pipe(
-            Effect.catchTag("ProviderAuthError", (e) =>
-              Effect.gen(function* () {
-                yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
-                return yield* Effect.fail(e)
-              }),
-            ),
-          )
+          // Refresh failure does NOT clear the cell. The rotated refresh
+          // token survives so a subsequent retry can re-attempt with it
+          // (e.g., transient network failure). Only the explicit
+          // "no usable refresh token" branch above resets to empty.
+          const refreshed = yield* io.refresh(refreshToken)
 
           // Carry the prior accountId forward when the refresh response
           // omits it (matches buildOAuthLoader behavior).
@@ -232,7 +236,34 @@ export class OpenAICredentialService extends Context.Service<
         },
       )
 
-      const invalidate: Effect.Effect<void> = Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
+      // Counsel HIGH #1: invalidate must NOT drop the rotated refresh
+      // token. Anthropic's invalidate is safe because the next
+      // `getFresh` re-reads from the OS keychain (which holds the most
+      // recent token); OpenAI has no keychain — the cell is the only
+      // copy of the rotated token. Hard-resetting to EMPTY would force
+      // the next refresh to fall back to `authInfo.refresh`, the
+      // bootstrap token, which the OAuth server may have already
+      // revoked when it issued the rotation.
+      //
+      // Instead: zero out the access token so the cache hit and
+      // freshness branches both miss, and reset `at` so TTL fires
+      // immediately. The refresh path then uses `cell.creds.refresh`
+      // (the rotated token) and gets a new access token. If creds is
+      // already null nothing to invalidate — keep the cell empty so
+      // the next `getFresh` falls through to its missing-refresh
+      // branch and reports a typed error.
+      const invalidate: Effect.Effect<void> = Ref.update(cellRef, (cell) => {
+        if (cell.creds === null) return cell
+        return {
+          creds: {
+            access: "",
+            refresh: cell.creds.refresh,
+            expires: 0,
+            ...(cell.creds.accountId !== undefined ? { accountId: cell.creds.accountId } : {}),
+          },
+          at: 0,
+        }
+      })
 
       return OpenAICredentialService.of({ getFresh, invalidate })
     })

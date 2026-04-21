@@ -160,10 +160,34 @@ describe("OpenAICredentialService — refresh on stale", () => {
     )
   })
 
-  test("refresh failure surfaces ProviderAuthError + clears cell", async () => {
+  test("refresh failure surfaces ProviderAuthError + preserves rotated refresh token in cell", async () => {
+    // Counsel HIGH #1: refresh failure must NOT clear the rotated
+    // refresh token. Drive a successful refresh first to rotate the
+    // token, then a failing refresh, then assert that a third attempt
+    // sees the ROTATED token in the refresh call (not the bootstrap).
+    let phase: "first" | "second" | "third" = "first"
+    const callTokens: string[] = []
     const state: IOState = {
-      refreshResult: () =>
-        Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
+      refreshResult: (rt) => {
+        callTokens.push(rt)
+        if (phase === "first") {
+          phase = "second"
+          return Effect.succeed({
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: 30_000, // expiring soon so next get refreshes
+          })
+        }
+        if (phase === "second") {
+          phase = "third"
+          return Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" }))
+        }
+        return Effect.succeed({
+          access: "third-access",
+          refresh: "third-refresh",
+          expires: FAR_FUTURE,
+        })
+      },
     }
     const persistState: PersistState = { lastWritten: undefined, failNext: false }
     const layer = OpenAICredentialService.layerFromIO(
@@ -175,21 +199,37 @@ describe("OpenAICredentialService — refresh on stale", () => {
       }),
     )
 
-    const result = await runWithTestClock(
+    await runWithTestClock(
       Effect.gen(function* () {
         const svc = yield* OpenAICredentialService
-        return yield* Effect.exit(svc.getFresh)
+
+        // First get: refreshes from bootstrap, rotates to "rotated-*".
+        const first = yield* svc.getFresh
+        expect(first.access).toBe("rotated-access")
+        expect(callTokens[0]).toBe("seed-refresh")
+
+        // Second get: rotated creds also expire soon → refresh again.
+        // This call fails — must surface ProviderAuthError.
+        const failure = yield* Effect.exit(svc.getFresh)
+        expect(failure._tag).toBe("Failure")
+        if (failure._tag === "Failure") {
+          const errOpt = Cause.findErrorOption(failure.cause)
+          expect(Option.isSome(errOpt)).toBe(true)
+          if (Option.isSome(errOpt)) {
+            expect(errOpt.value.message).toContain("401")
+          }
+        }
+        expect(callTokens[1]).toBe("rotated-refresh")
+
+        // Third get: must use the ROTATED refresh token, NOT the
+        // bootstrap. If the cell were cleared on failure, this would
+        // see "seed-refresh" and the OAuth server might have already
+        // revoked it.
+        const third = yield* svc.getFresh
+        expect(third.access).toBe("third-access")
+        expect(callTokens[2]).toBe("rotated-refresh")
       }).pipe(Effect.provide(layer)),
     )
-
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      const errOpt = Cause.findErrorOption(result.cause)
-      expect(Option.isSome(errOpt)).toBe(true)
-      if (Option.isSome(errOpt)) {
-        expect(errOpt.value.message).toContain("401")
-      }
-    }
   })
 
   test("refresh response without accountId carries forward prior accountId", async () => {
@@ -350,7 +390,168 @@ describe("OpenAICredentialService — persist failure does not regress getFresh"
   })
 })
 
+describe("OpenAICredentialService — invalidate preserves rotated refresh token", () => {
+  test("rotated refresh survives persist failure + invalidate (counsel HIGH #1)", async () => {
+    // The exact regression: refresh rotates the token, persist defects,
+    // invalidate fires (e.g. 401 recovery), next refresh MUST use the
+    // rotated token in memory — not the bootstrap from authInfo.
+    const callTokens: string[] = []
+    let phase: "first" | "after-invalidate" = "first"
+    const state: IOState = {
+      refreshResult: (rt) => {
+        callTokens.push(rt)
+        if (phase === "first") {
+          phase = "after-invalidate"
+          return Effect.succeed({
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: FAR_FUTURE,
+          })
+        }
+        return Effect.succeed({
+          access: "post-invalidate-access",
+          refresh: "post-invalidate-refresh",
+          expires: FAR_FUTURE,
+        })
+      },
+    }
+    // persist defects on the first write — exactly the lossy path
+    // the rotated token must survive.
+    const persistState: PersistState = { lastWritten: undefined, failNext: true }
+    const layer = OpenAICredentialService.layerFromIO(
+      makeIO(state),
+      makeAuthInfo(persistState, {
+        access: "seed-access",
+        refresh: "seed-refresh",
+        expires: 30_000, // forces refresh on first getFresh
+      }),
+    )
+
+    await runWithTestClock(
+      Effect.gen(function* () {
+        const svc = yield* OpenAICredentialService
+
+        // First get rotates token; persist defects; in-memory cell
+        // holds the rotated creds.
+        const first = yield* svc.getFresh
+        expect(first.access).toBe("rotated-access")
+        expect(callTokens[0]).toBe("seed-refresh")
+        expect(persistState.lastWritten).toBeUndefined()
+
+        // 401 recovery path: invalidate → next get must refresh using
+        // the rotated token. If invalidate cleared the cell, the
+        // service would fall back to "seed-refresh" (likely revoked).
+        yield* svc.invalidate
+        const second = yield* svc.getFresh
+        expect(second.access).toBe("post-invalidate-access")
+        expect(callTokens[1]).toBe("rotated-refresh")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("invalidate on an empty cell stays empty (no synthetic cell creation)", async () => {
+    // Edge case: invalidate must not invent a cell when there's nothing
+    // there to begin with. The "no usable refresh token" error path
+    // depends on EMPTY_CREDENTIAL_CELL staying empty.
+    const state: IOState = {
+      refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+    }
+    const authInfo: ProviderAuthInfo = { type: "oauth", access: "", refresh: "", expires: 0 }
+    const layer = OpenAICredentialService.layerFromIO(makeIO(state), authInfo)
+
+    await runWithTestClock(
+      Effect.gen(function* () {
+        const svc = yield* OpenAICredentialService
+        // Invalidate before any successful refresh — cell is empty.
+        yield* svc.invalidate
+        const result = yield* Effect.exit(svc.getFresh)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          const errOpt = Cause.findErrorOption(result.cause)
+          expect(Option.isSome(errOpt)).toBe(true)
+          if (Option.isSome(errOpt)) {
+            expect(errOpt.value.message).toContain("unavailable")
+          }
+        }
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+})
+
 describe("OpenAICredentialService — layerFromRef preserves cell across builds", () => {
+  test("warm cellRef beats a different authInfo seed on second build (counsel HIGH #2)", async () => {
+    // The actual seed-only-if-empty invariant. Build 1 fills the cell
+    // with rotated creds. Build 2 arrives with a DIFFERENT authInfo
+    // (different access/refresh) — the warm cell must win.
+    let refreshCount = 0
+    const state: IOState = {
+      refreshResult: () => {
+        refreshCount += 1
+        return Effect.succeed({
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+          expires: FAR_FUTURE,
+        })
+      },
+    }
+    const persistState: PersistState = { lastWritten: undefined, failNext: false }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cellRef = yield* Ref.make<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+
+          // Build 1: authInfo with EXPIRING access → forces refresh.
+          // After this, cellRef holds {access: "rotated-access", ...}.
+          yield* Effect.gen(function* () {
+            const svc = yield* OpenAICredentialService
+            const result = yield* svc.getFresh
+            expect(result.access).toBe("rotated-access")
+          }).pipe(
+            Effect.provide(
+              OpenAICredentialService.layerFromRefAndIO(
+                cellRef,
+                makeIO(state),
+                makeAuthInfo(persistState, {
+                  access: "build1-access",
+                  refresh: "build1-refresh",
+                  expires: 30_000,
+                }),
+              ),
+            ),
+          )
+
+          expect(refreshCount).toBe(1)
+
+          // Build 2: DIFFERENT authInfo (different bootstrap creds).
+          // The warm cell must beat this seed — getFresh must return
+          // the rotated creds from build 1, NOT "build2-access".
+          yield* Effect.gen(function* () {
+            const svc = yield* OpenAICredentialService
+            const result = yield* svc.getFresh
+            expect(result.access).toBe("rotated-access")
+            expect(result.access).not.toBe("build2-access")
+          }).pipe(
+            Effect.provide(
+              OpenAICredentialService.layerFromRefAndIO(
+                cellRef,
+                makeIO(state),
+                makeAuthInfo(persistState, {
+                  access: "build2-access",
+                  refresh: "build2-refresh",
+                  expires: FAR_FUTURE, // even fresh — cell still wins
+                }),
+              ),
+            ),
+          )
+
+          // No additional refresh — build 2 read straight from cell.
+          expect(refreshCount).toBe(1)
+        }),
+      ).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<void, unknown, never>,
+    )
+  })
+
   test("two layer builds sharing the same cellRef share the cache", async () => {
     // Counsel C3 fix: extension-closure-owned Ref must survive across
     // resolveModel-equivalent layer builds. Two builds against the same
