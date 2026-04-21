@@ -735,7 +735,7 @@ describe("streaming", () => {
     const toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(toolDeps))
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
-      Provider.Debug(),
+      Provider.Debug({ retries: false }),
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
