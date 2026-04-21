@@ -84,10 +84,8 @@ describe("session lifecycle", () => {
           // Route should already be session
           expect(ctx?.router.route()._tag).toBe("session")
 
-          // Allow auth gate + feed to settle
-          yield* Effect.sleep("300 millis")
-
-          // Composer should render with idle status and prompt marker
+          // waitForFrame polls until the composer renders — no pre-sleep
+          // needed; the visible "ready/idle/❯" marker is the readiness signal.
           const frame = yield* waitForFrame(
             setup,
             (f) => f.includes("ready") || f.includes("idle") || f.includes("❯"),
@@ -151,10 +149,9 @@ describe("session lifecycle", () => {
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
-          // Allow feed to subscribe
-          yield* Effect.sleep("300 millis")
-
-          // Send a message through the client (simulates user input)
+          // Send a message through the client (simulates user input).
+          // The downstream waitForFrame polls until the response arrives;
+          // the response itself confirms the feed fiber was subscribed.
           const session = ctx?.client.session()
           expect(session).not.toBeNull()
           if (session === null || session === undefined) return

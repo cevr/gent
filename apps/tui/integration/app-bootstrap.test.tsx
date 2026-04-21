@@ -145,9 +145,8 @@ describe("app bootstrap", () => {
           // Route should already be session — no loading transition needed
           expect(ctx!.router.route()._tag).toBe("session")
 
-          // Allow auth gate to settle
-          yield* Effect.sleep("200 millis")
-
+          // waitForFrame polls until the loading marker clears — no
+          // pre-sleep needed.
           const frame = yield* waitForFrame(
             setup,
             (f) => !f.includes("Loading session"),

@@ -48,16 +48,15 @@ describe("session feed boundary", () => {
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
-          // Allow feed to subscribe
-          yield* Effect.sleep("200 millis")
-
           yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "queued",
           })
 
-          // Wait for stream to start (provider.stream was called)
+          // controls.waitForStreamStart is the actual readiness signal — it
+          // resolves once provider.stream() has been called, which can only
+          // happen after the feed fiber is consuming events.
           yield* controls.waitForStreamStart
 
           // Emit all chunks + finish
@@ -104,9 +103,6 @@ describe("session feed boundary", () => {
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
-          // Allow feed to subscribe
-          yield* Effect.sleep("200 millis")
-
           // Send first message — will be gated by signal provider
           yield* client.message.send({
             sessionId: created.sessionId,
@@ -114,7 +110,9 @@ describe("session feed boundary", () => {
             content: "first",
           })
 
-          // Wait for first turn's stream to start
+          // Wait for first turn's stream to start. waitForStreamStart is the
+          // readiness signal — provider.stream() is only called once the feed
+          // fiber has consumed the MessageReceived event.
           yield* controls.waitForStreamStart
 
           // Send second message while first is still streaming (gated)
@@ -124,9 +122,8 @@ describe("session feed boundary", () => {
             content: "queued follow-up",
           })
 
-          // Allow queue state to propagate
-          yield* Effect.sleep("200 millis")
-
+          // waitForFrame polls until the queue widget appears — no need to
+          // pre-sleep for state to propagate.
           const frame = yield* waitForFrame(
             setup,
             (next) =>
@@ -174,15 +171,14 @@ describe("session feed boundary", () => {
           )
           yield* Effect.addFinalizer(() => Effect.sync(() => destroyRenderSetup(setup)))
 
-          // Allow feed to subscribe
-          yield* Effect.sleep("200 millis")
-
           yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
             content: "boom",
           })
 
+          // waitForFrame polls until the error event appears — no pre-sleep
+          // needed; the error event itself confirms feed delivery.
           const frame = yield* waitForFrame(
             setup,
             (next) => next.includes("provider exploded"),

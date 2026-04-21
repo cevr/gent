@@ -33,7 +33,7 @@ export const waitForFrame = (
       lastFrame = frame
       if (predicate(frame)) return frame
 
-      yield* Effect.sleep("50 millis")
+      yield* Effect.sleep("10 millis")
     }
 
     return yield* Effect.fail(
@@ -63,7 +63,7 @@ export const waitForCondition = (
 
       if (predicate()) return
 
-      yield* Effect.sleep("50 millis")
+      yield* Effect.sleep("10 millis")
     }
 
     return yield* Effect.fail(new Error(`timed out waiting for condition: ${label}`))
