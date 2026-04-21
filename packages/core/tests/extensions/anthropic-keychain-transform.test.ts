@@ -141,6 +141,22 @@ const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(paylo
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
   Effect.runPromise(Effect.scoped(eff.pipe(Effect.orDie)))
 
+// Drives Schedule.exponential("1 second") in virtual time. Used by
+// any test path that crosses a retry sleep — primarily 2b's transient
+// retry but also 2d's parity-drift test for 429+long-context-body.
+const runWithTestClock = async <A, E>(eff: Effect.Effect<A, E, never>) => {
+  const program = Effect.gen(function* () {
+    const fiber = yield* Effect.scoped(eff).pipe(Effect.forkChild)
+    // Walk past the exponential backoff window deterministically.
+    // 1s + 2s = 3s covers 2 retries with `Schedule.exponential("1 second")`.
+    yield* TestClock.adjust("3 seconds")
+    return yield* Fiber.join(fiber)
+  })
+  return await Effect.runPromise(
+    Effect.scoped(program).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
+  )
+}
+
 // ── Tests ──
 
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
@@ -281,22 +297,6 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 })
 
 describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
-  // Retry uses Schedule.exponential("1 second") which sleeps via the
-  // ambient Clock. TestClock is required to advance virtual time so
-  // tests don't block on real wall clock.
-  const runWithTestClock = async <A, E>(eff: Effect.Effect<A, E, never>) => {
-    const program = Effect.gen(function* () {
-      const fiber = yield* Effect.scoped(eff).pipe(Effect.forkChild)
-      // Walk past the exponential backoff window deterministically.
-      // 1s + 2s = 3s covers 2 retries with `Schedule.exponential("1 second")`.
-      yield* TestClock.adjust("3 seconds")
-      return yield* Fiber.join(fiber)
-    })
-    return await Effect.runPromise(
-      Effect.scoped(program).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
-    )
-  }
-
   test("429 once then 200 — retry succeeds, caller sees 200", async () => {
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
@@ -531,6 +531,44 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
     expect(fakeState.captured).toHaveLength(3)
     const nextRequestBetas = fakeState.captured[2]!.headers["anthropic-beta"]!.split(",").length
     expect(nextRequestBetas).toBe(learnedBetaCount)
+  })
+
+  test("429 with long-context-shaped body still retries via outer transient layer (counsel C2d)", async () => {
+    // Counsel C2d parity-drift fix: long-context layer is 400-only.
+    // A 429 — even if its body string happens to match the long-context
+    // marker — flows through to the outer transient layer untouched.
+    // Two-attempt sequence: 429-LC-body → 200. Asserts the outer 429
+    // retry kicked in (2 captures), NOT the long-context retry (which
+    // would have rebuilt headers; on a 429 there's nothing useful to
+    // narrow because the rate limit isn't beta-related).
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0
+          ? new Response(LONG_CONTEXT_BODY, { status: 429 })
+          : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+    // Crucial: header beta count unchanged between the two attempts —
+    // long-context layer did NOT narrow the set on the 429.
+    const initialBetas = fakeState.captured[0]!.headers["anthropic-beta"]!.split(",").length
+    const retryBetas = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
+    expect(retryBetas).toBe(initialBetas)
   })
 
   test("non-long-context 400 passes through without retry", async () => {

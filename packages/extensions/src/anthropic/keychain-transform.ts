@@ -278,7 +278,16 @@ export const buildKeychainTransformClient =
               HttpClientResponse.HttpClientResponse,
               LongContextBetaError | HttpClientError
             > => {
-              if (response.status !== 400 && response.status !== 429) {
+              // 400-only: the legacy guard included 429 too, but in
+              // legacy 429s came post-transient-retry (the inner layer
+              // never saw raw 429s). Counsel C2d flagged this as a
+              // parity drift in the new stack where the long-context
+              // layer wraps the transient layer. Narrowing to 400
+              // restores legacy semantics: 429s flow through to the
+              // outer transient layer untouched, and the only real
+              // long-context signal (the 400 body marker) still
+              // triggers retry.
+              if (response.status !== 400) {
                 return Effect.succeed(response)
               }
               return response.text.pipe(
