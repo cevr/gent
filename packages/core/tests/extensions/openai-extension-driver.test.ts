@@ -204,32 +204,21 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref (counsel
   })
 })
 
-describe("buildOpenAIModelDriver — 401 recovery survives the rewired layer (counsel O5 MEDIUM)", () => {
-  // Counsel called this out as the missing seam: the leaf-service suites
-  // (codex-transform.ts, credential-service.ts) prove 401 recovery in
-  // isolation, but the driver suite only exercised happy-path 200
-  // responses. This test drives one real `LanguageModel.generateText`
-  // through the OAuth resolveModel layer with a 401 wire response,
-  // asserting that the rewired layer wires the response-side
-  // invalidate+retry path end-to-end:
+describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewired layer", () => {
+  // Driver-level seam test. Proves the wiring, not the full retry-success
+  // path. Asserts:
+  //   1. the first wire attempt uses the seeded stale token (production
+  //      `mapRequestEffect` runs through the rewired
+  //      `OpenAiClient.layer({ transformClient })` path)
+  //   2. after the 401, invalidate fires on the closure-owned cell —
+  //      `.access` cleared, `.refresh` preserved, `.expires` zeroed
   //
-  //   1. one call into the rewired layer produces TWO wire attempts
-  //      (proves transformResponse → flatMap-on-401 → tapError(invalidate)
-  //      → retry is composed through OpenAiClient.layer({ transformClient }))
-  //   2. the first wire request uses the seeded stale token (proves
-  //      the production mapRequestEffect runs on the original attempt)
-  //   3. between attempts, invalidate zeroes `.access` on the cell
-  //      (proves invalidate has access to the closure-owned Ref) — the
-  //      retry's Authorization is `Bearer ` (empty bearer) because
-  //      preprocess re-runs and serves the post-invalidate cell value
-  //      via the freshness fallback (no live IO needed in tests)
-  //
-  // Why we don't simulate a successful refresh: the production driver
-  // wires `OpenAICredentialService.layerFromRef`, which uses `realIO`
-  // (live `refreshOpenAIOauth`). Tests can't drive a successful
-  // post-invalidate refresh without changing the driver to accept an
-  // IO seam — out of scope for O5. The codex-transform leaf test
-  // already proves the success path; this test locks the wiring seam.
+  // Does NOT prove: the retry actually re-attempts with a refreshed
+  // token. The production driver wires `OpenAICredentialService.layerFromRef`
+  // with `realIO` (live `refreshOpenAIOauth`), so simulating a successful
+  // post-invalidate refresh would require an IO seam the driver does not
+  // expose. Full success path is covered by the codex-transform leaf
+  // test (`401 → invalidate → retry succeeds with refreshed token`).
 
   test("401 fires invalidate on the closure-owned cell via OpenAiClient.layer({ transformClient })", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
@@ -244,11 +233,10 @@ describe("buildOpenAIModelDriver — 401 recovery survives the rewired layer (co
     const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
     const fetchState = makeFakeFetchState()
 
-    // 401 on every call. Triggers tapError(invalidate) + retry.
-    // On retry, preprocess (creds.getFresh) finds the invalidated cell
-    // (.access="", expires=0) and tries to refresh against the live
-    // network — that fails (no live IO seam in the production driver),
-    // surfacing as HttpClientError → Effect.either keeps assertions running.
+    // 401 triggers tapError(invalidate). The retry's preprocess sees
+    // the invalidated cell and attempts a live refresh, which fails
+    // (no IO seam in the production driver) — Effect.exit preserves
+    // the failure so the post-condition assertions still run.
     const responder = (req: CapturedRequest) => {
       void req
       return { status: 401, body: "unauthorized", headers: { "content-type": "text/plain" } }
@@ -266,14 +254,13 @@ describe("buildOpenAIModelDriver — 401 recovery survives the rewired layer (co
     expect(fetchState.captured[0]!.headers["authorization"]).toBe("Bearer stale-token")
     expect(fetchState.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
 
-    // The crucial driver-level seam: invalidate fired on the closure-
-    // owned cell after the 401. Visible end-to-end:
+    // Driver-level seam: invalidate fired on the closure-owned cell
+    // after the 401:
     //   - .access cleared (so the next request would have to re-auth)
-    //   - .refresh preserved (O1 HIGH #1: no-keychain hardening)
+    //   - .refresh preserved (rotated refresh token survives invalidate)
     //   - .expires zeroed (forces refresh on next getFresh)
-    // If transformResponse wasn't wired into the production layer,
-    // none of this would change — the cell would still hold the
-    // original "stale-token".
+    // If transformResponse weren't wired into the production layer,
+    // the cell would still hold the original "stale-token".
     const finalCell = Ref.getUnsafe(credentialCellRef)
     expect(finalCell.creds?.access).toBe("")
     expect(finalCell.creds?.refresh).toBe("r")

@@ -65,15 +65,14 @@ const makeApiKeyOpenAILayer = (
  * the Codex transform middleware (auth headers, URL/body/beta rewrite,
  * 401 recovery). No `apiKey` — the SDK only injects Bearer auth when
  * `apiKey !== undefined`, so omitting it lets our middleware own the
- * Authorization header without a "scrub-the-placeholder" coupling
- * (mirrors Anthropic counsel C3 MEDIUM).
+ * Authorization header without a "scrub-the-placeholder" coupling.
  *
  * The credential cache cell `Ref` is passed in from extension-closure
  * scope (built once in `modelDrivers()` via `Ref.makeUnsafe`), not
  * allocated per layer build. Without this hoist, every
- * `Provider.stream`/`Provider.generate` call rebuilt the service layer
- * and reset the cache, killing credential reuse and the rotated
- * refresh-token contract that O1 hardened around.
+ * `Provider.stream`/`Provider.generate` call would rebuild the service
+ * layer and reset the cache, killing credential reuse and the rotated
+ * refresh-token contract.
  */
 const makeOauthOpenAILayer = (
   modelName: string,

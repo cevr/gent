@@ -102,8 +102,7 @@ export class OpenAICredentialService extends Context.Service<
    * Cache cell `Ref` provided externally so its lifetime can be hoisted
    * above the per-`resolveModel` layer build. Without this, every
    * `Provider.stream`/`Provider.generate` call re-allocates the Ref and
-   * the cache effectively disables itself. Mirrors Anthropic counsel C3
-   * fix.
+   * the cache effectively disables itself.
    */
   static layerFromRef = (
     cellRef: Ref.Ref<CredentialCacheCell>,

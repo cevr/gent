@@ -4,20 +4,20 @@
  *
  * The SDK applies `transformClient` after its own baseline pipeline
  * (`prependUrl(${apiUrl}/v1)` + optional `bearerToken(apiKey)` +
- * `acceptJson`). With the OAuth path we omit `apiKey` entirely (counsel
- * correction — O5), so the SDK never injects a placeholder Bearer
- * header. This middleware supplies the OAuth Bearer + Codex-specific
- * headers itself, then rewrites Codex-bound requests to the ChatGPT
- * backend endpoint.
+ * `acceptJson`). With the OAuth path we omit `apiKey` entirely, so
+ * the SDK never injects a placeholder Bearer header. This middleware
+ * supplies the OAuth Bearer + Codex-specific headers itself, then
+ * rewrites Codex-bound requests to the ChatGPT backend endpoint.
  *
- * This file currently ships:
- *   - O2: auth-header preprocess (Bearer + ChatGPT-Account-Id +
- *         originator/user-agent defaults)
- *   - O3: URL rewrite to Codex backend, JSON body rewrite (input → top-
- *         level `instructions`, `store: false`), and `OpenAI-Beta:
- *         responses=experimental` for Codex-bound paths
- * 401 recovery lands in O4.
+ * Pipeline (in order):
+ *   - auth-header preprocess (Bearer + ChatGPT-Account-Id +
+ *     originator/user-agent defaults)
+ *   - URL rewrite to the Codex backend, JSON body rewrite (input →
+ *     top-level `instructions`, `store: false`), and `OpenAI-Beta:
+ *     responses=experimental` for Codex-bound paths
+ *   - 401 recovery: invalidate creds + retry once
  *
+
  * Why a factory `(creds) => (client) => client` instead of grabbing
  * the service from context inside `mapRequestEffect`: the SDK's
  * `transformClient` signature is `(HttpClient) => HttpClient`, which
@@ -50,11 +50,10 @@ import type { OpenAICredentialServiceShape } from "./credential-service.js"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 
 /**
- * Exact path equality (counsel correction): only `/v1/chat/completions`
- * and `/v1/responses` qualify. The legacy fetcher used `includes(...)`
- * which would also match e.g. `/v1/chat/completions/foo` if the SDK
- * ever added a sub-resource. Lock the surface to the exact paths the
- * SDK currently emits.
+ * Exact path equality: only `/v1/chat/completions` and `/v1/responses`
+ * qualify. Substring matching would also match e.g.
+ * `/v1/chat/completions/foo` if the SDK ever added a sub-resource;
+ * lock the surface to the exact paths the SDK emits today.
  *
  * The OpenAI-compat SDK only POSTs `/chat/completions` today, but
  * `/responses` is reserved for when the upstream switches to the
@@ -66,11 +65,11 @@ const isCodexBoundPath = (pathname: string): boolean =>
 const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
 
 /**
- * Required `OpenAI-Beta` token for Codex backend traffic. Counsel O3
- * MEDIUM #2: pure preserve-when-present is unsafe — if the SDK ever
- * starts sending some other beta header for a reason of its own, the
- * Codex request would lose the required `responses=experimental`
- * token and the backend would reject it. Merge instead.
+ * Required `OpenAI-Beta` token for Codex backend traffic. Pure
+ * preserve-when-present is unsafe — if the SDK ever starts sending
+ * some other beta header for a reason of its own, the Codex request
+ * would lose the required `responses=experimental` token and the
+ * backend would reject it. Merge instead.
  */
 const CODEX_BETA_TOKEN = "responses=experimental"
 
@@ -127,7 +126,7 @@ const splitInstructions = (
       // Only string content lifts to top-level `instructions`. Items
       // with structured (non-string) content stay in `filteredInput`
       // so the Codex backend still sees them — silently dropping them
-      // would corrupt the prompt at the boundary (counsel O3 MEDIUM #1).
+      // would corrupt the prompt at the boundary.
       if (typeof item.content === "string") {
         instructions.push(item.content)
         continue
@@ -176,13 +175,12 @@ const rewriteCodexBody = (
 // ── Header construction ──
 
 /**
- * Build the OAuth header set for a Codex request. Mirrors the legacy
- * `createAuthHeaders` at oauth.ts:415 — Bearer over the access token,
- * ChatGPT-Account-Id when known, plus polite-default `originator` and
- * `User-Agent` if the upstream didn't set them.
+ * Build the OAuth header set for a Codex request: Bearer over the
+ * access token, ChatGPT-Account-Id when known, plus polite-default
+ * `originator` and `User-Agent` if the upstream didn't set them.
  *
  * The SDK's baseline does NOT inject `Authorization` because we omit
- * `apiKey` from the client config (O5). The defensive `Headers.remove`
+ * `apiKey` from the client config. The defensive `Headers.remove`
  * for `authorization` here is belt-and-suspenders: if a future SDK
  * version starts injecting a placeholder header without an explicit
  * `apiKey`, this middleware still supplies the right value.
@@ -266,9 +264,9 @@ class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>
  * documented above.
  *
  * Per-request semantics are preserved: each request invokes
- * `creds.getFresh` which consults the live `Ref` cache (cell-resident
- * rotated refresh token survives invalidate per credential-service
- * counsel HIGH #1 fix).
+ * `creds.getFresh` which consults the live `Ref` cache (the cell-
+ * resident rotated refresh token survives invalidate so a subsequent
+ * refresh attempt has a usable token).
  *
  * Pipeline (per-request, before the request hits the wire):
  *   1. `creds.getFresh` — fetch live access token + account id
@@ -276,8 +274,8 @@ class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>
  *      originator/user-agent defaults
  *   3. If the request URL matches a Codex-eligible path
  *      (`/v1/chat/completions` or `/v1/responses`):
- *        a. Ensure `OpenAI-Beta` carries `responses=experimental`
- *           (merged with any upstream tokens — counsel O3 MEDIUM #2)
+ *        a. Ensure `OpenAI-Beta` carries `responses=experimental`,
+ *           merged with any upstream tokens
  *        b. Rewrite body shape if it carries an `input` array
  *        c. Rewrite URL to the ChatGPT Codex endpoint
  *      Non-Codex paths pass through unchanged after auth headers.
