@@ -129,6 +129,78 @@ const makeOauthAnthropicLayer = (
   )
 }
 
+/**
+ * Build the model-driver contribution given pre-allocated cache cell
+ * Refs. Extracted from the inline `modelDrivers` factory so tests can
+ * inject their own Refs and assert that two `resolveModel` calls share
+ * the same closure-owned cells (the C3 regression that counsel caught:
+ * fresh Refs per `resolveModel` killed cross-request beta learning).
+ */
+export const buildAnthropicModelDriver = (
+  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  betaCellRef: Ref.Ref<BetaCacheCell>,
+): ModelDriverContribution => ({
+  id: "anthropic",
+  name: "Anthropic",
+  resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+    // Precedence: stored API key > env API key > keychain/OAuth
+    const storedApiKey =
+      authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+    const envApiKey = readEnv("ANTHROPIC_API_KEY")
+    const apiKey = storedApiKey ?? envApiKey
+
+    const config = buildAnthropicConfig(hints)
+
+    if (apiKey !== undefined) {
+      return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
+    }
+
+    // OAuth path: per-resolveModel layer build wires the
+    // extension-closure-owned cache cells into a fresh credential
+    // service + beta cache layer pair. The Refs are shared across all
+    // calls, so cross-request beta learning and credential cache reuse
+    // survive — matching the legacy closure-cache + module-globals
+    // semantics. Counsel C3 HIGH #1.
+    return {
+      layer: makeOauthAnthropicLayer(modelName, config, authInfo, credentialCellRef, betaCellRef),
+    }
+  },
+  auth: {
+    methods: [
+      new AuthMethod({ type: "oauth", label: "Claude Code" }),
+      new AuthMethod({ type: "api", label: "Manually enter API key" }),
+    ],
+    authorize: (ctx) =>
+      Effect.gen(function* () {
+        if (ctx.methodIndex !== 0) return undefined
+        // The Claude Code authorize flow targets the primary
+        // account by default. PRIMARY_CLAUDE_SERVICE is spelled
+        // out here so a future audit-grep finds every "default"
+        // site (counsel K2 — multi-account picker UI is the
+        // next consumer).
+        let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+        const now = yield* Clock.currentTimeMillis
+        if (!freshEnoughForUse(creds, now)) {
+          // Use the returned creds — the previous shape re-read
+          // keychain after refresh and silently lost direct-OAuth
+          // tokens whenever write-back failed (counsel HIGH #1).
+          creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+        }
+        // Persist keychain creds to AuthStore
+        yield* ctx.persist({
+          type: "oauth",
+          access: creds.accessToken,
+          refresh: creds.refreshToken,
+          expires: creds.expiresAt,
+        })
+        return {
+          url: "" as string,
+          method: "done" as const,
+        }
+      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+  },
+})
+
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
   modelDrivers: () => {
@@ -148,74 +220,6 @@ export const AnthropicExtension = defineExtension({
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
 
-    const anthropicProvider: ModelDriverContribution = {
-      id: "anthropic",
-      name: "Anthropic",
-      resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-        // Precedence: stored API key > env API key > keychain/OAuth
-        const storedApiKey =
-          authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-        const envApiKey = readEnv("ANTHROPIC_API_KEY")
-        const apiKey = storedApiKey ?? envApiKey
-
-        const config = buildAnthropicConfig(hints)
-
-        if (apiKey !== undefined) {
-          return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
-        }
-
-        // OAuth path: per-resolveModel layer build wires the
-        // extension-closure-owned cache cells (created above) into a
-        // fresh credential service + beta cache layer pair. The Refs
-        // are shared across all calls, so cross-request beta learning
-        // and credential cache reuse survive — matching the legacy
-        // closure-cache + module-globals semantics. Counsel C3 HIGH #1.
-        return {
-          layer: makeOauthAnthropicLayer(
-            modelName,
-            config,
-            authInfo,
-            credentialCellRef,
-            betaCellRef,
-          ),
-        }
-      },
-      auth: {
-        methods: [
-          new AuthMethod({ type: "oauth", label: "Claude Code" }),
-          new AuthMethod({ type: "api", label: "Manually enter API key" }),
-        ],
-        authorize: (ctx) =>
-          Effect.gen(function* () {
-            if (ctx.methodIndex !== 0) return undefined
-            // The Claude Code authorize flow targets the primary
-            // account by default. PRIMARY_CLAUDE_SERVICE is spelled
-            // out here so a future audit-grep finds every "default"
-            // site (counsel K2 — multi-account picker UI is the
-            // next consumer).
-            let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
-            const now = yield* Clock.currentTimeMillis
-            if (!freshEnoughForUse(creds, now)) {
-              // Use the returned creds — the previous shape re-read
-              // keychain after refresh and silently lost direct-OAuth
-              // tokens whenever write-back failed (counsel HIGH #1).
-              creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
-            }
-            // Persist keychain creds to AuthStore
-            yield* ctx.persist({
-              type: "oauth",
-              access: creds.accessToken,
-              refresh: creds.refreshToken,
-              expires: creds.expiresAt,
-            })
-            return {
-              url: "" as string,
-              method: "done" as const,
-            }
-          }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-      },
-    }
-
-    return [anthropicProvider]
+    return [buildAnthropicModelDriver(credentialCellRef, betaCellRef)]
   },
 })
