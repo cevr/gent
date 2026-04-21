@@ -11,7 +11,8 @@
  * passed via Layer — the same composition production uses.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Fiber, Layer, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { buildKeychainTransformClient } from "@gent/extensions/anthropic/keychain-transform"
 import { initAnthropicKeychainEnv } from "@gent/extensions/anthropic/oauth"
@@ -229,6 +230,119 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     // circuited at the credential read.
     expect(fakeState.captured).toHaveLength(0)
     expect(exit._tag).toBe("Failure")
+  })
+})
+
+describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
+  // Retry uses Schedule.exponential("1 second") which sleeps via the
+  // ambient Clock. TestClock is required to advance virtual time so
+  // tests don't block on real wall clock.
+  const runWithTestClock = async <A, E>(eff: Effect.Effect<A, E, never>) => {
+    const program = Effect.gen(function* () {
+      const fiber = yield* Effect.scoped(eff).pipe(Effect.forkChild)
+      // Walk past the exponential backoff window deterministically.
+      // 1s + 2s = 3s covers 2 retries with `Schedule.exponential("1 second")`.
+      yield* TestClock.adjust("10 seconds")
+      return yield* Fiber.join(fiber)
+    })
+    return await Effect.runPromise(
+      Effect.scoped(program).pipe(Effect.provide(TestClock.layer())) as Effect.Effect<A, E, never>,
+    )
+  }
+
+  test("429 once then 200 — retry succeeds, caller sees 200", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0
+          ? new Response("rate limited", { status: 429 })
+          : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+  })
+
+  test("529 once then 200 — retry includes 529 (which retryTransient does not)", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0
+          ? new Response("overloaded", { status: 529 })
+          : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+  })
+
+  test("3 consecutive 429 — budget exhausted, final 429 surfaces", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: () => new Response("rate limited", { status: 429 }),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    // 1 initial + 2 retries = 3 attempts
+    expect(fakeState.captured).toHaveLength(3)
+    expect(response.status).toBe(429)
+  })
+
+  test("non-transient 4xx (e.g. 400) does not trigger retry", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: () => new Response("bad request", { status: 400 }),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(1)
+    expect(response.status).toBe(400)
   })
 })
 

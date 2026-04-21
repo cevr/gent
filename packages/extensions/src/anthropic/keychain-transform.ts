@@ -31,16 +31,49 @@
  * because each call to `creds.getFresh` still consults the live
  * `Ref` cache.
  *
- * This file currently ships only the auth-headers middleware (Commit
- * 2a). 429/529 retry, long-context beta retry, and 401 recovery land in
+ * This file currently ships auth headers (Commit 2a) + 429/529 retry
+ * (Commit 2b). Long-context beta retry and 401 recovery land in
  * subsequent commits.
+ *
+ * On the 429/529 retry: `HttpClient.retryTransient` covers 408, 429,
+ * 500, 502, 503, 504 but NOT 529 — Anthropic's "Overloaded" status.
+ * We use `HttpClient.transformResponse` directly with our own typed
+ * error so 529 is included alongside 429 with the same exponential
+ * backoff (matches the existing fetcher's `fetchOnce` + `fetchWithRetry`
+ * shape at the to-be-deleted `oauth.ts:790-815`).
  */
 
-import { Effect, Option } from "effect"
+import { Effect, Option, Schedule, Schema } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
+import type { HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import type { AnthropicCredentialServiceShape } from "./credential-service.js"
 import { getModelBetas, getUserAgent, parseModelIdFromBody } from "./oauth.js"
+
+// ── Typed errors ──
+
+/**
+ * Internal error used to drive 429/529 retry through `Effect.retry`.
+ * Carries the response so the catch-tag can hand the final 429/529
+ * back to the caller after the retry budget is exhausted (instead of
+ * surfacing as an unrelated typed failure).
+ *
+ * `response` is declared as `Schema.Any` because `HttpClientResponse`
+ * is a class-shaped type from a vendor module and embedding its full
+ * Schema would force this module to depend on undocumented internals.
+ * The typed accessor `getResponse` re-narrows for the catch-tag.
+ */
+class TransientResponseError extends Schema.TaggedErrorClass<TransientResponseError>(
+  "@gent/extensions/anthropic/TransientResponseError",
+)("TransientResponseError", {
+  response: Schema.Any,
+}) {
+  getResponse(): HttpClientResponse.HttpClientResponse {
+    return this.response
+  }
+}
+
+const isTransientStatus = (status: number): boolean => status === 429 || status === 529
 
 // ── Helpers ──
 
@@ -160,6 +193,29 @@ export const buildKeychainTransformClient =
             const headers = buildOauthHeaders(req, fresh.accessToken, modelId)
             return withHeaders(req, headers)
           }),
+        ),
+      ),
+      // 429/529 retry: 2 retries (3 attempts total) with exponential
+      // backoff starting at 1s. `transformResponse` lets us re-raise
+      // those statuses as a typed failure so `Effect.retry` can react,
+      // then catch-tag at the end folds the final response back into
+      // the success channel — keeping the public HttpClient contract.
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.flatMap(
+            (
+              response,
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, TransientResponseError> =>
+              isTransientStatus(response.status)
+                ? Effect.fail(new TransientResponseError({ response }))
+                : Effect.succeed(response),
+          ),
+          Effect.retry({
+            while: (e) => e._tag === "TransientResponseError",
+            schedule: Schedule.exponential("1 second"),
+            times: 2,
+          }),
+          Effect.catchTag("TransientResponseError", (e) => Effect.succeed(e.getResponse())),
         ),
       ),
     )
