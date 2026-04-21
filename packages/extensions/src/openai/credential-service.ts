@@ -2,15 +2,11 @@
  * OpenAICredentialService — Effect-native credential loader for the
  * ChatGPT OAuth (Codex) path.
  *
- * Replaces the Promise-callback `buildOAuthLoader` shape that existed
- * because the downstream consumer was a `typeof fetch` adapter. With
- * `@effect/ai-openai-compat`'s `transformClient` middleware reading
- * creds via `mapRequestEffect`, callbacks become Effects.
- *
- * Cache shape (TTL 30s + 60s freshness margin + refresh-on-stale +
- * best-effort `authInfo.persist` write-back) mirrors the Anthropic
- * service exactly. The initial credentials come from `authInfo` rather
- * than an OS keychain — there is no "read from keychain" IO for OpenAI.
+ * Cache shape: TTL 30s + 60s freshness margin + refresh-on-stale +
+ * best-effort `authInfo.persist` write-back. The initial credentials
+ * come from `authInfo` rather than an OS keychain — there is no
+ * "read from keychain" IO for OpenAI, so the cell IS the sole copy of
+ * the rotated refresh token until persist write-back lands.
  *
  * Mirrors `packages/extensions/src/anthropic/credential-service.ts` —
  * see that file for the architectural justification of the IO seam +
@@ -219,8 +215,7 @@ export class OpenAICredentialService extends Context.Service<
           // "no usable refresh token" branch above resets to empty.
           const refreshed = yield* io.refresh(refreshToken)
 
-          // Carry the prior accountId forward when the refresh response
-          // omits it (matches buildOAuthLoader behavior).
+          // Carry the prior accountId forward when the refresh response omits it.
           const merged: OpenAICredentials = {
             access: refreshed.access,
             refresh: refreshed.refresh,

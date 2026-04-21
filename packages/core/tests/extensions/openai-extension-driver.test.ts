@@ -3,14 +3,12 @@
  * coverage for `buildOpenAIModelDriver` / `resolveModel`.
  *
  * The leaf-service suites (`openai-credential-service.test.ts`,
- * `openai-codex-transform.test.ts`) cover services in isolation. Those
- * passed throughout O1–O4 even though the production wiring was still
- * the legacy `createOpenAIOAuthFetch` (Promise edge). This file drives
- * one real `LanguageModel.generateText` through the resolved layer with
- * a captured fake `fetch`, then asserts on the outbound request shape.
- * That proves the resolved layer's production wiring uses the
- * test-owned `Ref` and applies the Codex transforms (or doesn't, on the
- * API-key branch).
+ * `openai-codex-transform.test.ts`) cover services in isolation. This
+ * file drives one real `LanguageModel.generateText` through the
+ * resolved layer with a captured fake `fetch`, then asserts on the
+ * outbound request shape. That proves the resolved layer's production
+ * wiring uses the test-owned `Ref` and applies the Codex transforms
+ * (or doesn't, on the API-key branch).
  *
  * Mirrors `anthropic-extension-driver.test.ts`. Counsel C3 HIGH #1
  * (Anthropic) called this out as the missing regression seam — the
