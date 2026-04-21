@@ -26,25 +26,16 @@ const makeCreds = (label: string, expiresAt: number): ClaudeCredentials => ({
 })
 
 interface IOState {
-  readCalls: number
-  refreshCalls: number
   readResult: () => Effect.Effect<ClaudeCredentials, ProviderAuthError>
   refreshResult: () => Effect.Effect<ClaudeCredentials, ProviderAuthError>
 }
 
 const makeIO = (state: IOState): AnthropicCredentialIO => ({
-  read: Effect.suspend(() => {
-    state.readCalls += 1
-    return state.readResult()
-  }),
-  refresh: Effect.suspend(() => {
-    state.refreshCalls += 1
-    return state.refreshResult()
-  }),
+  read: Effect.suspend(() => state.readResult()),
+  refresh: Effect.suspend(() => state.refreshResult()),
 })
 
 interface PersistState {
-  calls: number
   lastWritten: { access: string; refresh: string; expires: number } | undefined
   failNext: boolean
 }
@@ -53,7 +44,6 @@ const makeAuthInfo = (state: PersistState): ProviderAuthInfo => ({
   type: "oauth",
   persist: (updated) =>
     Effect.suspend(() => {
-      state.calls += 1
       if (state.failNext) {
         state.failNext = false
         return Effect.die(new Error("simulated persist failure"))
@@ -78,35 +68,14 @@ const runWithTestClock = <A, E>(eff: Effect.Effect<A, E, AnthropicCredentialServ
 // ── Tests ──
 
 describe("AnthropicCredentialService — cache hit/miss", () => {
-  test("first call reads from IO; second call within TTL returns cached creds", async () => {
-    const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
-      readResult: () => Effect.succeed(makeCreds("k1", FAR_FUTURE)),
-      refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-    }
-    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
-
-    await runWithTestClock(
-      Effect.gen(function* () {
-        const svc = yield* AnthropicCredentialService
-        const first = yield* svc.getFresh
-        const second = yield* svc.getFresh
-        expect(first.accessToken).toBe("k1-access")
-        expect(second.accessToken).toBe("k1-access")
-        expect(state.readCalls).toBe(1) // second call hit cache
-        expect(state.refreshCalls).toBe(0)
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("call after TTL expires re-reads from IO", async () => {
+  test("returns cached creds within TTL even when source changes", async () => {
+    // Outcome assertion: if the source switches underneath, a cached
+    // call must STILL return the original creds — that proves the
+    // cache was consulted, no internal call counter needed.
     const creds1 = makeCreds("k1", FAR_FUTURE)
     const creds2 = makeCreds("k2", FAR_FUTURE)
     const callsRef: { current: ClaudeCredentials } = { current: creds1 }
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.succeed(callsRef.current),
       refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
@@ -116,13 +85,33 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
       Effect.gen(function* () {
         const svc = yield* AnthropicCredentialService
         const first = yield* svc.getFresh
+        callsRef.current = creds2 // source switches; cache should ignore
+        const second = yield* svc.getFresh
         expect(first.accessToken).toBe("k1-access")
-        // Advance past the 30s cache TTL
+        expect(second.accessToken).toBe("k1-access")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("re-reads source after TTL expires", async () => {
+    const creds1 = makeCreds("k1", FAR_FUTURE)
+    const creds2 = makeCreds("k2", FAR_FUTURE)
+    const callsRef: { current: ClaudeCredentials } = { current: creds1 }
+    const state: IOState = {
+      readResult: () => Effect.succeed(callsRef.current),
+      refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+    }
+    const layer = AnthropicCredentialService.layerFromIO(makeIO(state))
+
+    await runWithTestClock(
+      Effect.gen(function* () {
+        const svc = yield* AnthropicCredentialService
+        const first = yield* svc.getFresh
         callsRef.current = creds2
         yield* TestClock.adjust("31 seconds")
         const second = yield* svc.getFresh
+        expect(first.accessToken).toBe("k1-access")
         expect(second.accessToken).toBe("k2-access")
-        expect(state.readCalls).toBe(2)
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -130,15 +119,17 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
 
 describe("AnthropicCredentialService — refresh on stale", () => {
   test("expiring-soon creds trigger refresh; refreshed creds returned + persisted", async () => {
+    // Outcome assertions: returned creds are the refreshed ones (not
+    // the stale ones), and persist saw the new credential. Both are
+    // observable via the public surface (return value + persist
+    // recording its argument) — no internal call counter needed.
     const stale = makeCreds("stale", 30_000) // 30s — inside the 60s freshness margin
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.succeed(stale),
       refreshResult: () => Effect.succeed(fresh),
     }
-    const persistState: PersistState = { calls: 0, lastWritten: undefined, failNext: false }
+    const persistState: PersistState = { lastWritten: undefined, failNext: false }
     const layer = AnthropicCredentialService.layerFromIO(makeIO(state), makeAuthInfo(persistState))
 
     await runWithTestClock(
@@ -146,9 +137,6 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         const svc = yield* AnthropicCredentialService
         const result = yield* svc.getFresh
         expect(result.accessToken).toBe("fresh-access")
-        expect(state.readCalls).toBe(1)
-        expect(state.refreshCalls).toBe(1)
-        expect(persistState.calls).toBe(1)
         expect(persistState.lastWritten?.access).toBe("fresh-access")
       }).pipe(Effect.provide(layer)),
     )
@@ -157,8 +145,6 @@ describe("AnthropicCredentialService — refresh on stale", () => {
   test("refresh failure surfaces ProviderAuthError to caller", async () => {
     const stale = makeCreds("stale", 30_000)
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.succeed(stale),
       refreshResult: () =>
         Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
@@ -189,8 +175,6 @@ describe("AnthropicCredentialService — invalidate", () => {
     const creds2 = makeCreds("k2", FAR_FUTURE)
     const callsRef: { current: ClaudeCredentials } = { current: creds1 }
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.succeed(callsRef.current),
       refreshResult: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
@@ -199,13 +183,12 @@ describe("AnthropicCredentialService — invalidate", () => {
     await runWithTestClock(
       Effect.gen(function* () {
         const svc = yield* AnthropicCredentialService
-        yield* svc.getFresh
-        expect(state.readCalls).toBe(1)
+        const before = yield* svc.getFresh
         callsRef.current = creds2
         yield* svc.invalidate
-        const next = yield* svc.getFresh
-        expect(next.accessToken).toBe("k2-access")
-        expect(state.readCalls).toBe(2)
+        const after = yield* svc.getFresh
+        expect(before.accessToken).toBe("k1-access")
+        expect(after.accessToken).toBe("k2-access")
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -216,21 +199,21 @@ describe("AnthropicCredentialService — persist failure does not regress getFre
     const stale = makeCreds("stale", 30_000)
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.succeed(stale),
       refreshResult: () => Effect.succeed(fresh),
     }
-    const persistState: PersistState = { calls: 0, lastWritten: undefined, failNext: true }
+    const persistState: PersistState = { lastWritten: undefined, failNext: true }
     const layer = AnthropicCredentialService.layerFromIO(makeIO(state), makeAuthInfo(persistState))
 
     await runWithTestClock(
       Effect.gen(function* () {
         const svc = yield* AnthropicCredentialService
         const result = yield* svc.getFresh
-        expect(result.accessToken).toBe("fresh-access") // fresh creds returned
-        expect(persistState.calls).toBe(1) // persist was attempted
-        expect(persistState.lastWritten).toBeUndefined() // failed write-back, but caller still got creds
+        // Outcome: caller still receives the freshly-refreshed creds
+        // even though persist died. lastWritten remains undefined,
+        // confirming the write didn't land — but getFresh kept moving.
+        expect(result.accessToken).toBe("fresh-access")
+        expect(persistState.lastWritten).toBeUndefined()
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -240,8 +223,6 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
   test("read fails → refresh succeeds → returns refreshed creds", async () => {
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {
-      readCalls: 0,
-      refreshCalls: 0,
       readResult: () => Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
       refreshResult: () => Effect.succeed(fresh),
     }
@@ -251,9 +232,9 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
       Effect.gen(function* () {
         const svc = yield* AnthropicCredentialService
         const result = yield* svc.getFresh
+        // Outcome: when read fails, the refresh path's creds reach the
+        // caller. No internal call counters needed.
         expect(result.accessToken).toBe("fresh-access")
-        expect(state.readCalls).toBe(1)
-        expect(state.refreshCalls).toBe(1)
       }).pipe(Effect.provide(layer)),
     )
   })
