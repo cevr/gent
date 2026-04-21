@@ -729,6 +729,28 @@ export const getBillingHeaderInputs = (): { version: string; entrypoint: string 
   entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
 })
 
+/**
+ * Pull the `model` field from a JSON request body. Returns "unknown"
+ * for missing/non-string bodies or unparseable JSON. Pure — both the
+ * legacy fetcher and the new `keychainTransformClient` middleware
+ * read this from their respective request shapes (string body /
+ * Uint8Array body) and call this helper to derive the model id used
+ * for header construction.
+ */
+export const parseModelIdFromBody = (bodyText: string | undefined): string => {
+  if (bodyText === undefined || bodyText === "") return "unknown"
+  try {
+    const body: unknown = JSON.parse(bodyText)
+    if (typeof body === "object" && body !== null && "model" in body) {
+      const m = (body as Record<string, unknown>)["model"]
+      if (typeof m === "string") return m
+    }
+  } catch {
+    // ignore — modelId stays "unknown"
+  }
+  return "unknown"
+}
+
 const buildRequestHeaders = (
   input: RequestInfo | URL,
   init: RequestInit,
@@ -895,17 +917,7 @@ export const createAnthropicKeychainFetch = (loader: AnthropicCredentialLoader):
 
   const extractModelId = (init: RequestInit): string => {
     const bodyStr = typeof init.body === "string" ? init.body : undefined
-    if (bodyStr === undefined) return "unknown"
-    try {
-      const body: unknown = JSON.parse(bodyStr)
-      if (typeof body === "object" && body !== null && "model" in body) {
-        const m = (body as Record<string, unknown>)["model"]
-        if (typeof m === "string") return m
-      }
-    } catch {
-      // ignore — modelId stays "unknown"
-    }
-    return "unknown"
+    return parseModelIdFromBody(bodyStr)
   }
 
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {

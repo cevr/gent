@@ -12,7 +12,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { buildKeychainTransformClient } from "@gent/extensions/anthropic/keychain-transform"
 import { initAnthropicKeychainEnv } from "@gent/extensions/anthropic/oauth"
 import type {
@@ -82,6 +82,22 @@ const buildCreds = async (io: AnthropicCredentialIO): Promise<AnthropicCredentia
   )
 }
 
+const validCredsIO = (label: string): AnthropicCredentialIO => ({
+  read: Effect.succeed(makeCreds(label)),
+  refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+})
+
+// `HttpBody.jsonUnsafe` mirrors how the Anthropic SDK serializes
+// outgoing JSON bodies (via `text` → Uint8Array). The transform reads
+// the body via `requestBodyText` which decodes that Uint8Array back to
+// a string, so this matches production representation.
+const jsonBody = (payload: Record<string, unknown>) => HttpBody.jsonUnsafe(payload)
+
+// `Effect.orDie` collapses typed errors to defects so test bodies can
+// assert success without `as Effect<unknown, never, never>` casts.
+const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
+  Effect.runPromise(Effect.scoped(eff.pipe(Effect.orDie)))
+
 // ── Tests ──
 
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
@@ -91,10 +107,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 
   test("injects Authorization Bearer from credential service", async () => {
     resetEnv()
-    const creds = await buildCreds({
-      read: Effect.succeed(makeCreds("k1")),
-      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-    })
+    const creds = await buildCreds(validCredsIO("k1"))
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
@@ -102,10 +115,10 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     const transform = buildKeychainTransformClient(creds)
     const wrapped = transform(makeFakeClient(fakeState))
 
-    await Effect.runPromise(
+    await runOk(
       wrapped.post("https://api.anthropic.com/v1/messages", {
-        body: HttpClientRequest.empty.body,
-      }) as Effect.Effect<unknown, never, never>,
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
     )
 
     expect(fakeState.captured).toHaveLength(1)
@@ -114,10 +127,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 
   test("removes x-api-key (would otherwise conflict with OAuth Bearer)", async () => {
     resetEnv()
-    const creds = await buildCreds({
-      read: Effect.succeed(makeCreds("k1")),
-      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-    })
+    const creds = await buildCreds(validCredsIO("k1"))
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
@@ -127,13 +137,11 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 
     // Simulate the SDK's baseline by injecting x-api-key on the
     // outgoing request. The transform must strip it.
-    await Effect.runPromise(
-      wrapped
-        .post("https://api.anthropic.com/v1/messages", {
-          headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
-          body: HttpClientRequest.empty.body,
-        })
-        .pipe(Effect.scoped) as Effect.Effect<unknown, never, never>,
+    await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
     )
 
     expect(fakeState.captured[0]!.headers["x-api-key"]).toBeUndefined()
@@ -143,10 +151,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 
   test("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", async () => {
     resetEnv()
-    const creds = await buildCreds({
-      read: Effect.succeed(makeCreds("k1")),
-      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-    })
+    const creds = await buildCreds(validCredsIO("k1"))
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
@@ -154,12 +159,10 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     const transform = buildKeychainTransformClient(creds)
     const wrapped = transform(makeFakeClient(fakeState))
 
-    await Effect.runPromise(
-      wrapped
-        .post("https://api.anthropic.com/v1/messages", {
-          body: HttpClientRequest.empty.body,
-        })
-        .pipe(Effect.scoped) as Effect.Effect<unknown, never, never>,
+    await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
     )
 
     const headers = fakeState.captured[0]!.headers
@@ -170,10 +173,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
 
   test("merges anthropic-beta with model defaults", async () => {
     resetEnv()
-    const creds = await buildCreds({
-      read: Effect.succeed(makeCreds("k1")),
-      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
-    })
+    const creds = await buildCreds(validCredsIO("k1"))
     const fakeState: FakeClientState = {
       captured: [],
       responder: () => new Response("ok", { status: 200 }),
@@ -181,23 +181,25 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     const transform = buildKeychainTransformClient(creds)
     const wrapped = transform(makeFakeClient(fakeState))
 
-    // Send a request that already carries an anthropic-beta header
-    // (representing one set by the SDK or earlier middleware) and a
-    // body declaring a known model. The merge must include both
-    // incoming and model-default betas.
-    await Effect.runPromise(
-      wrapped
-        .post("https://api.anthropic.com/v1/messages", {
-          headers: { "anthropic-beta": "incoming-beta-1" },
-          body: HttpClientRequest.empty.body,
-        })
-        .pipe(Effect.scoped) as Effect.Effect<unknown, never, never>,
+    // Body declares claude-opus-4-6, which has model-default betas
+    // (base set + 1M-context + effort-2025-11-24 from the override).
+    // Incoming "incoming-beta-1" must merge with those, not replace.
+    await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        headers: { "anthropic-beta": "incoming-beta-1" },
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
     )
 
     const beta = fakeState.captured[0]!.headers["anthropic-beta"]
     expect(beta).toBeDefined()
-    // The incoming beta must be preserved through the merge.
-    expect(beta).toContain("incoming-beta-1")
+    const betas = beta!.split(",").map((s) => s.trim())
+    // Incoming preserved
+    expect(betas).toContain("incoming-beta-1")
+    // Model default present (oauth-2025-04-20 is in MODEL_CONFIG.baseBetas)
+    expect(betas).toContain("oauth-2025-04-20")
+    // Per-model-override present (effort-2025-11-24 is added for "4-6")
+    expect(betas).toContain("effort-2025-11-24")
   })
 
   test("credential-service failure surfaces as HttpClientError (transport)", async () => {
@@ -213,20 +215,20 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     const transform = buildKeychainTransformClient(creds)
     const wrapped = transform(makeFakeClient(fakeState))
 
-    const result = await Effect.runPromise(
+    const exit = await Effect.runPromise(
       Effect.exit(
-        wrapped
-          .post("https://api.anthropic.com/v1/messages", {
-            body: HttpClientRequest.empty.body,
-          })
-          .pipe(Effect.scoped),
-      ) as Effect.Effect<unknown, never, never>,
+        Effect.scoped(
+          wrapped.post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          }),
+        ),
+      ),
     )
 
     // The fake client never saw the request — the transform short-
     // circuited at the credential read.
     expect(fakeState.captured).toHaveLength(0)
-    expect(result._tag).toBe("Failure")
+    expect(exit._tag).toBe("Failure")
   })
 })
 

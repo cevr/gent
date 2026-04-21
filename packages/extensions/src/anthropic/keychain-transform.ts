@@ -40,7 +40,7 @@ import { Effect, Option } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import type { AnthropicCredentialServiceShape } from "./credential-service.js"
-import { getModelBetas, getUserAgent } from "./oauth.js"
+import { getModelBetas, getUserAgent, parseModelIdFromBody } from "./oauth.js"
 
 // ── Helpers ──
 
@@ -63,33 +63,18 @@ const withHeaders = (
   })
 
 /**
- * Read the model id from the request body (only POST `/v1/messages`
- * carries one). Returns "unknown" for any non-message endpoint or
- * unparseable body — used only for header derivation, so degraded
- * mode is safe.
+ * Decode the request body to a string for model-id extraction. The
+ * Anthropic SDK serializes JSON bodies as Uint8Array; legacy callers
+ * (Vercel-style) used Raw strings. Anything else (FormData / Stream /
+ * Empty) returns undefined and the parser short-circuits to "unknown".
  */
-const extractModelId = (req: HttpClientRequest.HttpClientRequest): string => {
-  if (req.body._tag !== "Uint8Array" && req.body._tag !== "Raw") return "unknown"
-  // The Anthropic SDK serializes JSON bodies as Uint8Array. Decode and
-  // parse for the model field.
-  let text: string
-  if (req.body._tag === "Uint8Array") {
-    text = new TextDecoder().decode(req.body.body)
-  } else {
+const requestBodyText = (req: HttpClientRequest.HttpClientRequest): string | undefined => {
+  if (req.body._tag === "Uint8Array") return new TextDecoder().decode(req.body.body)
+  if (req.body._tag === "Raw") {
     const raw: unknown = req.body.body
-    text = typeof raw === "string" ? raw : ""
+    return typeof raw === "string" ? raw : undefined
   }
-  if (text === "") return "unknown"
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (typeof parsed === "object" && parsed !== null && "model" in parsed) {
-      const m = (parsed as Record<string, unknown>)["model"]
-      if (typeof m === "string") return m
-    }
-  } catch {
-    // ignore — modelId stays "unknown"
-  }
-  return "unknown"
+  return undefined
 }
 
 /**
@@ -171,7 +156,7 @@ export const buildKeychainTransformClient =
               }),
           ),
           Effect.map((fresh) => {
-            const modelId = extractModelId(req)
+            const modelId = parseModelIdFromBody(requestBodyText(req))
             const headers = buildOauthHeaders(req, fresh.accessToken, modelId)
             return withHeaders(req, headers)
           }),
