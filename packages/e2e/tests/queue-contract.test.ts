@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
-import { queueTransportCases, waitFor } from "./transport-harness"
-
-// See event-stream-parity.test.ts for why streaming tests are direct-only.
-const streamingQueueCases = queueTransportCases.filter((c) => c.name === "direct")
+import { directSignalCase, waitFor } from "./transport-harness"
 
 const flattenRestoreText = (snapshot: {
   steering: ReadonlyArray<{ content: string }>
@@ -23,197 +20,211 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Re
   })
 
 describe("queue seam contract", () => {
-  for (const transport of streamingQueueCases) {
-    test(`${transport.name} exposes queued follow-ups and drain matches restore semantics`, async () => {
-      await transport.run(({ client }) =>
-        Effect.gen(function* () {
-          const created = yield* client.session
-            .create({
-              cwd: process.cwd(),
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+  test(`${directSignalCase.name} exposes queued follow-ups and drain matches restore semantics`, async () => {
+    await directSignalCase.run("done.", ({ client }, controls) =>
+      Effect.gen(function* () {
+        const created = yield* client.session
+          .create({
+            cwd: process.cwd(),
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const runtime = yield* collectRuntime(
-            client.session.watchRuntime({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-            }),
-          ).pipe(Effect.mapError((error) => new Error(String(error))))
+        const runtime = yield* collectRuntime(
+          client.session.watchRuntime({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+        ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "first turn",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+        yield* client.message
+          .send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "first turn",
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* waitFor(
-            Ref.get(runtime),
-            (states) => states.some((state) => state.status !== "idle"),
-            10_000,
-          )
+        // Wait for the stream to start so the runtime is genuinely non-idle
+        yield* controls.waitForStreamStart
 
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "queued a",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+        yield* waitFor(
+          Ref.get(runtime),
+          (states) => states.some((state) => state.status !== "idle"),
+          10_000,
+        )
 
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "queued b",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+        yield* client.message
+          .send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "queued a",
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const queued = yield* waitFor(
-            client.queue
-              .get({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (snapshot) => flattenRestoreText(snapshot) === "queued a\nqueued b",
-            10_000,
-          )
+        yield* client.message
+          .send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "queued b",
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          expect(queued.steering).toEqual([])
-          expect(flattenRestoreText(queued)).toBe("queued a\nqueued b")
-
-          const drained = yield* client.queue
-            .drain({
+        const queued = yield* waitFor(
+          client.queue
+            .get({
               sessionId: created.sessionId,
               branchId: created.branchId,
             })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
+            .pipe(Effect.mapError((error) => new Error(String(error)))),
+          (snapshot) => flattenRestoreText(snapshot) === "queued a\nqueued b",
+          10_000,
+        )
 
-          expect(flattenRestoreText(drained)).toBe("queued a\nqueued b")
+        expect(queued.steering).toEqual([])
+        expect(flattenRestoreText(queued)).toBe("queued a\nqueued b")
 
-          const afterDrain = yield* waitFor(
-            client.queue
-              .get({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
-            10_000,
-          )
+        const drained = yield* client.queue
+          .drain({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          expect(afterDrain.steering).toEqual([])
-          expect(afterDrain.followUp).toEqual([])
-        }),
-      )
-    }, 20_000)
+        expect(flattenRestoreText(drained)).toBe("queued a\nqueued b")
 
-    test(`${transport.name} runs steer before queued follow-up`, async () => {
-      await transport.run(({ client }) =>
-        Effect.gen(function* () {
-          const created = yield* client.session
-            .create({
-              cwd: process.cwd(),
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-
-          const runtime = yield* collectRuntime(
-            client.session.watchRuntime({
+        const afterDrain = yield* waitFor(
+          client.queue
+            .get({
               sessionId: created.sessionId,
               branchId: created.branchId,
-            }),
-          ).pipe(Effect.mapError((error) => new Error(String(error))))
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error)))),
+          (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
+          10_000,
+        )
 
-          yield* client.message
-            .send({
+        expect(afterDrain.steering).toEqual([])
+        expect(afterDrain.followUp).toEqual([])
+
+        // Release the stream so the run can complete and scope cleanup is fast
+        yield* controls.emitAll()
+      }),
+    )
+  }, 20_000)
+
+  test(`${directSignalCase.name} runs steer before queued follow-up`, async () => {
+    await directSignalCase.run("done.", ({ client }, controls) =>
+      Effect.gen(function* () {
+        const created = yield* client.session
+          .create({
+            cwd: process.cwd(),
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
+
+        const runtime = yield* collectRuntime(
+          client.session.watchRuntime({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+        ).pipe(Effect.mapError((error) => new Error(String(error))))
+
+        yield* client.message
+          .send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "first turn",
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
+
+        yield* controls.waitForStreamStart
+
+        yield* waitFor(
+          Ref.get(runtime),
+          (states) => states.some((state) => state.status !== "idle"),
+          10_000,
+        )
+
+        yield* client.message
+          .send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "queued follow-up",
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
+
+        yield* client.steer
+          .command({
+            command: {
+              _tag: "Interject",
               sessionId: created.sessionId,
               branchId: created.branchId,
-              content: "first turn",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-
-          yield* waitFor(
-            Ref.get(runtime),
-            (states) => states.some((state) => state.status !== "idle"),
-            10_000,
-          )
-
-          yield* client.message
-            .send({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
-              content: "queued follow-up",
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-
-          yield* client.steer
-            .command({
-              command: {
-                _tag: "Interject",
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-                message: "urgent steer",
-              },
-            })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-
-          const queued = yield* waitFor(
-            client.queue
-              .get({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (snapshot) =>
-              snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
-              snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
-            10_000,
-          )
-
-          expect(queued.steering[0]?.content).toContain("urgent steer")
-          expect(queued.followUp[0]?.content).toContain("queued follow-up")
-
-          const messages = yield* waitFor(
-            client.message
-              .list({ branchId: created.branchId })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (items) => {
-              const userTexts = items
-                .filter((message) => message.role === "user")
-                .map((message) => extractText(message.parts))
-              return (
-                userTexts.includes("first turn") &&
-                userTexts.includes("urgent steer") &&
-                userTexts.includes("queued follow-up")
-              )
+              message: "urgent steer",
             },
-            15_000,
-          )
+          })
+          .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          const userTexts = messages
-            .filter((message) => message.role === "user")
-            .map((message) => extractText(message.parts))
-            .filter((text) => ["first turn", "urgent steer", "queued follow-up"].includes(text))
+        const queued = yield* waitFor(
+          client.queue
+            .get({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error)))),
+          (snapshot) =>
+            snapshot.steering.some((entry) => entry.content.includes("urgent steer")) &&
+            snapshot.followUp.some((entry) => entry.content.includes("queued follow-up")),
+          10_000,
+        )
 
-          expect(userTexts).toEqual(["first turn", "urgent steer", "queued follow-up"])
+        expect(queued.steering[0]?.content).toContain("urgent steer")
+        expect(queued.followUp[0]?.content).toContain("queued follow-up")
 
-          const settledQueue = yield* waitFor(
-            client.queue
-              .get({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
-            10_000,
-          )
+        // Release chunks so the first turn finishes and the steer + follow-up
+        // can drain through the run loop. Each subsequent turn re-uses the
+        // same gated stream — emitAll covers the chunk count for one turn,
+        // so we keep emitting until the full sequence has been processed.
+        yield* controls.emitAll()
+        yield* controls.emitAll()
+        yield* controls.emitAll()
 
-          expect(settledQueue.steering).toEqual([])
-          expect(settledQueue.followUp).toEqual([])
-        }),
-      )
-    }, 20_000)
-  }
+        const messages = yield* waitFor(
+          client.message
+            .list({ branchId: created.branchId })
+            .pipe(Effect.mapError((error) => new Error(String(error)))),
+          (items) => {
+            const userTexts = items
+              .filter((message) => message.role === "user")
+              .map((message) => extractText(message.parts))
+            return (
+              userTexts.includes("first turn") &&
+              userTexts.includes("urgent steer") &&
+              userTexts.includes("queued follow-up")
+            )
+          },
+          15_000,
+        )
+
+        const userTexts = messages
+          .filter((message) => message.role === "user")
+          .map((message) => extractText(message.parts))
+          .filter((text) => ["first turn", "urgent steer", "queued follow-up"].includes(text))
+
+        expect(userTexts).toEqual(["first turn", "urgent steer", "queued follow-up"])
+
+        const settledQueue = yield* waitFor(
+          client.queue
+            .get({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error)))),
+          (snapshot) => snapshot.steering.length === 0 && snapshot.followUp.length === 0,
+          10_000,
+        )
+
+        expect(settledQueue.steering).toEqual([])
+        expect(settledQueue.followUp).toEqual([])
+      }),
+    )
+  }, 20_000)
 })

@@ -9,6 +9,7 @@ import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   type InProcessLayerConfig,
 } from "@gent/core/test-utils/in-process-layer.js"
+import { Provider, type SignalProviderControls } from "@gent/core/providers/provider.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
@@ -19,7 +20,9 @@ const defaultConfig: InProcessLayerConfig = {
   agents: AllBuiltinAgents,
   extraLayers: [GitReader.Test],
 }
-export const baseLocalLayer = () => _baseLocalLayer(defaultConfig)
+type HarnessProviderMode = "debug-scripted" | "debug-slow"
+export const baseLocalLayer = (providerMode: HarnessProviderMode = "debug-scripted") =>
+  _baseLocalLayer(defaultConfig, providerMode)
 export const baseLocalLayerWithProvider = (
   providerLayer: Parameters<typeof _baseLocalLayerWithProvider>[0],
 ) => _baseLocalLayerWithProvider(providerLayer, defaultConfig)
@@ -31,13 +34,36 @@ export interface TransportCase {
   readonly run: <A>(assertion: (bundle: GentClientBundle) => Effect.Effect<A, Error>) => Promise<A>
 }
 
-type HarnessProviderMode = "debug-scripted" | "debug-slow"
+export interface SignalTransportCase {
+  readonly name: string
+  readonly run: <A>(
+    reply: string,
+    assertion: (
+      bundle: GentClientBundle,
+      controls: SignalProviderControls,
+    ) => Effect.Effect<A, Error>,
+  ) => Promise<A>
+}
 
 const makeDirectCase = (providerMode: HarnessProviderMode = "debug-scripted"): TransportCase => ({
   name: "direct",
   run: (assertion) =>
     Effect.runPromise(
       Effect.scoped(Gent.test(baseLocalLayer(providerMode)).pipe(Effect.flatMap(assertion))),
+    ),
+})
+
+const makeDirectSignalCase = (): SignalTransportCase => ({
+  name: "direct",
+  run: (reply, assertion) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer, controls } = yield* Provider.Signal(reply)
+          const bundle = yield* Gent.test(baseLocalLayerWithProvider(layer))
+          return yield* assertion(bundle, controls)
+        }),
+      ),
     ),
 })
 
@@ -218,7 +244,8 @@ const makeTransportCases = (providerMode: HarnessProviderMode = "debug-scripted"
 ]
 
 export const transportCases = makeTransportCases()
-// debug-slow uses Effect.sleep per chunk — works in-process but causes CPU spin
-// in worker subprocesses. Keep worker cases on debug-scripted only.
-export const slowTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-scripted")]
-export const queueTransportCases = [makeDirectCase("debug-slow"), makeWorkerCase("debug-scripted")]
+// Lifecycle/queue assertions need streams paused mid-flight. Signal provider
+// gates each chunk on a Queue — the test releases chunks via controls.emitAll()
+// after observing the desired state, instead of paying real wall-clock per chunk.
+// Direct-only: the worker subprocess can't share a controls handle with the test.
+export const directSignalCase = makeDirectSignalCase()

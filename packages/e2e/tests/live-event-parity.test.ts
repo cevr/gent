@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Ref, Stream } from "effect"
-import { slowTransportCases, transportCases, waitFor } from "./transport-harness"
+import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
 // See event-stream-parity.test.ts for why streaming tests are direct-only.
 const streamingCases = transportCases.filter((c) => c.name === "direct")
-const slowStreamingCases = slowTransportCases.filter((c) => c.name === "direct")
 
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -80,53 +79,57 @@ describe("live event parity", () => {
     )
   }
 
-  for (const transport of slowStreamingCases) {
-    const timeoutMs = 15_000
+  // The replay-to-live handoff test needs StreamChunk events to be observed.
+  // Signal provider gates each chunk so we can release them on demand without
+  // paying real wall-clock per chunk.
+  const timeoutMs = 15_000
+  test(
+    `${directSignalCase.name} streamEvents keeps streamed chunks across replay-to-live handoff`,
+    async () => {
+      await directSignalCase.run("handoff payload.", ({ client }, controls) =>
+        Effect.gen(function* () {
+          const created = yield* client.session
+            .create({ cwd: process.cwd() })
+            .pipe(Effect.mapError((error) => new Error(String(error))))
 
-    test(
-      `${transport.name} streamEvents keeps streamed chunks across replay-to-live handoff`,
-      async () => {
-        await transport.run(({ client }) =>
-          Effect.gen(function* () {
-            const created = yield* client.session
-              .create({ cwd: process.cwd() })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          const snapshot = yield* client.session
+            .getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const snapshot = yield* client.session
-              .getSnapshot({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          const liveEvents = yield* collectLiveEvents(
+            client.session.events({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+              after: snapshot.lastEventId ?? undefined,
+            }),
+          ).pipe(Effect.mapError((error) => new Error(String(error))))
 
-            const liveEvents = yield* collectLiveEvents(
-              client.session.events({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-                after: snapshot.lastEventId ?? undefined,
-              }),
-            ).pipe(Effect.mapError((error) => new Error(String(error))))
+          yield* client.message
+            .send({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+              content: "after-live-chunks",
+            })
+            .pipe(Effect.mapError((error) => new Error(String(error))))
 
-            yield* client.message
-              .send({
-                sessionId: created.sessionId,
-                branchId: created.branchId,
-                content: "after-live-chunks",
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error))))
+          // Wait for the stream to start, then release the chunks
+          yield* controls.waitForStreamStart
+          yield* controls.emitAll()
 
-            const received = yield* waitFor(
-              Ref.get(liveEvents),
-              (current) => current.some((envelope) => envelope.event._tag === "StreamChunk"),
-              timeoutMs,
-            )
+          const received = yield* waitFor(
+            Ref.get(liveEvents),
+            (current) => current.some((envelope) => envelope.event._tag === "StreamChunk"),
+            timeoutMs,
+          )
 
-            expect(received.some((envelope) => envelope.event._tag === "StreamStarted")).toBe(true)
-            expect(received.some((envelope) => envelope.event._tag === "StreamChunk")).toBe(true)
-          }),
-        )
-      },
-      timeoutMs,
-    )
-  }
+          expect(received.some((envelope) => envelope.event._tag === "StreamStarted")).toBe(true)
+          expect(received.some((envelope) => envelope.event._tag === "StreamChunk")).toBe(true)
+        }),
+      )
+    },
+    timeoutMs,
+  )
 })
