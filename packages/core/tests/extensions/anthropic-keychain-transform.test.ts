@@ -279,14 +279,23 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
     const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
+    // The credential failure flows through the transient retry layer
+    // (`Schedule.exponential("1 second")` + 2 retries = 3s real-clock).
+    // Drive the schedule via TestClock so the test stays instant.
     const exit = await Effect.runPromise(
-      Effect.exit(
-        Effect.scoped(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
-      ),
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.scoped(
+            Effect.exit(
+              wrapped.post("https://api.anthropic.com/v1/messages", {
+                body: jsonBody({ model: "claude-opus-4-6" }),
+              }),
+            ),
+          ).pipe(Effect.forkChild)
+          yield* TestClock.adjust("3 seconds")
+          return yield* Fiber.join(fiber)
+        }),
+      ).pipe(Effect.provide(TestClock.layer())),
     )
 
     // The fake client never saw the request — the transform short-
