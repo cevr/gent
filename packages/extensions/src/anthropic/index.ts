@@ -3,11 +3,11 @@ import {
   defineExtension,
   AuthMethod,
   type ModelDriverContribution,
+  type ProviderAuthInfo,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
 import {
-  createAnthropicKeychainFetch,
   freshEnoughForUse,
   initAnthropicKeychainEnv,
   PRIMARY_CLAUDE_SERVICE,
@@ -18,7 +18,9 @@ import {
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
 import { FetchHttpClient } from "effect/unstable/http"
 import { keychainClient } from "./keychain-client.js"
-import { buildAnthropicCredentialLoader, type CredentialCache } from "./runtime-boundary.js"
+import { AnthropicCredentialService } from "./credential-service.js"
+import { AnthropicBetaCache } from "./beta-cache.js"
+import { buildKeychainTransformClient } from "./keychain-transform.js"
 
 // Provider extensions read env at setup time (outside Effect runtime, no Config available).
 // Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
@@ -27,8 +29,10 @@ const readEnv = (name: string): string | undefined => {
   return val !== undefined && val !== "" ? val : undefined
 }
 
-// Credential loader + cache live in `runtime-boundary.ts` — that module
-// owns the Promise edge into the Anthropic SDK loader contract.
+// Credential cache + refresh logic live in `AnthropicCredentialService`
+// (Effect-native). The OAuth path provides this service into the layer
+// that hosts `AnthropicClient`; the keychain transform middleware reads
+// from it per-request via `mapRequestEffect`.
 
 // Maps gent reasoning level to Anthropic effort (Anthropic caps at "high")
 const ANTHROPIC_EFFORT: Record<string, "low" | "medium" | "high"> = {
@@ -52,6 +56,65 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
   return config
 }
 
+// ── Layer construction helpers ──
+
+/**
+ * API-key path: standard `AnthropicClient.layer` over `FetchHttpClient`.
+ * No keychain, no OAuth, no custom middleware. Wrapped with
+ * `keychainClient` because that wrapper handles mcp_ prefixing,
+ * system identity injection, and cache control transforms — which apply
+ * to both auth modes, not just OAuth.
+ */
+const makeApiKeyAnthropicLayer = (
+  modelName: string,
+  config: Record<string, unknown>,
+  apiKey: string,
+) => {
+  const baseClient = AnthropicClient.layer({
+    apiKey: Redacted.make(apiKey),
+  }).pipe(Layer.provide(FetchHttpClient.layer))
+  const wrappedClient = keychainClient.pipe(Layer.provide(baseClient))
+  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
+    Layer.provide(wrappedClient),
+  )
+}
+
+/**
+ * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
+ * to the keychain transform middleware (auth headers, 429/529 retry,
+ * transport retry, long-context beta retry, 401 recovery). Uses
+ * `Layer.unwrap` because the transform factory needs the credential
+ * service and beta cache instances at construction time, and those
+ * come from layers that the unwrapped Effect can `yield*`.
+ *
+ * `apiKey: "oauth-placeholder"` keeps the SDK's baseline header
+ * pipeline happy — the transform deletes `x-api-key` before the wire.
+ */
+const makeOauthAnthropicLayer = (
+  modelName: string,
+  config: Record<string, unknown>,
+  authInfo: ProviderAuthInfo | undefined,
+) => {
+  const credentialLayer = AnthropicCredentialService.layer(authInfo)
+  const cacheLayer = AnthropicBetaCache.layer
+
+  const clientLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const creds = yield* AnthropicCredentialService
+      const cache = yield* AnthropicBetaCache
+      return AnthropicClient.layer({
+        apiKey: Redacted.make("oauth-placeholder"),
+        transformClient: buildKeychainTransformClient(creds, cache),
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+    }),
+  ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
+
+  const wrappedClient = keychainClient.pipe(Layer.provide(clientLayer))
+  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
+    Layer.provide(wrappedClient),
+  )
+}
+
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
   modelDrivers: () => {
@@ -61,9 +124,6 @@ export const AnthropicExtension = defineExtension({
       userAgent: readEnv("ANTHROPIC_USER_AGENT"),
     }
     initAnthropicKeychainEnv(env)
-
-    // Credential cache owned by this extension closure
-    const credentialCache: CredentialCache = { creds: null, at: 0 }
 
     const anthropicProvider: ModelDriverContribution = {
       id: "anthropic",
@@ -78,35 +138,19 @@ export const AnthropicExtension = defineExtension({
         const config = buildAnthropicConfig(hints)
 
         if (apiKey !== undefined) {
-          const clientLayer = AnthropicClient.layer({
-            apiKey: Redacted.make(apiKey),
-          }).pipe(Layer.provide(FetchHttpClient.layer))
-          const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-            Layer.provide(clientLayer),
-          )
-          return { layer: modelLayer }
+          return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
         }
 
-        // Fall back to keychain/OAuth with extension-owned credential cache.
-        // keychainClient wraps AnthropicClient to handle mcp_ tool prefixing,
-        // system identity injection, and cache control at the structured payload level.
-        // The custom fetch handles: auth headers, beta flags, billing, 429/529 retry.
-        const credentialLoader = buildAnthropicCredentialLoader(credentialCache, authInfo)
-        const keychainFetch = createAnthropicKeychainFetch(credentialLoader)
-
-        const customFetchLayer = Layer.succeed(
-          FetchHttpClient.Fetch,
-          keychainFetch as typeof globalThis.fetch,
-        )
-        const baseClientLayer = AnthropicClient.layer({
-          apiKey: Redacted.make("oauth-placeholder"),
-        }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
-        // Wrap the base client with keychain transforms (mcp_, identity, cache control)
-        const wrappedClientLayer = keychainClient.pipe(Layer.provide(baseClientLayer))
-        const modelLayer = AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
-          Layer.provide(wrappedClientLayer),
-        )
-        return { layer: modelLayer }
+        // OAuth path: per-resolveModel call, build a fresh credential
+        // service + beta cache and weave them into the SDK client via
+        // `transformClient`. The credential cache (Ref<CacheCell> inside
+        // AnthropicCredentialService) is per-layer-instance — one per
+        // resolveModel call — which preserves the legacy "cache lives
+        // for the model lifetime" semantics. The beta cache is similarly
+        // per-instance; cross-request learning lives within one model's
+        // lifetime, matching the legacy module-state-with-clear-on-
+        // model-change behavior (now structurally enforced).
+        return { layer: makeOauthAnthropicLayer(modelName, config, authInfo) }
       },
       auth: {
         methods: [
