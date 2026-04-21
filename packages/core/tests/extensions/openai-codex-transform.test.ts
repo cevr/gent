@@ -439,9 +439,12 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
     expect(state.captured[0]!.headers["openai-beta"]).toBe("responses=experimental")
   })
 
-  test("preserves a pre-existing OpenAI-Beta header (does not override)", async () => {
-    // Defensive: if the SDK or upstream ever sets a custom beta value
-    // for a particular request, do not stomp on it.
+  test("merges responses=experimental into a pre-existing OpenAI-Beta header (preserve other tokens)", async () => {
+    // Counsel O3 MEDIUM #2: if upstream sets a custom beta value, we
+    // must still ensure `responses=experimental` is present — pure
+    // preservation would let Codex reject our traffic if the SDK ever
+    // starts injecting a different beta token. Append the required
+    // token if missing; preserve every other token unchanged.
     const state = okResponse()
     const wrapped = await buildWrapped(state)
     await runOk(
@@ -450,7 +453,49 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         body: jsonBody({ model: "gpt-5.4" }),
       }),
     )
-    expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value")
+    expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value, responses=experimental")
+  })
+
+  test("does not duplicate responses=experimental when it's already present", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        headers: { "openai-beta": "custom=value, responses=experimental" },
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+    expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value, responses=experimental")
+  })
+
+  test("structured (non-string) system/developer content stays in input, NOT silently dropped", async () => {
+    // Counsel O3 MEDIUM #1: only string content lifts to top-level
+    // `instructions`. Items with structured content (e.g. ReadonlyArray
+    // of InputContent for system/developer per the OpenAI-compat
+    // schema) must remain in `filteredInput` so the Codex backend still
+    // sees them — silently dropping would corrupt the prompt.
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/responses", {
+        body: jsonBody({
+          model: "gpt-5.4",
+          input: [
+            { role: "system", content: "string-instructions" },
+            structured,
+            { role: "user", content: "hi" },
+          ],
+        }),
+      }),
+    )
+    const parsed = JSON.parse(state.captured[0]!.body!) as {
+      instructions?: string
+      input?: unknown[]
+    }
+    expect(parsed.instructions).toBe("string-instructions")
+    // Structured system item retained in input (alongside the user msg).
+    expect(parsed.input).toEqual([structured, { role: "user", content: "hi" }])
   })
 
   test("rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false", async () => {

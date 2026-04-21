@@ -65,6 +65,33 @@ const isCodexBoundPath = (pathname: string): boolean =>
 
 const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
 
+/**
+ * Required `OpenAI-Beta` token for Codex backend traffic. Counsel O3
+ * MEDIUM #2: pure preserve-when-present is unsafe — if the SDK ever
+ * starts sending some other beta header for a reason of its own, the
+ * Codex request would lose the required `responses=experimental`
+ * token and the backend would reject it. Merge instead.
+ */
+const CODEX_BETA_TOKEN = "responses=experimental"
+
+/**
+ * Merge `requiredToken` into a comma-separated `OpenAI-Beta` header
+ * value, preserving any other tokens already present and avoiding
+ * duplicates. Order: existing tokens first, required token appended
+ * last if missing. Whitespace around commas is normalized.
+ */
+const ensureBetaToken = (existing: string | undefined, requiredToken: string): string => {
+  const tokens =
+    existing === undefined
+      ? []
+      : existing
+          .split(",")
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+  if (tokens.includes(requiredToken)) return tokens.join(", ")
+  return [...tokens, requiredToken].join(", ")
+}
+
 // ── Body rewrite ──
 
 /**
@@ -97,8 +124,14 @@ const splitInstructions = (
   const filteredInput: unknown[] = []
   for (const item of input) {
     if (isInstructionItem(item)) {
-      if (typeof item.content === "string") instructions.push(item.content)
-      continue
+      // Only string content lifts to top-level `instructions`. Items
+      // with structured (non-string) content stay in `filteredInput`
+      // so the Codex backend still sees them — silently dropping them
+      // would corrupt the prompt at the boundary (counsel O3 MEDIUM #1).
+      if (typeof item.content === "string") {
+        instructions.push(item.content)
+        continue
+      }
     }
     filteredInput.push(item)
   }
@@ -252,9 +285,11 @@ export const buildCodexTransformClient =
           let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
           const url = new URL(req.url)
           if (codexUrlMatches(url)) {
-            if (headers["openai-beta"] === undefined) {
-              headers = Headers.set(headers, "openai-beta", "responses=experimental")
-            }
+            headers = Headers.set(
+              headers,
+              "openai-beta",
+              ensureBetaToken(headers["openai-beta"], CODEX_BETA_TOKEN),
+            )
             const withBody = rewriteCodexBody(withHeaders(req, headers))
             return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
           }
