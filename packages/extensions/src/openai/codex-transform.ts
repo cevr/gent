@@ -3,14 +3,20 @@
  * callback for the ChatGPT OAuth (Codex) path.
  *
  * The SDK applies `transformClient` after its own baseline pipeline
- * (`prependUrl(${apiUrl}/v1)` + optional `bearerToken(apiKey)`). With
- * the OAuth path we omit `apiKey` entirely (counsel correction — O5),
- * so the SDK never injects a placeholder Bearer header. This middleware
- * supplies the OAuth Bearer + Codex-specific headers itself.
+ * (`prependUrl(${apiUrl}/v1)` + optional `bearerToken(apiKey)` +
+ * `acceptJson`). With the OAuth path we omit `apiKey` entirely (counsel
+ * correction — O5), so the SDK never injects a placeholder Bearer
+ * header. This middleware supplies the OAuth Bearer + Codex-specific
+ * headers itself, then rewrites Codex-bound requests to the ChatGPT
+ * backend endpoint.
  *
- * This file ships the auth-header preprocess only (O2). URL rewrite,
- * body rewrite, and the Codex `OpenAI-Beta` header land in O3; 401
- * recovery lands in O4.
+ * This file currently ships:
+ *   - O2: auth-header preprocess (Bearer + ChatGPT-Account-Id +
+ *         originator/user-agent defaults)
+ *   - O3: URL rewrite to Codex backend, JSON body rewrite (input → top-
+ *         level `instructions`, `store: false`), and `OpenAI-Beta:
+ *         responses=experimental` for Codex-bound paths
+ * 401 recovery lands in O4.
  *
  * Why a factory `(creds) => (client) => client` instead of grabbing
  * the service from context inside `mapRequestEffect`: the SDK's
@@ -27,9 +33,112 @@
 
 import { Effect, Option } from "effect"
 import { HttpClient, HttpClientRequest, Headers } from "effect/unstable/http"
+import type { HttpBody } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import * as os from "node:os"
 import type { OpenAICredentialServiceShape } from "./credential-service.js"
+
+// ── Codex routing ──
+
+/**
+ * The ChatGPT backend endpoint Codex requests target. The SDK's
+ * baseline `prependUrl("https://api.openai.com/v1")` produces e.g.
+ * `https://api.openai.com/v1/chat/completions` — we rewrite the entire
+ * URL to the Codex endpoint when the path matches a Codex-eligible
+ * shape (see `isCodexBoundPath`).
+ */
+const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
+
+/**
+ * Exact path equality (counsel correction): only `/v1/chat/completions`
+ * and `/v1/responses` qualify. The legacy fetcher used `includes(...)`
+ * which would also match e.g. `/v1/chat/completions/foo` if the SDK
+ * ever added a sub-resource. Lock the surface to the exact paths the
+ * SDK currently emits.
+ *
+ * The OpenAI-compat SDK only POSTs `/chat/completions` today, but
+ * `/responses` is reserved for when the upstream switches to the
+ * responses-API shape. Both forward to the same Codex endpoint.
+ */
+const isCodexBoundPath = (pathname: string): boolean =>
+  pathname === "/v1/chat/completions" || pathname === "/v1/responses"
+
+const codexUrlMatches = (url: URL): boolean => isCodexBoundPath(url.pathname)
+
+// ── Body rewrite ──
+
+/**
+ * Codex backend expects a responses-API payload shape:
+ *   - `system`/`developer` items lifted out of `input` into a top-level
+ *     `instructions` string (joined by `\n\n`)
+ *   - `store: false` to prevent server-side conversation persistence
+ *
+ * Inputs without an `input` array (e.g. chat-completions `messages`
+ * payloads) pass through untouched — the Codex backend tolerates the
+ * legacy shape today, and locking it would prevent the SDK from
+ * gradually migrating to `/responses`.
+ */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+
+const isInstructionItem = (
+  item: unknown,
+): item is { role: "system" | "developer"; content?: unknown } => {
+  if (!isRecord(item)) return false
+  const role = item["role"]
+  return role === "system" || role === "developer"
+}
+
+const splitInstructions = (
+  input: unknown,
+): { instructions: string[]; filteredInput: unknown[] } | undefined => {
+  if (!Array.isArray(input)) return undefined
+  const instructions: string[] = []
+  const filteredInput: unknown[] = []
+  for (const item of input) {
+    if (isInstructionItem(item)) {
+      if (typeof item.content === "string") instructions.push(item.content)
+      continue
+    }
+    filteredInput.push(item)
+  }
+  return { instructions, filteredInput }
+}
+
+/**
+ * Try to read the request body as a JSON object. Returns `undefined`
+ * when the body isn't a `Uint8Array` HttpBody (the only shape the SDK
+ * emits via `bodyJsonUnsafe`) or when JSON parsing fails. Both cases
+ * cause the URL/header rewrite to still apply but the body to pass
+ * through unchanged — Codex tolerates the chat-completions shape today.
+ */
+const tryReadJsonBody = (body: HttpBody.HttpBody): Record<string, unknown> | undefined => {
+  if (body._tag !== "Uint8Array") return undefined
+  try {
+    const text = new TextDecoder().decode(body.body)
+    const parsed: unknown = JSON.parse(text)
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const rewriteCodexBody = (
+  req: HttpClientRequest.HttpClientRequest,
+): HttpClientRequest.HttpClientRequest => {
+  const parsed = tryReadJsonBody(req.body)
+  if (parsed === undefined) return req
+  const split = splitInstructions(parsed["input"])
+  if (split === undefined) return req
+  const next: Record<string, unknown> = { ...parsed }
+  if (split.instructions.length > 0) {
+    next["instructions"] = split.instructions.join("\n\n")
+  }
+  next["input"] = split.filteredInput
+  next["store"] = false
+  const encoded = new TextEncoder().encode(JSON.stringify(next))
+  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+}
 
 // ── Header construction ──
 
@@ -103,11 +212,18 @@ const withHeaders = (
  * rotated refresh token survives invalidate per credential-service
  * counsel HIGH #1 fix).
  *
- * O2 ships only the auth-header preprocess. The full middleware stack
- * lands incrementally:
- *   - mapRequestEffect (preprocess) — auth headers (O2)
- *     + URL/body rewrite + OpenAI-Beta (O3)
- *   - 401 recovery (outermost transformResponse) (O4)
+ * Pipeline (per-request, before the request hits the wire):
+ *   1. `creds.getFresh` — fetch live access token + account id
+ *   2. Auth headers — Bearer + ChatGPT-Account-Id +
+ *      originator/user-agent defaults
+ *   3. If the request URL matches a Codex-eligible path
+ *      (`/v1/chat/completions` or `/v1/responses`):
+ *        a. Set `OpenAI-Beta: responses=experimental` (preserve any
+ *           upstream value — defensive against future SDK changes)
+ *        b. Rewrite body shape if it carries an `input` array
+ *        c. Rewrite URL to the ChatGPT Codex endpoint
+ *      Non-Codex paths pass through unchanged after auth headers.
+ *   - 401 recovery wraps this preprocess in O4.
  */
 export const buildCodexTransformClient =
   (
@@ -133,7 +249,15 @@ export const buildCodexTransformClient =
                 }),
             ),
           )
-          const headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
+          let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
+          const url = new URL(req.url)
+          if (codexUrlMatches(url)) {
+            if (headers["openai-beta"] === undefined) {
+              headers = Headers.set(headers, "openai-beta", "responses=experimental")
+            }
+            const withBody = rewriteCodexBody(withHeaders(req, headers))
+            return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
+          }
           return withHeaders(req, headers)
         }),
       ),

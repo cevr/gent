@@ -244,7 +244,11 @@ describe("codexTransformClient — auth headers (O2)", () => {
     expect(fakeState.captured[0]!.headers["user-agent"]).toBe("custom-ua/1.0")
   })
 
-  test("preserves request method, url, and body across the transform", async () => {
+  test("preserves request method, url, and body for non-Codex paths", async () => {
+    // The OpenAI-compat SDK ALSO talks to `/embeddings` and other
+    // non-Codex endpoints. Those must pass through untouched (auth
+    // headers still applied — see other tests). Use the embeddings
+    // path here as a non-Codex example.
     const creds = await buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
     const fakeState: FakeClientState = {
       captured: [],
@@ -254,17 +258,20 @@ describe("codexTransformClient — auth headers (O2)", () => {
     const wrapped = transform(makeFakeClient(fakeState))
 
     await runOk(
-      wrapped.post("https://api.openai.com/v1/chat/completions", {
-        body: jsonBody({ model: "gpt-5.4", input: [{ role: "user", content: "hi" }] }),
+      wrapped.post("https://api.openai.com/v1/embeddings", {
+        body: jsonBody({ model: "text-embedding-3-small", input: "hello" }),
       }),
     )
 
     const seen = fakeState.captured[0]!
     expect(seen.method).toBe("POST")
-    expect(seen.url).toBe("https://api.openai.com/v1/chat/completions")
+    expect(seen.url).toBe("https://api.openai.com/v1/embeddings")
     expect(seen.body).toBeDefined()
-    const parsed = JSON.parse(seen.body ?? "{}") as { model: string }
-    expect(parsed.model).toBe("gpt-5.4")
+    const parsed = JSON.parse(seen.body ?? "{}") as { model: string; input: string }
+    expect(parsed.model).toBe("text-embedding-3-small")
+    expect(parsed.input).toBe("hello")
+    // No Codex beta header on non-Codex paths.
+    expect(seen.headers["openai-beta"]).toBeUndefined()
   })
 
   test("surfaces ProviderAuthError from getFresh as HttpClientError", async () => {
@@ -370,5 +377,197 @@ describe("codexTransformClient — auth headers (O2)", () => {
     // First call refreshes seed → rotated; second hits cache and reuses.
     expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer rotated-access")
     expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer rotated-access")
+  })
+})
+
+describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
+  // Helpers local to O3 — keep the auth-header tests above untouched.
+  const okResponse = (): FakeClientState => ({
+    captured: [],
+    responder: () => new Response("ok", { status: 200 }),
+  })
+
+  const buildWrapped = async (state: FakeClientState) => {
+    const creds = await buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
+    return buildCodexTransformClient(creds)(makeFakeClient(state))
+  }
+
+  test("rewrites /v1/chat/completions URL to the Codex backend endpoint", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    )
+    expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+  })
+
+  test("rewrites /v1/responses URL to the Codex backend endpoint", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/responses", {
+        body: jsonBody({ model: "gpt-5.4", input: [{ role: "user", content: "hi" }] }),
+      }),
+    )
+    expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+  })
+
+  test("does NOT rewrite paths that are not exactly chat/completions or responses", async () => {
+    // Counsel correction: legacy used `includes(...)` which would match
+    // sub-resources. Lock to exact equality.
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions/foo", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+    expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/chat/completions/foo")
+    expect(state.captured[0]!.headers["openai-beta"]).toBeUndefined()
+  })
+
+  test("sets OpenAI-Beta header on Codex-bound paths", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+    expect(state.captured[0]!.headers["openai-beta"]).toBe("responses=experimental")
+  })
+
+  test("preserves a pre-existing OpenAI-Beta header (does not override)", async () => {
+    // Defensive: if the SDK or upstream ever sets a custom beta value
+    // for a particular request, do not stomp on it.
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        headers: { "openai-beta": "custom=value" },
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+    expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value")
+  })
+
+  test("rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/responses", {
+        body: jsonBody({
+          model: "gpt-5.4",
+          input: [
+            { role: "system", content: "You are gent." },
+            { role: "developer", content: "Be terse." },
+            { role: "user", content: "hi" },
+          ],
+        }),
+      }),
+    )
+    const seen = state.captured[0]!
+    expect(seen.body).toBeDefined()
+    const parsed = JSON.parse(seen.body!) as {
+      instructions?: string
+      input?: unknown[]
+      store?: boolean
+      model?: string
+    }
+    expect(parsed.instructions).toBe("You are gent.\n\nBe terse.")
+    expect(parsed.input).toEqual([{ role: "user", content: "hi" }])
+    expect(parsed.store).toBe(false)
+    expect(parsed.model).toBe("gpt-5.4")
+  })
+
+  test("body without an `input` array passes through unchanged on Codex paths", async () => {
+    // Chat-completions payloads (`messages` instead of `input`) are
+    // forwarded as-is to the Codex endpoint — the backend tolerates
+    // the legacy shape today, and the SDK only emits this form on
+    // /chat/completions today.
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    const original = { model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody(original),
+      }),
+    )
+    const parsed = JSON.parse(state.captured[0]!.body!)
+    expect(parsed).toEqual(original)
+  })
+
+  test("body without input array: store flag NOT injected", async () => {
+    // Make sure we never set `store: false` on a body that didn't
+    // have an `input` array — the rewrite is gated on the input split.
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4", messages: [] }),
+      }),
+    )
+    const parsed = JSON.parse(state.captured[0]!.body!) as { store?: boolean }
+    expect(parsed.store).toBeUndefined()
+  })
+
+  test("body with input but no system/developer items: instructions NOT injected, store=false set", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/responses", {
+        body: jsonBody({
+          model: "gpt-5.4",
+          input: [{ role: "user", content: "hi" }],
+        }),
+      }),
+    )
+    const parsed = JSON.parse(state.captured[0]!.body!) as {
+      instructions?: string
+      input?: unknown[]
+      store?: boolean
+    }
+    expect(parsed.instructions).toBeUndefined()
+    expect(parsed.input).toEqual([{ role: "user", content: "hi" }])
+    expect(parsed.store).toBe(false)
+  })
+
+  test("non-Codex path: body untouched even when it carries an input array", async () => {
+    const state = okResponse()
+    const wrapped = await buildWrapped(state)
+    const original = {
+      model: "text-embedding-3-small",
+      input: [{ role: "system", content: "should-not-be-lifted" }],
+    }
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/embeddings", {
+        body: jsonBody(original),
+      }),
+    )
+    const parsed = JSON.parse(state.captured[0]!.body!)
+    expect(parsed).toEqual(original)
+    expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/embeddings")
+  })
+
+  test("auth headers still apply on Codex-rewritten requests", async () => {
+    // Belt-and-suspenders: the URL/body rewrite path must not strip
+    // the OAuth Bearer / ChatGPT-Account-Id added by the auth-header
+    // preprocess.
+    const creds = await buildCreds(
+      noopRefreshIO(),
+      validAuthInfo({ access: "k1-access", accountId: "acc-123" }),
+    )
+    const state = okResponse()
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+    await runOk(
+      wrapped.post("https://api.openai.com/v1/chat/completions", {
+        body: jsonBody({ model: "gpt-5.4" }),
+      }),
+    )
+    expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
+    expect(state.captured[0]!.headers["chatgpt-account-id"]).toBe("acc-123")
+    expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
   })
 })
