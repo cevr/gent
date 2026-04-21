@@ -14,6 +14,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Fiber, Layer, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { buildKeychainTransformClient } from "@gent/extensions/anthropic/keychain-transform"
 import { initAnthropicKeychainEnv } from "@gent/extensions/anthropic/oauth"
 import type {
@@ -42,9 +43,23 @@ interface CapturedRequest {
   body: string | undefined
 }
 
+// Sentinel object the responder can return to ask the fake client to
+// emit `HttpClientError(TransportError)` instead of a successful
+// response — exercises the wire-failure retry branch.
+interface TransportFailure {
+  readonly _tag: "TransportFailure"
+  readonly message: string
+}
+const transportFailure = (message: string): TransportFailure => ({
+  _tag: "TransportFailure",
+  message,
+})
+const isTransportFailure = (v: Response | TransportFailure): v is TransportFailure =>
+  (v as TransportFailure)._tag === "TransportFailure"
+
 interface FakeClientState {
   captured: Array<CapturedRequest>
-  responder: (call: number) => Response
+  responder: (call: number) => Response | TransportFailure
 }
 
 const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
@@ -65,8 +80,19 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
       headers: headersObj,
       body: bodyText,
     })
-    const response = state.responder(state.captured.length - 1)
-    return Effect.succeed(HttpClientResponse.fromWeb(request, response))
+    const result = state.responder(state.captured.length - 1)
+    if (isTransportFailure(result)) {
+      return Effect.fail(
+        new HttpClientError({
+          reason: new TransportError({
+            request,
+            cause: result,
+            description: result.message,
+          }),
+        }),
+      )
+    }
+    return Effect.succeed(HttpClientResponse.fromWeb(request, result))
   })
 
 // Capture the credential-service "instance" by running its layer once
@@ -242,7 +268,7 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
       const fiber = yield* Effect.scoped(eff).pipe(Effect.forkChild)
       // Walk past the exponential backoff window deterministically.
       // 1s + 2s = 3s covers 2 retries with `Schedule.exponential("1 second")`.
-      yield* TestClock.adjust("10 seconds")
+      yield* TestClock.adjust("3 seconds")
       return yield* Fiber.join(fiber)
     })
     return await Effect.runPromise(
@@ -321,6 +347,65 @@ describe("keychainTransformClient — 429/529 retry (Commit 2b)", () => {
     // 1 initial + 2 retries = 3 attempts
     expect(fakeState.captured).toHaveLength(3)
     expect(response.status).toBe(429)
+  })
+
+  test("transport failure (HttpClientError) once then 200 — retried like legacy fetch synthetic-500", async () => {
+    // Legacy `fetchOnce` (oauth.ts:813-838) caught thrown fetch errors,
+    // mapped them to a synthetic 500 response, and retried. The new
+    // middleware widens retry to ALL errors in the channel — both
+    // TransientResponseError (429/529) and HttpClientError from the
+    // wire — preserving that resilience contract.
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0 ? transportFailure("socket hang up") : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runWithTestClock(
+      wrapped
+        .post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        })
+        .pipe(Effect.orDie),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+  })
+
+  test("3 consecutive transport failures — budget exhausted, error propagates", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(validCredsIO("k1"))
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: () => transportFailure("connection refused"),
+    }
+    const transform = buildKeychainTransformClient(creds)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const exit = await Effect.runPromise(
+      Effect.exit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.scoped(
+              wrapped.post("https://api.anthropic.com/v1/messages", {
+                body: jsonBody({ model: "claude-opus-4-6" }),
+              }),
+            ).pipe(Effect.forkChild)
+            yield* TestClock.adjust("3 seconds")
+            return yield* Fiber.join(fiber)
+          }),
+        ).pipe(Effect.provide(TestClock.layer())),
+      ),
+    )
+
+    // 1 initial + 2 retries = 3 attempts
+    expect(fakeState.captured).toHaveLength(3)
+    expect(exit._tag).toBe("Failure")
   })
 
   test("non-transient 4xx (e.g. 400) does not trigger retry", async () => {
