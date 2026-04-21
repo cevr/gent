@@ -21,7 +21,7 @@ import {
  * `~/.claude/.credentials.json` on non-darwin), refreshing if it expires
  * within the next minute. Uses the refreshed creds returned from the
  * refresh call directly — re-reading keychain would silently lose
- * direct-OAuth tokens on write-back failure (counsel HIGH #1).
+ * direct-OAuth tokens on write-back failure.
  *
  * If the refreshed creds are still inside the freshness window, fail
  * with ProviderAuthError rather than send a token that will expire

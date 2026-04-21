@@ -87,8 +87,8 @@ export interface CapabilityRunOptions {
    *  `undefined` ONLY when the caller genuinely accepts both intents (e.g.,
    *  an internal admin path); typical callers pass `"read"` or `"write"` to
    *  prevent a same-id write capability from being invoked through a
-   *  read-only entry point and vice versa (codex HIGH on C4.5: dropping the
-   *  intent gate let `query()` invoke a write capability and `mutate()`
+   *  read-only entry point and vice versa (dropping the intent gate
+   *  would let `query()` invoke a write capability and `mutate()`
    *  invoke a read capability if their ids matched). */
   readonly intent?: Intent
 }

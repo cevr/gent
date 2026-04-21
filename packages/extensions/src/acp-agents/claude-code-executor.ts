@@ -175,7 +175,7 @@ interface ClaudeCodeProcess {
 
 // `ExternalSessionKey` is defined in `executor.ts` and re-used by both
 // session managers (SDK + ACP-protocol) so the cache-key shape stays in
-// one place — codex HIGH #2 / #3.
+// one place.
 const cacheKey = (k: ExternalSessionKey): string => `${k.driverId}::${k.sessionId}::${k.branchId}`
 
 /**
@@ -206,7 +206,7 @@ export interface ClaudeCodeManagedSession {
    * use it to seed the freshly-created remote session with the prior
    * transcript before sending the new turn — without seeding, a
    * fingerprint mismatch / `invalidateDriver` silently drops the
-   * conversation on the floor (counsel HIGH #4).
+   * conversation on the floor.
    */
   readonly created: boolean
 }
@@ -238,9 +238,9 @@ export interface ClaudeCodeSessionManager {
  */
 /** Resolves the Claude Code OAuth token. Defaults to the macOS keychain
  *  reader; tests inject a stub so they can exercise lifecycle/cache
- *  invariants without a real keychain entry (counsel MEDIUM #6). The
- *  error type is left wide enough to accept either the production
- *  `ProviderAuthError` or test stubs returning a plain `{ message }`. */
+ *  invariants without a real keychain entry. The error type is left
+ *  wide enough to accept either the production `ProviderAuthError` or
+ *  test stubs returning a plain `{ message }`. */
 export type ClaudeCodeTokenReader = () => Effect.Effect<string, { readonly message: string }>
 
 export const createClaudeCodeSessionManager = (
@@ -393,8 +393,8 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       // a single preamble user message before the new turn — the SDK
       // exposes no other channel for backfilling assistant history, so a
       // bare `prompt(lastUser)` would silently drop everything before
-      // the cache miss (counsel HIGH #4). The preamble is suppressed
-      // when reusing a warm session.
+      // the cache miss. The preamble is suppressed when reusing a warm
+      // session.
       const lastUserText = extractLastUserMessage(ctx.messages)
       const promptText = managed.created
         ? composePromptWithTranscript(ctx.messages, lastUserText)

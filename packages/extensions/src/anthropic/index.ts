@@ -66,8 +66,7 @@ const buildAnthropicConfig = (hints?: ProviderHints) => {
  * API-key path: plain `AnthropicClient.layer` over `FetchHttpClient`.
  * No keychain wrapper — `keychainClient` injects Claude Code OAuth
  * billing-header system blocks + identity prefix, which API-key users
- * are not on the hook for. Pre-C3 code did not wrap this branch either;
- * counsel C3 HIGH #2 caught the regression.
+ * are not on the hook for.
  */
 const makeApiKeyAnthropicLayer = (
   modelName: string,
@@ -88,17 +87,15 @@ const makeApiKeyAnthropicLayer = (
  * service and beta cache instances at construction time, and those
  * come from layers that the unwrapped Effect can `yield*`.
  *
- * Counsel C3 HIGH #1: the cache cell `Ref`s for both services are
- * passed in from extension-closure scope (built once in `modelDrivers()`
- * via `Ref.makeUnsafe`), not allocated per layer build. Without this
- * hoist, every `Provider.stream`/`Provider.generate` call rebuilt the
- * service layer and reset the cache, killing cross-request beta
- * learning and credential reuse. Legacy code achieved the same with
- * `credentialCache: CredentialCache = { creds: null, at: 0 }` in
- * extension-closure scope plus module-globals for beta exclusions.
+ * The cache cell `Ref`s for both services are passed in from
+ * extension-closure scope (built once in `modelDrivers()` via
+ * `Ref.makeUnsafe`), not allocated per layer build. Without this hoist,
+ * every `Provider.stream`/`Provider.generate` call rebuilds the service
+ * layer and resets the cache, killing cross-request beta learning and
+ * credential reuse.
  *
- * Counsel C3 MEDIUM: no `apiKey` is passed — the SDK's apiKey is
- * optional and skips `x-api-key` injection when absent (verified at
+ * No `apiKey` is passed — the SDK's apiKey is optional and skips
+ * `x-api-key` injection when absent (verified at
  * `~/.cache/repo/effect-ts/effect-smol/packages/ai/anthropic/src/AnthropicClient.ts:220`).
  * Avoids a brittle "scrub-the-placeholder" coupling between SDK and
  * middleware ordering.
@@ -133,8 +130,8 @@ const makeOauthAnthropicLayer = (
  * Build the model-driver contribution given pre-allocated cache cell
  * Refs. Extracted from the inline `modelDrivers` factory so tests can
  * inject their own Refs and assert that two `resolveModel` calls share
- * the same closure-owned cells (the C3 regression that counsel caught:
- * fresh Refs per `resolveModel` killed cross-request beta learning).
+ * the same closure-owned cells (fresh Refs per `resolveModel` would
+ * kill cross-request beta learning).
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: Ref.Ref<CredentialCacheCell>,
@@ -159,8 +156,7 @@ export const buildAnthropicModelDriver = (
     // extension-closure-owned cache cells into a fresh credential
     // service + beta cache layer pair. The Refs are shared across all
     // calls, so cross-request beta learning and credential cache reuse
-    // survive — matching the legacy closure-cache + module-globals
-    // semantics. Counsel C3 HIGH #1.
+    // survive.
     return {
       layer: makeOauthAnthropicLayer(modelName, config, authInfo, credentialCellRef, betaCellRef),
     }
@@ -176,14 +172,13 @@ export const buildAnthropicModelDriver = (
         // The Claude Code authorize flow targets the primary
         // account by default. PRIMARY_CLAUDE_SERVICE is spelled
         // out here so a future audit-grep finds every "default"
-        // site (counsel K2 — multi-account picker UI is the
-        // next consumer).
+        // site (the multi-account picker UI is the next consumer).
         let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
         const now = yield* Clock.currentTimeMillis
         if (!freshEnoughForUse(creds, now)) {
-          // Use the returned creds — the previous shape re-read
-          // keychain after refresh and silently lost direct-OAuth
-          // tokens whenever write-back failed (counsel HIGH #1).
+          // Use the returned creds — re-reading keychain after refresh
+          // would silently lose direct-OAuth tokens whenever write-back
+          // failed.
           creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
         }
         // Persist keychain creds to AuthStore
@@ -211,12 +206,11 @@ export const AnthropicExtension = defineExtension({
     }
     initAnthropicKeychainEnv(env)
 
-    // Counsel C3 HIGH #1: cache cells are hoisted to extension-closure
-    // scope so they survive across `resolveModel` calls. Lifetime
-    // matches the legacy module-state-with-clear-on-change behavior:
-    // one extension instance → one cell that lives until the runtime
-    // tears the extension down. `Ref.makeUnsafe` is the right primitive
-    // here because `modelDrivers()` is sync (no Effect runtime).
+    // Cache cells are hoisted to extension-closure scope so they
+    // survive across `resolveModel` calls. Lifetime: one extension
+    // instance → one cell that lives until the runtime tears the
+    // extension down. `Ref.makeUnsafe` is the right primitive here
+    // because `modelDrivers()` is sync (no Effect runtime).
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     const betaCellRef = Ref.makeUnsafe<BetaCacheCell>(EMPTY_BETA_CELL)
 

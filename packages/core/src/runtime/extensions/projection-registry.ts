@@ -124,7 +124,7 @@ export const compileProjections = (
     Effect.gen(function* () {
       // Id-keyed dedup matches the legacy `promptSection` map semantics —
       // higher-scope projection's section with the same id shadows a
-      // lower-scope one (codex MEDIUM on C7). Entries are scope-sorted at
+      // lower-scope one. Entries are scope-sorted at
       // `collectProjections`, so last write wins.
       const sectionsById = new Map<string, PromptSection>()
       const policyFragments: ToolPolicyFragment[] = []

@@ -161,10 +161,10 @@ describe("OpenAICredentialService — refresh on stale", () => {
   })
 
   test("refresh failure surfaces ProviderAuthError + preserves rotated refresh token in cell", async () => {
-    // Counsel HIGH #1: refresh failure must NOT clear the rotated
-    // refresh token. Drive a successful refresh first to rotate the
-    // token, then a failing refresh, then assert that a third attempt
-    // sees the ROTATED token in the refresh call (not the bootstrap).
+    // Refresh failure must NOT clear the rotated refresh token. Drive
+    // a successful refresh first to rotate the token, then a failing
+    // refresh, then assert that a third attempt sees the ROTATED token
+    // in the refresh call (not the bootstrap).
     let phase: "first" | "second" | "third" = "first"
     const callTokens: string[] = []
     const state: IOState = {
@@ -391,7 +391,7 @@ describe("OpenAICredentialService — persist failure does not regress getFresh"
 })
 
 describe("OpenAICredentialService — invalidate preserves rotated refresh token", () => {
-  test("rotated refresh survives persist failure + invalidate (counsel HIGH #1)", async () => {
+  test("rotated refresh survives persist failure + invalidate", async () => {
     // The exact regression: refresh rotates the token, persist defects,
     // invalidate fires (e.g. 401 recovery), next refresh MUST use the
     // rotated token in memory — not the bootstrap from authInfo.
@@ -479,7 +479,7 @@ describe("OpenAICredentialService — invalidate preserves rotated refresh token
 })
 
 describe("OpenAICredentialService — layerFromRef preserves cell across builds", () => {
-  test("warm cellRef beats a different authInfo seed on second build (counsel HIGH #2)", async () => {
+  test("warm cellRef beats a different authInfo seed on second build", async () => {
     // The actual seed-only-if-empty invariant. Build 1 fills the cell
     // with rotated creds. Build 2 arrives with a DIFFERENT authInfo
     // (different access/refresh) — the warm cell must win.

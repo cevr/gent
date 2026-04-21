@@ -10,11 +10,10 @@
  * wiring uses the test-owned `Ref` and applies the Codex transforms
  * (or doesn't, on the API-key branch).
  *
- * Mirrors `anthropic-extension-driver.test.ts`. Counsel C3 HIGH #1
- * (Anthropic) called this out as the missing regression seam — the
- * leaf-service suites passed even when `resolveModel` regressed to
- * allocating a fresh internal Ref per call. The same trap exists for
- * OpenAI's credential cache cell.
+ * Mirrors `anthropic-extension-driver.test.ts`. The leaf-service
+ * suites passed even when `resolveModel` regressed to allocating a
+ * fresh internal Ref per call. The same trap exists for OpenAI's
+ * credential cache cell.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Ref } from "effect"
@@ -75,7 +74,7 @@ const openaiHappyResponse = () => ({
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
   Effect.runPromise(oneGenerate(layer, state, openaiHappyResponse))
 
-describe("buildOpenAIModelDriver — OAuth path uses external cache Ref (counsel C3 HIGH #1 mirror)", () => {
+describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => {
   test("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
@@ -125,9 +124,9 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref (counsel
     // with the ChatGPT backend Codex endpoint.
     expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     // Codex requires the `responses=experimental` beta token. The
-    // transform merges it into any existing OpenAI-Beta value (counsel
-    // O3 MEDIUM #2). The SDK does not set its own OpenAI-Beta header,
-    // so this should be the only token.
+    // transform merges it into any existing OpenAI-Beta value. The SDK
+    // does not set its own OpenAI-Beta header, so this should be the
+    // only token.
     const beta = lastReq.headers["openai-beta"] ?? ""
     expect(beta).toContain("responses=experimental")
   })

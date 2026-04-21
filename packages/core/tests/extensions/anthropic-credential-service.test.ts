@@ -195,7 +195,7 @@ describe("AnthropicCredentialService — invalidate", () => {
 })
 
 describe("AnthropicCredentialService — persist failure does not regress getFresh", () => {
-  test("write-back failure logs warning but returns fresh creds (counsel HIGH #1)", async () => {
+  test("write-back failure logs warning but returns fresh creds", async () => {
     const stale = makeCreds("stale", 30_000)
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {

@@ -7,7 +7,7 @@
  * across turns. Branch + driver are part of the key because two
  * branches of the same gent session run logically separate
  * conversations and a driver swap mid-session must not reuse the prior
- * driver's subprocess (codex HIGH #2 / #3).
+ * driver's subprocess.
  *
  * Lifecycle: spawn → start codemode MCP → initialize → newSession (with
  * `_meta.systemPrompt`) → cache → reuse.

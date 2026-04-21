@@ -11,8 +11,7 @@
  * `boundary-discipline`: extensions get a read-only seam; writes happen in
  * `ApprovalService` / `AgentLoop`. The lint rule `gent/no-projection-writes`
  * cannot catch arbitrary method names like `persist`/`resolve`, so the
- * boundary itself is what enforces the contract — counsel finding from
- * Commit 6.
+ * boundary itself is what enforces the contract.
  *
  * @module
  */

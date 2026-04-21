@@ -1,10 +1,10 @@
 /**
- * Transcript composition for external-session rebuilds — counsel C5
- * fidelity check. The previous renderer dropped tool calls / results /
- * reasoning and emitted raw user text without escaping; the new shape
- * renders structured blocks inside a `<historical-transcript>` envelope
- * so the remote agent (Claude Code SDK / ACP) treats it as read-only
- * context, not instructions.
+ * Transcript composition for external-session rebuilds — fidelity
+ * check. A naive renderer drops tool calls / results / reasoning and
+ * emits raw user text without escaping; the structured shape renders
+ * blocks inside a `<historical-transcript>` envelope so the remote
+ * agent (Claude Code SDK / ACP) treats it as read-only context, not
+ * instructions.
  */
 import { describe, test, expect } from "bun:test"
 import { composePromptWithTranscript } from "@gent/extensions/acp-agents/transcript"

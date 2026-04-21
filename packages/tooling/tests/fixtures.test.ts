@@ -70,7 +70,7 @@ interface RuleCase {
    * Exact diagnostic count expected on the invalid fixture. When omitted,
    * the test asserts `> 0`. Set this when the invalid fixture covers a
    * specific enumerated set of cases — silently dropping a case on rule
-   * regression should fail the test, not pass it (counsel B11.2a).
+   * regression should fail the test, not pass it.
    */
   readonly expectedCount?: number
 }

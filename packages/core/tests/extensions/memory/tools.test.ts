@@ -1,10 +1,9 @@
 /**
  * Memory tool tests — covers the auto-derived projectKey contract.
  *
- * The tool schema documents `project_key` as "auto-detected if omitted",
- * but pre-C5-counsel-fix the tool just passed through the param without
- * filling it. That made `memory_remember({ scope: "project" })` silently
- * fall back to global storage, where the vault projection's project
+ * The tool schema documents `project_key` as "auto-detected if omitted".
+ * Without auto-fill, `memory_remember({ scope: "project" })` silently
+ * falls back to global storage, where the vault projection's project
  * section never finds them. These tests lock the auto-derive contract.
  */
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"

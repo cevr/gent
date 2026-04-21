@@ -201,7 +201,7 @@ describe("AuthGuard", () => {
   })
 })
 
-describe("ListAuthProvidersPayload schema (counsel HIGH #2)", () => {
+describe("ListAuthProvidersPayload schema", () => {
   // The RPC handler resolves project config from the session's cwd,
   // not the launch cwd. The wire payload must carry sessionId so the
   // TUI can opt into per-session resolution. Notably it does NOT

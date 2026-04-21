@@ -4,28 +4,27 @@
  *
  * The leaf-service suites (`anthropic-credential-service.test.ts`,
  * `anthropic-beta-cache.test.ts`, `anthropic-keychain-transform.test.ts`)
- * cover services in isolation. Those passed even when C3 introduced
- * two HIGH-severity wiring bugs that counsel had to catch:
+ * cover services in isolation. Those passed even when two HIGH-severity
+ * wiring bugs slipped in:
  *
  *   1. **Cache-Ref lifetime**: `resolveModel` runs once per
- *      `Provider.stream`/`Provider.generate` call. The original C3
- *      shape allocated `Ref<CredentialCacheCell>` and `Ref<BetaCacheCell>`
- *      inside `makeOauthAnthropicLayer`, so each request got a fresh
- *      empty cache — cross-request beta learning + credential reuse
- *      were silently dead.
- *   2. **API-key path wrapped in keychainClient**: pre-C3, only OAuth
- *      flowed through `keychainClient` (which injects Claude Code OAuth
- *      billing-header system blocks + identity prefix). C3 incorrectly
- *      extended the wrapper to the API-key branch.
+ *      `Provider.stream`/`Provider.generate` call. Allocating
+ *      `Ref<CredentialCacheCell>` and `Ref<BetaCacheCell>` inside
+ *      `makeOauthAnthropicLayer` gave each request a fresh empty
+ *      cache — cross-request beta learning + credential reuse were
+ *      silently dead.
+ *   2. **API-key path wrapped in keychainClient**: only OAuth should
+ *      flow through `keychainClient` (which injects Claude Code OAuth
+ *      billing-header system blocks + identity prefix). Extending the
+ *      wrapper to the API-key branch is incorrect.
  *
- * Earlier iterations of this file tested those invariants only at the
- * seam (sibling `layerFromRef` probes), which counsel correctly flagged
- * as coverage theater — the production layer was never actually built
- * or invoked. This file now drives one real `LanguageModel.generateText`
- * call through each layer with a captured fake `fetch`, then asserts
- * on the outbound request shape. That proves the resolved layer's
- * production wiring uses the test-owned Refs and applies the right
- * keychain transforms (or doesn't, on the API-key branch).
+ * Seam-only probes (sibling `layerFromRef`) are coverage theater — the
+ * production layer is never actually built or invoked. This file drives
+ * one real `LanguageModel.generateText` call through each layer with a
+ * captured fake `fetch`, then asserts on the outbound request shape.
+ * That proves the resolved layer's production wiring uses the
+ * test-owned Refs and applies the right keychain transforms (or
+ * doesn't, on the API-key branch).
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Ref } from "effect"
@@ -90,7 +89,7 @@ const parsePayload = (body: string | undefined): Record<string, unknown> => {
   return JSON.parse(body!) as Record<string, unknown>
 }
 
-describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (counsel C3 HIGH #1)", () => {
+describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", () => {
   test("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", async () => {
     initAnthropicKeychainEnv({})
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
@@ -226,7 +225,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs (cou
   })
 })
 
-describe("buildAnthropicModelDriver — API-key path is plain SDK (counsel C3 HIGH #2)", () => {
+describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   test("API-key resolveModel layer sends x-api-key (no Bearer)", async () => {
     initAnthropicKeychainEnv({})
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
@@ -254,8 +253,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK (counsel C3 HI
 
     const payload = parsePayload(fetchState.captured.at(-1)?.body)
     // No keychainClient wrapper → no system block, no identity prefix
-    // injection. Pre-C3 production code did NOT wrap the API-key
-    // branch; counsel C3 HIGH #2 caught the regression.
+    // injection. The API-key branch must not wrap.
     expect(JSON.stringify(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
   })
 

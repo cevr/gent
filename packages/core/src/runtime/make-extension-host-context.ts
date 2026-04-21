@@ -132,10 +132,9 @@ export const makeExtensionHostContext = (
       // Cast narrows `unknown` output to the typed `O`; the host validated
       // it via `ref.output` (== `capability.output`) at the boundary.
       // Error channel is `CapabilityError | CapabilityNotFoundError` and
-      // surfaces as such on the public `extension.query` API (no translation
-      // layer; codex HIGH on C4.5 — the prior cast lied about the runtime
-      // tag). The `intent: "read"` option gates the dispatch — a same-id
-      // write capability is invisible to `query()`.
+      // surfaces as such on the public `extension.query` API (no
+      // translation layer). The `intent: "read"` option gates the
+      // dispatch — a same-id write capability is invisible to `query()`.
       const e = capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctx, {
         intent: "read",
       })

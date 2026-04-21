@@ -39,7 +39,7 @@ export const runSupervisorRestart = <R>(
  *
  * Pinned to `Context.Context<never>` because the worker supervisor's
  * captured services are explicitly `Effect.context<never>()` — there is
- * no caller-provided service tail to thread through (counsel B11.2d).
+ * no caller-provided service tail to thread through.
  */
 export const runSupervisorCrashRestart = <A, E>(
   services: Context.Context<never>,

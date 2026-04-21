@@ -237,7 +237,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("addPermissionRule preserves driverOverrides (regression: codex HIGH)", () =>
+    it.live("addPermissionRule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
@@ -247,7 +247,7 @@ describe("ConfigService", () => {
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    it.live("removePermissionRule preserves driverOverrides (regression: codex HIGH)", () =>
+    it.live("removePermissionRule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
@@ -259,7 +259,7 @@ describe("ConfigService", () => {
     )
   })
 
-  describe("get(cwd) — per-session project config (counsel HIGH #1)", () => {
+  describe("get(cwd) — per-session project config", () => {
     // Shared scratch dirs: server launch cwd + two distinct project cwds,
     // each with a different `.gent/config.json`. The Live ConfigService
     // is built against the launch cwd, but every `get(otherCwd)` call

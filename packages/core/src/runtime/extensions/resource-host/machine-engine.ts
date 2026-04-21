@@ -130,13 +130,6 @@ export interface MachineEngineService {
   ) => Effect.Effect<void, ExtensionProtocolError>
   /**
    * Typed call/await-reply against an actor's request protocol.
-   *
-   * Renamed from `ask` in B11.3d (substrate-level only). The matching
-   * `extension.ask` RPC + `ctx.extension.ask(...)` host-context surface
-   * rename lands in B11.5 alongside the per-factory capability rebuild
-   * (those need a unified `extension.execute` RPC schema design).
-   * The internal mailbox-item tag has been `_tag: "execute"` since the
-   * B11.3a extraction.
    */
   readonly execute: <M extends AnyExtensionRequestMessage>(
     sessionId: SessionId,

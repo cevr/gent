@@ -108,8 +108,8 @@ describe("projection registry", () => {
   )
 
   it.live("prompt sections with same id: higher-scope shadows lower-scope (id-keyed dedup)", () =>
-    // C7 codex MEDIUM: dynamic prompt sections used to be id-keyed in the
-    // legacy registry. After the Projection.prompt migration, evaluateTurn
+    // Dynamic prompt sections used to be id-keyed in the legacy
+    // registry. After the Projection.prompt migration, evaluateTurn
     // now dedups by section id with last-write-wins (entries scope-sorted
     // builtin → user → project).
     Effect.gen(function* () {

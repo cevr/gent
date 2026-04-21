@@ -2,26 +2,10 @@
  * ResourceHost — substrate for the long-lived state declared by extension
  * Resources.
  *
- * Sequencing per `migrate-callers-then-delete-legacy-apis`:
- *
- *   - C3.1: SubscriptionEngine shipped; Resource shape in the contribution
- *     union.
- *   - C3.2: layer migration. `collectProcessLayers` is the only path for
- *     Resource layers; legacy `extractLayer` deleted.
- *   - C3.3: schedule engine arrives + `Resource.schedule`. Legacy
- *     `scheduler.ts` deleted.
- *   - C3.4 (here): `withLifecycle` weave consumes `Resource.start/stop`.
- *     Legacy `LifecycleContribution` + activation.ts lifecycle phase
- *     deleted.
- *   - B11.3: machine engine substrate split. `MachineEngine`
- *     (resource-host/machine-engine.ts) is the wide write surface
- *     (publish/send/ask/getActorStatuses/terminateAll); `MachineExecute`
- *     (machine-execute.ts) is the read-only call surface for projections
- *     (gains the `ReadOnly` brand in B11.4).
- *   - C3.6: bus-subscription / `ExtensionEventBus` deleted (only test
- *     callers remain by then).
- *
- * Each commit ships gate-green and counsel-reviewed.
+ * `MachineEngine` (resource-host/machine-engine.ts) is the wide write
+ * surface (publish/send/ask/getActorStatuses/terminateAll);
+ * `MachineExecute` (machine-execute.ts) is the read-only call surface for
+ * projections.
  *
  * @module
  */

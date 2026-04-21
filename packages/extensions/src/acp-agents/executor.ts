@@ -30,7 +30,7 @@ import { composePromptWithTranscript } from "./transcript.js"
  * Composite cache key shared by the SDK and ACP-protocol managers.
  * Keying on `(driverId, sessionId, branchId)` keeps two branches of the
  * same gent session, and two driver routings of the same branch, from
- * sharing remote state (codex HIGH #2 / #3).
+ * sharing remote state.
  */
 export interface ExternalSessionKey {
   readonly sessionId: string
@@ -46,7 +46,7 @@ export interface AcpManagedSession {
    * The executor uses it to seed the freshly-created remote session with
    * the prior transcript before sending the live user message — without
    * seeding, a fingerprint mismatch / `invalidateDriver` silently drops
-   * conversation history (counsel HIGH #4).
+   * conversation history.
    */
   readonly created: boolean
 }
@@ -197,7 +197,7 @@ export const makeAcpTurnExecutor = (
       // as a single preamble user message before the new turn — the ACP
       // protocol exposes only `prompt` for user input; we cannot inject
       // assistant turns directly. Bare last-user would silently drop
-      // history across cache misses / driver swaps (counsel HIGH #4).
+      // history across cache misses / driver swaps.
       const lastUser = extractLastUserMessage(ctx.messages)
       const promptText = session.created
         ? composePromptWithTranscript(ctx.messages, lastUser)

@@ -154,7 +154,7 @@ export const AcpAgentsExtension = defineExtension({
     // the native tool sections (`tool-list` + `tool-guidelines`) with a
     // codemode section — the model would otherwise see two contradictory
     // tool surfaces. Detection keys off driver metadata, not driver-id
-    // prefix (codex MEDIUM #3).
+    // prefix.
     pipeline("prompt.system", (input, next) =>
       Effect.gen(function* () {
         // Always run downstream first so this hook composes on top of

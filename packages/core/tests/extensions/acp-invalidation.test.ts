@@ -125,7 +125,7 @@ describe("AcpConnection.close", () => {
     }
   })
 
-  test("racing rpcRaw + close cannot leak a parked Deferred (counsel BLOCKER)", async () => {
+  test("racing rpcRaw + close cannot leak a parked Deferred", async () => {
     // Race coverage: a naive layout (separate closedRef + pendingRef)
     // permits this interleaving: rpcRaw reads closed=false → close
     // drains pending → rpcRaw inserts into the now-empty map → rpcRaw

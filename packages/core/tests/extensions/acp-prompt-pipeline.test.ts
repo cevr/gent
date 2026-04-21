@@ -176,7 +176,7 @@ describe("ACP prompt.system pipeline", () => {
     expect(result).not.toContain("@section:tool-list")
   })
 
-  test("strips every duplicate marker-wrapped section (counsel C8 deep)", async () => {
+  test("strips every duplicate marker-wrapped section", async () => {
     // Pre-fix the strip used a single non-global replace per id, so
     // duplicate marker-wrapped sections left one behind.
     const compiled = [

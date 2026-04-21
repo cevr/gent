@@ -64,11 +64,11 @@ export declare namespace ExtensionHostContext {
      * Typed read-only RPC into another extension. Routes by `(extensionId, queryId)`,
      * decodes input via `ref.input` and output via `ref.output`. The capability
      * host gates the call on `audience: "agent-protocol"` AND `intent: "read"`
-     * — a same-id write capability is invisible to `query()` (codex HIGH on
-     * C4.5: dropping the intent gate let `query()` invoke writes).
+     * — a same-id write capability is invisible to `query()` (dropping
+     * the intent gate would let `query()` invoke writes).
      *
      * Returns capability-host errors directly — there is no `QueryError`
-     * translation layer (deleted in C4.5).
+     * translation layer.
      */
     readonly query: <I, O>(
       ref: QueryRef<I, O>,

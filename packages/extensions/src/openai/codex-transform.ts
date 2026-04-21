@@ -237,7 +237,7 @@ const withHeaders = (
  * server-side between cache fill and wire send. On 401, invalidate
  * the cache and retry once — the next preprocess re-enters and
  * `creds.getFresh` forces a refresh against the rotated refresh token
- * preserved in the cell (per credential-service HIGH #1).
+ * preserved in the cell.
  *
  * Mirrors the Anthropic `Unauthorized401Error` (keychain-transform.ts:
  * 132-140) — typed so the recovery fires only on this signal, not on
@@ -329,7 +329,7 @@ export const buildCodexTransformClient =
       // minute; tokens can also be revoked between cache fill and wire
       // send. On the retry, `mapRequestEffect` re-enters and `creds.
       // getFresh` re-reads the rotated refresh token (preserved across
-      // invalidate per credential-service HIGH #1) and forces a refresh.
+      // invalidate) and forces a refresh.
       // A second 401 means a real auth failure (revoked session, expired
       // refresh token) — surface the response to the caller so the user
       // can re-authorize from the auth picker.

@@ -1,13 +1,13 @@
 /**
  * `auth.listProviders` RPC acceptance tests.
  *
- * Counsel HIGH #2: the handler resolves project config from the
- * session's cwd, not the launch cwd. A bug here (regression to
- * `configService.get()`) would silently re-block external-routed
- * sessions on launch-cwd model auth. The unit-level AuthGuard tests
- * at `auth-guard.test.ts:181` prove the `driverOverrides` short-circuit
- * works; this test proves the *RPC handler* threads `sessionId` →
- * `session.cwd` → `configService.get(cwd)` → `driverOverrides`.
+ * The handler resolves project config from the session's cwd, not the
+ * launch cwd. A bug here (regression to `configService.get()`) would
+ * silently re-block external-routed sessions on launch-cwd model auth.
+ * The unit-level AuthGuard tests at `auth-guard.test.ts:181` prove the
+ * `driverOverrides` short-circuit works; this test proves the *RPC
+ * handler* threads `sessionId` → `session.cwd` →
+ * `configService.get(cwd)` → `driverOverrides`.
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"

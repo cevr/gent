@@ -280,12 +280,12 @@ const resolveTurnContext = (params: {
     // then `UserConfig.driverOverrides[agent.name]`, else default.
     // `ConfigService` is a hard requirement of `AgentLoop.Live` — making
     // it optional here let test layers omit it and silently fall through
-    // to the default driver, hiding wiring bugs (codex MEDIUM #1).
+    // to the default driver, hiding wiring bugs.
     const configService = yield* ConfigService
     // Read driver overrides from the session's cwd. Without per-session
     // resolution, a multi-cwd server's project overrides would all
-    // come from the launch cwd (counsel HIGH #1). `get(undefined)`
-    // falls back to the launch-cwd cached config.
+    // come from the launch cwd. `get(undefined)` falls back to the
+    // launch-cwd cached config.
     const sessionConfig = yield* configService.get(params.sessionCwd)
     const driverOverrides = sessionConfig.driverOverrides ?? undefined
     const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
@@ -359,7 +359,7 @@ const resolveTurnContext = (params: {
     // append sentinel sections) AND the structured `sections` (for hooks
     // that need to swap or strip a section by id, e.g. codemode replacing
     // `tool-list` / `tool-guidelines` rather than appending a contradicting
-    // surface — codex MEDIUM #2).
+    // surface).
     const allAgents = yield* params.extensionRegistry.listAgents()
     const sections = buildTurnPromptSections(
       params.baseSections,
@@ -668,7 +668,7 @@ const resolveTurnPhase = (params: {
   hostCtx: ExtensionHostContext
   /** Session cwd — used to read project-level driver overrides from the
    *  *session's* `.gent/config.json` rather than the server's launch
-   *  cwd (counsel HIGH #1). Undefined for sessions without a cwd. */
+   *  cwd. Undefined for sessions without a cwd. */
   sessionCwd?: string
 }) =>
   Effect.gen(function* () {

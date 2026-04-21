@@ -188,10 +188,9 @@ export class AnthropicCredentialService extends Context.Service<
           }
 
           // Either no keychain creds or they're expiring inside the
-          // freshness window. Refresh — counsel HIGH #1: use the
-          // returned creds directly; the previous shape re-read
-          // keychain after refresh and silently lost direct-OAuth
-          // tokens whenever write-back failed.
+          // freshness window. Refresh — use the returned creds
+          // directly; re-reading keychain after refresh would silently
+          // lose direct-OAuth tokens whenever write-back failed.
           const refreshed = yield* io.refresh.pipe(
             Effect.catchTag("ProviderAuthError", () => Effect.succeed(null)),
           )

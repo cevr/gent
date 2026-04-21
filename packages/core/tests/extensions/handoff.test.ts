@@ -94,8 +94,7 @@ describe("HandoffTool", () => {
 // `getUiSnapshot`: `Suppress(n)` sets the counter to N; `GetCooldown` reads
 // it; every `TurnCompleted` decrements it. Workflows have no UI snapshot per
 // `composability-not-flags`, so the only legitimate cross-call read is the
-// typed `GetCooldown` reply. This test exists because before C8b nothing
-// directly exercised the protocol — the hole counsel flagged.
+// typed `GetCooldown` reply.
 // ============================================================================
 
 describe("Handoff cooldown workflow", () => {

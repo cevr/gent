@@ -246,7 +246,7 @@ describe("transformStreamEvent", () => {
   })
 })
 
-// ── repairToolPairs (counsel C7 / opencode parity B) ──
+// ── repairToolPairs (opencode parity B) ──
 
 describe("repairToolPairs", () => {
   test("drops orphan tool_use blocks (no matching downstream tool_result)", () => {
@@ -334,7 +334,7 @@ describe("repairToolPairs", () => {
   })
 })
 
-// ── system relocation (counsel C7 / opencode parity A) ──
+// ── system relocation (opencode parity A) ──
 
 describe("transformPayload — system content relocation", () => {
   test("moves third-party system blocks into the first user message", () => {
@@ -392,7 +392,7 @@ describe("transformPayload — system content relocation", () => {
     expect(messages[0]!.content).toHaveLength(1)
   })
 
-  test("splits IDENTITY+rest blocks so the rest gets relocated (counsel C8 deep — HIGH)", () => {
+  test("splits IDENTITY+rest blocks so the rest gets relocated", () => {
     // OpenCode's system.transform hook produces a single block of
     // shape `IDENTITY + "\n\n<real instructions>"`. Pre-fix, the
     // partition treated the whole block as identity-only and silently
@@ -415,12 +415,12 @@ describe("transformPayload — system content relocation", () => {
     expect(messages[0]!.content.endsWith("hello")).toBe(true)
   })
 
-  test("billing hash matches the post-relocation first-user text (counsel C7 regression)", () => {
-    // Counsel C7 follow-up: the prior order computed billing before
-    // relocation, so the hash on the wire didn't match what the API
-    // actually saw. Compare against a control payload with the same
-    // POST-relocation first-user text but no system to relocate — the
-    // billing hash header must be identical.
+  test("billing hash matches the post-relocation first-user text", () => {
+    // The prior order computed billing before relocation, so the hash
+    // on the wire didn't match what the API actually saw. Compare
+    // against a control payload with the same POST-relocation
+    // first-user text but no system to relocate — the billing hash
+    // header must be identical.
     const relocatedPayload = transformPayload({
       model: "claude-opus-4-6",
       max_tokens: 4096,
@@ -492,7 +492,7 @@ describe("transformPayload — system content relocation", () => {
   })
 })
 
-// ── haiku effort-strip (counsel C7 / opencode parity C) ──
+// ── haiku effort-strip (opencode parity C) ──
 
 describe("transformPayload — haiku effort-strip", () => {
   test("strips output_config.effort when model starts with claude-haiku", () => {

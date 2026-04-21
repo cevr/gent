@@ -137,14 +137,13 @@ describe("PRIMARY_CLAUDE_SERVICE", () => {
   })
 })
 
-describe("source-policy gates (counsel C4 review)", () => {
-  // Counsel C4 review surfaced two real defects: a non-primary
-  // keychain miss silently fell through to the on-disk file (which
-  // holds only the primary credential), and the CLI refresh fallback
-  // ran for any source (the CLI persists to whichever account is
-  // active, not the requested one). Both policies extracted into
-  // pure helpers so the gate is unit-testable without spawning
-  // `security` or `claude`.
+describe("source-policy gates", () => {
+  // Two real defects this guards: a non-primary keychain miss silently
+  // falling through to the on-disk file (which holds only the primary
+  // credential), and the CLI refresh fallback running for any source
+  // (the CLI persists to whichever account is active, not the
+  // requested one). Both policies extracted into pure helpers so the
+  // gate is unit-testable without spawning `security` or `claude`.
   describe("shouldFallBackToCredentialsFile", () => {
     it("returns true on non-darwin (no keychain at all)", () => {
       expect(shouldFallBackToCredentialsFile("linux", PRIMARY_CLAUDE_SERVICE)).toBe(true)
@@ -174,10 +173,10 @@ describe("source-policy gates (counsel C4 review)", () => {
 })
 
 describe("freshEnoughForUse", () => {
-  // Counsel HIGH #1 — the gate that decides "use these creds vs.
-  // refresh first" must allow at least a 60s safety margin so a token
-  // that's about to expire isn't sent on the wire mid-refresh. Note:
-  // this only tests the *threshold*, not the integration. The full
+  // The gate that decides "use these creds vs. refresh first" must
+  // allow at least a 60s safety margin so a token that's about to
+  // expire isn't sent on the wire mid-refresh. Note: this only tests
+  // the *threshold*, not the integration. The full
   // regression ("refresh returns fresh creds → caller uses them in
   // memory even when write-back failed") is verified at the call
   // sites (credential-service, claude-code-auth, anthropic/index)

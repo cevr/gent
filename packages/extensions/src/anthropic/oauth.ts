@@ -165,7 +165,7 @@ export const shouldFallBackToCli = (source: string): boolean => source === PRIMA
  * On darwin, the on-disk fallback is gated to PRIMARY only. A
  * non-primary keychain miss propagates `ProviderAuthError` rather
  * than silently returning the disk credential as if it belonged to
- * the requested source (counsel C4 review).
+ * the requested source.
  */
 export const readClaudeCodeCredentials = (
   source: string,
@@ -186,7 +186,7 @@ export const readClaudeCodeCredentials = (
   )
 }
 
-// ── Multi-account discovery (counsel keychain alignment K2) ──
+// ── Multi-account discovery ──
 
 /**
  * Enumerate every `Claude Code-credentials*` keychain entry — the CLI
@@ -259,7 +259,7 @@ export interface ClaudeAccount {
  * are dropped (the slot may exist but be empty / corrupted) — the
  * list returned is ready to render in a picker.
  *
- * Foundation for the multi-account auth UI; see counsel K2.
+ * Foundation for the multi-account auth UI.
  */
 export const listClaudeAccounts = (): Effect.Effect<ReadonlyArray<ClaudeAccount>> =>
   Effect.gen(function* () {
@@ -278,7 +278,7 @@ export const listClaudeAccounts = (): Effect.Effect<ReadonlyArray<ClaudeAccount>
     return accounts
   })
 
-// ── Write-back (counsel keychain alignment K2) ──
+// ── Write-back ──
 
 /**
  * Discover the macOS username stored on a keychain entry. The Claude
@@ -563,11 +563,11 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
  * Claude binary itself; we re-read keychain afterwards.
  *
  * Crucially the caller MUST use the returned value rather than
- * re-reading keychain after the call. The previous void-returning
- * shape silently lost direct-OAuth tokens whenever write-back failed
- * (locked keychain, file perms, race with `claude` CLI) — counsel
- * HIGH #1. Write-back here is best-effort; the in-memory creds are
- * authoritative for this turn.
+ * re-reading keychain after the call. A void-returning shape would
+ * silently lose direct-OAuth tokens whenever write-back failed
+ * (locked keychain, file perms, race with `claude` CLI). Write-back
+ * here is best-effort; the in-memory creds are authoritative for this
+ * turn.
  */
 export const refreshClaudeCodeCredentials = (
   source: string,
@@ -601,7 +601,7 @@ export const refreshClaudeCodeCredentials = (
     // the primary source. For non-primary accounts a CLI spawn could
     // refresh the wrong account; surface a typed failure instead so
     // the picker can prompt the user to refresh that account
-    // explicitly (counsel C4 review).
+    // explicitly.
     if (!shouldFallBackToCli(source)) {
       return yield* Effect.fail(
         new ProviderAuthError({

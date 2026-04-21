@@ -36,7 +36,7 @@ export const ListAuthProvidersPayload = Schema.Struct({
    * Without this, a multi-cwd server's auth gate always reads launch-cwd
    * config — so a session whose project config routes `cowork` to an
    * external driver would still be UX-blocked by model auth from launch
-   * cwd (counsel HIGH #2).
+   * cwd.
    */
   sessionId: Schema.optional(SessionId),
 })

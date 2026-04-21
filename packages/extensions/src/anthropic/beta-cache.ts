@@ -70,7 +70,7 @@ export interface AnthropicBetaCacheShape {
    * Record that `beta` was rejected for `modelId` under the current
    * `betaFlags` env. Runs the same env/model-change clear logic as
    * `getExcluded` so the call is standalone-safe (no hidden ordering
-   * contract — see counsel finding on commit b3758a64).
+   * contract).
    */
   readonly recordExcluded: (
     modelId: string,

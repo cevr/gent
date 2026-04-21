@@ -54,8 +54,8 @@ export interface ConfigServiceService {
    * Resolve the merged user + project config. Pass `cwd` whenever the
    * consumer is acting *on behalf of a specific session* — a multi-cwd
    * server (sessions in /a, /b, /c) cannot rely on the launch-cwd's
-   * `.gent/config.json` to carry project overrides for everyone
-   * (counsel HIGH #1). The in-memory user config is reused; only the
+   * `.gent/config.json` to carry project overrides for everyone.
+   * The in-memory user config is reused; only the
    * project file changes between cwds, falling back to an empty
    * project config if the file is missing or unparsable. Without `cwd`,
    * returns the cached project config from the server's launch cwd.

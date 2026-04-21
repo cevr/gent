@@ -53,8 +53,8 @@ const isPublicTransportEvent = (envelope: EventEnvelope) =>
  * of reusing the previous subprocess. Both `prev` and `next` may be the
  * same external — invalidating it once still tears down stale cache
  * (re-set after config edits, etc.). External drivers always carry an
- * `invalidate` hook (counsel C6 — required, not optional); model
- * drivers don't appear here because they aren't external.
+ * `invalidate` hook (required, not optional); model drivers don't
+ * appear here because they aren't external.
  */
 const invalidateExternalDriversFor = (
   registry: DriverRegistryService,
@@ -334,8 +334,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           // Read the previous override (if any) before persisting so we
           // can tear down its cached external sessions. Without this, an
           // ACP subprocess that was bound to the old routing would keep
-          // serving turns until the next fingerprint mismatch — see
-          // counsel HIGH #3.
+          // serving turns until the next fingerprint mismatch.
           const prevConfig = yield* configService.get()
           const prevOverride = prevConfig.driverOverrides?.[agentName]
 
@@ -347,7 +346,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       // The cleared override falls back to the model path on the next
       // turn. Any cached external session bound to the previous routing
       // is torn down here so a re-set to the same external doesn't
-      // resurrect a stale subprocess (counsel HIGH #3).
+      // resurrect a stale subprocess.
       "driver.clear": ({ agentName }) =>
         Effect.gen(function* () {
           const prevConfig = yield* configService.get()
@@ -360,11 +359,10 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "auth.listProviders": ({ agentName, sessionId }) =>
         Effect.gen(function* () {
           // Resolve config from the session's cwd when the caller knows
-          // it (counsel HIGH #2 — without per-session resolution, a
-          // multi-cwd server always reads launch-cwd config and gates
-          // a session whose project config routes through an external
-          // driver). Falls back to launch cwd if the lookup fails or
-          // sessionId is absent.
+          // it. Without per-session resolution, a multi-cwd server always
+          // reads launch-cwd config and gates a session whose project
+          // config routes through an external driver. Falls back to
+          // launch cwd if the lookup fails or sessionId is absent.
           let cwd: string | undefined
           if (sessionId !== undefined && storageForProfile._tag === "Some") {
             const session = yield* storageForProfile.value

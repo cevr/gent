@@ -533,14 +533,14 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
     expect(nextRequestBetas).toBe(learnedBetaCount)
   })
 
-  test("429 with long-context-shaped body still retries via outer transient layer (counsel C2d)", async () => {
-    // Counsel C2d parity-drift fix: long-context layer is 400-only.
-    // A 429 — even if its body string happens to match the long-context
-    // marker — flows through to the outer transient layer untouched.
-    // Two-attempt sequence: 429-LC-body → 200. Asserts the outer 429
-    // retry kicked in (2 captures), NOT the long-context retry (which
-    // would have rebuilt headers; on a 429 there's nothing useful to
-    // narrow because the rate limit isn't beta-related).
+  test("429 with long-context-shaped body still retries via outer transient layer", async () => {
+    // Long-context layer is 400-only. A 429 — even if its body string
+    // happens to match the long-context marker — flows through to the
+    // outer transient layer untouched. Two-attempt sequence: 429-LC-body
+    // → 200. Asserts the outer 429 retry kicked in (2 captures), NOT
+    // the long-context retry (which would have rebuilt headers; on a
+    // 429 there's nothing useful to narrow because the rate limit isn't
+    // beta-related).
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(validCredsIO("k1"))
     const cache = await buildBetaCache()
@@ -691,14 +691,11 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
     expect(response.status).toBe(401)
   })
 
-  test("non-401 failure does not invalidate creds (counsel C2e)", async () => {
-    // Counter-test sharpened per counsel C2e: the original shape only
-    // proved "first attempt used first token" — vacuously true since
-    // each request only does one io.read. Stronger shape: fire TWO
-    // sequential requests (500 then 200) on the same creds service. If
-    // a non-401 mistakenly invalidated the cache, request #2 would
-    // re-read and pick up the second token. Asserting both requests
-    // use the first token proves the cache survived the 500.
+  test("non-401 failure does not invalidate creds", async () => {
+    // Fire TWO sequential requests (500 then 200) on the same creds
+    // service. If a non-401 mistakenly invalidated the cache, request
+    // #2 would re-read and pick up the second token. Asserting both
+    // requests use the first token proves the cache survived the 500.
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(togglingCredsIO("first", "second"))
     const cache = await buildBetaCache()

@@ -3,8 +3,8 @@
  *
  * Validates the executor's session-management contract using a controllable
  * fake `ClaudeSdkServiceShape` plus a stub token reader — keeping the
- * tests independent of the macOS keychain so they run in CI (counsel
- * MEDIUM #6). Pure SDK message → TurnEvent mapping tests live in
+ * tests independent of the macOS keychain so they run in CI. Pure SDK
+ * message → TurnEvent mapping tests live in
  * `claude-code-executor.test.ts`.
  *
  *   1. Cache hit returns the same session for matching fingerprints and
@@ -13,7 +13,7 @@
  *      the previous session and rebuilds, reporting `created: true`.
  *   3. Branch + driver are part of the cache key — two branches of the
  *      same gent session, and two drivers serving the same branch, do
- *      not share remote state (codex HIGH #2 / #3).
+ *      not share remote state.
  *   4. `manager.invalidate(key)` closes the cached session.
  *   5. `manager.invalidateDriver(driverId)` closes every cached session
  *      whose key matches the driver.
@@ -77,7 +77,7 @@ describe("ClaudeCodeSessionManager", () => {
     expect(sessions).toHaveLength(1)
   })
 
-  test("rebuilds the session when systemPrompt changes (regression: codex HIGH)", async () => {
+  test("rebuilds the session when systemPrompt changes", async () => {
     const { sdk, sessions } = makeCountingSdk()
     const manager = createClaudeCodeSessionManager(sdk, stubTokenReader)
     await Effect.runPromise(manager.getOrCreate(key("g1"), "/cwd", "PROMPT-A", undefined))

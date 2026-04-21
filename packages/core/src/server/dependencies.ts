@@ -254,14 +254,11 @@ export const createDependencies = (config: DependenciesConfig) => {
   // permissions across every session, even if a session's cwd has
   // its own `.gent/config.json` permissions.
   //
-  // Counsel HIGH #2 flagged this alongside `auth.listProviders`. Auth
-  // gating was easy to make per-session (the RPC handler resolves cwd
-  // from the session at call time). Permission rules are checked
-  // synchronously from inside tool execution — every consumer would
-  // need a per-session Permission instance, which means lifting
-  // Permission out of the global Layer into a per-session profile.
-  // That's a bigger lift than this wave; tracking as TODO so it's
-  // not lost.
+  // Auth gating is per-session (the RPC handler resolves cwd from the
+  // session at call time). Permission rules are checked synchronously
+  // from inside tool execution — every consumer would need a
+  // per-session Permission instance, which means lifting Permission
+  // out of the global Layer into a per-session profile.
   const permissionLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {

@@ -260,11 +260,11 @@ describe("capability-host", () => {
     }),
   )
 
-  // ── intent gate (codex HIGH on C4.5) ──
-  // Replaces the deleted `query-mutation.test.ts` semantic lock: a same-id
-  // write capability must be invisible to a `{ intent: "read" }` dispatch
-  // (and vice versa) — otherwise `query()` could invoke a write capability
-  // and `mutate()` could invoke a read capability if their ids matched.
+  // ── intent gate ──
+  // A same-id write capability must be invisible to a
+  // `{ intent: "read" }` dispatch (and vice versa) — otherwise `query()`
+  // could invoke a write capability and `mutate()` could invoke a read
+  // capability if their ids matched.
 
   it.live("rejects with CapabilityNotFoundError when required intent does not match", () =>
     Effect.gen(function* () {
@@ -371,7 +371,7 @@ describe("capability-host", () => {
     }),
   )
 
-  // ── narrow ctx guard (codex MEDIUM on C4.5) ──
+  // ── narrow ctx guard ──
   // A handler authored against the wide `ModelCapabilityContext` that reaches
   // for `ctx.extension` (etc.) must surface a clear error when invoked through
   // a non-model dispatch with a narrow `CapabilityCoreContext` — not a

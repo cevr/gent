@@ -404,9 +404,9 @@ const stripHaikuEffort = (payload: Record<string, unknown>): Record<string, unkn
 
 /**
  * Apply every outgoing OAuth-billing transform. Order is load-bearing —
- * counsel C7 follow-up reordered relocation BEFORE billing computation
- * because the relocator changes the first-user message text and the
- * billing hash MUST match what's on the wire:
+ * relocation MUST run BEFORE billing computation because the relocator
+ * changes the first-user message text and the billing hash MUST match
+ * what's on the wire:
  *
  *   1. transformTools — PascalCase mcp_ prefix on tool names.
  *   2. repairToolPairs — drop orphan tool_use / tool_result blocks

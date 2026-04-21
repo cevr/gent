@@ -440,11 +440,11 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
   })
 
   test("merges responses=experimental into a pre-existing OpenAI-Beta header (preserve other tokens)", async () => {
-    // Counsel O3 MEDIUM #2: if upstream sets a custom beta value, we
-    // must still ensure `responses=experimental` is present — pure
-    // preservation would let Codex reject our traffic if the SDK ever
-    // starts injecting a different beta token. Append the required
-    // token if missing; preserve every other token unchanged.
+    // If upstream sets a custom beta value, we must still ensure
+    // `responses=experimental` is present — pure preservation would
+    // let Codex reject our traffic if the SDK ever starts injecting a
+    // different beta token. Append the required token if missing;
+    // preserve every other token unchanged.
     const state = okResponse()
     const wrapped = await buildWrapped(state)
     await runOk(
@@ -469,11 +469,11 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
   })
 
   test("structured (non-string) system/developer content stays in input, NOT silently dropped", async () => {
-    // Counsel O3 MEDIUM #1: only string content lifts to top-level
-    // `instructions`. Items with structured content (e.g. ReadonlyArray
-    // of InputContent for system/developer per the OpenAI-compat
-    // schema) must remain in `filteredInput` so the Codex backend still
-    // sees them — silently dropping would corrupt the prompt.
+    // Only string content lifts to top-level `instructions`. Items
+    // with structured content (e.g. ReadonlyArray of InputContent for
+    // system/developer per the OpenAI-compat schema) must remain in
+    // `filteredInput` so the Codex backend still sees them — silently
+    // dropping would corrupt the prompt.
     const state = okResponse()
     const wrapped = await buildWrapped(state)
     const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
@@ -762,10 +762,10 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
   })
 
   test("401 → invalidate → retry refresh fails surfaces ProviderAuthError as HttpClientError", async () => {
-    // Edge case from counsel review: first wire call returns 401 with a
-    // valid initial token. Invalidate fires, retry triggers a re-read of
-    // creds, and the rotation IO fails with ProviderAuthError on the
-    // second refresh. The caller must see HttpClientError with
+    // Edge case: first wire call returns 401 with a valid initial
+    // token. Invalidate fires, retry triggers a re-read of creds, and
+    // the rotation IO fails with ProviderAuthError on the second
+    // refresh. The caller must see HttpClientError with
     // TransportError.cause = ProviderAuthError — same surface as the
     // pre-wire credential failure path. This locks in that the recovery
     // chain doesn't swallow auth errors that surface during the retry.

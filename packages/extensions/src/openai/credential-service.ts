@@ -192,11 +192,10 @@ export class OpenAICredentialService extends Context.Service<
           // Need to refresh. Always prefer the in-memory refresh token
           // from the cell — that's the most recently rotated one. Only
           // fall back to `authInfo.refresh` (the bootstrap token) when
-          // no rotation has happened yet. Counsel HIGH #1: dropping the
-          // rotated token on refresh failure or invalidate would
-          // silently roll back to a stale bootstrap that the OAuth
-          // server may have already revoked once the new one was
-          // issued.
+          // no rotation has happened yet. Dropping the rotated token
+          // on refresh failure or invalidate would silently roll back
+          // to a stale bootstrap that the OAuth server may have
+          // already revoked once the new one was issued.
           const refreshToken = cell.creds?.refresh ?? authInfo.refresh
           if (refreshToken === undefined || refreshToken.length === 0) {
             yield* Ref.set(cellRef, EMPTY_CREDENTIAL_CELL)
@@ -230,14 +229,14 @@ export class OpenAICredentialService extends Context.Service<
         },
       )
 
-      // Counsel HIGH #1: invalidate must NOT drop the rotated refresh
-      // token. Anthropic's invalidate is safe because the next
-      // `getFresh` re-reads from the OS keychain (which holds the most
-      // recent token); OpenAI has no keychain — the cell is the only
-      // copy of the rotated token. Hard-resetting to EMPTY would force
-      // the next refresh to fall back to `authInfo.refresh`, the
-      // bootstrap token, which the OAuth server may have already
-      // revoked when it issued the rotation.
+      // Invalidate must NOT drop the rotated refresh token. Anthropic's
+      // invalidate is safe because the next `getFresh` re-reads from
+      // the OS keychain (which holds the most recent token); OpenAI
+      // has no keychain — the cell is the only copy of the rotated
+      // token. Hard-resetting to EMPTY would force the next refresh
+      // to fall back to `authInfo.refresh`, the bootstrap token, which
+      // the OAuth server may have already revoked when it issued the
+      // rotation.
       //
       // Instead: zero out the access token so the cache hit and
       // freshness branches both miss, and reset `at` so TTL fires
