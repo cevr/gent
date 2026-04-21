@@ -760,4 +760,69 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
     expect(response.status).toBe(200)
     expect(state.captured).toHaveLength(1)
   })
+
+  test("401 → invalidate → retry refresh fails surfaces ProviderAuthError as HttpClientError", async () => {
+    // Edge case from counsel review: first wire call returns 401 with a
+    // valid initial token. Invalidate fires, retry triggers a re-read of
+    // creds, and the rotation IO fails with ProviderAuthError on the
+    // second refresh. The caller must see HttpClientError with
+    // TransportError.cause = ProviderAuthError — same surface as the
+    // pre-wire credential failure path. This locks in that the recovery
+    // chain doesn't swallow auth errors that surface during the retry.
+    let refreshCount = 0
+    const rotateThenFailIO: OpenAICredentialIO = {
+      refresh: () =>
+        Effect.suspend(() => {
+          refreshCount += 1
+          if (refreshCount === 1) {
+            return Effect.succeed<OpenAICredentials>({
+              access: "first-access",
+              refresh: "first-refresh",
+              expires: FAR_FUTURE_MS(),
+            })
+          }
+          return Effect.fail(new ProviderAuthError({ message: "rotation failed mid-recovery" }))
+        }),
+    }
+    const stalAuthInfo: ProviderAuthInfo = {
+      type: "oauth",
+      access: "",
+      refresh: "seed-refresh",
+      expires: 0,
+    }
+    const creds = await buildCreds(rotateThenFailIO, stalAuthInfo)
+    const state: FakeClientState = {
+      captured: [],
+      responder: () => new Response("unauthorized", { status: 401 }),
+    }
+    const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        wrapped
+          .post("https://api.openai.com/v1/chat/completions", {
+            body: jsonBody({ model: "gpt-5.4" }),
+          })
+          .pipe(Effect.exit),
+      ),
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag !== "Failure") throw new Error("expected failure")
+    const failReason = result.cause.reasons.find(
+      (r): r is Cause.Fail<HttpClientError> => r._tag === "Fail",
+    )
+    expect(failReason).toBeDefined()
+    const err = failReason!.error
+    expect(err).toBeInstanceOf(HttpClientError)
+    expect(err.reason).toBeInstanceOf(TransportError)
+    const reason = err.reason as TransportError
+    expect(reason.cause).toBeInstanceOf(ProviderAuthError)
+    expect((reason.cause as ProviderAuthError).message).toBe("rotation failed mid-recovery")
+    // Exactly one wire call: the original 401. The retry never reaches
+    // the wire because preprocess (creds.getFresh) fails first.
+    expect(state.captured).toHaveLength(1)
+    // Two refreshes: cache fill (succeeds) + post-invalidate re-read (fails).
+    expect(refreshCount).toBe(2)
+  })
 })
