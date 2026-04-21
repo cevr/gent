@@ -691,31 +691,45 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
     expect(response.status).toBe(401)
   })
 
-  test("non-401 failure does not invalidate creds", async () => {
-    // Counter-test: if the middleware over-eagerly invalidated on any
-    // error, a transport failure would burn the credential cache and
-    // potentially trigger an unwanted refresh. Assert the creds stay
-    // pinned across a 500 (which doesn't trigger any retry layer).
+  test("non-401 failure does not invalidate creds (counsel C2e)", async () => {
+    // Counter-test sharpened per counsel C2e: the original shape only
+    // proved "first attempt used first token" — vacuously true since
+    // each request only does one io.read. Stronger shape: fire TWO
+    // sequential requests (500 then 200) on the same creds service. If
+    // a non-401 mistakenly invalidated the cache, request #2 would
+    // re-read and pick up the second token. Asserting both requests
+    // use the first token proves the cache survived the 500.
     initAnthropicKeychainEnv({})
     const creds = await buildCreds(togglingCredsIO("first", "second"))
     const cache = await buildBetaCache()
     const fakeState: FakeClientState = {
       captured: [],
-      responder: () => new Response("server error", { status: 500 }),
+      responder: (call) =>
+        call === 0
+          ? new Response("server error", { status: 500 })
+          : new Response("ok", { status: 200 }),
     }
     const transform = buildKeychainTransformClient(creds, cache)
     const wrapped = transform(makeFakeClient(fakeState))
 
-    const response = await runOk(
+    const r1 = await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
+    )
+    const r2 = await runOk(
       wrapped.post("https://api.anthropic.com/v1/messages", {
         body: jsonBody({ model: "claude-opus-4-6" }),
       }),
     )
 
-    // Single attempt, original token used, 500 propagates.
-    expect(fakeState.captured).toHaveLength(1)
-    expect(response.status).toBe(500)
+    expect(fakeState.captured).toHaveLength(2)
+    expect(r1.status).toBe(500)
+    expect(r2.status).toBe(200)
+    // Both requests used the cached "first" token. If the 500 had
+    // wrongly invalidated, request #2 would carry "second-access".
     expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer first-access")
+    expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer first-access")
   })
 })
 
