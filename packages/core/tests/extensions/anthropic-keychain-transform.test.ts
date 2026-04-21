@@ -623,6 +623,102 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   })
 })
 
+describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
+  // IO that flips its `read` result on each call — simulates the
+  // production sequence: stale cached token sent on attempt 1, 401 fires
+  // creds.invalidate, attempt 2's mapRequestEffect re-reads keychain and
+  // gets the fresh token. No global mutation; the toggle lives in a
+  // closure over `attempt`.
+  const togglingCredsIO = (staleLabel: string, freshLabel: string): AnthropicCredentialIO => {
+    let attempt = 0
+    return {
+      read: Effect.suspend(() => {
+        const label = attempt === 0 ? staleLabel : freshLabel
+        attempt++
+        return Effect.succeed(makeCreds(label))
+      }),
+      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+    }
+  }
+
+  test("401 once → invalidate creds → retry succeeds with fresh token", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(togglingCredsIO("stale", "fresh"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: (call) =>
+        call === 0 ? new Response("auth", { status: 401 }) : new Response("ok", { status: 200 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
+    )
+
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(200)
+    // Crucial: token differs across attempts — invalidate forced the
+    // mapRequestEffect to re-read creds, getting the fresh token.
+    expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer stale-access")
+    expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
+  })
+
+  test("two consecutive 401s — second surfaces (real auth failure, no infinite loop)", async () => {
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(togglingCredsIO("stale", "still-bad"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      // Both attempts get 401 — the second 401 is a real auth failure
+      // (revoked session, missing scope) and must reach the caller.
+      responder: () => new Response("auth", { status: 401 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
+    )
+
+    // 1 initial + 1 retry = 2 attempts (no third)
+    expect(fakeState.captured).toHaveLength(2)
+    expect(response.status).toBe(401)
+  })
+
+  test("non-401 failure does not invalidate creds", async () => {
+    // Counter-test: if the middleware over-eagerly invalidated on any
+    // error, a transport failure would burn the credential cache and
+    // potentially trigger an unwanted refresh. Assert the creds stay
+    // pinned across a 500 (which doesn't trigger any retry layer).
+    initAnthropicKeychainEnv({})
+    const creds = await buildCreds(togglingCredsIO("first", "second"))
+    const cache = await buildBetaCache()
+    const fakeState: FakeClientState = {
+      captured: [],
+      responder: () => new Response("server error", { status: 500 }),
+    }
+    const transform = buildKeychainTransformClient(creds, cache)
+    const wrapped = transform(makeFakeClient(fakeState))
+
+    const response = await runOk(
+      wrapped.post("https://api.anthropic.com/v1/messages", {
+        body: jsonBody({ model: "claude-opus-4-6" }),
+      }),
+    )
+
+    // Single attempt, original token used, 500 propagates.
+    expect(fakeState.captured).toHaveLength(1)
+    expect(response.status).toBe(500)
+    expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer first-access")
+  })
+})
+
 // Suppress unused-warning for Layer/Ref imports kept for symmetry with
 // other test files in this directory.
 void Layer

@@ -31,9 +31,13 @@
  * because each call to `creds.getFresh` still consults the live
  * `Ref` cache.
  *
- * This file currently ships auth headers (Commit 2a) + 429/529 retry
- * (Commit 2b) + long-context beta retry (Commit 2d). 401 recovery
- * lands in 2e.
+ * This file ships the full middleware stack: auth headers (2a),
+ * 429/529 + transport retry (2b), long-context beta retry (2d), and
+ * 401 recovery (2e). Layered outside-in via `pipe`, the order is:
+ *   - mapRequestEffect (preprocess) — auth + cache-aware headers
+ *   - long-context beta retry (innermost transformResponse)
+ *   - 429/529 + transport retry (middle)
+ *   - 401 recovery (outermost) — invalidate creds + retry once
  *
  * On the long-context beta retry: the Anthropic API rejects requests
  * that include both `context-1m-2025-08-07` and `interleaved-thinking-
@@ -110,6 +114,24 @@ const isTransientStatus = (status: number): boolean => status === 429 || status 
 class LongContextBetaError extends Schema.TaggedErrorClass<LongContextBetaError>(
   "@gent/extensions/anthropic/LongContextBetaError",
 )("LongContextBetaError", {
+  response: Schema.Any,
+}) {
+  getResponse(): HttpClientResponse.HttpClientResponse {
+    return this.response
+  }
+}
+
+/**
+ * Internal error driving 401 recovery. The credential cache TTL (30s)
+ * can outlive the token's last minute, and tokens can be revoked
+ * server-side between cache fill and wire send. On 401, invalidate the
+ * cache and retry once — `creds.getFresh` then re-reads from keychain
+ * or forces a refresh. Counsel-friendly typed error so the recovery
+ * fires only on this signal, not other unrelated 4xx.
+ */
+class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>(
+  "@gent/extensions/anthropic/Unauthorized401Error",
+)("Unauthorized401Error", {
   response: Schema.Any,
 }) {
   getResponse(): HttpClientResponse.HttpClientResponse {
@@ -352,6 +374,38 @@ export const buildKeychainTransformClient =
             times: 2,
           }),
           Effect.catchTag("TransientResponseError", (e) => Effect.succeed(e.getResponse())),
+        ),
+      ),
+      // 401 recovery (outermost): invalidate the credential cache + retry
+      // ONCE. The cache TTL is 30s so it can outlive a token's last
+      // minute; tokens can also be revoked between cache fill and wire
+      // send. On the retry, `mapRequestEffect` re-enters and `creds.
+      // getFresh` re-reads keychain or forces a refresh. A second 401
+      // means a real auth failure (revoked session, missing scope) —
+      // surface the response to the caller so user-facing recovery
+      // (the "Run `claude`" message) can kick in.
+      //
+      // `tapError` runs the invalidate effect AFTER the failure but
+      // BEFORE Effect.retry decides to re-attempt — invalidate must
+      // commit before the next preprocess re-reads the cache.
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.flatMap(
+            (
+              response,
+            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> =>
+              response.status === 401
+                ? Effect.fail(new Unauthorized401Error({ response }))
+                : Effect.succeed(response),
+          ),
+          Effect.tapError((e) =>
+            e._tag === "Unauthorized401Error" ? creds.invalidate : Effect.void,
+          ),
+          Effect.retry({
+            while: (e) => e._tag === "Unauthorized401Error",
+            times: 1,
+          }),
+          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.getResponse())),
         ),
       ),
     )
