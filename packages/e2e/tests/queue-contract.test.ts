@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, waitFor } from "./transport-harness"
 
@@ -11,11 +11,20 @@ const flattenRestoreText = (snapshot: {
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>): Effect.Effect<Ref.Ref<A[]>, E, never> =>
   Effect.gen(function* () {
     const values = yield* Ref.make<A[]>([])
+    const ready = yield* Deferred.make<void>()
     yield* stream.pipe(
-      Stream.runForEach((value) => Ref.update(values, (current) => [...current, value])),
+      Stream.runForEach((value) =>
+        Effect.gen(function* () {
+          yield* Ref.update(values, (current) => [...current, value])
+          yield* Deferred.succeed(ready, void 0).pipe(Effect.ignore)
+        }),
+      ),
       Effect.forkScoped,
     )
-    yield* Effect.sleep("50 millis")
+    // Resolve once the first value has been written into `values`. Cap at 50ms
+    // because some streams (events-after-cursor) only emit when state changes
+    // — downstream waitFor() polls absorb any remaining race.
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 
