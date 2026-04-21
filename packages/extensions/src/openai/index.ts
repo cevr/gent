@@ -1,73 +1,27 @@
-import { Effect, Layer, Redacted } from "effect"
+import { Effect, Layer, Redacted, Ref } from "effect"
 import {
   defineExtension,
-  AuthOauth,
   AuthMethod,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderHints,
   type ProviderResolution,
 } from "@gent/core/extensions/api"
-import {
-  authorizeOpenAI,
-  createOpenAIOAuthFetch,
-  refreshOpenAIOauth,
-  OPENAI_OAUTH_ALLOWED_MODELS,
-} from "./oauth.js"
-import { persistRefreshedOpenAICredentials } from "./persist-boundary.js"
+import { authorizeOpenAI, OPENAI_OAUTH_ALLOWED_MODELS } from "./oauth.js"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 import { FetchHttpClient } from "effect/unstable/http"
+import {
+  OpenAICredentialService,
+  EMPTY_CREDENTIAL_CELL,
+  type CredentialCacheCell,
+} from "./credential-service.js"
+import { buildCodexTransformClient } from "./codex-transform.js"
 
+// Provider extensions read env at setup time (outside Effect runtime, no Config available).
+// Lint override in .oxlintrc.json allows process.env in extensions/**/provider dirs.
 const readEnv = (name: string): string | undefined => {
   const val = process.env[name]
   return val !== undefined && val !== "" ? val : undefined
-}
-
-/** Build an OAuth fetch wrapper from ProviderAuthInfo tokens + persist callback */
-const buildOAuthLoader = (authInfo: ProviderAuthInfo) => {
-  // Mutable token state for the lifetime of this model resolution
-  let current = {
-    access: authInfo.access ?? "",
-    refresh: authInfo.refresh ?? "",
-    expires: authInfo.expires ?? 0,
-    accountId: authInfo.accountId,
-  }
-
-  return async (): Promise<AuthOauth> => {
-    if (current.access.length > 0 && current.expires >= Date.now()) {
-      return new AuthOauth({
-        type: "oauth",
-        access: current.access,
-        refresh: current.refresh,
-        expires: current.expires,
-        ...(current.accountId !== undefined ? { accountId: current.accountId } : {}),
-      })
-    }
-
-    // Token expired — refresh
-    const refreshed = await refreshOpenAIOauth(current.refresh)
-    current = {
-      access: refreshed.access,
-      refresh: refreshed.refresh,
-      expires: refreshed.expires,
-      accountId: refreshed.accountId ?? current.accountId,
-    }
-
-    // Persist back to AuthStore — Promise edge lives in `persist-boundary.ts`.
-    // The SDK loader is Promise-returning; persistence runs the Effect via
-    // the boundary helper, which logs and swallows failures.
-    if (authInfo.persist !== undefined) {
-      await persistRefreshedOpenAICredentials(authInfo.persist, current)
-    }
-
-    return new AuthOauth({
-      type: "oauth",
-      access: current.access,
-      refresh: current.refresh,
-      expires: current.expires,
-      ...(current.accountId !== undefined ? { accountId: current.accountId } : {}),
-    })
-  }
 }
 
 type OAuthCallback = (code?: string) => Promise<{
@@ -88,123 +42,175 @@ const buildOpenAiConfig = (hints?: ProviderHints) => {
   return config
 }
 
+// ── Layer construction helpers ──
+
+/**
+ * API-key path: plain `OpenAiClient.layer` over `FetchHttpClient`. No
+ * Codex transform — the Codex backend rewrite + OAuth headers are
+ * specific to the ChatGPT OAuth path.
+ */
+const makeApiKeyOpenAILayer = (
+  modelName: string,
+  config: Record<string, unknown>,
+  apiKey: string,
+) => {
+  const clientLayer = OpenAiClient.layer({
+    apiKey: Redacted.make(apiKey),
+  }).pipe(Layer.provide(FetchHttpClient.layer))
+  return OpenAiLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
+}
+
+/**
+ * OAuth path: builds `OpenAiClient.layer` with `transformClient` set to
+ * the Codex transform middleware (auth headers, URL/body/beta rewrite,
+ * 401 recovery). No `apiKey` — the SDK only injects Bearer auth when
+ * `apiKey !== undefined`, so omitting it lets our middleware own the
+ * Authorization header without a "scrub-the-placeholder" coupling
+ * (mirrors Anthropic counsel C3 MEDIUM).
+ *
+ * The credential cache cell `Ref` is passed in from extension-closure
+ * scope (built once in `modelDrivers()` via `Ref.makeUnsafe`), not
+ * allocated per layer build. Without this hoist, every
+ * `Provider.stream`/`Provider.generate` call rebuilt the service layer
+ * and reset the cache, killing credential reuse and the rotated
+ * refresh-token contract that O1 hardened around.
+ */
+const makeOauthOpenAILayer = (
+  modelName: string,
+  config: Record<string, unknown>,
+  authInfo: ProviderAuthInfo,
+  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+) => {
+  const credentialLayer = OpenAICredentialService.layerFromRef(credentialCellRef, authInfo)
+
+  const clientLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const creds = yield* OpenAICredentialService
+      return OpenAiClient.layer({
+        transformClient: buildCodexTransformClient(creds),
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+    }),
+  ).pipe(Layer.provide(credentialLayer))
+
+  return OpenAiLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
+}
+
+/**
+ * Build the model-driver contribution given a pre-allocated credential
+ * cache cell `Ref`. Extracted from the inline `modelDrivers` factory so
+ * tests can inject their own `Ref` and assert that two `resolveModel`
+ * calls share the same closure-owned cell.
+ */
+export const buildOpenAIModelDriver = (
+  credentialCellRef: Ref.Ref<CredentialCacheCell>,
+  pendingCallbacks: Map<string, OAuthCallback>,
+): ModelDriverContribution => ({
+  id: "openai",
+  name: "OpenAI",
+  resolveModel: (modelName, authInfo, hints): ProviderResolution => {
+    const config = buildOpenAiConfig(hints)
+
+    // Stored OAuth — handle inline with token refresh
+    // Uses openai-compat (Chat Completions) since the Codex endpoint
+    // expects that format
+    if (authInfo?.type === "oauth") {
+      if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
+        throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
+      }
+      return { layer: makeOauthOpenAILayer(modelName, config, authInfo, credentialCellRef) }
+    }
+
+    // Stored API key takes precedence over env var
+    const storedApiKey =
+      authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
+    const envApiKey = readEnv("OPENAI_API_KEY")
+    const apiKey = storedApiKey ?? envApiKey
+
+    if (apiKey !== undefined) {
+      return { layer: makeApiKeyOpenAILayer(modelName, config, apiKey) }
+    }
+
+    // No auth available — try unauthenticated (will fail at API call time)
+    const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
+    return {
+      layer: OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+        Layer.provide(clientLayer),
+      ),
+    }
+  },
+  listModels: (baseCatalog, authInfo) => {
+    // When OAuth is active, filter to allowed models + zero pricing
+    if (authInfo?.type !== "oauth") return baseCatalog
+    return baseCatalog
+      .filter((model) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const m = model as { provider?: string; id?: string }
+        if (m.provider !== "openai") return true
+        const parts = String(m.id ?? "").split("/", 2)
+        const modelName = parts[1]
+        return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
+      })
+      .map((model) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        const m = model as { provider?: string; pricing?: unknown }
+        if (m.provider !== "openai") return model
+        return { ...m, pricing: { input: 0, output: 0 } }
+      })
+  },
+  auth: {
+    methods: [
+      new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
+      new AuthMethod({ type: "api", label: "Manually enter API key" }),
+    ],
+    authorize: (ctx) =>
+      Effect.tryPromise({
+        try: async () => {
+          if (ctx.methodIndex !== 0) return undefined
+          const { authorization, callback: cb } = await authorizeOpenAI()
+          pendingCallbacks.set(ctx.authorizationId, cb)
+          return authorization
+        },
+        catch: (e) => ({
+          _tag: "OpenAIOAuthError" as const,
+          cause: e,
+        }),
+      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+    callback: (ctx) =>
+      Effect.gen(function* () {
+        const cb = pendingCallbacks.get(ctx.authorizationId)
+        pendingCallbacks.delete(ctx.authorizationId)
+        if (cb === undefined) return
+        const result = yield* Effect.tryPromise({
+          try: () => cb(ctx.code),
+          catch: (e) => ({
+            _tag: "OpenAIOAuthCallbackError" as const,
+            cause: e,
+          }),
+        })
+        yield* ctx.persist({
+          type: "oauth",
+          access: result.access,
+          refresh: result.refresh,
+          expires: result.expires,
+          ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
+        })
+      }).pipe(Effect.catchEager(() => Effect.void)),
+  },
+})
+
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",
   modelDrivers: () => {
+    // Counsel C3 HIGH #1 (Anthropic precedent): the credential cache
+    // cell is hoisted to extension-closure scope so it survives across
+    // `resolveModel` calls. One extension instance → one cell that
+    // lives until the runtime tears the extension down. `Ref.makeUnsafe`
+    // is the right primitive here because `modelDrivers()` is sync
+    // (no Effect runtime).
+    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     // Pending OAuth callbacks keyed by authorizationId (closure state)
     const pendingCallbacks = new Map<string, OAuthCallback>()
-    const openaiProvider: ModelDriverContribution = {
-      id: "openai",
-      name: "OpenAI",
-      resolveModel: (modelName, authInfo, hints): ProviderResolution => {
-        const config = buildOpenAiConfig(hints)
 
-        // Stored OAuth — handle inline with token refresh
-        // Uses openai-compat (Chat Completions) since the Codex endpoint expects that format
-        if (authInfo?.type === "oauth") {
-          if (!OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)) {
-            throw new Error(`Model "${modelName}" not available with ChatGPT OAuth`)
-          }
-          const loadAuth = buildOAuthLoader(authInfo)
-          const oauthFetch = createOpenAIOAuthFetch(loadAuth)
-
-          // Provide custom fetch via FetchHttpClient.Fetch layer
-          const customFetchLayer = Layer.succeed(
-            FetchHttpClient.Fetch,
-            oauthFetch as typeof globalThis.fetch,
-          )
-          const clientLayer = OpenAiClient.layer({
-            apiKey: Redacted.make("oauth"),
-          }).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(customFetchLayer))
-          const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-            Layer.provide(clientLayer),
-          )
-          return { layer: modelLayer }
-        }
-
-        // Stored API key takes precedence over env var
-        const storedApiKey =
-          authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
-        const envApiKey = readEnv("OPENAI_API_KEY")
-        const apiKey = storedApiKey ?? envApiKey
-
-        if (apiKey !== undefined) {
-          const clientLayer = OpenAiClient.layer({
-            apiKey: Redacted.make(apiKey),
-          }).pipe(Layer.provide(FetchHttpClient.layer))
-          const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-            Layer.provide(clientLayer),
-          )
-          return { layer: modelLayer }
-        }
-
-        // No auth available — try unauthenticated (will fail at API call time)
-        const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
-        const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-          Layer.provide(clientLayer),
-        )
-        return { layer: modelLayer }
-      },
-      listModels: (baseCatalog, authInfo) => {
-        // When OAuth is active, filter to allowed models + zero pricing
-        if (authInfo?.type !== "oauth") return baseCatalog
-        return baseCatalog
-          .filter((model) => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const m = model as { provider?: string; id?: string }
-            if (m.provider !== "openai") return true
-            const parts = String(m.id ?? "").split("/", 2)
-            const modelName = parts[1]
-            return modelName !== undefined && OPENAI_OAUTH_ALLOWED_MODELS.has(modelName)
-          })
-          .map((model) => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const m = model as { provider?: string; pricing?: unknown }
-            if (m.provider !== "openai") return model
-            return { ...m, pricing: { input: 0, output: 0 } }
-          })
-      },
-      auth: {
-        methods: [
-          new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
-          new AuthMethod({ type: "api", label: "Manually enter API key" }),
-        ],
-        authorize: (ctx) =>
-          Effect.tryPromise({
-            try: async () => {
-              if (ctx.methodIndex !== 0) return undefined
-              const { authorization, callback: cb } = await authorizeOpenAI()
-              pendingCallbacks.set(ctx.authorizationId, cb)
-              return authorization
-            },
-            catch: (e) => ({
-              _tag: "OpenAIOAuthError" as const,
-              cause: e,
-            }),
-          }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
-        callback: (ctx) =>
-          Effect.gen(function* () {
-            const cb = pendingCallbacks.get(ctx.authorizationId)
-            pendingCallbacks.delete(ctx.authorizationId)
-            if (cb === undefined) return
-            const result = yield* Effect.tryPromise({
-              try: () => cb(ctx.code),
-              catch: (e) => ({
-                _tag: "OpenAIOAuthCallbackError" as const,
-                cause: e,
-              }),
-            })
-            yield* ctx.persist({
-              type: "oauth",
-              access: result.access,
-              refresh: result.refresh,
-              expires: result.expires,
-              ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
-            })
-          }).pipe(Effect.catchEager(() => Effect.void)),
-      },
-    }
-
-    return [openaiProvider]
+    return [buildOpenAIModelDriver(credentialCellRef, pendingCallbacks)]
   },
 })
