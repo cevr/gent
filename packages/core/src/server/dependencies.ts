@@ -5,7 +5,6 @@ import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
-import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { GentExtension } from "../domain/extension.js"
 import { Provider } from "../providers/provider.js"
@@ -23,7 +22,7 @@ import {
   resolveRuntimeProfile,
   type RuntimeProfile,
 } from "../runtime/profile.js"
-import { ExtensionRegistry, type ResolvedExtensions } from "../runtime/extensions/registry.js"
+import { type ResolvedExtensions } from "../runtime/extensions/registry.js"
 import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
 import {
   type ScheduledJobCommand,
@@ -249,32 +248,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     FetchHttpClient.layer,
   )
 
-  // Permission rules are loaded once at startup from the launch-cwd
-  // project config. Multi-cwd servers therefore share the launch-cwd
-  // permissions across every session, even if a session's cwd has
-  // its own `.gent/config.json` permissions.
-  //
-  // Auth gating is per-session (the RPC handler resolves cwd from the
-  // session at call time). Permission rules are checked synchronously
-  // from inside tool execution — every consumer would need a
-  // per-session Permission instance, which means lifting Permission
-  // out of the global Layer into a per-session profile.
-  const permissionLive = Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const configService = yield* ConfigService
-        const extensionRegistry = yield* ExtensionRegistry
-        const [configRules, extensionRules] = yield* Effect.all([
-          configService.getPermissionRules(),
-          extensionRegistry.listPermissionRules(),
-        ])
-        return Permission.Live([...extensionRules, ...configRules], "allow")
-      }),
-    ),
-    baseServicesLive,
-  )
-  const baseWithPermission = Layer.merge(baseServicesLive, permissionLive)
-
   // ApprovalService — single handler for all interaction types
   const approvalServiceLive = Layer.provide(
     Layer.unwrap(
@@ -287,20 +260,20 @@ export const createDependencies = (config: DependenciesConfig) => {
         })
       }),
     ),
-    baseWithPermission,
+    baseServicesLive,
   )
 
   const promptPresenterLive = Layer.provide(
     PromptPresenter.Live,
-    Layer.merge(approvalServiceLive, baseWithPermission),
+    Layer.merge(approvalServiceLive, baseServicesLive),
   )
   const toolRunnerLive = Layer.provide(
     ToolRunner.Live,
-    Layer.merge(baseWithPermission, approvalServiceLive),
+    Layer.merge(baseServicesLive, approvalServiceLive),
   )
 
   const allDeps = Layer.mergeAll(
-    baseWithPermission,
+    baseServicesLive,
     approvalServiceLive,
     toolRunnerLive,
     promptPresenterLive,

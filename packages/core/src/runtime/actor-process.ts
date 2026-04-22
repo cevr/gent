@@ -369,6 +369,7 @@ export const LocalActorProcessLive: Layer.Layer<
             currentTurnAgent,
             toolRunner,
             extensionRegistry: invokeRegistry,
+            permission: invokeProfile?.permissionService,
             hostCtx: invokeHostCtx,
             resourceManager,
             storage,

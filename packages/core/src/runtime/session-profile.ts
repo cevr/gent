@@ -20,6 +20,12 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
+import {
+  type PermissionRule,
+  type PermissionService,
+  compilePermissionRules,
+  evaluatePermissionRules,
+} from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
   type ExtensionRegistryService,
@@ -37,9 +43,45 @@ import {
   type SubscriptionEngineService,
 } from "./extensions/resource-host/subscription-engine.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
-import { ConfigService } from "./config-service.js"
+import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { buildExtensionLayers, compileBaseSections, resolveRuntimeProfile } from "./profile.js"
+
+const allowAllPermission: PermissionService = {
+  check: () => Effect.succeed("allowed"),
+  addRule: () => Effect.void,
+  removeRule: () => Effect.void,
+  getRules: () => Effect.succeed([]),
+}
+
+const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
+
+const makeSessionPermissionService = (params: {
+  cwd: string
+  configService: ConfigServiceService
+  extensionRules: ReadonlyArray<PermissionRule>
+}): PermissionService => {
+  const compiledExtensionRules = compilePermissionRules(params.extensionRules)
+
+  return {
+    check: Effect.fn("SessionProfile.permission.check")(function* (tool, args) {
+      const config = yield* params.configService.get(params.cwd)
+      const compiledConfigRules = compilePermissionRules(permissionRulesFromConfig(config))
+      return evaluatePermissionRules(
+        [...compiledExtensionRules, ...compiledConfigRules],
+        tool,
+        args,
+        "allow",
+      )
+    }),
+    addRule: (rule) => params.configService.addPermissionRule(rule),
+    removeRule: (tool, pattern) => params.configService.removePermissionRule(tool, pattern),
+    getRules: Effect.fn("SessionProfile.permission.getRules")(function* () {
+      const config = yield* params.configService.get(params.cwd)
+      return [...params.extensionRules, ...permissionRulesFromConfig(config)]
+    }),
+  }
+}
 
 // ── SessionProfile ──
 
@@ -47,6 +89,7 @@ export interface SessionProfile {
   readonly cwd: string
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resolved: ResolvedExtensions
+  readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
   readonly extensionStateRuntime: MachineEngineService
@@ -162,6 +205,11 @@ export class SessionProfileCache extends Context.Service<
             const subscriptionEngineOpt = Context.getOption(combinedCtx, SubscriptionEngine)
             const subscriptionEngine =
               subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
+            const permissionService = makeSessionPermissionService({
+              cwd: canonicalCwd,
+              configService,
+              extensionRules: resolved.permissionRules,
+            })
 
             // Compile base sections inside the built layer's runtime so any
             // dynamic prompt section (e.g. `Skills`) can read its required
@@ -179,6 +227,7 @@ export class SessionProfileCache extends Context.Service<
               cwd: canonicalCwd,
               extensions: resolved.extensions,
               resolved,
+              permissionService,
               registryService,
               driverRegistryService,
               extensionStateRuntime: stateRuntime,
@@ -253,6 +302,7 @@ export class SessionProfileCache extends Context.Service<
             cwd,
             extensions: [],
             resolved,
+            permissionService: allowAllPermission,
             registryService: Context.get(
               Effect.runSync(
                 Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),

@@ -30,6 +30,34 @@ export class PermissionRule extends Schema.Class<PermissionRule>("PermissionRule
 export const PermissionResult = Schema.Literals(["allowed", "denied"])
 export type PermissionResult = typeof PermissionResult.Type
 
+type StoredRule = { rule: PermissionRule; regex?: RegExp }
+
+const toStoredRule = (rule: PermissionRule): StoredRule => ({
+  rule,
+  regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
+})
+
+export const compilePermissionRules = (
+  rules: ReadonlyArray<PermissionRule>,
+): ReadonlyArray<StoredRule> => rules.map(toStoredRule)
+
+export const evaluatePermissionRules = (
+  rules: ReadonlyArray<StoredRule>,
+  tool: string,
+  args: unknown,
+  defaultAction: PermissionRule["action"] = "allow",
+): PermissionResult => {
+  const argsStr = JSON.stringify(args)
+  for (const entry of rules) {
+    const rule = entry.rule
+    if (rule.tool !== tool && rule.tool !== "*") continue
+    if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
+    if (rule.action === "allow") return "allowed"
+    if (rule.action === "deny") return "denied"
+  }
+  return defaultAction === "deny" ? "denied" : "allowed"
+}
+
 // Permission Service
 
 export interface PermissionService {
@@ -49,29 +77,13 @@ export class Permission extends Context.Service<Permission, PermissionService>()
     Layer.effect(
       Permission,
       Effect.gen(function* () {
-        type StoredRule = { rule: PermissionRule; regex?: RegExp }
-        const toStored = (rule: PermissionRule): StoredRule => ({
-          rule,
-          regex: rule.pattern !== undefined ? new RegExp(rule.pattern) : undefined,
-        })
-        const rulesRef = yield* Ref.make<StoredRule[]>([...initialRules.map(toStored)])
-        const defaultResult: PermissionResult = defaultAction === "deny" ? "denied" : "allowed"
+        const rulesRef = yield* Ref.make<StoredRule[]>([...compilePermissionRules(initialRules)])
         return Permission.of({
           check: (tool, args) =>
             Ref.get(rulesRef).pipe(
-              Effect.map((rules) => {
-                const argsStr = JSON.stringify(args)
-                for (const entry of rules) {
-                  const rule = entry.rule
-                  if (rule.tool !== tool && rule.tool !== "*") continue
-                  if (entry.regex !== undefined && !entry.regex.test(argsStr)) continue
-                  if (rule.action === "allow") return "allowed" as const
-                  if (rule.action === "deny") return "denied" as const
-                }
-                return defaultResult
-              }),
+              Effect.map((rules) => evaluatePermissionRules(rules, tool, args, defaultAction)),
             ),
-          addRule: (rule) => Ref.update(rulesRef, (rules) => [...rules, toStored(rule)]),
+          addRule: (rule) => Ref.update(rulesRef, (rules) => [...rules, toStoredRule(rule)]),
           removeRule: (tool, pattern) =>
             Ref.update(rulesRef, (rules) =>
               rules.filter(

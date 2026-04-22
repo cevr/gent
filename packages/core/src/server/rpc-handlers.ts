@@ -7,7 +7,6 @@ import { AgentLoop, type SteerCommand } from "../runtime/agent/agent-loop.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
-import { Permission } from "../domain/permission.js"
 import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import {
@@ -82,7 +81,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const eventStore = yield* EventStore
     const agentLoop = yield* AgentLoop
     const interactions = yield* InteractionCommands
-    const permission = yield* Permission
     const configService = yield* ConfigService
     const actorProcess = yield* ActorProcess
     const modelRegistry = yield* ModelRegistry
@@ -277,10 +275,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "permission.listRules": () => configService.getPermissionRules(),
 
       "permission.deleteRule": ({ tool, pattern }) =>
-        Effect.gen(function* () {
-          yield* configService.removePermissionRule(tool, pattern)
-          yield* permission.removeRule(tool, pattern)
-        }),
+        configService.removePermissionRule(tool, pattern),
 
       // -- model --
       "model.list": () => modelRegistry.list(),

@@ -7,7 +7,7 @@ import {
 } from "../extensions/resource-host/machine-engine.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ToolResultPart } from "../../domain/message.js"
-import { Permission } from "../../domain/permission.js"
+import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
 import { ApprovalService } from "../approval-service.js"
 import { formatSchemaError } from "../format-schema-error"
@@ -54,9 +54,43 @@ export interface ToolRunnerService {
     profileOverride?: {
       readonly registry: ExtensionRegistryService
       readonly stateRuntime?: MachineEngineService
+      readonly permission?: PermissionService
     },
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
 }
+
+const allowAllPermission: PermissionService = {
+  check: () => Effect.succeed("allowed"),
+  addRule: () => Effect.void,
+  removeRule: () => Effect.void,
+  getRules: () => Effect.succeed([]),
+}
+
+const resolveActivePermission = (
+  basePermissionOpt: Option.Option<PermissionService>,
+  profileOverride:
+    | {
+        readonly registry: ExtensionRegistryService
+        readonly stateRuntime?: MachineEngineService
+        readonly permission?: PermissionService
+      }
+    | undefined,
+): PermissionService =>
+  profileOverride?.permission ??
+  (basePermissionOpt._tag === "Some" ? basePermissionOpt.value : allowAllPermission)
+
+const runPermissionCheck = (params: {
+  toolCall: { toolName: string; input: unknown }
+  ctx: ToolContext
+  pipelines: ExtensionRegistryService["pipelines"]
+  permission: PermissionService
+}): Effect.Effect<"allowed" | "denied"> =>
+  params.pipelines.runPipeline(
+    "permission.check",
+    { toolName: params.toolCall.toolName, input: params.toolCall.input },
+    (input) => params.permission.check(input.toolName, input.input),
+    params.ctx,
+  )
 
 const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, message: string) =>
   new ToolResultPart({
@@ -75,12 +109,12 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
   static Live: Layer.Layer<
     ToolRunner,
     never,
-    ExtensionRegistry | Permission | ApprovalService | RuntimePlatform | MachineEngine
+    ExtensionRegistry | ApprovalService | RuntimePlatform | MachineEngine
   > = Layer.effect(
     ToolRunner,
     Effect.gen(function* () {
       const extensionRegistry = yield* ExtensionRegistry
-      const permission = yield* Permission
+      const basePermissionOpt = yield* Effect.serviceOption(Permission)
       const approvalService = yield* ApprovalService
       const platform = yield* RuntimePlatform
       const extensionStateRuntime = yield* MachineEngine
@@ -93,6 +127,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
+            const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
             const activePipelines = activeRegistry.pipelines
 
             const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
@@ -110,21 +145,19 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run permission.check interceptor, falling back to base Permission service
-            const permCheckResult = yield* activePipelines
-              .runPipeline(
-                "permission.check",
-                { toolName: toolCall.toolName, input: toolCall.input },
-                (input) => permission.check(input.toolName, input.input),
-                ctx,
-              )
-              .pipe(
-                Effect.catchEager((e) =>
-                  WideEvent.set({
-                    toolError: ToolError.PermissionCheckFailed,
-                    errorMessage: String(e),
-                  }).pipe(Effect.as("interceptor_failed" as const)),
-                ),
-              )
+            const permCheckResult = yield* runPermissionCheck({
+              toolCall,
+              ctx,
+              pipelines: activePipelines,
+              permission: activePermission,
+            }).pipe(
+              Effect.catchEager((e) =>
+                WideEvent.set({
+                  toolError: ToolError.PermissionCheckFailed,
+                  errorMessage: String(e),
+                }).pipe(Effect.as("interceptor_failed" as const)),
+              ),
+            )
 
             if (permCheckResult === "interceptor_failed") {
               yield* Effect.logWarning("tool.permission.check.failed").pipe(

@@ -93,6 +93,7 @@ import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-
 import type { TurnExecutor, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
+import type { PermissionService } from "../../domain/permission.js"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,
   buildLoopCheckpointRecord,
@@ -581,6 +582,7 @@ const executeToolCalls = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime?: MachineEngineService
+  permission?: PermissionService
   resourceManager: ResourceManagerService
 }) =>
   Effect.forEach(
@@ -620,6 +622,7 @@ const executeToolCalls = (params: {
           .run(toolCall, ctx, {
             registry: params.extensionRegistry,
             stateRuntime: params.extensionStateRuntime,
+            ...(params.permission !== undefined ? { permission: params.permission } : {}),
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
         const tool = yield* params.extensionRegistry.getTool(toolCall.toolName)
@@ -1180,6 +1183,7 @@ const executeToolsPhase = (params: {
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
   extensionStateRuntime?: MachineEngineService
+  permission?: PermissionService
   resourceManager: ResourceManagerService
   storage: StorageService
 }) =>
@@ -1224,6 +1228,7 @@ export const invokeToolPhase = (params: {
   currentTurnAgent: AgentNameType
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
+  permission?: PermissionService
   hostCtx: ExtensionHostContext
   resourceManager: ResourceManagerService
   storage: StorageService
@@ -1265,6 +1270,7 @@ export const invokeToolPhase = (params: {
       currentTurnAgent: params.currentTurnAgent,
       toolRunner: params.toolRunner,
       extensionRegistry: params.extensionRegistry,
+      permission: params.permission,
       resourceManager: params.resourceManager,
     })
 
@@ -1831,6 +1837,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   turnExtensionRegistry: profile.registryService,
                   turnDriverRegistry: profile.driverRegistryService,
                   turnExtensionStateRuntime: profile.extensionStateRuntime,
+                  turnPermission: profile.permissionService,
                   turnBaseSections: profile.baseSections,
                   turnHostCtx,
                   turnSessionCwd: sessionCwd,
@@ -1841,6 +1848,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
                 turnDriverRegistry: driverRegistry as DriverRegistryService,
                 turnExtensionStateRuntime: extensionStateRuntime as MachineEngineService,
+                turnPermission: undefined,
                 turnBaseSections: config.baseSections,
                 turnHostCtx: defaultHostCtx,
                 turnSessionCwd: sessionCwd,
@@ -1900,6 +1908,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 turnExtensionRegistry,
                 turnDriverRegistry,
                 turnExtensionStateRuntime,
+                turnPermission,
                 turnBaseSections,
                 turnHostCtx,
                 turnSessionCwd,
@@ -1937,6 +1946,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       toolRunner,
                       extensionRegistry: turnExtensionRegistry,
                       extensionStateRuntime: turnExtensionStateRuntime,
+                      permission: turnPermission,
                       resourceManager,
                       storage,
                     }).pipe(
@@ -2100,6 +2110,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   toolRunner,
                   extensionRegistry: turnExtensionRegistry,
                   extensionStateRuntime: turnExtensionStateRuntime,
+                  permission: turnPermission,
                   resourceManager,
                   storage,
                 }).pipe(
