@@ -2,6 +2,19 @@
 
 Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
+## Core Model
+
+`gent` is organized around six nouns:
+
+- `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
+- `Profile` — cwd-scoped policy and extension graph: permissions, drivers, projections, resources, capabilities.
+- `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
+- `Capability` — the only callable primitive.
+- `Resource` — long-lived services, machines, schedules, subscriptions, lifecycle.
+- `Projection` — pure derived views for prompt, policy, runtime, and client state.
+
+Everything else is adapter code around those nouns.
+
 ## Rules
 
 - Schema-first transport contract.
@@ -10,7 +23,9 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 - Runtime owns orchestration.
 - Platform edges stay explicit.
 - TUI routes own screen state; components render and dispatch.
-- Extension hooks are structural descriptors, not stringly maps.
+- Extension seams are explicit structural descriptors, not generic middleware buckets.
+- App-specific UI extension facets live at the app edge, not in core.
+- RPC is the application transport. No parallel REST surface.
 
 ## Package Map
 
@@ -24,12 +39,12 @@ packages/
 │   ├── domain/    # Schemas, ids, events, service tags, pure domain helpers
 │   ├── storage/   # SQLite persistence (Storage + 6 sub-Tags: SessionStorage, BranchStorage, MessageStorage, EventStorage, RelationshipStorage, ExtensionStateStorage)
 │   ├── providers/ # AI SDK adapter (Provider inlines model resolution + auth)
-│   ├── runtime/   # actor-process, agent-loop, task/runtime services
+│   ├── runtime/   # SessionRuntime, agent-loop internals, profile/runtime services
 │   ├── extensions/# api.ts only — public authoring surface for extensions
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
 ├── extensions/    # all 27 builtin extensions (imports only @gent/core/extensions/api)
-└── sdk/           # direct + HTTP transports over one client contract
+└── sdk/           # direct + RPC transports over one client contract
 ```
 
 ## System Shape
@@ -78,12 +93,12 @@ Adapters:
 
 - `packages/sdk/src/client.ts`
 - `packages/core/src/server/rpcs.ts`
-- `packages/core/src/server/http-api.ts`
+- `packages/core/src/server/server-routes.ts`
 
 Rule:
 
 - no client-specific DTO remodeling
-- no parallel contract surfaces
+- no parallel application contract surfaces
 - handlers and adapters derive from the same contract types
 
 ## App Services
@@ -124,15 +139,15 @@ Ephemeral child runs (`runtime/agent/agent-runner.ts`) intentionally do NOT call
 
 Core orchestration lives in:
 
-- `packages/core/src/runtime/actor-process.ts`
+- `packages/core/src/runtime/session-runtime.ts`
 - `packages/core/src/runtime/agent/agent-loop.ts`
 - `packages/core/src/runtime/agent/agent-loop.state.ts`
 - `packages/core/src/runtime/agent/agent-loop.utils.ts`
 
 Shape:
 
-- `ActorProcess` is the single command entry for session/branch actor work.
-- `AgentLoop` is a flat machine-owned control plane (turn phases inlined, state uses union-level derive).
+- `SessionRuntime` is the single public session engine.
+- `AgentLoop` is an internal flat machine-owned control plane.
 - `AgentRunner` is the helper-agent boundary. Durable runs create persisted child sessions; ephemeral runs use isolated in-memory storage and only publish parent-side `AgentRun*` receipts.
 - local CLI routing is in-process by default; remote routing is explicit server topology
 - queue ownership is structural
@@ -236,6 +251,7 @@ Main boundaries:
 
 - `apps/tui/src/client/context.tsx` for client/session/event state
 - `apps/tui/src/routes/session-controller.ts` for session-screen orchestration
+- `apps/tui/src/extensions/client-facets.ts` for TUI-owned extension facets
 - route state machines for modal/session surfaces
 - components like `composer.tsx`, `message-list.tsx`, `queue-widget.tsx` as presentation + local interaction
 
@@ -294,7 +310,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 One authoring shape: `defineExtension({ id, resources?, capabilities?, projections?, drivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches a Projection placed in `capabilities` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
-There is no flat `Contribution[]` and no `_kind` discriminator. The C8 redesign collapsed 16 contribution kinds into the six-primitive set below. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
+There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, machine?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Carries optional `effect-machine` machine + declared effects when the extension owns one. Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering to a single `CapabilityContribution`. `tool` = model-facing tool (audiences `["model"]`); `request` = typed extension request callable from transport-public or agent-protocol surfaces (with `intent: "read" | "write"`); `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories and the `audiences + intent` flag matrix are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts` and `runtime/extensions/capability-host.ts`.
@@ -403,7 +419,7 @@ tests/
 ├── domain/        # auth-store, auth-guard, agent, event, message, skills, ...
 ├── extensions/    # api, registry, compile-tool-policy, hooks, loader, memory/, ...
 ├── providers/     # provider, provider-auth, provider-resolution, anthropic-keychain
-├── runtime/       # agent-loop, actor-process, retry, agent-runner, tool-runner, ...
+├── runtime/       # session-runtime, agent-loop, retry, agent-runner, tool-runner, ...
 ├── server/        # rpcs, session-queries, system-prompt
 ├── storage/       # sqlite-storage, search-storage, task-storage, bypass
 ├── debug/         # sequence-provider
