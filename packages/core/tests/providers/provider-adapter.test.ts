@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import {
@@ -19,7 +20,6 @@ import {
   ToolResultPart,
   ImagePart,
 } from "@gent/core/domain/message"
-import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { MessageId, SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 
 // ── Helpers ──
@@ -140,11 +140,14 @@ describe("convertMessages", () => {
 
 describe("convertTools", () => {
   const EchoParams = Schema.Struct({ text: Schema.String })
-  const echoDef: AnyToolDefinition = {
-    name: "echo",
+  const echoDef: AnyCapabilityContribution = {
+    id: "echo",
     description: "Echoes input",
-    params: EchoParams,
-    execute: () => Effect.succeed("echoed"),
+    audiences: ["model"],
+    intent: "write",
+    input: EchoParams,
+    output: Schema.Unknown,
+    effect: () => Effect.succeed("echoed"),
   }
 
   test("creates tools with correct names", () => {
@@ -172,11 +175,14 @@ describe("convertTools", () => {
 
   test("multiple tools", () => {
     const SearchParams = Schema.Struct({ query: Schema.String })
-    const searchDef: AnyToolDefinition = {
-      name: "search",
+    const searchDef: AnyCapabilityContribution = {
+      id: "search",
       description: "Searches",
-      params: SearchParams,
-      execute: () => Effect.succeed("found"),
+      audiences: ["model"],
+      intent: "write",
+      input: SearchParams,
+      output: Schema.Unknown,
+      effect: () => Effect.succeed("found"),
     }
     const result = convertTools([echoDef, searchDef])
     expect(Object.keys(result.tools).sort()).toEqual(["echo", "search"])

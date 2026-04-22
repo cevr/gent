@@ -1,6 +1,6 @@
 import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
-import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId } from "../domain/ids.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
@@ -198,7 +198,7 @@ export const toTurnEventStream = (stream: Stream.Stream<StreamChunk, ProviderErr
 export interface ProviderRequest {
   readonly model: string
   readonly messages: ReadonlyArray<Message>
-  readonly tools?: ReadonlyArray<AnyToolDefinition>
+  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
   readonly systemPrompt?: string
   readonly maxTokens?: number
   readonly temperature?: number
@@ -311,21 +311,21 @@ export function convertMessages(messages: ReadonlyArray<Message>): Prompt.Messag
   return result
 }
 
-// ── Tool Conversion (AnyToolDefinition → Toolkit.WithHandler) ──
+// ── Tool Conversion (Capability → Toolkit.WithHandler) ──
 
 // Tool JSON schema conversion — canonical implementation in domain/tool-schema.ts
 import { buildToolJsonSchema } from "../domain/tool-schema.js"
 
 /** @internal — exported for testing */
 export function convertTools(
-  tools: ReadonlyArray<AnyToolDefinition>,
+  tools: ReadonlyArray<AnyCapabilityContribution>,
 ): AiToolkit.WithHandler<Record<string, AiTool.Any>> {
   const toolsRecord: Record<string, AiTool.Any> = {}
 
-  for (const t of tools) {
-    const flat = buildToolJsonSchema(t)
-    toolsRecord[t.name] = AiTool.dynamic(t.name, {
-      description: t.description,
+  for (const capability of tools) {
+    const flat = buildToolJsonSchema(capability)
+    toolsRecord[capability.id] = AiTool.dynamic(capability.id, {
+      description: capability.description ?? "",
       parameters: flat,
     })
   }

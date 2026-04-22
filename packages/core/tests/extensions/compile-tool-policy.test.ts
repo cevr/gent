@@ -1,20 +1,19 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { compileToolPolicy } from "@gent/core/runtime/extensions/registry"
 import { AgentDefinition } from "@gent/core/domain/agent"
-// `compileToolPolicy` consumes `AnyToolDefinition[]` (the internal
-// lowered shape). Hand-built literals are safe; no factory call needed.
-// Migrating compileToolPolicy to consume `AnyCapabilityContribution[]`
-// is B11.8a's scope (alongside the ToolRunner direct migration).
-import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 
 describe("compileToolPolicy", () => {
-  const makeTool = (name: string): AnyToolDefinition => ({
-    name,
+  const makeTool = (name: string): AnyCapabilityContribution => ({
+    id: name,
     description: name,
-    params: Schema.Struct({}),
-    execute: () => Effect.succeed(null),
+    audiences: ["model"],
+    intent: "write",
+    input: Schema.Struct({}),
+    output: Schema.Unknown,
+    effect: () => Effect.succeed(null),
   })
 
   const allTools = [
@@ -33,7 +32,7 @@ describe("compileToolPolicy", () => {
 
   const emptyCtx = { sessionId: SessionId.of("s"), branchId: BranchId.of("b") }
 
-  const names = (tools: ReadonlyArray<{ name: string }>) => tools.map((t) => t.name).sort()
+  const names = (tools: ReadonlyArray<{ id: string }>) => tools.map((t) => t.id).sort()
 
   test("no allow-list → all tools", () => {
     const agent = new AgentDefinition({ name: "cowork" })
@@ -132,12 +131,15 @@ describe("compileToolPolicy", () => {
   })
 
   test("interactive tools filtered when context.interactive is false", () => {
-    const interactiveTool: AnyToolDefinition = {
-      name: "ask_user",
+    const interactiveTool: AnyCapabilityContribution = {
+      id: "ask_user",
       interactive: true,
       description: "ask_user",
-      params: Schema.Struct({}),
-      execute: () => Effect.succeed(null),
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({}),
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(null),
     }
     const nonInteractiveTool = makeTool("read")
     const agent = new AgentDefinition({ name: "cowork" })
@@ -148,12 +150,15 @@ describe("compileToolPolicy", () => {
   })
 
   test("interactive tools kept when context.interactive is not false", () => {
-    const interactiveTool: AnyToolDefinition = {
-      name: "ask_user",
+    const interactiveTool: AnyCapabilityContribution = {
+      id: "ask_user",
       interactive: true,
       description: "ask_user",
-      params: Schema.Struct({}),
-      execute: () => Effect.succeed(null),
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({}),
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(null),
     }
     const agent = new AgentDefinition({ name: "cowork" })
     const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])

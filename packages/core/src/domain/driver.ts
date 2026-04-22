@@ -32,10 +32,10 @@ import { Schema, type Effect, type Layer, type Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { AgentDefinition } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "./auth-method.js"
+import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
-import type { AnyToolDefinition } from "./tool.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Note: TurnExecutor is defined below alongside the driver primitives — no
@@ -247,7 +247,7 @@ export interface TurnContext {
   readonly branchId: BranchId
   readonly agent: AgentDefinition
   readonly messages: ReadonlyArray<Message>
-  readonly tools: ReadonlyArray<AnyToolDefinition>
+  readonly tools: ReadonlyArray<AnyCapabilityContribution>
   readonly systemPrompt: string
   readonly cwd: string
   readonly abortSignal: AbortSignal

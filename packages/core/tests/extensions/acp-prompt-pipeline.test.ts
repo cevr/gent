@@ -9,9 +9,9 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/server/system-prompt"
-import type { AnyToolDefinition } from "@gent/core/domain/tool"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -20,11 +20,14 @@ const baseAgent = new AgentDefinition({
   name: "cowork" as never,
 })
 
-const fakeTool: AnyToolDefinition = {
-  name: "echo",
+const fakeTool: AnyCapabilityContribution = {
+  id: "echo",
   description: "echo tool",
-  params: Schema.Struct({ text: Schema.String }),
-  execute: () => Effect.succeed({ ok: true }),
+  audiences: ["model"],
+  intent: "write",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Unknown,
+  effect: () => Effect.succeed({ ok: true }),
 }
 
 const stubHostCtx = {} as ExtensionHostContext
@@ -61,7 +64,7 @@ const runHandler = async (input: {
   readonly agent: AgentDefinition
   readonly driverSource?: "config" | "default"
   readonly driverToolSurface?: "native" | "codemode"
-  readonly tools?: ReadonlyArray<AnyToolDefinition>
+  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
 }) =>
   Effect.runPromise(
     (await getRuntimeSlots()).resolveSystemPrompt(input, {

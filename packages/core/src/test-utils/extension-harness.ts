@@ -29,11 +29,11 @@ import type {
   TurnProjection,
 } from "../domain/extension.js"
 import { type ExtensionContributions } from "../domain/contribution.js"
-import type { CapabilityToken } from "../domain/capability.js"
+import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import { BranchId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
-import type { AnyToolDefinition, ToolContext } from "../domain/tool.js"
+import type { ToolContext } from "../domain/tool.js"
 import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import {
   reconcileLoadedExtensions,
@@ -52,7 +52,7 @@ export interface ActorHarnessOptions {
   readonly sessionId?: SessionId
   readonly branchId?: BranchId
   readonly agent?: AgentDefinition
-  readonly allTools?: ReadonlyArray<AnyToolDefinition>
+  readonly allTools?: ReadonlyArray<AnyCapabilityContribution>
 }
 
 // ── Event Factories ──

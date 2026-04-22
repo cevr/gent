@@ -52,7 +52,7 @@ const fingerprintSession = (
     codemodeConfig === undefined
       ? []
       : codemodeConfig.tools
-          .map((t) => t.name)
+          .map((t) => t.id)
           .slice()
           .sort()
   return JSON.stringify({

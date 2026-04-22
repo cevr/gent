@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { type ActorRef, Event, State } from "effect-machine"
-import type { AnyToolDefinition } from "../../domain/tool.js"
+import type { AnyCapabilityContribution } from "../../domain/capability.js"
 import {
   AgentName,
   RunSpecSchema,
@@ -196,7 +196,7 @@ export type ResolvedTurn = {
   modelId: ModelIdType
   reasoning?: ReasoningEffortType
   temperature?: number
-  tools?: ReadonlyArray<AnyToolDefinition>
+  tools?: ReadonlyArray<AnyCapabilityContribution>
   agent?: AgentDefinitionType
   driver?: DriverRef
   /** Origin of {@link driver} — set by `resolveAgentDriver` in the loop's

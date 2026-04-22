@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { Schema } from "effect"
 import {
   buildSystemPrompt,
   buildBasePromptSections,
@@ -8,6 +9,7 @@ import {
 } from "@gent/core/server/system-prompt"
 import { buildTurnPrompt } from "@gent/core/runtime/agent/agent-loop.utils"
 import { AgentDefinition } from "@gent/core/domain/agent"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 
 describe("buildSystemPrompt", () => {
   const base = {
@@ -149,6 +151,20 @@ describe("withSectionMarkers / sectionPatternFor", () => {
 })
 
 describe("buildTurnPrompt", () => {
+  const makeTool = (
+    id: string,
+    overrides: Partial<AnyCapabilityContribution> = {},
+  ): AnyCapabilityContribution => ({
+    id,
+    description: id,
+    audiences: ["model"],
+    intent: "write",
+    input: Schema.Struct({}),
+    output: Schema.Unknown,
+    effect: (() => {}) as never,
+    ...overrides,
+  })
+
   const agent = new AgentDefinition({
     name: "test-agent",
     systemPromptAddendum: "Be helpful.",
@@ -158,20 +174,8 @@ describe("buildTurnPrompt", () => {
 
   test("includes tool snippets when tools have promptSnippet", () => {
     const tools = [
-      {
-        name: "read",
-        description: "Read files",
-        promptSnippet: "Read file contents",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "bash",
-        description: "Run commands",
-        promptSnippet: "Execute shell commands",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
+      makeTool("read", { description: "Read files", promptSnippet: "Read file contents" }),
+      makeTool("bash", { description: "Run commands", promptSnippet: "Execute shell commands" }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).toContain("## Available Tools")
@@ -181,13 +185,10 @@ describe("buildTurnPrompt", () => {
 
   test("includes tool guidelines when tools have promptGuidelines", () => {
     const tools = [
-      {
-        name: "read",
+      makeTool("read", {
         description: "Read files",
         promptGuidelines: ["Use instead of bash cat"] as const,
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
+      }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).toContain("## Tool Guidelines")
@@ -196,20 +197,8 @@ describe("buildTurnPrompt", () => {
 
   test("duplicate guidelines appear only once", () => {
     const tools = [
-      {
-        name: "read",
-        description: "Read",
-        promptGuidelines: ["Shared guideline"] as const,
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "grep",
-        description: "Grep",
-        promptGuidelines: ["Shared guideline"] as const,
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
+      makeTool("read", { description: "Read", promptGuidelines: ["Shared guideline"] as const }),
+      makeTool("grep", { description: "Grep", promptGuidelines: ["Shared guideline"] as const }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     const count = result.split("Shared guideline").length - 1
@@ -223,14 +212,7 @@ describe("buildTurnPrompt", () => {
   })
 
   test("omits tool sections when no tools have metadata", () => {
-    const tools = [
-      {
-        name: "plain",
-        description: "No metadata",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-    ]
+    const tools = [makeTool("plain", { description: "No metadata" })]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).not.toContain("## Available Tools")
     expect(result).not.toContain("## Tool Guidelines")
@@ -238,18 +220,8 @@ describe("buildTurnPrompt", () => {
 
   test("prefer-dedicated-tools guideline names only active tools", () => {
     const tools = [
-      {
-        name: "bash",
-        description: "Run",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "grep",
-        description: "Search",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
+      makeTool("bash", { description: "Run" }),
+      makeTool("grep", { description: "Search" }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).toContain("Prefer grep over bash")
@@ -258,57 +230,23 @@ describe("buildTurnPrompt", () => {
 
   test("names all active dedicated tools in the guideline", () => {
     const tools = [
-      {
-        name: "bash",
-        description: "Run",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "grep",
-        description: "Search",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "glob",
-        description: "Find",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-      {
-        name: "read",
-        description: "Read",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
+      makeTool("bash", { description: "Run" }),
+      makeTool("grep", { description: "Search" }),
+      makeTool("glob", { description: "Find" }),
+      makeTool("read", { description: "Read" }),
     ]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).toContain("Prefer grep/glob/read over bash")
   })
 
   test("omits prefer-dedicated-tools guideline when only bash active", () => {
-    const tools = [
-      {
-        name: "bash",
-        description: "Run",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-    ]
+    const tools = [makeTool("bash", { description: "Run" })]
     const result = buildTurnPrompt(baseSections, agent, tools)
     expect(result).not.toContain("Prefer")
   })
 
   test("synthesizes delegation targets when delegate is in tool set", () => {
-    const tools = [
-      {
-        name: "delegate",
-        description: "Delegate work",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-    ]
+    const tools = [makeTool("delegate", { description: "Delegate work" })]
     const targets = [
       new AgentDefinition({ name: "explore", description: "Fast codebase search" }),
       new AgentDefinition({ name: "explore-2", description: "Code review" }),
@@ -323,14 +261,7 @@ describe("buildTurnPrompt", () => {
 
   test("excludes current agent from delegation targets", () => {
     const self = new AgentDefinition({ name: "test-agent", description: "Self" })
-    const tools = [
-      {
-        name: "delegate",
-        description: "Delegate",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-    ]
+    const tools = [makeTool("delegate", { description: "Delegate" })]
     const targets = [self, new AgentDefinition({ name: "other", description: "Other agent" })]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("**other**: Other agent")
@@ -338,14 +269,7 @@ describe("buildTurnPrompt", () => {
   })
 
   test("omits delegation targets when delegate not in tool set", () => {
-    const tools = [
-      {
-        name: "read",
-        description: "Read",
-        params: {} as never,
-        execute: (() => {}) as never,
-      },
-    ]
+    const tools = [makeTool("read", { description: "Read" })]
     const targets = [new AgentDefinition({ name: "explore", description: "Search" })]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).not.toContain("## Delegation Targets")

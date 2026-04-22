@@ -1,5 +1,12 @@
 import { Schema } from "effect"
-import type { AnyToolDefinition } from "./tool.js"
+
+type ToolSchemaCarrier =
+  | {
+      readonly input: Schema.Schema<unknown>
+    }
+  | {
+      readonly params: Schema.Schema<unknown>
+    }
 
 /**
  * Flatten allOf into parent object. Effect's `.check()` emits constraints
@@ -37,9 +44,9 @@ export function flattenAllOf(schema: Record<string, unknown>): Record<string, un
   return result
 }
 
-export function buildToolJsonSchema(t: AnyToolDefinition): Record<string, unknown> {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const doc = Schema.toJsonSchemaDocument(t.params as Schema.Schema<unknown>)
+export function buildToolJsonSchema(source: ToolSchemaCarrier): Record<string, unknown> {
+  const schema = "input" in source ? source.input : source.params
+  const doc = Schema.toJsonSchemaDocument(schema)
   const merged =
     Object.keys(doc.definitions).length > 0 ? { ...doc.schema, $defs: doc.definitions } : doc.schema
   const flat = flattenAllOf(merged as Record<string, unknown>)

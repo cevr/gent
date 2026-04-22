@@ -13,7 +13,7 @@ import { Effect } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { type AnyToolDefinition, buildToolJsonSchema } from "@gent/core/extensions/api"
+import { type AnyCapabilityContribution, buildToolJsonSchema } from "@gent/core/extensions/api"
 
 // ── Types ──
 
@@ -24,7 +24,7 @@ export interface CodemodeServer {
 }
 
 export interface CodemodeConfig {
-  readonly tools: ReadonlyArray<AnyToolDefinition>
+  readonly tools: ReadonlyArray<AnyCapabilityContribution>
   /** Run a tool by name with args. Routes through ToolRunner.run() in the
    *  parent Effect runtime — full permission checks, interceptors, and
    *  result enrichment apply. Returns the tool result value. */
@@ -39,7 +39,9 @@ export interface CodemodeConfig {
  * tool's description AND as the ACP system prompt's tools section
  * (replaces the default per-tool listing for external-routed agents).
  */
-export const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>): string => {
+export const generateToolDescription = (
+  tools: ReadonlyArray<AnyCapabilityContribution>,
+): string => {
   const lines = [
     "Execute JavaScript with access to gent tools.",
     "",
@@ -79,7 +81,7 @@ export const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>)
       })
       .join(", ")
 
-    lines.push(`- \`gent.${tool.name}({ ${params} })\` — ${tool.description}`)
+    lines.push(`- \`gent.${tool.id}({ ${params} })\` — ${tool.description ?? ""}`)
   }
 
   return lines.join("\n")
@@ -88,10 +90,10 @@ export const generateToolDescription = (tools: ReadonlyArray<AnyToolDefinition>)
 // ── Proxy factory ──
 
 const makeGentProxy = (
-  tools: ReadonlyArray<AnyToolDefinition>,
+  tools: ReadonlyArray<AnyCapabilityContribution>,
   runTool: CodemodeConfig["runTool"],
 ) => {
-  const toolNames = new Set(tools.map((t) => t.name))
+  const toolNames = new Set(tools.map((t) => t.id))
 
   return new Proxy(
     {},

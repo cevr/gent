@@ -322,7 +322,7 @@ describe("ExtensionRegistry", () => {
     const registry = await buildRegistry([
       makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
     ])
-    const tools = await Effect.runPromise(registry.listTools())
+    const tools = await Effect.runPromise(registry.listModelCapabilities())
     expect(tools.length).toBe(2)
   })
 
@@ -340,11 +340,11 @@ describe("ExtensionRegistry", () => {
       ],
     )
 
-    const tools = await Effect.runPromise(registry.listTools())
+    const tools = await Effect.runPromise(registry.listModelCapabilities())
     const failed = await Effect.runPromise(registry.listFailedExtensions())
     const statuses = await Effect.runPromise(registry.listExtensionStatuses())
 
-    expect(tools.map((tool) => tool.name)).toEqual(["read"])
+    expect(tools.map((tool) => tool.id)).toEqual(["read"])
     expect(failed).toEqual([
       {
         manifest: { id: "broken" },
@@ -416,7 +416,7 @@ describe("ExtensionRegistry", () => {
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
     expect(tools.length).toBe(1)
-    expect(tools[0]?.name).toBe("read")
+    expect(tools[0]?.id).toBe("read")
   })
 
   test("resolveToolPolicy allowedTools restricts to exact set", async () => {
@@ -433,7 +433,7 @@ describe("ExtensionRegistry", () => {
     ])
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
-    const names = tools.map((t) => t.name)
+    const names = tools.map((t) => t.id)
     expect(names).toContain("read")
     expect(names).toContain("bash")
     expect(names).not.toContain("edit")
@@ -452,7 +452,7 @@ describe("ExtensionRegistry", () => {
     ])
 
     const { tools } = await Effect.runPromise(registry.resolveToolPolicy(agent, runCtx, []))
-    const names = tools.map((t) => t.name)
+    const names = tools.map((t) => t.id)
     expect(names).toContain("read")
     expect(names).not.toContain("write")
   })
@@ -473,7 +473,7 @@ describe("ExtensionRegistry", () => {
     const { tools } = await Effect.runPromise(
       registry.resolveToolPolicy(agent, runCtx, [{ toolPolicy: { include: ["secret"] } }]),
     )
-    expect(tools.map((t) => t.name)).not.toContain("secret")
+    expect(tools.map((t) => t.id)).not.toContain("secret")
   })
 
   test("registered model driver is findable by ID", async () => {
@@ -513,7 +513,7 @@ describe("ExtensionRegistry", () => {
       }),
     )
 
-    const tools = await Effect.runPromise(registries.ext.listTools())
+    const tools = await Effect.runPromise(registries.ext.listModelCapabilities())
     expect(tools.length).toBe(0)
 
     const agents = await Effect.runPromise(registries.ext.listAgents())

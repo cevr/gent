@@ -1,5 +1,6 @@
 import { ReasoningEffort } from "../../domain/agent.js"
 import type { AgentDefinition } from "../../domain/agent.js"
+import type { AnyCapabilityContribution } from "../../domain/capability.js"
 import {
   type ReasoningPart,
   type Message,
@@ -10,7 +11,6 @@ import {
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"
-import type { AnyToolDefinition } from "../../domain/tool.js"
 import {
   compileSystemPrompt,
   withSectionMarkers,
@@ -30,7 +30,7 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 export const buildTurnPromptSections = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<AnyToolDefinition>,
+  tools: ReadonlyArray<AnyCapabilityContribution>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): ReadonlyArray<PromptSection> => {
@@ -48,7 +48,7 @@ export const buildTurnPromptSections = (
   // Tool list — tools with promptSnippet get listed explicitly
   const snippets = tools
     .filter((t) => t.promptSnippet !== undefined)
-    .map((t) => `- **${t.name}**: ${t.promptSnippet}`)
+    .map((t) => `- **${t.id}**: ${t.promptSnippet}`)
   if (snippets.length > 0) {
     // Wrap with section sentinels so the ACP codemode pipeline can swap
     // this block atomically. Other sections don't need markers because
@@ -63,8 +63,8 @@ export const buildTurnPromptSections = (
 
   // Tool guidelines — collected from active tools + conditional rules
   const guidelines = tools.flatMap((t) => t.promptGuidelines ?? [])
-  const hasBash = tools.some((t) => t.name === "bash")
-  const dedicatedNames = ["grep", "glob", "read"].filter((n) => tools.some((t) => t.name === n))
+  const hasBash = tools.some((t) => t.id === "bash")
+  const dedicatedNames = ["grep", "glob", "read"].filter((n) => tools.some((t) => t.id === n))
   if (hasBash && dedicatedNames.length > 0) {
     guidelines.push(`Prefer ${dedicatedNames.join("/")} over bash for file searching and reading`)
   }
@@ -83,7 +83,7 @@ export const buildTurnPromptSections = (
   // Delegation targets — synthesized from registered agents when delegate is available
   // Internal agents are hidden — only user-facing agents appear as delegation targets
   const INTERNAL_AGENTS = new Set(["auditor", "architect", "summarizer", "title", "librarian"])
-  const hasDelegate = tools.some((t) => t.name === "delegate")
+  const hasDelegate = tools.some((t) => t.id === "delegate")
   if (hasDelegate && delegationTargets !== undefined && delegationTargets.length > 0) {
     const targets = delegationTargets
       .filter(
@@ -117,7 +117,7 @@ export const buildTurnPromptSections = (
 export const buildTurnPrompt = (
   baseSections: ReadonlyArray<PromptSection>,
   agent: AgentDefinition,
-  tools: ReadonlyArray<AnyToolDefinition>,
+  tools: ReadonlyArray<AnyCapabilityContribution>,
   extraSections?: ReadonlyArray<PromptSection>,
   delegationTargets?: ReadonlyArray<AgentDefinition>,
 ): string =>

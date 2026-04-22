@@ -35,6 +35,7 @@ import {
   type RunSpec,
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
+import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import { type QueueSnapshot } from "../../domain/queue.js"
 import {
   AgentSwitched,
@@ -56,7 +57,7 @@ import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { MessageId, ToolCallId } from "../../domain/ids.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import { type AnyToolDefinition, type ToolContext } from "../../domain/tool.js"
+import { type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
   makeExtensionHostContext,
@@ -172,7 +173,7 @@ export const emptyTurnMetrics = (): TurnMetrics => ({
 
 interface ResolvedTurnContext extends ResolvedTurn {
   agent: AgentDefinition
-  tools: ReadonlyArray<AnyToolDefinition>
+  tools: ReadonlyArray<AnyCapabilityContribution>
 }
 
 const persistAssistantText = (params: {
@@ -298,7 +299,7 @@ const resolveTurnContext = (params: {
         : effectiveAgent
 
     // Derive extension projections from state machines and explicit prompt/message slots.
-    const allTools = yield* params.extensionRegistry.listTools()
+    const allTools = yield* params.extensionRegistry.listModelCapabilities()
     const turnCtx = {
       sessionId: params.sessionId,
       branchId: params.branchId,

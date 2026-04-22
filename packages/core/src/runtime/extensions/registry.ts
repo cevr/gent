@@ -33,6 +33,7 @@ export interface SlashCommand {
 // Resolved snapshot — the immutable compiled state
 
 export interface ResolvedExtensions {
+  readonly modelCapabilities: ReadonlyMap<string, AnyCapabilityContribution>
   readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
@@ -208,11 +209,15 @@ export const resolveExtensions = (
   // (regardless of audience) enters the candidate map; authorization
   // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
   // override that narrows audiences correctly hides a shadowed builtin tool.
-  const toolWinners = compileCapabilityWinners(sorted)
+  const capabilityWinners = compileCapabilityWinners(sorted)
+  const modelCapabilities = new Map<string, AnyCapabilityContribution>()
+  for (const [id, cap] of capabilityWinners) {
+    if (!cap.audiences.includes("model")) continue
+    modelCapabilities.set(id, cap)
+  }
 
   const tools = new Map<string, AnyToolDefinition>()
-  for (const [name, cap] of toolWinners) {
-    if (!cap.audiences.includes("model")) continue
+  for (const [name, cap] of modelCapabilities) {
     tools.set(name, capabilityToTool(cap))
   }
 
@@ -240,7 +245,7 @@ export const resolveExtensions = (
   // (Dynamic prompt content lives on `Projection.prompt(value)` and is
   // assembled per-turn by ProjectionRegistry, not here.)
   const promptSectionsMap = new Map<string, PromptSection>()
-  for (const cap of toolWinners.values()) {
+  for (const cap of capabilityWinners.values()) {
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
@@ -248,7 +253,7 @@ export const resolveExtensions = (
   // otherwise overriding `bash` without `permissionRules` would still inherit
   // builtin denies (codex BLOCKER on C7).
   const permissionRules: PermissionRule[] = []
-  for (const cap of toolWinners.values()) {
+  for (const cap of capabilityWinners.values()) {
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
   }
 
@@ -275,6 +280,7 @@ export const resolveExtensions = (
   ]
 
   return {
+    modelCapabilities,
     tools,
     agents,
     modelDrivers,
@@ -293,7 +299,7 @@ export const resolveExtensions = (
 // ToolPolicy compiler — unified tool filtering + prompt section collection
 
 export interface CompiledToolPolicy {
-  readonly tools: ReadonlyArray<AnyToolDefinition>
+  readonly tools: ReadonlyArray<AnyCapabilityContribution>
   readonly promptSections: ReadonlyArray<PromptSection>
 }
 
@@ -307,12 +313,12 @@ export interface CompiledToolPolicy {
  * 4. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
-  allTools: ReadonlyArray<AnyToolDefinition>,
+  allTools: ReadonlyArray<AnyCapabilityContribution>,
   agent: AgentDefinition,
   runContext: RunContext,
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  const allToolsByName = new Map(allTools.map((t) => [t.name, t]))
+  const allToolsByName = new Map(allTools.map((t) => [t.id, t]))
 
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
@@ -330,7 +336,7 @@ export const compileToolPolicy = (
       })
     } else {
       if (policy.include !== undefined) {
-        const existing = new Set(tools.map((t) => t.name))
+        const existing = new Set(tools.map((t) => t.id))
         for (const name of policy.include) {
           if (!existing.has(name)) {
             const t = allToolsByName.get(name)
@@ -343,7 +349,7 @@ export const compileToolPolicy = (
       }
       if (policy.exclude !== undefined) {
         const excludeSet = new Set(policy.exclude)
-        tools = tools.filter((t) => !excludeSet.has(t.name))
+        tools = tools.filter((t) => !excludeSet.has(t.id))
       }
     }
   }
@@ -372,7 +378,7 @@ export const compileToolPolicy = (
 export interface ExtensionRegistryService {
   // Tool resolution
   readonly getTool: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
-  readonly listTools: () => Effect.Effect<ReadonlyArray<AnyToolDefinition>>
+  readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<AnyCapabilityContribution>>
   /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
     agent: AgentDefinition,
@@ -411,10 +417,15 @@ export class ExtensionRegistry extends Context.Service<
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
       getTool: (name) => Effect.succeed(resolved.tools.get(name)),
-      listTools: () => Effect.succeed([...resolved.tools.values()]),
+      listModelCapabilities: () => Effect.succeed([...resolved.modelCapabilities.values()]),
       resolveToolPolicy: (agent, runContext, extensionProjections) =>
         Effect.succeed(
-          compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
+          compileToolPolicy(
+            [...resolved.modelCapabilities.values()],
+            agent,
+            runContext,
+            extensionProjections,
+          ),
         ),
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
@@ -491,14 +502,14 @@ export const requireAgent = (name: string) =>
 // Tool filtering — pure helper for agent tool visibility
 
 const filterToolsForAgent = (
-  allTools: ReadonlyArray<AnyToolDefinition>,
+  allTools: ReadonlyArray<AnyCapabilityContribution>,
   agent: AgentDefinition,
-): AnyToolDefinition[] => {
-  let tools: AnyToolDefinition[]
+): AnyCapabilityContribution[] => {
+  let tools: AnyCapabilityContribution[]
 
   if (agent.allowedTools !== undefined) {
     const names = new Set(agent.allowedTools)
-    tools = allTools.filter((t) => names.has(t.name))
+    tools = allTools.filter((t) => names.has(t.id))
   } else {
     tools = [...allTools]
   }
@@ -512,10 +523,10 @@ const filterToolsForAgent = (
 
 /** Re-apply deny filter — extensions can't escape agent denials. */
 const applyDenyFilter = (
-  tools: ReadonlyArray<AnyToolDefinition>,
+  tools: ReadonlyArray<AnyCapabilityContribution>,
   agent: AgentDefinition,
-): AnyToolDefinition[] => {
+): AnyCapabilityContribution[] => {
   if (agent.deniedTools === undefined) return [...tools]
   const denied = new Set(agent.deniedTools)
-  return tools.filter((t) => !denied.has(t.name))
+  return tools.filter((t) => !denied.has(t.id))
 }
