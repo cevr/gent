@@ -112,9 +112,9 @@ export interface RunContext {
   readonly interactive?: boolean
 }
 
-// Hook input types — consumed by Pipeline and Subscription primitives. The
-// legacy `Interceptor<I, O>` shape and `ExtensionInterceptorMap` were deleted
-// in C6; pipeline/subscription own their own key maps.
+// Turn-scoped input shapes for the explicit runtime seams. Prompt/context
+// shaping lives on `Projection`; turn/message reactions and tool-result
+// enrichment live on `Resource.runtime`.
 
 export interface SystemPromptInput {
   readonly basePrompt: string
@@ -212,12 +212,6 @@ export interface MessageInputInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
-
-// Pipeline and Subscription key maps live in `pipeline.ts` and
-// `subscription.ts` respectively. The legacy `ExtensionInterceptorMap`
-// (a single map for both transformers and observers) was deleted in C6 —
-// the union was a deceptive shape where `Interceptor<I, void>` made `next`
-// look meaningful for observer hooks where it was bookkeeping.
 
 // Extension State Machine — server-owned state that drives tool policy, prompt, and UI
 
@@ -342,8 +336,8 @@ export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any
 
 // `CommandContribution` (server slash commands) was deleted in C8 — no
 // extension contributes one anymore (executor migrated to a Capability with
-// `audiences:["human-slash"]` in C4.3). The TUI's separate `_kind: "command"`
-// in `extension-client.ts` is unrelated.
+// `audiences:["human-slash"]` in C4.3). The TUI's separate client-facet
+// `_kind: "command"` model is unrelated.
 
 // Turn executor types — owned by the driver primitive (external drivers wrap them).
 export type { TurnExecutor, TurnContext, TurnEvent, TurnError } from "./driver.js"

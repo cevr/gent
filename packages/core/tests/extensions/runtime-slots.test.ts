@@ -5,7 +5,9 @@ import type {
   ContextMessagesInput,
   ExtensionContributions,
   LoadedExtension,
+  MessageOutputInput,
   SystemPromptInput,
+  TurnBeforeInput,
   TurnAfterInput,
 } from "@gent/core/domain/extension"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
@@ -51,6 +53,20 @@ class BoomError extends Data.TaggedError("@gent/core/tests/runtime-slots/BoomErr
 }> {}
 
 describe("runtime slots", () => {
+  it.live("normalizeMessageInput is a pass-through without explicit rewrites", () => {
+    const slots = compileRuntimeSlots([])
+    return slots
+      .normalizeMessageInput(
+        {
+          content: "hello",
+          sessionId: SessionId.of("test-session"),
+          branchId: BranchId.of("test-branch"),
+        },
+        stubHostCtx,
+      )
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("hello"))))
+  })
+
   it.live("systemPrompt composes explicit projection rewrites in scope order", () => {
     const extensions = [
       makeExt("builtin", "builtin", {
@@ -265,5 +281,110 @@ describe("runtime slots", () => {
       }
       expect(calls).toEqual(["continue", "isolate", "halt"])
     })
+  })
+
+  it.live("turnBefore explicit reactions fire in scope order", () => {
+    const calls: string[] = []
+    const slots = compileRuntimeSlots([
+      makeExt("builtin", "builtin", {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            runtime: {
+              turnBefore: {
+                failureMode: "continue",
+                handler: () =>
+                  Effect.sync(() => {
+                    calls.push("builtin")
+                  }),
+              },
+            },
+          }),
+        ],
+      }),
+      makeExt("project", "project", {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            runtime: {
+              turnBefore: {
+                failureMode: "continue",
+                handler: () =>
+                  Effect.sync(() => {
+                    calls.push("project")
+                  }),
+              },
+            },
+          }),
+        ],
+      }),
+    ])
+
+    return slots
+      .emitTurnBefore(
+        {
+          sessionId: SessionId.of("test-session"),
+          branchId: BranchId.of("test-branch"),
+          agentName: "cowork",
+          toolCount: 2,
+          systemPromptLength: 42,
+        } satisfies TurnBeforeInput,
+        stubHostCtx,
+      )
+      .pipe(Effect.tap(() => Effect.sync(() => expect(calls).toEqual(["builtin", "project"]))))
+  })
+
+  it.live("messageOutput explicit reactions fire in scope order", () => {
+    const calls: string[] = []
+    const slots = compileRuntimeSlots([
+      makeExt("builtin", "builtin", {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            runtime: {
+              messageOutput: {
+                failureMode: "continue",
+                handler: () =>
+                  Effect.sync(() => {
+                    calls.push("builtin")
+                  }),
+              },
+            },
+          }),
+        ],
+      }),
+      makeExt("project", "project", {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            runtime: {
+              messageOutput: {
+                failureMode: "continue",
+                handler: () =>
+                  Effect.sync(() => {
+                    calls.push("project")
+                  }),
+              },
+            },
+          }),
+        ],
+      }),
+    ])
+
+    return slots
+      .emitMessageOutput(
+        {
+          sessionId: SessionId.of("test-session"),
+          branchId: BranchId.of("test-branch"),
+          agentName: "cowork",
+          parts: [new TextPart({ type: "text", text: "hello" })],
+        } satisfies MessageOutputInput,
+        stubHostCtx,
+      )
+      .pipe(Effect.tap(() => Effect.sync(() => expect(calls).toEqual(["builtin", "project"]))))
   })
 })
