@@ -6,7 +6,7 @@
  * plus a `query(extensionId, projectionId, ctx)` for direct lookup.
  *
  * UI projection is gone — client widgets read state via the extension's
- * typed `client.extension.invoke(...)` and refetch on `ExtensionStateChanged`
+ * typed `client.extension.request(...)` and refetch on `ExtensionStateChanged`
  * pulses (see `event-publisher.ts`).
  *
  * Failure isolation: a failing projection logs and is skipped. Other projections

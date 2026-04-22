@@ -1,11 +1,11 @@
 /**
- * Task tools RPC acceptance test — exercises `client.extension.invoke`
+ * Task tools RPC acceptance test — exercises `client.extension.request`
  * through the full per-request scope path that
  * production uses (Gent.test → RpcServer → registry dispatch → handler).
  *
  * Locks the C4 transport boundary the per-commit unit tests don't cover:
- *  - invoke(write) creates a task → invoke(read) lists it → invoke(write)
- *    updates → invoke(read) confirms
+ *  - request(write) creates a task → request(read) lists it → request(write)
+ *    updates → request(read) confirms
  *  - bad input fails as ExtensionProtocolError (Schema rejects at the boundary)
  *  - missing capability id fails as ExtensionProtocolError (NotFound mapped)
  */
@@ -33,7 +33,7 @@ const setupTaskExt = Effect.provide(
 
 describe("TaskExtension via RPC", () => {
   it.live(
-    "invoke(TaskCreate/TaskList/TaskUpdate) round-trip",
+    "request(TaskCreate/TaskList/TaskUpdate) round-trip",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -44,8 +44,8 @@ describe("TaskExtension via RPC", () => {
           )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          // invoke: create
-          const created = (yield* client.extension.invoke({
+          // request: create
+          const created = (yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskCreateRef.extensionId,
@@ -57,8 +57,8 @@ describe("TaskExtension via RPC", () => {
           expect(created.subject).toBe("Inspect repo")
           expect(created.status).toBe("pending")
 
-          // invoke: list
-          const listed = (yield* client.extension.invoke({
+          // request: list
+          const listed = (yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
@@ -69,8 +69,8 @@ describe("TaskExtension via RPC", () => {
           expect(listed).toHaveLength(1)
           expect(listed[0]?.id).toBe(created.id)
 
-          // invoke: transition pending → in_progress
-          yield* client.extension.invoke({
+          // request: transition pending → in_progress
+          yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskUpdateRef.extensionId,
@@ -79,7 +79,7 @@ describe("TaskExtension via RPC", () => {
             input: { taskId: created.id, status: "in_progress" },
           })
 
-          const afterUpdate = (yield* client.extension.invoke({
+          const afterUpdate = (yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
@@ -89,8 +89,8 @@ describe("TaskExtension via RPC", () => {
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
 
-          // invoke: delete
-          yield* client.extension.invoke({
+          // request: delete
+          yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskDeleteRef.extensionId,
@@ -98,7 +98,7 @@ describe("TaskExtension via RPC", () => {
             intent: TaskDeleteRef.intent,
             input: { taskId: created.id },
           })
-          const afterDelete = (yield* client.extension.invoke({
+          const afterDelete = (yield* client.extension.request({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
@@ -113,7 +113,7 @@ describe("TaskExtension via RPC", () => {
   )
 
   it.live(
-    "invoke with bad input fails as ExtensionProtocolError",
+    "request with bad input fails as ExtensionProtocolError",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -125,7 +125,7 @@ describe("TaskExtension via RPC", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
-            .invoke({
+            .request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
@@ -143,7 +143,7 @@ describe("TaskExtension via RPC", () => {
   )
 
   it.live(
-    "invoke with unknown id fails as ExtensionProtocolError",
+    "request with unknown id fails as ExtensionProtocolError",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -155,7 +155,7 @@ describe("TaskExtension via RPC", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
-            .invoke({
+            .request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
@@ -171,7 +171,7 @@ describe("TaskExtension via RPC", () => {
   )
 
   it.live(
-    "invoke with mismatched intent fails as ExtensionProtocolError",
+    "request with mismatched intent fails as ExtensionProtocolError",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -183,7 +183,7 @@ describe("TaskExtension via RPC", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
-            .invoke({
+            .request({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,

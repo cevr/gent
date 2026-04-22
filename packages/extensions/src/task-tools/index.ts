@@ -11,7 +11,7 @@
  * The extension has NO actor. The legacy `TaskProtocol` actor (which was a
  * pure RPC dispatcher mapping ExtensionMessage.reply requests to TaskService
  * calls) has been replaced with typed Query/Mutation contributions consumed
- * via `ctx.extension.invoke(ref, input)`.
+ * via `ctx.extension.request(ref, input)`.
  *
  * @module
  */

@@ -10,7 +10,7 @@ export const TaskListTool = tool({
   description: "List all tasks for the current session and branch, sorted by creation time.",
   params: TaskListParams,
   execute: Effect.fn("TaskListTool.execute")(function* (_params, ctx) {
-    const tasks = yield* ctx.extension.invoke(TaskListRef, {})
+    const tasks = yield* ctx.extension.request(TaskListRef, {})
 
     if (tasks.length === 0) {
       return { tasks: [], summary: "No tasks" }

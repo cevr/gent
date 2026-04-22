@@ -25,7 +25,7 @@
  *                         model-specific fields (`resources`, `idempotent`,
  *                         `promptSnippet`, `promptGuidelines`, `interactive`).
  *   - `"agent-protocol"` — other server extensions may invoke via
- *                         `ctx.extension.invoke(...)`.
+ *                         `ctx.extension.request(...)`.
  *   - `"transport-public"` — any transport client (TUI, SDK, future web UI)
  *                         may invoke via the published transport surface.
  *   - `"human-slash"`   — slash-command surface in the TUI.

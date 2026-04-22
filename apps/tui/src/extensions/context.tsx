@@ -6,7 +6,7 @@
  *
  * B11.6 deleted the paired-package snapshot cache. Widgets that need
  * server-side state subscribe to `ClientTransport.onExtensionStateChanged`
- * and call `client.extension.invoke`/`ask` directly — see e.g.
+ * and call `client.extension.request`/`ask` directly — see e.g.
  * `builtins/tasks.client.tsx`.
  */
 

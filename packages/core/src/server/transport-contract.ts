@@ -352,7 +352,7 @@ export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
  *  without an `unknown` cast (codex BLOCK on C4.2). Callers that previously
  *  omitted it must now pass the active session's current branch.
  */
-export const InvokeCapabilityInput = Schema.Struct({
+export const RequestCapabilityInput = Schema.Struct({
   sessionId: SessionId,
   extensionId: Schema.String,
   capabilityId: Schema.String,
@@ -360,7 +360,7 @@ export const InvokeCapabilityInput = Schema.Struct({
   input: Schema.Unknown,
   branchId: BranchId,
 })
-export type InvokeCapabilityInput = typeof InvokeCapabilityInput.Type
+export type RequestCapabilityInput = typeof RequestCapabilityInput.Type
 
 export const ListExtensionStatusInput = Schema.Struct({
   sessionId: Schema.optional(SessionId),

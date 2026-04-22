@@ -468,7 +468,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           return reply
         }),
 
-      "extension.invoke": ({ sessionId, extensionId, capabilityId, intent, input, branchId }) =>
+      "extension.request": ({ sessionId, extensionId, capabilityId, intent, input, branchId }) =>
         Effect.gen(function* () {
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
           const capabilities = activeRegistry.getResolved().capabilities

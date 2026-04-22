@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off the paired-package snapshot cache. The widget owns
  * its own Solid signal inside an Effect-typed setup, fetched via the
- * typed transport (`client.extension.invoke`) and refreshed on
+ * typed transport (`client.extension.request`) and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/task-tools`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -69,7 +69,7 @@ export default defineClientExtension("@gent/task-tools", {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const out = await transport.runtime.run(
-          transport.client.extension.invoke({
+          transport.client.extension.request({
             sessionId: captured.sessionId,
             extensionId: EXT_ID,
             capabilityId: QUERY_ID,

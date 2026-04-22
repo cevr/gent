@@ -123,7 +123,7 @@ export const makeExtensionHostContext = (
       deps.extensionStateRuntime.send(runInfo.sessionId, message, branchId ?? runInfo.branchId),
     ask: (message, branchId) =>
       deps.extensionStateRuntime.execute(runInfo.sessionId, message, branchId ?? runInfo.branchId),
-    invoke: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
+    request: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
       const capabilities = deps.extensionRegistry.getResolved().capabilities
       const ctx = {
         sessionId: runInfo.sessionId,

@@ -61,7 +61,7 @@ export declare namespace ExtensionHostContext {
     /** Typed capability RPC into another extension. Routes by
      *  `(extensionId, capabilityId)`, decodes via `ref.input`, validates
      *  output via `ref.output`, and gates dispatch on `ref.intent`. */
-    readonly invoke: <I, O>(
+    readonly request: <I, O>(
       ref: CapabilityRef<I, O>,
       input: I,
     ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>

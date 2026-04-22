@@ -30,6 +30,11 @@ const makeCtx = (overrides: {
       resolveDualModelPair: () =>
         Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
     },
+    extension: {
+      send: () => Effect.void,
+      ask: () => Effect.die("extension.ask not expected in DelegateTool test"),
+      request: () => Effect.succeed({}),
+    },
   })
 
 describe("Delegate Tool", () => {

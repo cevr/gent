@@ -320,7 +320,7 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
   extension: {
     send: dieStub("extension.send"),
     ask: dieStub("extension.ask"),
-    invoke: dieStub("extension.invoke"),
+    request: dieStub("extension.request"),
   },
   agent: {
     get: dieStub("agent.get"),

@@ -161,7 +161,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           )
 
         // Extension state is no longer hydrated through the session snapshot —
-        // clients call the extension's typed `client.extension.invoke(...)` on
+        // clients call the extension's typed `client.extension.request(...)` on
         // mount and subscribe to `ExtensionStateChanged` events for refetch
         // signals. The privileged out-of-band UI snapshot channel is gone.
 

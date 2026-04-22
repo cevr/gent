@@ -39,7 +39,7 @@ const makeCtx = Effect.gen(function* () {
   const runtime = yield* MachineEngine
   const registry = yield* ExtensionRegistry
   const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
-  const invoke = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
+  const request = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
     const e = registry
       .getResolved()
       .capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctxBase, {
@@ -70,7 +70,7 @@ const makeCtx = Effect.gen(function* () {
     extension: {
       send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
       ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
-      invoke,
+      request,
     },
   }) as ToolContext
 })

@@ -61,7 +61,7 @@ export function BackgroundTasksDialog(props: {
     if (session === undefined || session === null) return
     cast(
       clientCtx.client.extension
-        .invoke({
+        .request({
           sessionId: session.sessionId,
           branchId: session.branchId,
           extensionId: TaskUpdateRef.extensionId,

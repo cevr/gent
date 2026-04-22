@@ -13,12 +13,12 @@ export const TaskGetTool = tool({
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
     const taskId = TaskId.of(params.taskId)
-    const task = yield* ctx.extension.invoke(TaskGetRef, { taskId })
+    const task = yield* ctx.extension.request(TaskGetRef, { taskId })
     if (task == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* ctx.extension.invoke(TaskGetDepsRef, { taskId })
+    const deps = yield* ctx.extension.request(TaskGetDepsRef, { taskId })
 
     return {
       id: task.id,
