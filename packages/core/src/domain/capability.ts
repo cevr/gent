@@ -25,7 +25,7 @@
  *                         model-specific fields (`resources`, `idempotent`,
  *                         `promptSnippet`, `promptGuidelines`, `interactive`).
  *   - `"agent-protocol"` — other server extensions may invoke via
- *                         `ctx.extension.query(...)` / `.mutate(...)`.
+ *                         `ctx.extension.invoke(...)`.
  *   - `"transport-public"` — any transport client (TUI, SDK, future web UI)
  *                         may invoke via the published transport surface.
  *   - `"human-slash"`   — slash-command surface in the TUI.
@@ -215,6 +215,7 @@ export type CapabilityToken = AnyCapabilityContribution & {
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: string
   readonly capabilityId: string
+  readonly intent: Intent
   readonly input: Schema.Schema<Input>
   readonly output: Schema.Schema<Output>
 }

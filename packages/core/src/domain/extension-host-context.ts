@@ -1,5 +1,6 @@
 import type { Effect, PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
+import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
 import type {
   AnyExtensionCommandMessage,
@@ -15,9 +16,6 @@ import type {
 } from "./interaction-request"
 import type { Branch, Message, MessageMetadata, Session } from "./message"
 import type { ModelId } from "./model"
-import type { MutationRef } from "./mutation"
-import type { QueryRef } from "./query"
-import type { CapabilityError, CapabilityNotFoundError } from "./capability"
 import type { SearchResult } from "../storage/search-storage"
 import type { StorageError } from "../storage/sqlite-storage"
 
@@ -60,29 +58,11 @@ export declare namespace ExtensionHostContext {
       branchId?: BranchId,
     ) => Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError>
 
-    /**
-     * Typed read-only RPC into another extension. Routes by `(extensionId, queryId)`,
-     * decodes input via `ref.input` and output via `ref.output`. The capability
-     * host gates the call on `audience: "agent-protocol"` AND `intent: "read"`
-     * — a same-id write capability is invisible to `query()` (dropping
-     * the intent gate would let `query()` invoke writes).
-     *
-     * Returns capability-host errors directly — there is no `QueryError`
-     * translation layer.
-     */
-    readonly query: <I, O>(
-      ref: QueryRef<I, O>,
-      input: I,
-    ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-
-    /**
-     * Typed write RPC into another extension. Same routing/decode rules as
-     * `query()` — the distinction is intent: `mutate` is the explicit write
-     * surface and is gated on `intent: "write"` (a read capability with the
-     * same id is invisible). Returns capability-host errors directly.
-     */
-    readonly mutate: <I, O>(
-      ref: MutationRef<I, O>,
+    /** Typed capability RPC into another extension. Routes by
+     *  `(extensionId, capabilityId)`, decodes via `ref.input`, validates
+     *  output via `ref.output`, and gates dispatch on `ref.intent`. */
+    readonly invoke: <I, O>(
+      ref: CapabilityRef<I, O>,
       input: I,
     ) => Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
   }

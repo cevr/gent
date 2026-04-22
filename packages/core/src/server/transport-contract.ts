@@ -343,33 +343,24 @@ export const AskExtensionMessageInput = Schema.Struct({
 })
 export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
 
-/** Input shape for `extension.query` and `extension.mutate` transport RPCs.
- *  `extensionId` + (`queryId` | `mutationId`) route to the registered
- *  contribution; `input` is decoded by the contribution's input schema at
- *  the registry boundary.
+/** Input shape for transport capability RPCs.
+ *  `extensionId` + `capabilityId` route to the registered capability;
+ *  `intent` preserves the read/write fence at the transport boundary.
  *
  *  `branchId` is required so the C4.2 capability bridge can pass a
  *  fully-populated `CapabilityCoreContext` to the underlying handler
  *  without an `unknown` cast (codex BLOCK on C4.2). Callers that previously
  *  omitted it must now pass the active session's current branch.
  */
-export const QueryExtensionInput = Schema.Struct({
+export const InvokeCapabilityInput = Schema.Struct({
   sessionId: SessionId,
   extensionId: Schema.String,
-  queryId: Schema.String,
+  capabilityId: Schema.String,
+  intent: Schema.Literals(["read", "write"]),
   input: Schema.Unknown,
   branchId: BranchId,
 })
-export type QueryExtensionInput = typeof QueryExtensionInput.Type
-
-export const MutateExtensionInput = Schema.Struct({
-  sessionId: SessionId,
-  extensionId: Schema.String,
-  mutationId: Schema.String,
-  input: Schema.Unknown,
-  branchId: BranchId,
-})
-export type MutateExtensionInput = typeof MutateExtensionInput.Type
+export type InvokeCapabilityInput = typeof InvokeCapabilityInput.Type
 
 export const ListExtensionStatusInput = Schema.Struct({
   sessionId: Schema.optional(SessionId),

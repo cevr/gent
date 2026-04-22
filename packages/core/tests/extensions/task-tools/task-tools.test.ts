@@ -17,9 +17,11 @@ import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import type { QueryRef } from "@gent/core/domain/query"
-import type { MutationRef } from "@gent/core/domain/mutation"
-import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability"
+import type {
+  CapabilityError,
+  CapabilityNotFoundError,
+  CapabilityRef,
+} from "@gent/core/domain/capability"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -37,20 +39,11 @@ const makeCtx = Effect.gen(function* () {
   const runtime = yield* MachineEngine
   const registry = yield* ExtensionRegistry
   const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
-  const query = <I, O>(ref: QueryRef<I, O>, input: I) => {
+  const invoke = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
     const e = registry
       .getResolved()
-      .capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctxBase, {
-        intent: "read",
-      })
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-  }
-  const mutate = <I, O>(ref: MutationRef<I, O>, input: I) => {
-    const e = registry
-      .getResolved()
-      .capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctxBase, {
-        intent: "write",
+      .capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctxBase, {
+        intent: ref.intent,
       })
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
@@ -77,14 +70,7 @@ const makeCtx = Effect.gen(function* () {
     extension: {
       send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
       ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
-      query,
-      mutate,
-      getUiSnapshots: dieStub("extension.getUiSnapshots"),
-      getUiSnapshot: dieStub("extension.getUiSnapshot"),
-    },
-    extensions: {
-      send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
+      invoke,
     },
   }) as ToolContext
 })

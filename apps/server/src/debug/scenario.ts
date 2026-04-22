@@ -585,47 +585,41 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       home: platform.home,
     }
 
-    const runQuery = <T>(
-      ref: { readonly extensionId: string; readonly queryId: string },
+    const invoke = <T>(
+      ref: {
+        readonly extensionId: string
+        readonly capabilityId: string
+        readonly intent: "read" | "write"
+      },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctx, {
-        intent: "read",
-      })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
-    }
-    const runMutation = <T>(
-      ref: { readonly extensionId: string; readonly mutationId: string },
-      input: unknown,
-    ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctx, {
-        intent: "write",
+      const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
+        intent: ref.intent,
       })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
     }
 
     while (true) {
-      const existing = yield* runQuery<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})
+      const existing = yield* invoke<ReadonlyArray<{ readonly id: string }>>(TaskListRef, {})
       for (const task of existing) {
-        yield* runMutation<null>(TaskDeleteRef, { taskId: task.id }).pipe(
+        yield* invoke<null>(TaskDeleteRef, { taskId: task.id }).pipe(
           Effect.catchEager(() => Effect.void),
         )
       }
 
-      const inspect = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+      const inspect = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
         subject: "Inspect codebase",
       })
-      const verify = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+      const verify = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
         subject: "Run verification",
       })
-      const summarize = yield* runMutation<{ readonly id: string }>(TaskCreateRef, {
+      const summarize = yield* invoke<{ readonly id: string }>(TaskCreateRef, {
         subject: "Summarize outcome",
       })
 
       const setStatus = (taskId: string, status: "in_progress" | "completed") =>
-        runMutation<unknown>(TaskUpdateRef, { taskId, status })
+        invoke<unknown>(TaskUpdateRef, { taskId, status })
 
       yield* setStatus(inspect.id, "in_progress")
       yield* Effect.sleep("2 seconds")
@@ -639,7 +633,7 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       yield* Effect.sleep("2 seconds")
 
       const deleteTask = (taskId: string) =>
-        runMutation<null>(TaskDeleteRef, { taskId }).pipe(Effect.catchEager(() => Effect.void))
+        invoke<null>(TaskDeleteRef, { taskId }).pipe(Effect.catchEager(() => Effect.void))
 
       yield* deleteTask(inspect.id)
       yield* deleteTask(verify.id)

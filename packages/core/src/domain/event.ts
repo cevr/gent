@@ -292,14 +292,14 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
    * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
    * is honest: it tells subscribers "extension X has news" without coupling a
    * schema between server and client. Any transport consumer (TUI, SDK, future
-   * web UI) reads the new state the same way — via `client.extension.query`.
+   * web UI) reads the new state the same way — via `client.extension.invoke`.
    *
    * Server publishes this after:
    *   - A workflow state machine transition (machine.afterTransition)
    *   - A projection's underlying source emits an event the projection observes
    *
    * Client widgets subscribe by `extensionId` filter and refetch their typed
-   * query on each pulse.
+   * capability request on each pulse.
    */
   ExtensionStateChanged: {
     sessionId: SessionId,

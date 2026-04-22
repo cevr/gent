@@ -1,12 +1,13 @@
 /**
- * Task tools RPC acceptance test — exercises `client.extension.query` and
- * `client.extension.mutate` through the full per-request scope path that
+ * Task tools RPC acceptance test — exercises `client.extension.invoke`
+ * through the full per-request scope path that
  * production uses (Gent.test → RpcServer → registry dispatch → handler).
  *
  * Locks the C4 transport boundary the per-commit unit tests don't cover:
- *  - mutate creates a task → query lists it → mutate updates → query confirms
+ *  - invoke(write) creates a task → invoke(read) lists it → invoke(write)
+ *    updates → invoke(read) confirms
  *  - bad input fails as ExtensionProtocolError (Schema rejects at the boundary)
- *  - missing mutation/query id fails as ExtensionProtocolError (NotFound mapped)
+ *  - missing capability id fails as ExtensionProtocolError (NotFound mapped)
  */
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
@@ -32,7 +33,7 @@ const setupTaskExt = Effect.provide(
 
 describe("TaskExtension via RPC", () => {
   it.live(
-    "mutate(TaskCreate) → query(TaskList) → mutate(TaskUpdate) round-trip",
+    "invoke(TaskCreate/TaskList/TaskUpdate) round-trip",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -43,60 +44,66 @@ describe("TaskExtension via RPC", () => {
           )
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
-          // mutate: create
-          const created = (yield* client.extension.mutate({
+          // invoke: create
+          const created = (yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskCreateRef.extensionId,
-            mutationId: TaskCreateRef.mutationId,
+            capabilityId: TaskCreateRef.capabilityId,
+            intent: TaskCreateRef.intent,
             input: { subject: "Inspect repo" },
           })) as { id: string; subject: string; status: string }
           expect(created.id).toBeDefined()
           expect(created.subject).toBe("Inspect repo")
           expect(created.status).toBe("pending")
 
-          // query: list
-          const listed = (yield* client.extension.query({
+          // invoke: list
+          const listed = (yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
-            queryId: TaskListRef.queryId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; subject: string; status: string }>
           expect(listed).toHaveLength(1)
           expect(listed[0]?.id).toBe(created.id)
 
-          // mutate: transition pending → in_progress
-          yield* client.extension.mutate({
+          // invoke: transition pending → in_progress
+          yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskUpdateRef.extensionId,
-            mutationId: TaskUpdateRef.mutationId,
+            capabilityId: TaskUpdateRef.capabilityId,
+            intent: TaskUpdateRef.intent,
             input: { taskId: created.id, status: "in_progress" },
           })
 
-          const afterUpdate = (yield* client.extension.query({
+          const afterUpdate = (yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
-            queryId: TaskListRef.queryId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
 
-          // mutate: delete
-          yield* client.extension.mutate({
+          // invoke: delete
+          yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskDeleteRef.extensionId,
-            mutationId: TaskDeleteRef.mutationId,
+            capabilityId: TaskDeleteRef.capabilityId,
+            intent: TaskDeleteRef.intent,
             input: { taskId: created.id },
           })
-          const afterDelete = (yield* client.extension.query({
+          const afterDelete = (yield* client.extension.invoke({
             sessionId,
             branchId,
             extensionId: TaskListRef.extensionId,
-            queryId: TaskListRef.queryId,
+            capabilityId: TaskListRef.capabilityId,
+            intent: TaskListRef.intent,
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
@@ -106,7 +113,7 @@ describe("TaskExtension via RPC", () => {
   )
 
   it.live(
-    "mutate with bad input fails as ExtensionProtocolError",
+    "invoke with bad input fails as ExtensionProtocolError",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -118,11 +125,12 @@ describe("TaskExtension via RPC", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
-            .mutate({
+            .invoke({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
-              mutationId: TaskCreateRef.mutationId,
+              capabilityId: TaskCreateRef.capabilityId,
+              intent: TaskCreateRef.intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
             })
@@ -135,7 +143,7 @@ describe("TaskExtension via RPC", () => {
   )
 
   it.live(
-    "mutate with unknown id fails as ExtensionProtocolError",
+    "invoke with unknown id fails as ExtensionProtocolError",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -147,14 +155,44 @@ describe("TaskExtension via RPC", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 
           const result = yield* client.extension
-            .mutate({
+            .invoke({
               sessionId,
               branchId,
               extensionId: TaskCreateRef.extensionId,
-              mutationId: "not-a-real-mutation",
+              capabilityId: "not-a-real-capability",
+              intent: "write",
               input: {},
             })
             .pipe(Effect.flip)
+          expect(result._tag).toBe("ExtensionProtocolError")
+        }),
+      ),
+    { timeout: 10_000 },
+  )
+
+  it.live(
+    "invoke with mismatched intent fails as ExtensionProtocolError",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ext = yield* setupTaskExt
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+
+          const result = yield* client.extension
+            .invoke({
+              sessionId,
+              branchId,
+              extensionId: TaskCreateRef.extensionId,
+              capabilityId: TaskCreateRef.capabilityId,
+              intent: "read",
+              input: { subject: "Inspect repo" },
+            })
+            .pipe(Effect.flip)
+
           expect(result._tag).toBe("ExtensionProtocolError")
         }),
       ),

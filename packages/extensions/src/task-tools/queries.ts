@@ -7,16 +7,18 @@
  * compile here. `TaskService` is a wide read+write Tag; we yield
  * `TaskStorageReadOnly` (the branded sub-Tag from B11.4) instead.
  *
- * Refs (`TaskGetRef`, `TaskListRef`, `TaskGetDepsRef`) remain
- * `QueryRef`-shaped values whose `queryId` matches the capability's
- * `id` — that's the routing key the dispatcher uses. They will migrate
- * to `CapabilityRef` when the `ctx.extension.query/mutate` API
- * collapses (deferred from B11.3d; tracked separately).
+ * `CapabilityRef`s keep the routing key and read/write fence together.
  *
  * @module
  */
 import { Effect, Schema } from "effect"
-import { CapabilityError, type QueryRef, request, Task, TaskId } from "@gent/core/extensions/api"
+import {
+  CapabilityError,
+  type CapabilityRef,
+  request,
+  Task,
+  TaskId,
+} from "@gent/core/extensions/api"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
 
@@ -48,9 +50,10 @@ export const TaskGetQuery = request({
     }),
 })
 
-export const TaskGetRef: QueryRef<typeof TaskGetInput.Type, typeof TaskGetOutput.Type> = {
+export const TaskGetRef: CapabilityRef<typeof TaskGetInput.Type, typeof TaskGetOutput.Type> = {
   extensionId: TASK_TOOLS_EXTENSION_ID,
-  queryId: "task.get",
+  capabilityId: "task.get",
+  intent: "read",
   input: TaskGetInput,
   output: TaskGetOutput,
 }
@@ -84,9 +87,10 @@ export const TaskListQuery = request({
     }),
 })
 
-export const TaskListRef: QueryRef<typeof TaskListInput.Type, typeof TaskListOutput.Type> = {
+export const TaskListRef: CapabilityRef<typeof TaskListInput.Type, typeof TaskListOutput.Type> = {
   extensionId: TASK_TOOLS_EXTENSION_ID,
-  queryId: "task.list",
+  capabilityId: "task.list",
+  intent: "read",
   input: TaskListInput,
   output: TaskListOutput,
 }
@@ -118,10 +122,13 @@ export const TaskGetDepsQuery = request({
     }),
 })
 
-export const TaskGetDepsRef: QueryRef<typeof TaskGetDepsInput.Type, typeof TaskGetDepsOutput.Type> =
-  {
-    extensionId: TASK_TOOLS_EXTENSION_ID,
-    queryId: "task.getDeps",
-    input: TaskGetDepsInput,
-    output: TaskGetDepsOutput,
-  }
+export const TaskGetDepsRef: CapabilityRef<
+  typeof TaskGetDepsInput.Type,
+  typeof TaskGetDepsOutput.Type
+> = {
+  extensionId: TASK_TOOLS_EXTENSION_ID,
+  capabilityId: "task.getDeps",
+  intent: "read",
+  input: TaskGetDepsInput,
+  output: TaskGetDepsOutput,
+}

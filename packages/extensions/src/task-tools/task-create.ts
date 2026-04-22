@@ -25,7 +25,7 @@ export const TaskCreateTool = tool({
     "Create a durable task with optional dependencies. Tasks persist across turns and can be run in the background. Set agent + prompt for executable tasks.",
   params: TaskCreateParams,
   execute: Effect.fn("TaskCreateTool.execute")(function* (params, ctx) {
-    const task = yield* ctx.extension.mutate(TaskCreateRef, {
+    const task = yield* ctx.extension.invoke(TaskCreateRef, {
       subject: params.subject,
       description: params.description,
       agentType: params.agent,
@@ -35,7 +35,7 @@ export const TaskCreateTool = tool({
 
     if (params.blockedBy !== undefined) {
       for (const depId of params.blockedBy) {
-        yield* ctx.extension.mutate(TaskAddDepRef, {
+        yield* ctx.extension.invoke(TaskAddDepRef, {
           taskId: task.id,
           blockedById: TaskId.of(depId),
         })

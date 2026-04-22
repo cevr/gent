@@ -5,7 +5,7 @@
  * policy). It exists only to register the task-tools extension as having
  * observable state, so the event publisher emits `ExtensionStateChanged`
  * pulses that the TUI widget subscribes to. Clients fetch the actual task
- * list via the typed `TaskListQuery` (`client.extension.query`).
+ * list via the typed `TaskListQuery` (`client.extension.invoke`).
  *
  * @module
  */

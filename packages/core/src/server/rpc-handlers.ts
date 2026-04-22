@@ -468,15 +468,15 @@ export const RpcHandlersLive = GentRpcs.toLayer(
           return reply
         }),
 
-      "extension.query": ({ sessionId, extensionId, queryId, input, branchId }) =>
+      "extension.invoke": ({ sessionId, extensionId, capabilityId, intent, input, branchId }) =>
         Effect.gen(function* () {
           const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
           const capabilities = activeRegistry.getResolved().capabilities
           return yield* capabilities
             .run(
               extensionId,
-              queryId,
-              "agent-protocol",
+              capabilityId,
+              "transport-public",
               input,
               {
                 sessionId: SessionId.of(sessionId),
@@ -484,45 +484,14 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                 cwd: platform.cwd,
                 home: platform.home,
               },
-              { intent: "read" },
+              { intent },
             )
             .pipe(
               Effect.mapError(
                 (e) =>
                   new ExtensionProtocolError({
                     extensionId,
-                    tag: queryId,
-                    phase: "request",
-                    message: "reason" in e ? `${e._tag}: ${e.reason}` : e._tag,
-                  }),
-              ),
-            )
-        }),
-
-      "extension.mutate": ({ sessionId, extensionId, mutationId, input, branchId }) =>
-        Effect.gen(function* () {
-          const { registry: activeRegistry } = yield* resolveSessionProfile(sessionId)
-          const capabilities = activeRegistry.getResolved().capabilities
-          return yield* capabilities
-            .run(
-              extensionId,
-              mutationId,
-              "agent-protocol",
-              input,
-              {
-                sessionId: SessionId.of(sessionId),
-                branchId: BranchId.of(branchId),
-                cwd: platform.cwd,
-                home: platform.home,
-              },
-              { intent: "write" },
-            )
-            .pipe(
-              Effect.mapError(
-                (e) =>
-                  new ExtensionProtocolError({
-                    extensionId,
-                    tag: mutationId,
+                    tag: capabilityId,
                     phase: "request",
                     message: "reason" in e ? `${e._tag}: ${e.reason}` : e._tag,
                   }),

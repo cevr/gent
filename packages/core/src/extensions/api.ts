@@ -278,17 +278,6 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-// Authoring-side `QueryContribution` / `MutationContribution` /
-// `AnyQueryContribution` / `AnyMutationContribution` / `*Context` were
-// dropped from the public surface in B11.5d-fix — zero authors construct
-// these (the unified `request({ intent })` factory is the way). The
-// internal types still live at `domain/{query,mutation}.ts` for the
-// dispatcher's routing keys (`QueryRef` / `MutationRef`) and error
-// channel until the `ctx.extension.query/mutate` API collapse lands.
-export type { QueryRef } from "../domain/query.js"
-export { QueryError, QueryNotFoundError } from "../domain/query.js"
-export type { MutationRef } from "../domain/mutation.js"
-export { MutationError, MutationNotFoundError } from "../domain/mutation.js"
 export {
   InteractionPendingReader,
   type InteractionPendingReaderService,

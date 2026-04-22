@@ -6,9 +6,8 @@ import {
   CommandInfo,
   ExtensionHealthSnapshot,
   InvokeCommandInput,
+  InvokeCapabilityInput,
   ListExtensionStatusInput,
-  MutateExtensionInput,
-  QueryExtensionInput,
   SendExtensionMessageInput,
 } from "../transport-contract.js"
 
@@ -22,13 +21,8 @@ export class ExtensionRpcs extends RpcGroup.make(
     success: Schema.Unknown,
     error: GentRpcError,
   }),
-  Rpc.make("query", {
-    payload: QueryExtensionInput.fields,
-    success: Schema.Unknown,
-    error: GentRpcError,
-  }),
-  Rpc.make("mutate", {
-    payload: MutateExtensionInput.fields,
+  Rpc.make("invoke", {
+    payload: InvokeCapabilityInput.fields,
     success: Schema.Unknown,
     error: GentRpcError,
   }),

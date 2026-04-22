@@ -155,7 +155,7 @@ export interface ClientContextValue {
   // Extension state-change pulse subscription. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
   // registered subscriber. The pulse carries no payload — consumers
-  // refetch via the extension's typed `client.extension.query(...)`.
+  // refetch via the extension's typed `client.extension.invoke(...)`.
   // Returns an unsubscribe function. Replaces a single-slot callback so
   // multiple widgets can listen for their own extension's pulses.
   onExtensionStateChanged: (
@@ -490,7 +490,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   setAgentStore({ agent: rt.agent, status })
 
                   // No initial-snapshot fan-out: the UI snapshot channel is gone.
-                  // Widgets fetch initial state via `client.extension.query(...)`
+                  // Widgets fetch initial state via `client.extension.invoke(...)`
                   // and refetch on `ExtensionStateChanged` pulses.
                 },
                 openEvents: (after) =>

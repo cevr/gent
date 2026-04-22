@@ -61,11 +61,12 @@ export function BackgroundTasksDialog(props: {
     if (session === undefined || session === null) return
     cast(
       clientCtx.client.extension
-        .mutate({
+        .invoke({
           sessionId: session.sessionId,
           branchId: session.branchId,
           extensionId: TaskUpdateRef.extensionId,
-          mutationId: TaskUpdateRef.mutationId,
+          capabilityId: TaskUpdateRef.capabilityId,
+          intent: TaskUpdateRef.intent,
           input: { taskId, status: "stopped" },
         })
         .pipe(Effect.catchEager(() => Effect.void)),

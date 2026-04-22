@@ -6,12 +6,14 @@
  */
 
 import { DateTime, Effect } from "effect"
+import type {
+  CapabilityError,
+  CapabilityNotFoundError,
+  CapabilityRef,
+} from "../domain/capability.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import type { MutationRef } from "../domain/mutation.js"
-import type { QueryRef } from "../domain/query.js"
-import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
 import type { RuntimePlatformShape } from "./runtime-platform.js"
 import type { ApprovalServiceShape } from "./approval-service.js"
@@ -121,7 +123,7 @@ export const makeExtensionHostContext = (
       deps.extensionStateRuntime.send(runInfo.sessionId, message, branchId ?? runInfo.branchId),
     ask: (message, branchId) =>
       deps.extensionStateRuntime.execute(runInfo.sessionId, message, branchId ?? runInfo.branchId),
-    query: <I, O>(ref: QueryRef<I, O>, input: I) => {
+    invoke: <I, O>(ref: CapabilityRef<I, O>, input: I) => {
       const capabilities = deps.extensionRegistry.getResolved().capabilities
       const ctx = {
         sessionId: runInfo.sessionId,
@@ -129,28 +131,8 @@ export const makeExtensionHostContext = (
         cwd: deps.platform.cwd,
         home: deps.platform.home,
       }
-      // Cast narrows `unknown` output to the typed `O`; the host validated
-      // it via `ref.output` (== `capability.output`) at the boundary.
-      // Error channel is `CapabilityError | CapabilityNotFoundError` and
-      // surfaces as such on the public `extension.query` API (no
-      // translation layer). The `intent: "read"` option gates the
-      // dispatch — a same-id write capability is invisible to `query()`.
-      const e = capabilities.run(ref.extensionId, ref.queryId, "agent-protocol", input, ctx, {
-        intent: "read",
-      })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
-    },
-    mutate: <I, O>(ref: MutationRef<I, O>, input: I) => {
-      const capabilities = deps.extensionRegistry.getResolved().capabilities
-      const ctx = {
-        sessionId: runInfo.sessionId,
-        branchId: runInfo.branchId,
-        cwd: deps.platform.cwd,
-        home: deps.platform.home,
-      }
-      const e = capabilities.run(ref.extensionId, ref.mutationId, "agent-protocol", input, ctx, {
-        intent: "write",
+      const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
+        intent: ref.intent,
       })
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>

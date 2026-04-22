@@ -2,20 +2,16 @@
  * Task-tools mutations — typed write Capabilities authored through the
  * `request({ intent: "write", ... })` factory (B11.5).
  *
- * Refs (`TaskCreateRef`, …) remain `MutationRef`-shaped values whose
- * `mutationId` matches the capability's `id` — the routing key the
- * dispatcher uses. They will migrate to `CapabilityRef` when the
- * `ctx.extension.query/mutate` API collapses (deferred from B11.3d;
- * tracked separately).
+ * `CapabilityRef`s keep the routing key and read/write fence together.
  *
  * @module
  */
 import { Effect, Schema } from "effect"
 import {
   AgentName,
+  type CapabilityRef,
   CapabilityError,
   EventPublisher,
-  type MutationRef,
   request,
   Task,
   TaskId,
@@ -70,13 +66,16 @@ export const TaskCreateMutation = request({
     }),
 })
 
-export const TaskCreateRef: MutationRef<typeof TaskCreateInput.Type, typeof TaskCreateOutput.Type> =
-  {
-    extensionId: TASK_TOOLS_EXTENSION_ID,
-    mutationId: "task.create",
-    input: TaskCreateInput,
-    output: TaskCreateOutput,
-  }
+export const TaskCreateRef: CapabilityRef<
+  typeof TaskCreateInput.Type,
+  typeof TaskCreateOutput.Type
+> = {
+  extensionId: TASK_TOOLS_EXTENSION_ID,
+  capabilityId: "task.create",
+  intent: "write",
+  input: TaskCreateInput,
+  output: TaskCreateOutput,
+}
 
 // ── UpdateTask ──
 
@@ -108,13 +107,16 @@ export const TaskUpdateMutation = request({
     }),
 })
 
-export const TaskUpdateRef: MutationRef<typeof TaskUpdateInput.Type, typeof TaskUpdateOutput.Type> =
-  {
-    extensionId: TASK_TOOLS_EXTENSION_ID,
-    mutationId: "task.update",
-    input: TaskUpdateInput,
-    output: TaskUpdateOutput,
-  }
+export const TaskUpdateRef: CapabilityRef<
+  typeof TaskUpdateInput.Type,
+  typeof TaskUpdateOutput.Type
+> = {
+  extensionId: TASK_TOOLS_EXTENSION_ID,
+  capabilityId: "task.update",
+  intent: "write",
+  input: TaskUpdateInput,
+  output: TaskUpdateOutput,
+}
 
 // ── DeleteTask ──
 
@@ -137,13 +139,16 @@ export const TaskDeleteMutation = request({
     }),
 })
 
-export const TaskDeleteRef: MutationRef<typeof TaskDeleteInput.Type, typeof TaskDeleteOutput.Type> =
-  {
-    extensionId: TASK_TOOLS_EXTENSION_ID,
-    mutationId: "task.delete",
-    input: TaskDeleteInput,
-    output: TaskDeleteOutput,
-  }
+export const TaskDeleteRef: CapabilityRef<
+  typeof TaskDeleteInput.Type,
+  typeof TaskDeleteOutput.Type
+> = {
+  extensionId: TASK_TOOLS_EXTENSION_ID,
+  capabilityId: "task.delete",
+  intent: "write",
+  input: TaskDeleteInput,
+  output: TaskDeleteOutput,
+}
 
 // ── AddDependency ──
 
@@ -173,13 +178,16 @@ export const TaskAddDepMutation = request({
     }),
 })
 
-export const TaskAddDepRef: MutationRef<typeof TaskAddDepInput.Type, typeof TaskAddDepOutput.Type> =
-  {
-    extensionId: TASK_TOOLS_EXTENSION_ID,
-    mutationId: "task.addDep",
-    input: TaskAddDepInput,
-    output: TaskAddDepOutput,
-  }
+export const TaskAddDepRef: CapabilityRef<
+  typeof TaskAddDepInput.Type,
+  typeof TaskAddDepOutput.Type
+> = {
+  extensionId: TASK_TOOLS_EXTENSION_ID,
+  capabilityId: "task.addDep",
+  intent: "write",
+  input: TaskAddDepInput,
+  output: TaskAddDepOutput,
+}
 
 // ── RemoveDependency ──
 
@@ -209,12 +217,13 @@ export const TaskRemoveDepMutation = request({
     }),
 })
 
-export const TaskRemoveDepRef: MutationRef<
+export const TaskRemoveDepRef: CapabilityRef<
   typeof TaskRemoveDepInput.Type,
   typeof TaskRemoveDepOutput.Type
 > = {
   extensionId: TASK_TOOLS_EXTENSION_ID,
-  mutationId: "task.removeDep",
+  capabilityId: "task.removeDep",
+  intent: "write",
   input: TaskRemoveDepInput,
   output: TaskRemoveDepOutput,
 }
