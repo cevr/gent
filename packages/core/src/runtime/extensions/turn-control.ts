@@ -1,13 +1,8 @@
-/**
- * Extension turn-control service — shared bridge into agent-loop queue paths.
- *
- * No hidden mailbox here. If the loop has not bound handlers yet, that is a
- * wiring bug and should fail loudly through actor supervision.
- */
+/** Extension turn-control service — queue-backed mailbox into agent-loop queue paths. */
 
-import { Effect, Layer, Ref, Semaphore, Context } from "effect"
-import type { BranchId, SessionId } from "../../domain/ids.js"
-import type { MessageMetadata } from "../../domain/message.js"
+import { Context, Effect, Layer, Queue, Schema, Stream } from "effect"
+import { BranchId, SessionId } from "../../domain/ids.js"
+import { MessageMetadata } from "../../domain/message.js"
 
 export interface QueueFollowUpInput {
   readonly sessionId: SessionId
@@ -22,10 +17,23 @@ export interface InterjectInput {
   readonly content: string
 }
 
-interface ExtensionTurnControlHandlers {
-  readonly queueFollowUp: (input: QueueFollowUpInput) => Effect.Effect<void>
-  readonly interject: (input: InterjectInput) => Effect.Effect<void>
-}
+export const QueueFollowUpCommand = Schema.TaggedStruct("QueueFollowUp", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  content: Schema.String,
+  metadata: Schema.optional(MessageMetadata),
+})
+export type QueueFollowUpCommand = typeof QueueFollowUpCommand.Type
+
+export const InterjectCommand = Schema.TaggedStruct("Interject", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  content: Schema.String,
+})
+export type InterjectCommand = typeof InterjectCommand.Type
+
+export const TurnControlCommand = Schema.Union([QueueFollowUpCommand, InterjectCommand])
+export type TurnControlCommand = typeof TurnControlCommand.Type
 
 export interface ExtensionTurnControlService {
   /** Queue a follow-up message after the current turn completes */
@@ -33,8 +41,8 @@ export interface ExtensionTurnControlService {
 
   /** Interject urgently — interrupts the current turn */
   readonly interject: (input: InterjectInput) => Effect.Effect<void>
-  /** Bind the live agent-loop handlers once the loop exists. */
-  readonly bind: (handlers: ExtensionTurnControlHandlers) => Effect.Effect<void>
+  /** Stream of queued turn-control commands, owned by the runtime. */
+  readonly commands: Stream.Stream<TurnControlCommand>
 }
 
 export class ExtensionTurnControl extends Context.Service<
@@ -44,39 +52,20 @@ export class ExtensionTurnControl extends Context.Service<
   static Live: Layer.Layer<ExtensionTurnControl> = Layer.effect(
     ExtensionTurnControl,
     Effect.gen(function* () {
-      const handlersRef = yield* Ref.make<ExtensionTurnControlHandlers | undefined>(undefined)
-      const lock = yield* Semaphore.make(1)
-
-      const withHandlers = <A>(
-        operation: string,
-        run: (handlers: ExtensionTurnControlHandlers) => Effect.Effect<A>,
-      ) =>
-        Effect.gen(function* () {
-          const handlers = yield* lock.withPermits(1)(Ref.get(handlersRef))
-          if (handlers === undefined) {
-            return yield* Effect.die(
-              new Error(`ExtensionTurnControl.${operation} called before AgentLoop bound handlers`),
-            )
-          }
-          return yield* run(handlers)
-        })
+      const queue = yield* Queue.unbounded<TurnControlCommand>()
 
       return {
         queueFollowUp: Effect.fn("ExtensionTurnControl.queueFollowUp")(function* (
           input: QueueFollowUpInput,
         ) {
-          yield* withHandlers("queueFollowUp", (handlers) => handlers.queueFollowUp(input))
+          yield* Queue.offer(queue, { _tag: "QueueFollowUp", ...input })
         }),
 
         interject: Effect.fn("ExtensionTurnControl.interject")(function* (input: InterjectInput) {
-          yield* withHandlers("interject", (handlers) => handlers.interject(input))
+          yield* Queue.offer(queue, { _tag: "Interject", ...input })
         }),
 
-        bind: Effect.fn("ExtensionTurnControl.bind")(function* (
-          handlers: ExtensionTurnControlHandlers,
-        ) {
-          yield* lock.withPermits(1)(Ref.set(handlersRef, handlers))
-        }),
+        commands: Stream.fromQueue(queue),
       } satisfies ExtensionTurnControlService
     }),
   )
@@ -85,6 +74,6 @@ export class ExtensionTurnControl extends Context.Service<
     Layer.succeed(ExtensionTurnControl, {
       queueFollowUp: () => Effect.void,
       interject: () => Effect.void,
-      bind: () => Effect.void,
+      commands: Stream.empty,
     })
 }

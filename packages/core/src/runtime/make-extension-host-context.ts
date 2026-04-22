@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { DateTime, Effect } from "effect"
+import { DateTime, Effect, Stream } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -86,7 +86,7 @@ export const unavailableHostDeps = (label: string): OptionalHostDeps => {
     turnControl: {
       queueFollowUp: die("TurnControl"),
       interject: die("TurnControl"),
-      bind: die("TurnControl"),
+      commands: Stream.empty,
     },
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     storage: new Proxy({} as StorageService, {
