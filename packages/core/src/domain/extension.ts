@@ -122,7 +122,7 @@ export interface SystemPromptInput {
   readonly interactive?: boolean
   /**
    * Origin of the resolved driver for this turn. Set by the agent loop
-   * after `resolveAgentDriver` runs. Pipeline hooks read this to detect
+   * after `resolveAgentDriver` runs. Prompt slots read this to detect
    * external dispatch (e.g. ACP via codemode) and rewrite the prompt's
    * tool section accordingly. `undefined` for code paths that bypass
    * `resolveTurnContext`.
@@ -137,13 +137,13 @@ export interface SystemPromptInput {
    * Tool surface declared by the resolved driver (`"native"` or
    * `"codemode"`). Set by the agent loop from
    * `ExternalDriverContribution.toolSurface`; `undefined` for
-   * model-routed turns. The codemode pipeline keys off this metadata
+   * model-routed turns. The codemode prompt slot keys off this metadata
    * rather than driver-id heuristics.
    */
   readonly driverToolSurface?: "native" | "codemode"
   /**
    * The structured prompt sections used to build `basePrompt`, in
-   * pre-compile form. Pipeline hooks that need to swap or strip
+   * pre-compile form. Prompt slots that need to swap or strip
    * sections (e.g. codemode replacing `tool-list` / `tool-guidelines`)
    * rewrite this and recompile rather than performing string surgery.
    */
@@ -393,6 +393,6 @@ export interface GentExtension {
   ) => Effect.Effect<ExtensionContributions, ExtensionLoadError>
 }
 
-// Pipeline / Subscription factories live in `domain/contribution.ts`.
-// `defineInterceptor` (legacy single shape) was deleted in C6 — use
-// `pipeline(hook, handler)` for transformers and `subscription(event, failureMode, handler)` for observers.
+// Legacy keyed middleware primitives are gone. Prompt/context shaping now
+// lives on `Projection`; turn/message reactions and tool-result enrichment
+// live on `Resource.runtime`.

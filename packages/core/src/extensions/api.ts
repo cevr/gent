@@ -52,10 +52,8 @@ import type { ExtensionContributions } from "../domain/contribution.js"
 import type { AgentDefinition } from "../domain/agent.js"
 import type { AnyCapabilityContribution, CapabilityToken } from "../domain/capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../domain/driver.js"
-import type { AnyPipelineContribution } from "../domain/pipeline.js"
 import type { AnyProjectionContribution } from "../domain/projection.js"
 import type { AnyResourceContribution } from "../domain/resource.js"
-import type { AnySubscriptionContribution } from "../domain/subscription.js"
 import type { AgentEvent, AgentEventTag } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
@@ -185,10 +183,8 @@ export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
 export {
   type ExtensionContributions,
-  // Smart constructors — return bare leaf values; the bucket they're placed
+  // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
-  pipeline,
-  subscription,
   defineResource,
   resource,
 } from "../domain/contribution.js"
@@ -207,24 +203,6 @@ export {
   type WriteRequestInput,
 } from "../domain/capability/request.js"
 export { action, type ActionInput, type ActionSurface } from "../domain/capability/action.js"
-export {
-  type PipelineContribution,
-  type AnyPipelineContribution,
-  type PipelineKey,
-  type PipelineHandler,
-  type PipelineInput,
-  type PipelineOutput,
-  type PipelineMap,
-} from "../domain/pipeline.js"
-export {
-  type SubscriptionContribution,
-  type AnySubscriptionContribution,
-  type SubscriptionKey,
-  type SubscriptionHandler,
-  type SubscriptionEvent,
-  type SubscriptionMap,
-  type SubscriptionFailureMode,
-} from "../domain/subscription.js"
 export type {
   CapabilityToken,
   CapabilityContribution,
@@ -314,8 +292,6 @@ export interface DefineExtensionInput {
   readonly capabilities?: FieldSpec<CapabilityToken>
   readonly agents?: FieldSpec<AgentDefinition>
   readonly projections?: FieldSpec<AnyProjectionContribution>
-  readonly pipelines?: FieldSpec<AnyPipelineContribution>
-  readonly subscriptions?: FieldSpec<AnySubscriptionContribution>
   readonly modelDrivers?: FieldSpec<ModelDriverContribution>
   readonly externalDrivers?: FieldSpec<ExternalDriverContribution>
   readonly pulseTags?: ReadonlyArray<AgentEventTag>
@@ -510,13 +486,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
         const capabilities = yield* resolveField(manifest, "capabilities", params.capabilities, ctx)
         const agents = yield* resolveField(manifest, "agents", params.agents, ctx)
         const projections = yield* resolveField(manifest, "projections", params.projections, ctx)
-        const pipelines = yield* resolveField(manifest, "pipelines", params.pipelines, ctx)
-        const subscriptions = yield* resolveField(
-          manifest,
-          "subscriptions",
-          params.subscriptions,
-          ctx,
-        )
         const modelDrivers = yield* resolveField(manifest, "modelDrivers", params.modelDrivers, ctx)
         const externalDrivers = yield* resolveField(
           manifest,
@@ -529,8 +498,6 @@ export const defineExtension = (params: DefineExtensionInput): GentExtension => 
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(agents.length > 0 ? { agents } : {}),
           ...(projections.length > 0 ? { projections } : {}),
-          ...(pipelines.length > 0 ? { pipelines } : {}),
-          ...(subscriptions.length > 0 ? { subscriptions } : {}),
           ...(modelDrivers.length > 0 ? { modelDrivers } : {}),
           ...(externalDrivers.length > 0 ? { externalDrivers } : {}),
           ...(params.pulseTags !== undefined && params.pulseTags.length > 0

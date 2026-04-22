@@ -224,8 +224,8 @@ const persistAssistantText = (params: {
   })
 
 /**
- * Resolve the tool surface a driver expects, used by the `prompt.system`
- * pipeline to decide whether to append/replace tool-section content.
+ * Resolve the tool surface a driver expects, used by the `systemPrompt`
+ * slot to decide whether to append/replace tool-section content.
  * External drivers expose this on `ExternalDriverContribution.toolSurface`
  * (defaulting to `"native"` when omitted); model drivers are always native.
  * Returns `undefined` when no driver is set.
@@ -357,9 +357,9 @@ const resolveTurnContext = (params: {
         extensionProjections,
       )
 
-    // Build tool-aware prompt, then run through prompt.system interceptor.
-    // We hand the pipeline both the compiled `basePrompt` (for hooks that
-    // append sentinel sections) AND the structured `sections` (for hooks
+    // Build tool-aware prompt, then run through explicit prompt slots.
+    // We hand the slot layer both the compiled `basePrompt` (for append-only
+    // rewrites) AND the structured `sections` (for slots
     // that need to swap or strip a section by id, e.g. codemode replacing
     // `tool-list` / `tool-guidelines` rather than appending a contradicting
     // surface).

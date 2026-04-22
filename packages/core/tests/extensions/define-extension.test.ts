@@ -11,14 +11,10 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import { defineExtension, defineResource, tool, pipeline } from "@gent/core/extensions/api"
+import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
-import {
-  ExtensionLoadError,
-  type ExtensionSetupContext,
-  type SystemPromptInput,
-} from "@gent/core/domain/extension"
+import { ExtensionLoadError, type ExtensionSetupContext } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
@@ -58,7 +54,7 @@ describe("defineExtension", () => {
       expect(contributions.modelDrivers ?? []).toEqual([])
       expect(contributions.resources ?? []).toEqual([])
       expect(contributions.externalDrivers ?? []).toEqual([])
-      expect(contributions.pipelines ?? []).toEqual([])
+      expect(contributions.projections ?? []).toEqual([])
     }),
   )
 
@@ -79,7 +75,13 @@ describe("defineExtension", () => {
         id: "all-kinds",
         capabilities: [myTool],
         agents: [Agents.cowork],
-        pipelines: [pipeline("prompt.system", (i, next) => next(i))],
+        projections: [
+          {
+            id: "prompt-suffix",
+            query: () => Effect.succeed(" [suffix]"),
+            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+          },
+        ],
         resources: [
           defineResource({
             scope: "process",
@@ -104,7 +106,7 @@ describe("defineExtension", () => {
       expect(modelCaps[0]?.permissionRules?.[0]?.tool).toBe("echo")
       expect(modelCaps[0]?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe("cowork")
-      expect((contributions.pipelines ?? [])[0]?.hook).toBe("prompt.system")
+      expect((contributions.projections ?? [])[0]?.id).toBe("prompt-suffix")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       expect(resources[0]!.schedule?.[0]?.id).toBe("test-job")
@@ -215,7 +217,7 @@ describe("defineExtension", () => {
     }),
   )
 
-  it.live("defineExtension result wires through ExtensionRegistry + pipeline chain", () =>
+  it.live("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>
     Effect.gen(function* () {
       const myTool = tool({
         id: "from-define",
@@ -226,12 +228,12 @@ describe("defineExtension", () => {
       const ext = defineExtension({
         id: "wired",
         capabilities: [myTool],
-        pipelines: [
-          pipeline(
-            "prompt.system",
-            (input: SystemPromptInput, next: (i: SystemPromptInput) => Effect.Effect<string>) =>
-              next(input).pipe(Effect.map((s) => `${s}!!`)),
-          ),
+        projections: [
+          {
+            id: "prompt",
+            query: () => Effect.succeed("!!"),
+            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+          },
         ],
       })
       const contributions = yield* setupOf(ext)

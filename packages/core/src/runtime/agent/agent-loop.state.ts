@@ -200,7 +200,7 @@ export type ResolvedTurn = {
   agent?: AgentDefinitionType
   driver?: DriverRef
   /** Origin of {@link driver} — set by `resolveAgentDriver` in the loop's
-   *  `resolveTurnContext`. ACP-aware pipelines (`prompt.system`) read this
+   *  `resolveTurnContext`. ACP-aware prompt slots read this
    *  to detect external dispatch and rewrite the prompt accordingly. */
   driverSource?: DriverSource
 }

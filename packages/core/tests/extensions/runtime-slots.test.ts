@@ -11,7 +11,7 @@ import type {
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
-import { pipeline, defineResource } from "@gent/core/domain/contribution"
+import { defineResource } from "@gent/core/domain/contribution"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 
 const stubHostCtx = {
@@ -51,16 +51,18 @@ class BoomError extends Data.TaggedError("@gent/core/tests/runtime-slots/BoomErr
 }> {}
 
 describe("runtime slots", () => {
-  it.live("systemPrompt applies legacy pipeline first, then explicit projection rewrite", () => {
+  it.live("systemPrompt composes explicit projection rewrites in scope order", () => {
     const extensions = [
-      makeExt("legacy", "builtin", {
-        pipelines: [
-          pipeline("prompt.system", (input, next) =>
-            next(input).pipe(Effect.map((out) => `${out}[legacy]`)),
-          ),
+      makeExt("builtin", "builtin", {
+        projections: [
+          {
+            id: "prompt-builtin",
+            query: () => Effect.succeed("[builtin]"),
+            systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+          },
         ],
       }),
-      makeExt("explicit", "project", {
+      makeExt("project", "project", {
         projections: [
           {
             id: "prompt",
@@ -79,11 +81,11 @@ describe("runtime slots", () => {
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
       .pipe(
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[legacy][projection]"))),
+        Effect.tap((result) => Effect.sync(() => expect(result).toBe("base[builtin][projection]"))),
       )
   })
 
-  it.live("contextMessages applies explicit projection rewrite after legacy pipeline", () => {
+  it.live("contextMessages applies explicit projection rewrites in sequence", () => {
     const baseMessage = new Message({
       id: "m1",
       sessionId: SessionId.of("test-session"),
@@ -101,14 +103,16 @@ describe("runtime slots", () => {
       createdAt: new Date(),
     })
     const extensions = [
-      makeExt("legacy", "builtin", {
-        pipelines: [
-          pipeline("context.messages", (input, next) =>
-            next(input).pipe(Effect.map((messages) => [...messages].reverse())),
-          ),
+      makeExt("prepend", "builtin", {
+        projections: [
+          {
+            id: "messages-prepend",
+            query: () => Effect.succeed(baseMessage),
+            contextMessages: (message, input) => Effect.succeed([message, ...input.messages]),
+          },
         ],
       }),
-      makeExt("explicit", "project", {
+      makeExt("append", "project", {
         projections: [
           {
             id: "messages",
@@ -133,18 +137,24 @@ describe("runtime slots", () => {
       )
       .pipe(
         Effect.tap((messages) =>
-          Effect.sync(() => expect(messages.map((message) => message.id)).toEqual(["m1", "m2"])),
+          Effect.sync(() =>
+            expect(messages.map((message) => message.id)).toEqual(["m1", "m1", "m2"]),
+          ),
         ),
       )
   })
 
-  it.live("toolResult applies legacy pipeline first, then explicit resource enrichment", () => {
+  it.live("toolResult applies explicit resource enrichments in scope order", () => {
     const extensions = [
-      makeExt("legacy", "builtin", {
-        pipelines: [
-          pipeline("tool.result", (input, next) =>
-            next(input).pipe(Effect.map((result) => `${String(result)}-legacy`)),
-          ),
+      makeExt("builtin", "builtin", {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty,
+            runtime: {
+              toolResult: (input) => Effect.succeed(`${String(input.result)}-builtin`),
+            },
+          }),
         ],
       }),
       makeExt("explicit", "project", {
@@ -175,7 +185,7 @@ describe("runtime slots", () => {
         },
         stubHostCtx,
       )
-      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-legacy-explicit"))))
+      .pipe(Effect.tap((result) => Effect.sync(() => expect(result).toBe("base-builtin-explicit"))))
   })
 
   it.live("turnAfter explicit reactions keep continue/isolate/halt semantics", () => {

@@ -11,9 +11,9 @@
  * `domain/capability/{tool,request,action}.ts`. The legacy lowering smart
  * constructors `tool` / `request` aliases from the old split were deleted in B11.5d.
  *
- * Pipeline / Subscription / Resource keep identity smart constructors
- * (`pipeline`, `subscription`, `resource`) below — they exist to widen
- * variance at the bucket boundary, not to lower a legacy shape.
+ * Resource keeps an identity smart constructor (`resource`) below — it
+ * exists to widen variance at the bucket boundary, not to lower a legacy
+ * shape.
  *
  * Codex BLOCK on C8 design: drivers split into `modelDrivers` and
  * `externalDrivers` — one untagged `drivers: []` would smuggle back the
@@ -25,15 +25,8 @@ import type { AgentDefinition } from "./agent.js"
 import type { CapabilityToken } from "./capability.js"
 import type { AgentEventTag } from "./event.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
-import type { AnyPipelineContribution, PipelineHandler, PipelineKey } from "./pipeline.js"
 import type { AnyProjectionContribution } from "./projection.js"
 import type { AnyResourceContribution, ResourceContribution, ResourceScope } from "./resource.js"
-import type {
-  AnySubscriptionContribution,
-  SubscriptionFailureMode,
-  SubscriptionHandler,
-  SubscriptionKey,
-} from "./subscription.js"
 
 // ── Typed buckets ──
 
@@ -53,8 +46,6 @@ export interface ExtensionContributions {
   readonly capabilities?: ReadonlyArray<CapabilityToken>
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly projections?: ReadonlyArray<AnyProjectionContribution>
-  readonly pipelines?: ReadonlyArray<AnyPipelineContribution>
-  readonly subscriptions?: ReadonlyArray<AnySubscriptionContribution>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
   /**
@@ -75,36 +66,10 @@ export interface ExtensionContributions {
 
 // ── Smart constructors ──
 //
-// `pipeline`, `subscription`, `resource` lower their typed authoring
-// shape to the bucket leaf. The legacy `tool` / `query` / `mutation`
-// smart constructors were deleted in B11.5d — capabilities are now
-// authored exclusively through the typed factories in
+// `resource` widens the typed authoring shape to the bucket leaf. The
+// legacy `tool` / `query` / `mutation` smart constructors were deleted in
+// B11.5d — capabilities are now authored exclusively through the typed factories in
 // `domain/capability/{tool,request,action}.ts`.
-
-/**
- * Pipeline smart constructor. Takes `(hook, handler)` directly. Generic over
- * `<K, E, R>` so authors keep their typed handler shape; widened to
- * `AnyPipelineContribution` at the bucket boundary.
- */
-export const pipeline = <K extends PipelineKey, E, R>(
-  hook: K,
-  handler: PipelineHandler<K, E, R>,
-): AnyPipelineContribution =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  ({ hook, handler }) as unknown as AnyPipelineContribution
-
-/**
- * Subscription smart constructor. Takes `(event, failureMode, handler)`
- * directly. Generic over `<K, E, R>` so authors keep their typed handler
- * shape; widened to `AnySubscriptionContribution` at the bucket boundary.
- */
-export const subscription = <K extends SubscriptionKey, E, R>(
-  event: K,
-  failureMode: SubscriptionFailureMode,
-  handler: SubscriptionHandler<K, E, R>,
-): AnySubscriptionContribution =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  ({ event, handler, failureMode }) as unknown as AnySubscriptionContribution
 
 // The old query/mutation smart constructors are gone. Authors use the
 // unified `request({ intent: "read" | "write", ... })` factory at
@@ -118,9 +83,8 @@ export { defineResource } from "./resource.js"
 /**
  * Identity smart constructor for the Resource primitive. Generic over
  * `<A, S, R, E>` so authors keep their typed Resource shape; the leaf is
- * widened to `AnyResourceContribution` at the bucket boundary. Mirrors
- * {@link pipeline} and {@link subscription} — the same variance hole that
- * forces those wideners forces this one too: `Layer.Layer<A, E, R>` has a
+ * widened to `AnyResourceContribution` at the bucket boundary. The same
+ * variance hole that forces this widener exists because `Layer.Layer<A, E, R>` has a
  * contravariant `R` channel, so a narrowly-typed `Layer<never, never, ...>`
  * is not assignable to `Layer<any, any, any>` without an identity widener.
  */

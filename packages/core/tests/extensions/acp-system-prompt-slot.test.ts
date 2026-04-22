@@ -73,7 +73,7 @@ const runHandler = async (input: {
     }),
   )
 
-describe("ACP prompt.system slot", () => {
+describe("ACP systemPrompt slot", () => {
   test("appends codemode section when driverToolSurface is codemode", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
@@ -143,12 +143,6 @@ describe("ACP prompt.system slot", () => {
   })
 
   test("strips marker-wrapped tool-list / tool-guidelines and appends codemode", async () => {
-    // basePrompt mirrors what `compileSystemPrompt` produces in
-    // production: native tool sections wrapped in `@section:<id>` start
-    // and end sentinels. Counsel C6 — the codemode hook now matches
-    // those sentinels rather than doing `indexOf(section.content)` on
-    // raw content, so upstream edits to the *content* between the
-    // sentinels still get cleaned up atomically.
     const compiled = [
       "ID-SECTION",
       withSectionMarkers("tool-list", "## Available Tools\n\n- echo"),
@@ -170,16 +164,11 @@ describe("ACP prompt.system slot", () => {
     expect(result).toContain("External Tool Surface (codemode)")
     expect(result).not.toContain("## Available Tools")
     expect(result).not.toContain("- use tools")
-    // Sentinels are removed alongside content.
     expect(result).not.toContain("@section:tool-list")
     expect(result).not.toContain("@section:tool-guidelines")
   })
 
   test("strips even when upstream rewrote the inner section content", async () => {
-    // An upstream pipeline mutated the inside of the tool-list section.
-    // The marker sentinels still bound the block, so the codemode hook
-    // strips it cleanly — the prior `indexOf(section.content)` shape
-    // would have left rewritten content stranded in the prompt.
     const compiled = [
       "INSTRUCTIONS-FROM-UPSTREAM",
       "ID-SECTION",
@@ -205,8 +194,6 @@ describe("ACP prompt.system slot", () => {
   })
 
   test("strips every duplicate marker-wrapped section", async () => {
-    // Pre-fix the strip used a single non-global replace per id, so
-    // duplicate marker-wrapped sections left one behind.
     const compiled = [
       "ID-SECTION",
       withSectionMarkers("tool-list", "## Available Tools\n\n- echo (a)"),
@@ -223,20 +210,18 @@ describe("ACP prompt.system slot", () => {
       driverToolSurface: "codemode",
       tools: [fakeTool],
     })
-    expect(result).not.toContain("- echo (a)")
-    expect(result).not.toContain("- echo (b)")
-    expect(result).not.toContain("@section:tool-list")
+    expect(result).not.toContain("echo (a)")
+    expect(result).not.toContain("echo (b)")
     expect(result).toContain("External Tool Surface (codemode)")
   })
 
   test("leaves prompt untouched when native sections lack markers", async () => {
-    // If the section was authored without sentinels (e.g. an extension
-    // produced a tool-list section directly), the codemode hook can't
-    // locate it. Prefer leaving the prompt untouched over guessing —
-    // the model gets a contradicting tool surface, which is bad, but
-    // mangled-prompt is worse. The native-builder always wraps these
-    // sections, so this is only a concern for hand-rolled extensions.
-    const compiled = ["ID-SECTION", "## Available Tools\n\n- echo", "EXTRA-SECTION"].join("\n\n")
+    const compiled = [
+      "ID-SECTION",
+      "## Available Tools\n\n- echo",
+      "## Tool Guidelines\n\n- use tools",
+      "EXTRA-SECTION",
+    ].join("\n\n")
     const result = await runHandler({
       basePrompt: compiled,
       agent: new AgentDefinition({

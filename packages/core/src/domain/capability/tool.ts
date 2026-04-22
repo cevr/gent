@@ -100,7 +100,7 @@ export interface ToolInput<
  *
  * Generic over `<Params, Result, Error, Deps>` so authors keep their
  * typed handler shape; the leaf is widened to `AnyCapabilityContribution`
- * at the bucket boundary (same variance hole as `pipeline`/`subscription`).
+ * at the bucket boundary.
  *
  * The B11.5 migration-window overload accepting legacy `AnyToolDefinition`
  * was deleted in B11.5d.

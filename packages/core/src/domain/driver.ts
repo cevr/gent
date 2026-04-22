@@ -276,10 +276,10 @@ export interface TurnExecutor {
  *   an external sandbox (i.e. all model drivers).
  * - `codemode` — driver receives a single `execute` MCP tool that takes
  *   JS code; tool calls go through a `gent.<name>(args)` proxy. The
- *   `prompt.system` pipeline replaces the native tool sections with a
+ *   `systemPrompt` slot replaces the native tool sections with a
  *   codemode listing so the model sees the right affordance.
  *
- * Pipelines key off this metadata rather than driver-id heuristics —
+ * Prompt slots key off this metadata rather than driver-id heuristics —
  * see `acp-agents/index.ts`.
  */
 export type ToolSurface = "native" | "codemode"

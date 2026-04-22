@@ -23,7 +23,7 @@ const isReasoningEffort = Schema.is(ReasoningEffort)
 /**
  * Build the per-turn prompt sections (base + agent addendum + tool list +
  * tool guidelines + delegation targets + extension extras). Returns the
- * unsorted section list so pipeline hooks can rewrite specific sections
+ * unsorted section list so prompt slots can rewrite specific sections
  * (e.g. codemode replacing `tool-list` / `tool-guidelines`) before final
  * compilation.
  */
@@ -50,10 +50,10 @@ export const buildTurnPromptSections = (
     .filter((t) => t.promptSnippet !== undefined)
     .map((t) => `- **${t.id}**: ${t.promptSnippet}`)
   if (snippets.length > 0) {
-    // Wrap with section sentinels so the ACP codemode pipeline can swap
+    // Wrap with section sentinels so the ACP codemode prompt slot can swap
     // this block atomically. Other sections don't need markers because
     // nothing downstream rewrites them — markers cost tokens, only spend
-    // them where a hook needs the anchor.
+    // them where a slot needs the anchor.
     sections.push({
       id: "tool-list",
       content: withSectionMarkers("tool-list", `## Available Tools\n\n${snippets.join("\n")}`),

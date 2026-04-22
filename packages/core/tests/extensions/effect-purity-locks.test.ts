@@ -13,14 +13,7 @@
 
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import {
-  defineExtension,
-  defineResource,
-  pipeline,
-  resource,
-  subscription,
-  tool,
-} from "@gent/core/extensions/api"
+import { defineExtension, defineResource, resource, tool } from "@gent/core/extensions/api"
 
 describe("Effect-purity locks (compile-time)", () => {
   test("tool.execute MUST return Effect — async handler rejected", () => {
@@ -34,22 +27,33 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("pipeline handler MUST return Effect — async handler rejected", () => {
-    pipeline(
-      "prompt.system",
-      // @ts-expect-error — async handler must not be assignable to Effect-returning pipeline
-      async (input, next) => next(input),
-    )
+  test("Projection.systemPrompt MUST return Effect — async handler rejected", () => {
+    defineExtension({
+      id: "bad-projection",
+      projections: [
+        {
+          id: "prompt",
+          query: () => Effect.succeed("x"),
+          // @ts-expect-error — async handler must not be assignable to Effect-returning systemPrompt
+          systemPrompt: async (value, input) => `${input.basePrompt}${value}`,
+        },
+      ],
+    })
     expect(true).toBe(true)
   })
 
-  test("subscription handler MUST return Effect — async handler rejected", () => {
-    subscription(
-      "turn.after",
-      "isolate",
-      // @ts-expect-error — async handler must not be assignable to Effect-returning subscription
-      async () => undefined,
-    )
+  test("Resource.runtime.turnAfter handler MUST return Effect — async handler rejected", () => {
+    defineResource({
+      scope: "process",
+      layer: Layer.empty,
+      runtime: {
+        turnAfter: {
+          failureMode: "isolate",
+          // @ts-expect-error — async handler must not be assignable to Effect-returning runtime reaction
+          handler: async () => undefined,
+        },
+      },
+    })
     expect(true).toBe(true)
   })
 
@@ -98,8 +102,13 @@ describe("Effect-purity locks (compile-time)", () => {
           execute: () => Effect.succeed("ok"),
         }),
       ],
-      pipelines: [pipeline("prompt.system", (i, next) => next(i))],
-      subscriptions: [subscription("turn.after", "isolate", () => Effect.void)],
+      projections: [
+        {
+          id: "prompt",
+          query: () => Effect.succeed("suffix"),
+          systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+        },
+      ],
       resources: [
         resource(
           defineResource({
@@ -107,6 +116,12 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.empty,
             start: Effect.void,
             stop: Effect.void,
+            runtime: {
+              turnAfter: {
+                failureMode: "continue",
+                handler: () => Effect.void,
+              },
+            },
             subscriptions: [{ pattern: "agent:*", handler: () => Effect.void }],
             schedule: [
               {

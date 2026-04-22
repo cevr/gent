@@ -305,7 +305,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, message)
             }
 
-            // Run tool.result interceptor — extensions can enrich/append to tool results
+            // Run explicit tool-result slots — extensions can enrich/append to tool results
             const enrichedResult = yield* activeRegistry.runtimeSlots
               .transformToolResult(
                 {

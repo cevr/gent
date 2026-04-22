@@ -1,14 +1,14 @@
 /**
  * System prompt construction via ordered sections.
  *
- * Pipeline hooks that need to swap or strip a section (e.g. codemode
+ * Prompt slots that need to swap or strip a section (e.g. codemode
  * replacing `tool-list` / `tool-guidelines`) ask the section author to
  * wrap content in `<!-- @section:<id>:start --> ... @section:<id>:end -->`
  * sentinel comments via `withSectionMarkers`. Markers are HTML comments
  * so they're invisible to most renderers but survive whatever upstream
- * rewrite the previous pipeline did. Counsel C6 — replaces brittle
+ * rewrite an earlier slot did. Counsel C6 — replaces brittle
  * `indexOf(section.content)` string surgery; the previous shape broke
- * the moment any upstream pipeline rewrote a single character inside the
+ * the moment any upstream slot rewrote a single character inside the
  * native section.
  *
  * Markers are opt-in (per-section, by author) rather than wrapped around
@@ -22,15 +22,15 @@ import type { PromptSection } from "../domain/prompt.js"
 export type { PromptSection } from "../domain/prompt.js"
 
 /** Sentinel pair marking the bounds of a section that downstream
- *  pipelines may swap or strip. */
+ *  prompt slots may swap or strip. */
 export const sectionStartMarker = (id: string): string => `<!-- @section:${id}:start -->`
 export const sectionEndMarker = (id: string): string => `<!-- @section:${id}:end -->`
 
 /**
- * Wrap section content with start/end sentinels so downstream pipeline
- * hooks can locate it for atomic replacement. Used by section authors
+ * Wrap section content with start/end sentinels so downstream prompt
+ * slots can locate it for atomic replacement. Used by section authors
  * whose content is intentionally swappable (currently `tool-list` and
- * `tool-guidelines`, swapped by the ACP codemode pipeline).
+ * `tool-guidelines`, swapped by the ACP codemode slot).
  */
 export const withSectionMarkers = (id: string, content: string): string =>
   `${sectionStartMarker(id)}\n${content}\n${sectionEndMarker(id)}`

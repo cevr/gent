@@ -3,7 +3,7 @@
  *
  * Locks the rule that builtin < user < project across:
  *  - keyed contributions (tools, agents, prompt sections) — later scope wins
- *  - pipeline chain (later scope wraps earlier — outermost runs first)
+ *  - explicit prompt slots (later scope applies after earlier scope)
  *  - alphabetical tie-break on extension id within the same scope
  *
  * Providers and turn executors share the keyed-contribution code path
@@ -17,7 +17,6 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { pipeline } from "@gent/core/domain/contribution"
 import { tool } from "@gent/core/extensions/api"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -182,21 +181,16 @@ describe("scope precedence", () => {
     })
   })
 
-  describe("pipeline chain — project wraps user wraps builtin", () => {
-    it.live("execution order proves project is outermost", () => {
-      const log: string[] = []
+  describe("explicit prompt slots — project applies after user after builtin", () => {
+    it.live("systemPrompt rewrite order follows scope precedence", () => {
       const make = (id: string, kind: "builtin" | "user" | "project") =>
         ext(id, kind, {
-          pipelines: [
-            pipeline("prompt.system", (input, next) => {
-              log.push(`${kind}-before`)
-              return next(input).pipe(
-                Effect.map((r) => {
-                  log.push(`${kind}-after`)
-                  return r
-                }),
-              )
-            }),
+          projections: [
+            {
+              id: `prompt-${id}`,
+              query: () => Effect.succeed(`[${kind}]`),
+              systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
+            },
           ],
         })
 
@@ -213,17 +207,8 @@ describe("scope precedence", () => {
           { projection: stubProjectionCtx, host: stubCtx },
         )
         .pipe(
-          Effect.tap(() =>
-            Effect.sync(() =>
-              expect(log).toEqual([
-                "project-before",
-                "user-before",
-                "builtin-before",
-                "builtin-after",
-                "user-after",
-                "project-after",
-              ]),
-            ),
+          Effect.tap((result) =>
+            Effect.sync(() => expect(result).toBe("x[builtin][user][project]")),
           ),
         )
     })
