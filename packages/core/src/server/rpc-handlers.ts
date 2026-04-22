@@ -1,13 +1,12 @@
-import { Clock, Effect, Stream } from "effect"
+import { Clock, Effect, Layer, Stream } from "effect"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { GentRpcs } from "./rpcs"
-import { AgentLoop, type SteerCommand } from "../runtime/agent/agent-loop.js"
+import type { SteerCommand } from "../domain/steer.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import { AuthGuard } from "../domain/auth-guard.js"
 import { AuthApi, AuthStore } from "../domain/auth-store.js"
-import { ActorProcess } from "../runtime/actor-process.js"
 import { ConfigService } from "../runtime/config-service.js"
 import {
   DriverRegistry,
@@ -80,10 +79,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const queries = yield* SessionQueries
     const commands = yield* SessionCommands
     const eventStore = yield* EventStore
-    const agentLoop = yield* AgentLoop
     const interactions = yield* InteractionCommands
     const configService = yield* ConfigService
-    const actorProcess = yield* ActorProcess
+    const sessionRuntime = yield* SessionRuntime
     const modelRegistry = yield* ModelRegistry
     const driverRegistry = yield* DriverRegistry
     const authStore = yield* AuthStore
@@ -97,7 +95,6 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const storageForProfile = yield* Effect.serviceOption(Storage)
-    const sessionRuntime = SessionRuntime.make({ actorProcess, agentLoop })
 
     /** Resolve per-session profile services. Falls back to server-wide. */
     const resolveSessionProfile = (sessionId: string) =>
@@ -645,4 +642,4 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
     }
   }),
-)
+).pipe(Layer.provideMerge(SessionRuntime.Live))

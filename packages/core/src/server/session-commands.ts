@@ -5,7 +5,7 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
 import { Branch, Message, Session, TextPart } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
-import type { SteerCommand } from "../runtime/agent/agent-loop.js"
+import type { SteerCommand } from "../domain/steer.js"
 import {
   EventStore,
   BranchSwitched,
@@ -18,8 +18,8 @@ import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { Provider } from "../providers/provider.js"
-import { ActorProcess } from "../runtime/actor-process.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -67,7 +67,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
-      const actorProcess = yield* ActorProcess
+      const sessionRuntime = yield* SessionRuntime
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
@@ -180,7 +180,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         // Optional initial prompt — sends immediately after creation
         if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
-          yield* actorProcess.sendUserMessage({
+          yield* sessionRuntime.sendUserMessage({
             sessionId,
             branchId,
             content: input.initialPrompt,
@@ -326,7 +326,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
         input: SendMessageInput,
       ) {
-        yield* actorProcess.sendUserMessage({
+        yield* sessionRuntime.sendUserMessage({
           sessionId: input.sessionId,
           branchId: input.branchId,
           content: input.content,
@@ -362,9 +362,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         switchBranch,
         forkBranch,
         sendMessage,
-        steer: (command) => actorProcess.steerAgent(command),
+        steer: (command) => sessionRuntime.steerAgent(command),
         drainQueuedMessages: ({ sessionId, branchId }) =>
-          actorProcess
+          sessionRuntime
             .drainQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
         updateSessionReasoningLevel: Effect.fn("SessionCommands.updateSessionReasoningLevel")(
@@ -391,7 +391,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         ),
       } satisfies SessionCommandsService
     }),
-  )
+  ).pipe(Layer.provideMerge(SessionRuntime.Live))
 
   /**
    * Domain-tier deleter Layer — projects `SessionCommands.deleteSession`

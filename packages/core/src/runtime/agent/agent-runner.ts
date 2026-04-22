@@ -473,14 +473,16 @@ const buildEphemeralLayer = (params: {
     Layer.mergeAll(parentLayer, approvalLayer),
   )
 
-  const coreDeps = Layer.mergeAll(
-    storageLayer,
-    eventStoreLayer,
-    eventPublisherLayer,
+  const coreDeps = Layer.merge(
+    Layer.mergeAll(
+      storageLayer,
+      eventStoreLayer,
+      eventPublisherLayer,
+      approvalLayer,
+      promptPresenterLayer,
+      ResourceManagerLive,
+    ),
     extensionLayers,
-    approvalLayer,
-    promptPresenterLayer,
-    ResourceManagerLive,
   )
 
   const toolRunnerLayer = Layer.provide(ToolRunner.Live, Layer.merge(parentLayer, coreDeps))

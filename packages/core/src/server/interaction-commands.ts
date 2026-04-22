@@ -2,7 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved, type EventStoreError } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 
 export interface RespondInteractionInput {
@@ -25,7 +25,7 @@ export class InteractionCommands extends Context.Service<
     InteractionCommands,
     Effect.gen(function* () {
       const approvalService = yield* ApprovalService
-      const agentLoop = yield* AgentLoop
+      const sessionRuntime = yield* SessionRuntime
       const eventPublisher = yield* EventPublisher
 
       return {
@@ -40,7 +40,7 @@ export class InteractionCommands extends Context.Service<
           // 2. Wake the machine (before storage resolve — if we crash after
           //    resolve but before wake, the request is no longer pending and
           //    the in-memory resolution is lost, stranding the session)
-          yield* agentLoop.respondInteraction({
+          yield* sessionRuntime.respondInteraction({
             sessionId: input.sessionId,
             branchId: input.branchId,
             requestId: input.requestId,
@@ -62,5 +62,5 @@ export class InteractionCommands extends Context.Service<
         }),
       } satisfies InteractionCommandsService
     }),
-  )
+  ).pipe(Layer.provideMerge(SessionRuntime.Live))
 }
