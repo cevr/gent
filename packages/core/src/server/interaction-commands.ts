@@ -2,7 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
+import { SessionRuntime, respondInteractionCommand } from "../runtime/session-runtime.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { AppServiceError } from "./errors.js"
 
@@ -41,11 +41,13 @@ export class InteractionCommands extends Context.Service<
           // 2. Wake the machine (before storage resolve — if we crash after
           //    resolve but before wake, the request is no longer pending and
           //    the in-memory resolution is lost, stranding the session)
-          yield* sessionRuntime.respondInteraction({
-            sessionId: input.sessionId,
-            branchId: input.branchId,
-            requestId: input.requestId,
-          })
+          yield* sessionRuntime.dispatch(
+            respondInteractionCommand({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              requestId: input.requestId,
+            }),
+          )
           // 3. Resolve in storage (best-effort cleanup after wake)
           yield* approvalService.respond(input.requestId)
           // 4. Publish resolution event

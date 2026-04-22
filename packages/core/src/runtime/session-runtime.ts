@@ -171,15 +171,7 @@ export const SessionRuntimeMetrics = Schema.Struct({
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 export interface SessionRuntimeService {
-  readonly sendUserMessage: (
-    input: SendUserMessagePayload,
-  ) => Effect.Effect<void, SessionRuntimeError>
-  readonly sendToolResult: (
-    input: SendToolResultPayload,
-  ) => Effect.Effect<void, SessionRuntimeError>
-  readonly invokeTool: (input: InvokeToolPayload) => Effect.Effect<void, SessionRuntimeError>
-  readonly interrupt: (input: InterruptPayload) => Effect.Effect<void, SessionRuntimeError>
-  readonly steerAgent: (input: SteerCommand) => Effect.Effect<void, SessionRuntimeError>
+  readonly dispatch: (command: RuntimeCommand) => Effect.Effect<void, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
@@ -192,9 +184,6 @@ export interface SessionRuntimeService {
   readonly getMetrics: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<SessionRuntimeMetrics, SessionRuntimeError>
-  readonly respondInteraction: (
-    input: Pick<SessionRuntimeTarget, "sessionId" | "branchId"> & { requestId: string },
-  ) => Effect.Effect<void, SessionRuntimeError>
   readonly watchState: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<Stream.Stream<SessionRuntimeState>, SessionRuntimeError>
@@ -211,22 +200,22 @@ const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
 const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
   MessageId.of(`${commandId}:tool-result`)
 
-const sendUserMessageToCommand = (input: SendUserMessagePayload): SendUserMessageCommand => ({
+export const sendUserMessageCommand = (input: SendUserMessagePayload): SendUserMessageCommand => ({
   _tag: "SendUserMessage",
   ...input,
 })
 
-const sendToolResultToCommand = (input: SendToolResultPayload): RecordToolResultCommand => ({
+export const recordToolResultCommand = (input: SendToolResultPayload): RecordToolResultCommand => ({
   _tag: "RecordToolResult",
   ...input,
 })
 
-const invokeToolToCommand = (input: InvokeToolPayload): InvokeToolCommand => ({
+export const invokeToolCommand = (input: InvokeToolPayload): InvokeToolCommand => ({
   _tag: "InvokeTool",
   ...input,
 })
 
-const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandType => {
+export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandType => {
   switch (input.kind) {
     case "interject":
       return {
@@ -250,12 +239,12 @@ const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandTy
   }
 }
 
-const steerToCommand = (command: SteerCommandType): ApplySteerCommand => ({
+export const applySteerCommand = (command: SteerCommandType): ApplySteerCommand => ({
   _tag: "ApplySteer",
   command,
 })
 
-const respondInteractionToCommand = (
+export const respondInteractionCommand = (
   input: Pick<SessionRuntimeTarget, "sessionId" | "branchId"> & { requestId: string },
 ): RespondInteractionCommand => ({
   _tag: "RespondInteraction",
@@ -476,19 +465,9 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       })
 
       return {
-        sendUserMessage: (input) =>
-          dispatchCommand(sendUserMessageToCommand(input)).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("sendUserMessage failed", cause))),
-          ),
-
-        sendToolResult: (input) =>
-          dispatchCommand(sendToolResultToCommand(input)).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("sendToolResult failed", cause))),
-          ),
-
-        invokeTool: (input) =>
-          dispatchCommand(invokeToolToCommand(input)).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("invokeTool failed", cause))),
+        dispatch: (command) =>
+          dispatchCommand(command).pipe(
+            Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
           ),
 
         drainQueuedMessages: (input) =>
@@ -508,16 +487,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
                 Effect.fail(wrapError("getQueuedMessages failed", cause)),
               ),
             ),
-
-        interrupt: (input) =>
-          dispatchCommand(steerToCommand(interruptPayloadToSteerCommand(input))).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("interrupt failed", cause))),
-          ),
-
-        steerAgent: (command) =>
-          dispatchCommand(steerToCommand(command)).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("steerAgent failed", cause))),
-          ),
 
         getState: (input) =>
           Effect.gen(function* () {
@@ -577,13 +546,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
             Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
           ),
 
-        respondInteraction: (input) =>
-          dispatchCommand(respondInteractionToCommand(input)).pipe(
-            Effect.catchCause((cause) =>
-              Effect.fail(wrapError("respondInteraction failed", cause)),
-            ),
-          ),
-
         watchState: (input) =>
           agentLoop
             .watchState(input)
@@ -594,11 +556,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {
-      sendUserMessage: () => Effect.void,
-      sendToolResult: () => Effect.void,
-      invokeTool: () => Effect.void,
-      interrupt: () => Effect.void,
-      steerAgent: () => Effect.void,
+      dispatch: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
@@ -610,7 +568,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
-      respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
     })
 }

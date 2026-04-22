@@ -19,7 +19,11 @@ import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { Provider } from "../providers/provider.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
+import {
+  SessionRuntime,
+  applySteerCommand,
+  sendUserMessageCommand,
+} from "../runtime/session-runtime.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import type {
   CreateBranchInput,
@@ -180,12 +184,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         // Optional initial prompt — sends immediately after creation
         if (input.initialPrompt !== undefined && input.initialPrompt.length > 0) {
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: input.initialPrompt,
-            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-          })
+          yield* sessionRuntime.dispatch(
+            sendUserMessageCommand({
+              sessionId,
+              branchId,
+              content: input.initialPrompt,
+              ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+            }),
+          )
         }
 
         return { sessionId, branchId, name }
@@ -326,13 +332,15 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
         input: SendMessageInput,
       ) {
-        yield* sessionRuntime.sendUserMessage({
-          sessionId: input.sessionId,
-          branchId: input.branchId,
-          content: input.content,
-          ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
-          ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
-        })
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            content: input.content,
+            ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+            ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
+          }),
+        )
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({
             sessionId: input.sessionId,
@@ -362,7 +370,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         switchBranch,
         forkBranch,
         sendMessage,
-        steer: (command) => sessionRuntime.steerAgent(command),
+        steer: (command) => sessionRuntime.dispatch(applySteerCommand(command)),
         drainQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId })

@@ -24,11 +24,7 @@ describe("Session Snapshot", () => {
   it.live("getSessionSnapshot only returns persisted state", () => {
     const eventStoreLayer = EventStore.Memory
     const sessionRuntimeLayer = Layer.succeed(SessionRuntime, {
-      sendUserMessage: () => Effect.void,
-      sendToolResult: () => Effect.void,
-      invokeTool: () => Effect.void,
-      interrupt: () => Effect.void,
-      steerAgent: () => Effect.void,
+      dispatch: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
@@ -40,7 +36,6 @@ describe("Session Snapshot", () => {
         }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
-      respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
     })
     const baseWithEventStore = Layer.mergeAll(

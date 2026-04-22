@@ -13,7 +13,14 @@ import { Agents } from "@gent/extensions/all-agents"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { SessionRuntime } from "@gent/core/runtime/session-runtime"
+import {
+  SessionRuntime,
+  applySteerCommand,
+  interruptPayloadToSteerCommand,
+  invokeToolCommand,
+  respondInteractionCommand,
+  sendUserMessageCommand,
+} from "@gent/core/runtime/session-runtime"
 
 const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
   ExtensionRegistry.fromResolved(
@@ -84,12 +91,14 @@ describe("SessionRuntime", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.steerAgent({
-          _tag: "SwitchAgent",
-          sessionId: "s1" as never,
-          branchId: "b1" as never,
-          agent: "deepwork",
-        })
+        yield* sessionRuntime.dispatch(
+          applySteerCommand({
+            _tag: "SwitchAgent",
+            sessionId: "s1" as never,
+            branchId: "b1" as never,
+            agent: "deepwork",
+          }),
+        )
         expect(steered).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
@@ -124,12 +133,16 @@ describe("SessionRuntime", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.interrupt({
-          sessionId: "s1" as never,
-          branchId: "b1" as never,
-          kind: "interject",
-          message: "cut in",
-        })
+        yield* sessionRuntime.dispatch(
+          applySteerCommand(
+            interruptPayloadToSteerCommand({
+              sessionId: "s1" as never,
+              branchId: "b1" as never,
+              kind: "interject",
+              message: "cut in",
+            }),
+          ),
+        )
         expect(commandSeen).toEqual({
           _tag: "Interject",
           sessionId: "s1",
@@ -177,11 +190,13 @@ describe("SessionRuntime", () => {
           }),
         )
 
-        yield* sessionRuntime.sendUserMessage({
-          sessionId: "defect-session" as never,
-          branchId: "defect-branch" as never,
-          content: "trigger defect",
-        })
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({
+            sessionId: "defect-session" as never,
+            branchId: "defect-branch" as never,
+            content: "trigger defect",
+          }),
+        )
 
         const calls = yield* recorder.getCalls()
         const publishedTags = calls
@@ -267,12 +282,14 @@ describe("SessionRuntime", () => {
           }),
         )
 
-        yield* sessionRuntime.invokeTool({
-          sessionId: "invoke-session" as never,
-          branchId: "invoke-branch" as never,
-          toolName: "read",
-          input: {},
-        })
+        yield* sessionRuntime.dispatch(
+          invokeToolCommand({
+            sessionId: "invoke-session" as never,
+            branchId: "invoke-branch" as never,
+            toolName: "read",
+            input: {},
+          }),
+        )
 
         const messages = yield* storage.listMessages("invoke-branch" as never)
         const calls = yield* recorder.getCalls()
@@ -321,11 +338,13 @@ describe("SessionRuntime", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.respondInteraction({
-          sessionId: "s1" as never,
-          branchId: "b1" as never,
-          requestId: "req-1",
-        })
+        yield* sessionRuntime.dispatch(
+          respondInteractionCommand({
+            sessionId: "s1" as never,
+            branchId: "b1" as never,
+            requestId: "req-1",
+          }),
+        )
         expect(responseSeen).toEqual({
           _tag: "RespondInteraction",
           sessionId: "s1",
