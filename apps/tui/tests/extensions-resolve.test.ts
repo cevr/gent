@@ -27,7 +27,7 @@ import {
   rendererContribution,
   widgetContribution,
   type ClientContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../src/extensions/client-facets.js"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ToolRenderer } from "../src/components/tool-renderers/types"
 

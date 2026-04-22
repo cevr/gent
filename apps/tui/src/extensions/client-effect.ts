@@ -21,13 +21,12 @@
  * contributions (autocomplete `items`, etc.) is wired via the same runtime —
  * the seam is at the rendering edge, not in the Effect surface.
  *
- * Layering: `ClientDeps` is the core-level *floor* (`FileSystem | Path`).
+ * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
  * Each client surface (TUI shell, future SDK headless, web UI) augments its
  * runtime with the services its extensions need, and an extension widens its
  * `R` accordingly. The TUI shell publishes its typed `ClientTransport` tag
- * downstream at `apps/tui/src/extensions/client-transport.ts` because the
- * SDK client types (`GentNamespacedClient`, `GentRuntime`) live downstream
- * of `@gent/core`.
+ * at `apps/tui/src/extensions/client-transport.ts` because the SDK client
+ * types (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
  */
 
 import { type Effect, type FileSystem, type Path, Schema } from "effect"
@@ -51,16 +50,16 @@ export class ClientSetupError extends Schema.TaggedErrorClass<ClientSetupError>(
 /**
  * The dependency channel a client extension's setup Effect MAY require.
  *
- * `ClientDeps` is the universal core-level set: file system and path
+ * `ClientDeps` is the TUI-local floor: file system and path
  * services. It's a *floor*, not a ceiling — an individual client surface
  * (the TUI shell, a future SDK headless, a web UI) augments its runtime
  * with additional services like transport, theming, or platform-specific
  * APIs, and an extension that yields one of those declares a wider `R`.
  *
- * Core does NOT declare `ClientTransport` because its payload type lives
- * downstream of `@gent/core` (`GentNamespacedClient` + `GentRuntime` are
- * SDK types). The TUI declares its own `ClientTransport` tag with a typed
- * payload at `apps/tui/src/extensions/client-transport.ts` (C9.2). Other
+ * `@gent/core` does NOT declare `ClientTransport` because its payload type
+ * lives downstream (`GentNamespacedClient` + `GentRuntime` are SDK types).
+ * The TUI declares its own `ClientTransport` tag with a typed payload at
+ * `apps/tui/src/extensions/client-transport.ts`. Other
  * client surfaces would do the same with whatever transport they speak.
  */
 export type ClientDeps = FileSystem.FileSystem | Path.Path

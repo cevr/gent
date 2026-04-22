@@ -3,7 +3,7 @@
  */
 
 import { For } from "solid-js"
-import type { WidgetSlot } from "@gent/core/domain/extension-client.js"
+import type { WidgetSlot } from "../extensions/client-facets.js"
 import { useExtensionUI } from "../extensions/context"
 
 export function ExtensionWidgets(props: { slot: WidgetSlot }) {

@@ -1,8 +1,5 @@
 import { Effect } from "effect"
-import {
-  defineClientExtension,
-  clientCommandContribution,
-} from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
 import { ClientShell } from "../client-services"
 
 export default defineClientExtension("@gent/plan", {

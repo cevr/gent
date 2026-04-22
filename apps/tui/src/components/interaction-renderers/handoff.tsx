@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
+import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { OptionList } from "./option-list"
 
 export function HandoffRenderer(props: InteractionRendererProps) {

@@ -14,7 +14,7 @@
 
 import { Context, Layer } from "effect"
 import type { AnyExtensionCommandMessage } from "@gent/core/domain/extension-protocol.js"
-import type { OverlayId, ComposerState } from "@gent/core/domain/extension-client.js"
+import type { OverlayId, ComposerState } from "./client-facets.js"
 
 // ── ClientWorkspace ──────────────────────────────────────────────────────
 

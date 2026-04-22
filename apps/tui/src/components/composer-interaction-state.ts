@@ -1,4 +1,4 @@
-import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
+import type { AutocompleteContribution } from "../extensions/client-facets.js"
 
 export interface AutocompleteState {
   type: string

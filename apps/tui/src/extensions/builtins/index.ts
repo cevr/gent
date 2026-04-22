@@ -1,4 +1,4 @@
-import type { ExtensionClientModule } from "@gent/core/domain/extension-client.js"
+import type { ExtensionClientModule } from "../client-facets.js"
 
 import builtinArtifacts from "./artifacts.client"
 import builtinAuto from "./auto.client"

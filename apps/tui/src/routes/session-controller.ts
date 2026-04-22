@@ -8,7 +8,7 @@ import {
   useContext,
 } from "solid-js"
 import { Effect, Fiber, Stream } from "effect"
-import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import { autocompleteContribution } from "../extensions/client-facets.js"
 import type { ActiveInteraction } from "@gent/core/domain/event.js"
 import type { BranchId, MessageId, SessionId } from "@gent/core/domain/ids.js"
 import type { ReasoningEffort } from "@gent/core/domain/agent.js"

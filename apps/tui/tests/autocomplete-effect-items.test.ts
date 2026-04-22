@@ -18,7 +18,7 @@ import {
   type AutocompleteContribution,
   type AutocompleteItem,
   autocompleteContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../src/extensions/client-facets.js"
 import {
   ClientTransport,
   type ClientTransportShape,

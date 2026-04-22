@@ -11,7 +11,7 @@ import type {
   AutocompleteContribution,
   ClientContribution,
   ClientContributionKind,
-} from "@gent/core/domain/extension-client.js"
+} from "./client-facets.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"

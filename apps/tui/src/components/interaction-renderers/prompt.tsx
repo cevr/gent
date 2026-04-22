@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { isRecord } from "@gent/core/domain/guards.js"
-import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
+import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import { OptionList } from "./option-list"
 
 interface PromptMetadata {

@@ -9,10 +9,7 @@
  */
 
 import { Effect, type ManagedRuntime } from "effect"
-import type {
-  AutocompleteContribution,
-  AutocompleteItem,
-} from "@gent/core/domain/extension-client.js"
+import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 
 export const runAutocompleteItems = (
   contribution: AutocompleteContribution,

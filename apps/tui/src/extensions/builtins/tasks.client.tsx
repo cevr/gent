@@ -20,7 +20,7 @@ import {
   clientCommandContribution,
   overlayContribution,
   widgetContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../client-facets.js"
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"

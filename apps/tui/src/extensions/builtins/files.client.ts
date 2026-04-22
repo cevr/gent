@@ -8,10 +8,7 @@
  */
 
 import { Effect, FileSystem } from "effect"
-import {
-  defineClientExtension,
-  autocompleteContribution,
-} from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
 import { truncatePath } from "../../components/message-list-utils"
 import { getFileTag } from "../../components/file-tag"
 import { searchFiles, trackSelection } from "../../utils/file-finder"

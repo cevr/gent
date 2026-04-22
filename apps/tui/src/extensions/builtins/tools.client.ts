@@ -3,7 +3,7 @@ import {
   defineClientExtension,
   clientCommandContribution,
   rendererContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../client-facets.js"
 import { BUILTIN_TOOL_RENDERERS } from "../../components/tool-renderers/index"
 import { ClientShell } from "../client-services"
 

@@ -3,10 +3,7 @@
  */
 
 import { Effect } from "effect"
-import {
-  defineClientExtension,
-  interactionRendererContribution,
-} from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, interactionRendererContribution } from "../client-facets.js"
 import { PromptRenderer } from "../../components/interaction-renderers/prompt"
 import { AskUserRenderer } from "../../components/interaction-renderers/ask-user"
 

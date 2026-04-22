@@ -2,7 +2,7 @@
 
 import { createSignal, Show } from "solid-js"
 import { isRecord } from "@gent/core/domain/guards.js"
-import type { InteractionRendererProps } from "@gent/core/domain/extension-client.js"
+import type { InteractionRendererProps } from "../../extensions/client-facets.js"
 import type { Question } from "@gent/core/domain/event.js"
 import { OptionList } from "./option-list"
 

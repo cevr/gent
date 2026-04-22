@@ -3,7 +3,7 @@ import {
   ComposerInteractionState,
   transitionComposerInteraction,
 } from "../src/components/composer-interaction-state"
-import type { AutocompleteContribution } from "@gent/core/domain/extension-client.js"
+import type { AutocompleteContribution } from "../src/extensions/client-facets.js"
 
 const testContributions: AutocompleteContribution[] = [
   { prefix: "$", title: "Skills", items: () => [] },

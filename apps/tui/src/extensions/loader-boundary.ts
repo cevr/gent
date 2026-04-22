@@ -12,10 +12,7 @@
  */
 
 import { Effect, type FileSystem, type ManagedRuntime, type Path } from "effect"
-import type {
-  ExtensionClientModule,
-  ClientContribution,
-} from "@gent/core/domain/extension-client.js"
+import type { ExtensionClientModule, ClientContribution } from "./client-facets.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,

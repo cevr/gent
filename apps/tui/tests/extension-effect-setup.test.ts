@@ -12,8 +12,8 @@ import {
   type AutocompleteContribution,
   autocompleteContribution,
   type ExtensionClientModule,
-} from "@gent/core/domain/extension-client.js"
-import type { ClientEffect } from "@gent/core/domain/client-effect.js"
+} from "../src/extensions/client-facets.js"
+import type { ClientEffect } from "../src/extensions/client-effect.js"
 import { loadTuiExtensions } from "../src/extensions/loader-boundary"
 
 const runtime = ManagedRuntime.make(Layer.merge(BunFileSystem.layer, BunServices.layer))
@@ -63,7 +63,7 @@ describe("loadTuiExtensions Effect setup", () => {
         join(userDir, "discovered.client.ts"),
         `
 import { Effect } from "effect"
-import { autocompleteContribution } from "@gent/core/domain/extension-client.js"
+import { autocompleteContribution } from "../../../src/extensions/client-facets.js"
 
 export default {
   id: "@test/discovered-effect",

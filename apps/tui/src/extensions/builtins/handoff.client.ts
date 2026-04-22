@@ -3,7 +3,7 @@ import {
   defineClientExtension,
   clientCommandContribution,
   interactionRendererContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../client-facets.js"
 import { HandoffRenderer } from "../../components/interaction-renderers/handoff"
 import { ClientShell } from "../client-services"
 

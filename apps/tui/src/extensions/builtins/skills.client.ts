@@ -1,7 +1,4 @@
-import {
-  defineClientExtension,
-  autocompleteContribution,
-} from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, autocompleteContribution } from "../client-facets.js"
 import { Effect } from "effect"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
 import { askExtension } from "../client-transport"

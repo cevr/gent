@@ -25,7 +25,7 @@
 //   - autocomplete: collected (no winner), scope-ordered
 
 import type { Effect } from "effect"
-import type { ActiveInteraction, ApprovalResult } from "./event"
+import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 
 /** Widget placement slots in the session view */

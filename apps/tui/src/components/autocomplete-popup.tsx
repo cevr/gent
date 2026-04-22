@@ -15,10 +15,7 @@ import { useScrollSync } from "../hooks/use-scroll-sync"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useExtensionUI } from "../extensions/context"
 import { useClient } from "../client/index"
-import type {
-  AutocompleteContribution,
-  AutocompleteItem,
-} from "@gent/core/domain/extension-client.js"
+import type { AutocompleteContribution, AutocompleteItem } from "../extensions/client-facets.js"
 import type { AutocompleteState } from "./composer-interaction-state"
 import { runAutocompleteItems } from "./autocomplete-popup-boundary"
 

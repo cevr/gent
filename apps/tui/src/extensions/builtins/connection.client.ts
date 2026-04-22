@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { defineClientExtension, widgetContribution } from "@gent/core/domain/extension-client.js"
+import { defineClientExtension, widgetContribution } from "../client-facets.js"
 import { ConnectionWidget } from "../../components/connection-widget"
 
 export default defineClientExtension("@gent/connection", {

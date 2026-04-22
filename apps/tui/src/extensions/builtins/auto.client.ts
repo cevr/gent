@@ -19,7 +19,7 @@ import {
   borderLabelContribution,
   clientCommandContribution,
   overlayContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../client-facets.js"
 import type { AutoSnapshotReply } from "@gent/extensions/auto-protocol.js"
 import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"

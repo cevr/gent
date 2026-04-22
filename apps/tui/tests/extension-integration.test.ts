@@ -25,7 +25,7 @@ import {
   clientCommandContribution,
   composerSurfaceContribution,
   interactionRendererContribution,
-} from "@gent/core/domain/extension-client.js"
+} from "../src/extensions/client-facets.js"
 
 // B11.6a: loadTuiExtensions now takes a single opts arg (no makeCtx second arg).
 // This shim makes `runtime` optional in tests, defaulting to _testRuntime.
