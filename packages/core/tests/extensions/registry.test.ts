@@ -5,7 +5,12 @@ import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import {
+  ExtensionRegistry,
+  listSlashCommands,
+  resolveExtensions,
+  type SlashCommand,
+} from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
 
@@ -549,9 +554,7 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       branchId: BranchId.of("test-branch"),
       cwd,
       home: "/test/home",
-    }) as unknown as Parameters<
-      ReturnType<typeof resolveExtensions>["commands"][number]["handler"]
-    >[1]
+    }) as unknown as Parameters<SlashCommand["handler"]>[1]
 
   test('Capability(audiences:["human-slash"], intent:"write") appears in commands', () => {
     const cap: AnyCapabilityContribution = {
@@ -564,10 +567,9 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       effect: () => Effect.void,
     }
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
-    expect(resolved.commands.map((c) => c.name)).toContain("echo")
-    expect(resolved.commands.find((c) => c.name === "echo")?.description).toBe(
-      "Echo the args back.",
-    )
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).toContain("echo")
+    expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
   })
 
   test("invoking a synthesized command decodes args and runs the capability effect", async () => {
@@ -586,7 +588,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const resolved = resolveExtensions([
       makeExt("@test/remember", "builtin", { capabilities: [cap] }),
     ])
-    const cmd = resolved.commands.find((c) => c.name === "remember")
+    const commands = listSlashCommands(resolved.extensions)
+    const cmd = commands.find((c) => c.name === "remember")
     expect(cmd).toBeDefined()
     await Effect.runPromise(cmd!.handler("hello", makeHostCtx()))
     expect(seen).toEqual(["hello"])
@@ -617,7 +620,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.commands.map((c) => c.name)).not.toContain("act")
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).not.toContain("act")
   })
 
   test("palette-only capability does not appear in the slash-backed command list", () => {
@@ -632,7 +636,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const resolved = resolveExtensions([
       makeExt("@test/palette", "builtin", { capabilities: [cap] }),
     ])
-    expect(resolved.commands.map((c) => c.name)).not.toContain("palette-only")
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).not.toContain("palette-only")
   })
 
   test('project capability with audiences:["transport-public"] SHADOWS builtin slash command', () => {
@@ -656,7 +661,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.commands.map((c) => c.name)).not.toContain("act")
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).not.toContain("act")
   })
 
   test('project capability with intent:"read" SHADOWS builtin slash command', () => {
@@ -682,7 +688,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const resolved = resolveExtensions([builtin, project])
     // project shadows builtin; intent: "read" — read capabilities ARE allowed as commands
     // (the filter is audiences:["human-slash"], not intent:"write")
-    expect(resolved.commands.map((c) => c.name)).toContain("look")
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).toContain("look")
   })
 
   test("model-only capability SHADOWS builtin slash command", () => {
@@ -706,7 +713,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.commands.map((c) => c.name)).not.toContain("run")
+    const commands = listSlashCommands(resolved.extensions)
+    expect(commands.map((c) => c.name)).not.toContain("run")
   })
 
   // ── C4.4 tool bridge ────────────────────────────────────────────────
@@ -882,7 +890,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       effect: () => Effect.succeed("not a number" as unknown as number),
     }
     const resolved = resolveExtensions([makeExt("@test/lies", "builtin", { capabilities: [cap] })])
-    const cmd = resolved.commands.find((c) => c.name === "lies")
+    const commands = listSlashCommands(resolved.extensions)
+    const cmd = commands.find((c) => c.name === "lies")
     expect(cmd).toBeDefined()
     const exit = await Effect.runPromiseExit(cmd!.handler("ignored", makeHostCtx()))
     expect(Exit.isFailure(exit)).toBe(true)

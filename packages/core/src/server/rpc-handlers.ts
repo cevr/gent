@@ -20,7 +20,7 @@ import { SessionCommands } from "./session-commands.js"
 import { EventStore, EventId, type EventEnvelope } from "../domain/event.js"
 import { InteractionCommands } from "./interaction-commands.js"
 import { SubscriptionEngine } from "../runtime/extensions/resource-host/subscription-engine.js"
-import { ExtensionRegistry } from "../runtime/extensions/registry.js"
+import { ExtensionRegistry, listSlashCommands } from "../runtime/extensions/registry.js"
 import { buildExtensionHealthSnapshot } from "./extension-health.js"
 import {
   makeExtensionHostContext,
@@ -500,11 +500,12 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       "extension.listCommands": () =>
-        extensionRegistry
-          .listCommands()
-          .pipe(
-            Effect.map((cmds) => cmds.map((c) => ({ name: c.name, description: c.description }))),
-          ),
+        Effect.succeed(
+          listSlashCommands(extensionRegistry.getResolved().extensions).map((c) => ({
+            name: c.name,
+            description: c.description,
+          })),
+        ),
 
       "extension.invokeCommand": ({ name, args, sessionId, branchId }) =>
         Effect.gen(function* () {
@@ -530,7 +531,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
                   .pipe(Effect.orElseSucceed(() => undefined))
               : undefined
 
-          const cmds = yield* activeRegistry.listCommands()
+          const cmds = listSlashCommands(activeRegistry.getResolved().extensions)
           const cmd = cmds.find((c) => c.name === name)
           if (cmd === undefined) {
             return yield* Effect.die(`Unknown command: ${name}`)

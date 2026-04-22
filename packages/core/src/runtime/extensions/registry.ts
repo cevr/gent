@@ -38,7 +38,6 @@ export interface ResolvedExtensions {
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly promptSections: ReadonlyMap<string, PromptSection>
-  readonly commands: ReadonlyArray<SlashCommand>
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly runtimeSlots: CompiledRuntimeSlots
   readonly projections: CompiledProjections
@@ -66,6 +65,27 @@ const compileBucket = <T>(
   }
   return result
 }
+
+const compileCapabilityWinners = (
+  sorted: ReadonlyArray<LoadedExtension>,
+): ReadonlyMap<string, AnyCapabilityContribution> => {
+  const winners = new Map<string, AnyCapabilityContribution>()
+  for (const ext of sorted) {
+    for (const cap of ext.contributions.capabilities ?? []) {
+      winners.set(cap.id, cap)
+    }
+  }
+  return winners
+}
+
+const sortExtensionsByScope = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<LoadedExtension> =>
+  [...extensions].sort((a, b) => {
+    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
+    if (scopeDiff !== 0) return scopeDiff
+    return a.manifest.id.localeCompare(b.manifest.id)
+  })
 
 /**
  * C4.4 bridge — lower a `Capability` whose `audiences` includes `"model"`
@@ -181,23 +201,14 @@ export const resolveExtensions = (
   scheduledJobFailures: ScheduledJobFailureByExtension = new Map(),
 ): ResolvedExtensions => {
   const mergedFailures = [...failedExtensions]
-  const sorted = [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
-    if (scopeDiff !== 0) return scopeDiff
-    return a.manifest.id.localeCompare(b.manifest.id)
-  })
+  const sorted = sortExtensionsByScope(extensions)
 
   // Tool resolution — identity-first scope shadowing followed by audience
   // authorization. Tools' identity is `cap.id` (flat). Every capability
   // (regardless of audience) enters the candidate map; authorization
   // (`audiences.includes("model")`) happens AFTER selection so a higher-scope
   // override that narrows audiences correctly hides a shadowed builtin tool.
-  const toolWinners = new Map<string, AnyCapabilityContribution>()
-  for (const ext of sorted) {
-    for (const cap of ext.contributions.capabilities ?? []) {
-      toolWinners.set(cap.id, cap)
-    }
-  }
+  const toolWinners = compileCapabilityWinners(sorted)
 
   const tools = new Map<string, AnyToolDefinition>()
   for (const [name, cap] of toolWinners) {
@@ -233,38 +244,12 @@ export const resolveExtensions = (
     if (cap.prompt) promptSectionsMap.set(cap.prompt.id, cap.prompt)
   }
 
-  // Slash-command resolution — identity-first scope shadowing followed by
-  // audience-only authorization. C8: legacy server-side `CommandContribution`
-  // is gone; every slash command is a Capability with
-  // `audiences.includes("human-slash")` (read- and write-intent both surface).
-  // The candidate set is toolWinners (already scope-resolved); authorization
-  // is the second pass.
-  //
-  // `"human-palette"` is NOT slash-authorizable — palette-only capabilities
-  // surface in the command palette but not as slash commands. The
-  // palette-vs-slash split materializes when CapabilityHost takes over
-  // command dispatch entirely (C10).
-  const commandWinners = toolWinners
-
   // C7: permission rules collected from WINNERS, not raw extractions —
   // otherwise overriding `bash` without `permissionRules` would still inherit
   // builtin denies (codex BLOCKER on C7).
   const permissionRules: PermissionRule[] = []
   for (const cap of toolWinners.values()) {
     if (cap.permissionRules) permissionRules.push(...cap.permissionRules)
-  }
-
-  // Filter: any capability whose audiences include "human-slash" is a slash
-  // command — read-intent capabilities are allowed (they surface as commands
-  // even though they don't mutate state). Palette-only and model-only
-  // capabilities are excluded by virtue of NOT including "human-slash".
-  const isAuthorizedAsSlashCommand = (cap: AnyCapabilityContribution): boolean =>
-    cap.audiences.includes("human-slash")
-
-  const commands: SlashCommand[] = []
-  for (const cap of commandWinners.values()) {
-    if (!isAuthorizedAsSlashCommand(cap)) continue
-    commands.push(capabilityToCommand(cap))
   }
 
   const runtimeSlots = compileRuntimeSlots(sorted)
@@ -295,7 +280,6 @@ export const resolveExtensions = (
     modelDrivers,
     externalDrivers,
     promptSections: promptSectionsMap,
-    commands,
     permissionRules,
     runtimeSlots,
     projections,
@@ -396,9 +380,6 @@ export interface ExtensionRegistryService {
     extensionProjections: ReadonlyArray<TurnProjection>,
   ) => Effect.Effect<CompiledToolPolicy>
 
-  // Command resolution
-  readonly listCommands: () => Effect.Effect<ReadonlyArray<SlashCommand>>
-
   // Agent resolution
   readonly getAgent: (name: string) => Effect.Effect<AgentDefinition | undefined>
   readonly listAgents: () => Effect.Effect<ReadonlyArray<AgentDefinition>>
@@ -435,7 +416,6 @@ export class ExtensionRegistry extends Context.Service<
         Effect.succeed(
           compileToolPolicy([...resolved.tools.values()], agent, runContext, extensionProjections),
         ),
-      listCommands: () => Effect.succeed(resolved.commands),
       listPermissionRules: () => Effect.succeed(resolved.permissionRules),
       getAgent: (name) => Effect.succeed(resolved.agents.get(name)),
       listAgents: () => Effect.succeed([...resolved.agents.values()]),
@@ -479,6 +459,18 @@ export class ExtensionRegistry extends Context.Service<
 
   static Test = (): Layer.Layer<ExtensionRegistry> =>
     ExtensionRegistry.fromResolved(resolveExtensions([]))
+}
+
+export const listSlashCommands = (
+  extensions: ReadonlyArray<LoadedExtension>,
+): ReadonlyArray<SlashCommand> => {
+  const winners = compileCapabilityWinners(sortExtensionsByScope(extensions))
+  const commands: SlashCommand[] = []
+  for (const cap of winners.values()) {
+    if (!cap.audiences.includes("human-slash")) continue
+    commands.push(capabilityToCommand(cap))
+  }
+  return commands
 }
 
 /** Resolve a required agent from the registry. Fails with a clear error if not found. */
