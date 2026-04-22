@@ -7,7 +7,7 @@
  * effects with disjoint resource sets run in parallel.
  *
  * Pre-Phase 6 the runtime had two parallel `bashSemaphore` instances (one in
- * `actor-process.ts`, one inside `AgentLoop`) and only the bash tool's
+ * `session-runtime.ts`, one inside `AgentLoop`) and only the bash tool's
  * `concurrency: "serial"` flag triggered them — so `edit`/`write` (also
  * declared serial) accidentally shared the bash lock instead of having their
  * own. This service replaces the boolean flag with a composable name-based

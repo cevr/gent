@@ -18,16 +18,14 @@ export const formatError = (error: UiError): string => {
       return error.message
     case "StorageError":
       return `Storage: ${error.message}`
-    case "AgentLoopError":
-      return `Agent: ${error.message}`
+    case "SessionRuntimeError":
+      return `Runtime: ${error.message}`
     case "ProviderError":
       return `${error.model}: ${error.message}`
     case "EventStoreError":
       return `Events: ${error.message}`
     case "NotFoundError":
       return `Not found: ${error.message}`
-    case "ActorProcessError":
-      return `Actor: ${error.message}`
     case "PlatformError":
       return `Platform: ${error.message}`
     case "ProviderAuthError":

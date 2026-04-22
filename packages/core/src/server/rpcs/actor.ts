@@ -1,13 +1,13 @@
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import {
-  ActorProcessMetrics,
-  ActorProcessState,
-  ActorTarget,
   InterruptPayload,
   InvokeToolPayload,
   SendToolResultPayload,
   SendUserMessagePayload,
-} from "../../runtime/actor-process.js"
+  SessionRuntimeMetrics,
+  SessionRuntimeStateSchema,
+  SessionRuntimeTarget,
+} from "../../runtime/session-runtime.js"
 import { GentRpcError } from "../errors.js"
 
 export class ActorRpcs extends RpcGroup.make(
@@ -28,13 +28,13 @@ export class ActorRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("getState", {
-    payload: ActorTarget.fields,
-    success: ActorProcessState,
+    payload: SessionRuntimeTarget.fields,
+    success: SessionRuntimeStateSchema,
     error: GentRpcError,
   }),
   Rpc.make("getMetrics", {
-    payload: ActorTarget.fields,
-    success: ActorProcessMetrics,
+    payload: SessionRuntimeTarget.fields,
+    success: SessionRuntimeMetrics,
     error: GentRpcError,
   }),
 ).prefix("actor.") {}

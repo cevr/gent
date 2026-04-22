@@ -13,7 +13,6 @@ import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
-import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
@@ -380,15 +379,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, sessionProfileCacheLive)
 
-  const actorProcessLive = Layer.provide(LocalActorProcessLive, allWithRuntime)
-  const sessionRuntimeLive = Layer.provide(
-    SessionRuntime.Live,
-    Layer.merge(allWithRuntime, actorProcessLive),
-  )
-  return Layer.mergeAll(
-    allWithRuntime,
-    actorProcessLive,
-    sessionRuntimeLive,
-    interactionRecoveryLive,
-  )
+  const sessionRuntimeLive = Layer.provide(SessionRuntime.Live, allWithRuntime)
+  return Layer.mergeAll(allWithRuntime, sessionRuntimeLive, interactionRecoveryLive)
 }

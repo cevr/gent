@@ -38,7 +38,6 @@ import { MachineEngine } from "../runtime/extensions/resource-host/machine-engin
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
-import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -246,10 +245,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         }),
         agentLoopDeps,
       )
-      const actorProcessLive = Layer.provide(
-        LocalActorProcessLive,
-        Layer.mergeAll(agentLoopDeps, agentLoopLive),
-      )
       const sessionRuntimeLive = Layer.provide(
         SessionRuntime.Live,
         Layer.mergeAll(
@@ -258,7 +253,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           eventPublisherLive,
           toolRunnerLive,
           agentLoopLive,
-          actorProcessLive,
         ),
       )
 
@@ -270,7 +264,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           eventPublisherLive,
           toolRunnerLive,
           agentLoopLive,
-          actorProcessLive,
           sessionRuntimeLive,
         ),
       )

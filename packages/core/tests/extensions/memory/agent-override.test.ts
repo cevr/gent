@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Stream } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
@@ -11,7 +11,6 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionCommands } from "@gent/core/server/session-commands"
-import { LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import type { SteerCommand } from "@gent/core/runtime/agent/agent-loop"
@@ -52,6 +51,7 @@ const makeTestLayer = (logs: {
     followUp: () => Effect.void,
     isRunning: () => Effect.succeed(false),
     respondInteraction: () => Effect.void,
+    watchState: () => Effect.succeed(Stream.empty),
     getState: () =>
       Effect.succeed({
         phase: "idle" as const,
@@ -73,20 +73,15 @@ const makeTestLayer = (logs: {
     SessionCwdRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, storageDeps)
-  const actorProcessLayer = Layer.provide(
-    LocalActorProcessLive,
-    Layer.merge(storageDeps, eventPublisherLayer),
-  )
-  const baseWithActorProcess = Layer.mergeAll(
+  const baseRuntime = Layer.mergeAll(
     storageDeps,
     eventPublisherLayer,
-    actorProcessLayer,
     Provider.Debug(),
     Permission.Live([], "allow"),
     ConfigService.Test(),
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
-  const deps = Layer.mergeAll(baseWithActorProcess, sessionRuntimeLayer, ApprovalService.Test())
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseRuntime)
+  const deps = Layer.mergeAll(baseRuntime, sessionRuntimeLayer, ApprovalService.Test())
   return Layer.provideMerge(AppServicesLive, deps)
 }
 

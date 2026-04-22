@@ -1,10 +1,14 @@
 export { InProcessRunner, SubprocessRunner, ToolRunner } from "./agent"
 
-export { LocalActorProcessLive } from "./actor-process"
 export {
+  InterruptPayload,
+  InvokeToolPayload,
+  SendToolResultPayload,
+  SendUserMessagePayload,
   SessionRuntime,
+  SessionRuntimeMetrics,
   SessionRuntimeErrorSchema,
-  type SessionRuntimeError,
+  SessionRuntimeTarget,
   type SessionRuntimeService,
   type SessionRuntimeState,
 } from "./session-runtime"

@@ -12,9 +12,9 @@ describe("formatError", () => {
     expect(formatError(err)).toBe("Storage: disk full")
   })
 
-  test("AgentLoopError → prefixed", () => {
-    const err = { _tag: "AgentLoopError", message: "max turns" } as UiError
-    expect(formatError(err)).toBe("Agent: max turns")
+  test("SessionRuntimeError → prefixed", () => {
+    const err = { _tag: "SessionRuntimeError", message: "max turns" } as UiError
+    expect(formatError(err)).toBe("Runtime: max turns")
   })
 
   test("ProviderError → model:message", () => {
@@ -30,11 +30,6 @@ describe("formatError", () => {
   test("NotFoundError → prefixed", () => {
     const err = { _tag: "NotFoundError", message: "session abc" } as UiError
     expect(formatError(err)).toBe("Not found: session abc")
-  })
-
-  test("ActorProcessError → prefixed", () => {
-    const err = { _tag: "ActorProcessError", message: "crash" } as UiError
-    expect(formatError(err)).toBe("Actor: crash")
   })
 
   test("PlatformError → prefixed", () => {

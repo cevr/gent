@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Stream } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
@@ -11,14 +11,12 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionCommands } from "@gent/core/server/session-commands"
-import { ActorProcess, LocalActorProcessLive } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { SessionRuntime } from "@gent/core/runtime/session-runtime"
-
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Agents } from "@gent/extensions/all-agents"
@@ -40,21 +38,30 @@ const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
   ]),
 )
 
-describe("SessionCommands → ActorProcess integration", () => {
-  const makeActorProcessLayer = (
-    storageDeps: Layer.Layer<
-      Storage | EventStore | AgentLoop | ToolRunner | ExtensionRegistry,
-      never,
-      never
-    >,
-  ) => {
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.merge(storageDeps, runtimePlatformLayer),
-    )
-    return Layer.provide(LocalActorProcessLive, Layer.merge(storageDeps, eventPublisherLayer))
-  }
+const makeAppLayer = (
+  storageDeps: Layer.Layer<
+    Storage | EventStore | AgentLoop | ToolRunner | ExtensionRegistry,
+    never,
+    never
+  >,
+) => {
+  const eventPublisherLayer = Layer.provide(
+    EventPublisherLive,
+    Layer.merge(storageDeps, runtimePlatformLayer),
+  )
+  const baseRuntime = Layer.mergeAll(
+    storageDeps,
+    eventPublisherLayer,
+    Provider.Debug(),
+    Permission.Live([], "allow"),
+    ConfigService.Test(),
+  )
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseRuntime)
+  const deps = Layer.mergeAll(baseRuntime, sessionRuntimeLayer, ApprovalService.Test())
+  return Layer.provideMerge(AppServicesLive, Layer.merge(deps, runtimePlatformLayer))
+}
 
+describe("SessionCommands → SessionRuntime integration", () => {
   const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
     const agentLoopLayer = Layer.effect(
       AgentLoop,
@@ -66,17 +73,20 @@ describe("SessionCommands → ActorProcess integration", () => {
             {
               sessionId: message.sessionId,
               content: message.parts
-                .filter((p): p is { type: "text"; text: string } => p.type === "text")
-                .map((p) => p.text)
+                .filter((part): part is { type: "text"; text: string } => part.type === "text")
+                .map((part) => part.text)
                 .join(""),
             },
           ])
+
         return {
           submit: (message: Message) => appendMessage(message),
           run: (message: Message) => appendMessage(message),
           steer: () => Effect.void,
           followUp: () => Effect.void,
           isRunning: () => Effect.succeed(false),
+          respondInteraction: () => Effect.void,
+          watchState: () => Effect.succeed(Stream.empty),
           getState: () =>
             Effect.succeed({
               phase: "idle" as const,
@@ -88,10 +98,9 @@ describe("SessionCommands → ActorProcess integration", () => {
       }),
     )
 
-    const eventStoreLayer = EventStore.Memory
     const storageDeps = Layer.mergeAll(
       Storage.TestWithSql(),
-      eventStoreLayer,
+      EventStore.Memory,
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
@@ -99,27 +108,8 @@ describe("SessionCommands → ActorProcess integration", () => {
       ResourceManagerLive,
       SessionCwdRegistry.Test(),
     )
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.merge(storageDeps, runtimePlatformLayer),
-    )
-    const actorProcessLayer = makeActorProcessLayer(storageDeps)
-    const baseWithActorProcess = Layer.mergeAll(
-      storageDeps,
-      eventPublisherLayer,
-      actorProcessLayer,
-      Provider.Debug(),
-      Permission.Live([], "allow"),
-      ConfigService.Test(),
-    )
-    const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      sessionRuntimeLayer,
-      ApprovalService.Test(),
-      runtimePlatformLayer,
-    )
-    return Layer.provideMerge(AppServicesLive, deps)
+
+    return makeAppLayer(storageDeps)
   }
 
   test("createSession then sendMessage reaches AgentLoop.run", async () => {
@@ -129,9 +119,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
-        const session = yield* commands.createSession({
-          name: "Integration Test",
-        })
+        const session = yield* commands.createSession({ name: "Integration Test" })
 
         yield* commands.sendMessage({
           sessionId: session.sessionId,
@@ -182,6 +170,8 @@ describe("SessionCommands → ActorProcess integration", () => {
         }),
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
       getState: () =>
         Effect.succeed({
           phase: "idle" as const,
@@ -191,10 +181,9 @@ describe("SessionCommands → ActorProcess integration", () => {
         }),
     })
 
-    const eventStoreLayer = EventStore.Memory
     const storageDeps = Layer.mergeAll(
       Storage.TestWithSql(),
-      eventStoreLayer,
+      EventStore.Memory,
       agentLoopLayer,
       testExtensionRegistryLayer,
       ToolRunner.Test(),
@@ -202,30 +191,7 @@ describe("SessionCommands → ActorProcess integration", () => {
       ResourceManagerLive,
       SessionCwdRegistry.Test(),
     )
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.merge(storageDeps, runtimePlatformLayer),
-    )
-    const actorProcessLayer = Layer.provide(
-      LocalActorProcessLive,
-      Layer.merge(storageDeps, eventPublisherLayer),
-    )
-    const baseWithActorProcess = Layer.mergeAll(
-      storageDeps,
-      eventPublisherLayer,
-      actorProcessLayer,
-      Provider.Debug(),
-      Permission.Live([], "allow"),
-      ConfigService.Test(),
-    )
-    const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
-    const deps = Layer.mergeAll(
-      baseWithActorProcess,
-      sessionRuntimeLayer,
-      ApprovalService.Test(),
-      runtimePlatformLayer,
-    )
-    const layer = Layer.provideMerge(AppServicesLive, deps)
+    const layer = makeAppLayer(storageDeps)
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -244,7 +210,7 @@ describe("SessionCommands → ActorProcess integration", () => {
     )
   })
 
-  test("actor process getState delegates to the loop snapshot", async () => {
+  test("session runtime getState delegates to the loop snapshot", async () => {
     const agentLoopLayer = Layer.succeed(AgentLoop, {
       submit: () => Effect.void,
       run: () => Effect.void,
@@ -253,6 +219,8 @@ describe("SessionCommands → ActorProcess integration", () => {
       drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
       isRunning: () => Effect.succeed(true),
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
       getState: () =>
         Effect.succeed({
           phase: "running" as const,
@@ -279,15 +247,12 @@ describe("SessionCommands → ActorProcess integration", () => {
       EventPublisherLive,
       Layer.merge(storageDeps, runtimePlatformLayer),
     )
-    const layer = Layer.provide(
-      LocalActorProcessLive,
-      Layer.merge(storageDeps, eventPublisherLayer),
-    )
+    const layer = Layer.provide(SessionRuntime.Live, Layer.merge(storageDeps, eventPublisherLayer))
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const actorProcess = yield* ActorProcess
-        return yield* actorProcess.getState({
+        const sessionRuntime = yield* SessionRuntime
+        return yield* sessionRuntime.getState({
           sessionId: SessionId.of("state-session"),
           branchId: BranchId.of("state-branch"),
         })
@@ -302,7 +267,6 @@ describe("SessionCommands → ActorProcess integration", () => {
         steering: [{ content: "steer" }],
         followUp: [{ content: "follow-up" }],
       },
-      lastError: undefined,
     })
   })
 })

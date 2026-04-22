@@ -3,7 +3,7 @@
  *
  * Verifies that RunSpec (including parentToolCallId)
  * survive the full chain: client.message.send → RPC → session-commands
- * → actor-process → agentLoop.submit → resolveTurnContext → deriveAll.
+ * → session-runtime → agentLoop.submit → resolveTurnContext → deriveAll.
  *
  * Also tests the CLI serialization round-trip used by SubprocessRunner.
  */

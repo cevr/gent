@@ -37,7 +37,6 @@ describe("Session Snapshot", () => {
           status: "running" as const,
           agent: "deepwork" as const,
           queue: { steering: [], followUp: [] },
-          lastError: undefined,
         }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),

@@ -24,7 +24,6 @@ import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { ServerProfileService } from "../runtime/scope-brands.js"
-import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -111,25 +110,14 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     AgentLoop.Live({ baseSections: [{ id: "base", content: "test system prompt", priority: 0 }] }),
     Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
   )
-  const actorProcessLive = Layer.provide(
-    LocalActorProcessLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive),
-  )
   const sessionRuntimeLive = Layer.provide(
     SessionRuntime.Live,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, actorProcessLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive),
   )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(
-      baseDeps,
-      eventStoreLive,
-      eventPublisherLive,
-      agentLoopLive,
-      actorProcessLive,
-      sessionRuntimeLive,
-    ),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, sessionRuntimeLive),
   )
 }
 

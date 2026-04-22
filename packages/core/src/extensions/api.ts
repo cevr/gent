@@ -260,7 +260,7 @@ export type {
 export { ProjectionError } from "../domain/projection.js"
 // `MachineEngine` is the substrate's write surface for machine-bearing
 // extensions: `publish` / `send` / `ask` / `getActorStatuses` /
-// `terminateAll`. Producers (event-publisher, agent-loop, actor-process,
+// `terminateAll`. Producers (event-publisher, agent-loop, session-runtime,
 // rpc-handlers) yield this Tag. Read-only consumers (projections) yield
 // `MachineExecute` instead — the read-only fence carrying the `ReadOnly`
 // brand (B11.4).

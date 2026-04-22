@@ -1,5 +1,16 @@
-import { Cause, DateTime, Duration, Effect, Fiber, FileSystem, Layer, Schema, Stream } from "effect"
-import type { Context } from "effect"
+import {
+  Cause,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+  Stream,
+} from "effect"
 import { withWideEvent, WideEvent, agentRunBoundary } from "../wide-event-boundary"
 import {
   AgentSwitched,
@@ -33,13 +44,14 @@ import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { ToolRunner } from "./tool-runner.js"
-import type { Provider } from "../../providers/provider.js"
+import { Provider } from "../../providers/provider.js"
 import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ApprovalService } from "../approval-service.js"
 import { EventStoreLive } from "../event-store-live.js"
-import { EventPublisherLive } from "../../server/event-publisher.js"
 import { ResourceManagerLive } from "../resource-manager.js"
+import { RuntimePlatform } from "../runtime-platform.js"
+import { ConfigService } from "../config-service.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
 import { RuntimeComposer } from "../composer.js"
@@ -452,40 +464,61 @@ const buildEphemeralLayer = (params: {
 }) => {
   const resolved = params.extensionRegistry.getResolved()
   const extensionLayers = buildExtensionLayers(resolved)
-
-  // Parent context as a Layer — deps that owned layers need resolve from here.
-  const parentLayer = Layer.succeedContext(params.parentServices)
+  const parentService = <S>(tag: Context.Key<unknown, S>): S =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    Context.get(params.parentServices as Context.Context<unknown>, tag)
 
   const storageLayer = Storage.MemoryWithSql()
   const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
   const approvalLayer = ApprovalService.LiveAutoResolve
-
-  // EventPublisher reaches into bus + state runtime + registry so extension
-  // subscriptions fire on local events. Parent first so locally-built
-  // MachineEngine, SubscriptionEngine, registry win.
-  const eventPublisherLayer = Layer.provide(
-    EventPublisherLive,
-    Layer.mergeAll(parentLayer, eventStoreLayer, extensionLayers),
+  const parentRuntimePlatformLayer = Layer.succeed(RuntimePlatform, parentService(RuntimePlatform))
+  const parentFileSystemLayer = Layer.succeed(
+    FileSystem.FileSystem,
+    parentService(FileSystem.FileSystem),
   )
-
+  const parentPathLayer = Layer.succeed(Path.Path, parentService(Path.Path))
+  const parentProviderLayer = Layer.succeed(Provider, parentService(Provider))
+  const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
   const promptPresenterLayer = Layer.provide(
     PromptPresenter.Live,
-    Layer.mergeAll(parentLayer, approvalLayer),
+    Layer.mergeAll(
+      approvalLayer,
+      parentRuntimePlatformLayer,
+      parentFileSystemLayer,
+      parentPathLayer,
+    ),
   )
 
-  const coreDeps = Layer.mergeAll(
-    storageLayer,
-    eventStoreLayer,
-    eventPublisherLayer,
-    extensionLayers,
-    approvalLayer,
-    promptPresenterLayer,
-    ResourceManagerLive,
+  // Ephemeral child sessions are synthetic. Persist local events so the
+  // child loop can complete, but do not run local extension reduction on
+  // those synthetic session ids; mirrored parent observers handle the
+  // subset of child events that should escape.
+  const eventPublisherLayer = Layer.effect(
+    EventPublisher,
+    Effect.gen(function* () {
+      const baseEventStore = yield* EventStore
+      return EventPublisher.of({
+        publish: (event) => baseEventStore.publish(event),
+        terminateSession: () => Effect.void,
+      })
+    }),
+  ).pipe(Layer.provide(eventStoreLayer))
+  const toolRunnerLayer = Layer.provideMerge(
+    ToolRunner.Live,
+    Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimePlatformLayer),
   )
-
-  const toolRunnerLayer = Layer.provide(ToolRunner.Live, Layer.merge(parentLayer, coreDeps))
   const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
-    Layer.provide(Layer.merge(parentLayer, Layer.merge(coreDeps, toolRunnerLayer))),
+    Layer.provide(
+      Layer.mergeAll(
+        storageLayer,
+        eventPublisherLayer,
+        toolRunnerLayer,
+        ResourceManagerLive,
+        extensionLayers,
+        parentProviderLayer,
+        parentConfigLayer,
+      ),
+    ),
   )
 
   // withOverrides maps each named field to ALL Tags that should be omitted
@@ -672,9 +705,9 @@ const runEphemeralAgent = (params: {
     //
     // `RuntimeComposer.build()` already wraps the merged layer in
     // `Layer.fresh` and strips `Layer.CurrentMemoMap` from the forwarded
-    // parent context, so layers like `EventPublisherLive` are constructed
-    // against the child's local dependencies instead of being reused from
-    // the parent's memo map.
+    // parent context, so child-local layers are constructed against the
+    // ephemeral dependencies instead of being reused from the parent's
+    // memo map.
     const result = yield* childRun.pipe(
       // @effect-diagnostics-next-line strictEffectProvide:off — ephemeral runtime composition root
       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion

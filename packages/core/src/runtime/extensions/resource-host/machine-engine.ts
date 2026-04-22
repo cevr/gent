@@ -953,7 +953,7 @@ export const makeMachineEngine = (
 //
 // `MachineEngine` is the substrate-wide call surface for the machine engine:
 // `publish` / `send` / `execute` / `getActorStatuses` / `terminateAll`.
-// Producers yield this Tag (event-publisher, agent-loop, actor-process,
+// Producers yield this Tag (event-publisher, agent-loop, session-runtime,
 // rpc-handlers). Read-only consumers (projections) yield `MachineExecute`
 // instead.
 

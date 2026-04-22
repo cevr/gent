@@ -45,6 +45,9 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
+import { CheckpointStorage } from "../storage/checkpoint-storage.js"
+import { InteractionStorage } from "../storage/interaction-storage.js"
+import { SearchStorage } from "../storage/search-storage.js"
 import { EventStore } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { ApprovalService } from "./approval-service.js"
@@ -146,6 +149,9 @@ type EphemeralOverrideProvides =
   | EventStorage
   | RelationshipStorage
   | ExtensionStateStorage
+  | CheckpointStorage
+  | InteractionStorage
+  | SearchStorage
   | EventStore
   | EventPublisher
   | ApprovalService
@@ -172,6 +178,9 @@ const OVERRIDE_TAG_SETS: Record<
     EventStorage,
     RelationshipStorage,
     ExtensionStateStorage,
+    CheckpointStorage,
+    InteractionStorage,
+    SearchStorage,
   ] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   eventStore: [EventStore] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
@@ -303,7 +312,6 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       }),
     withOverrides: (overrides) => {
       const extraKeys: Context.Key<unknown, unknown>[] = []
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
       const extraLayers: OpaqueLayer[] = []
       const addOverride = (field: keyof EphemeralOverrides) => {
         const layer = overrides[field]

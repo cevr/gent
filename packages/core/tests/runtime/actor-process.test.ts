@@ -1,12 +1,11 @@
-import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Effect, Layer, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
 import type { ExtensionContributions } from "@gent/core/domain/extension"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { LocalActorProcessLive, ActorProcess } from "@gent/core/runtime/actor-process"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
@@ -14,6 +13,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { SessionRuntime } from "@gent/core/runtime/session-runtime"
 
 const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
   ExtensionRegistry.fromResolved(
@@ -37,15 +37,21 @@ const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
     ]),
   )
 
-describe("ActorProcess", () => {
-  const makeActorProcessLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
+const idleLoopState = {
+  phase: "idle" as const,
+  status: "idle" as const,
+  agent: "cowork" as const,
+  queue: { steering: [], followUp: [] },
+}
+
+describe("SessionRuntime", () => {
+  const makeSessionRuntimeLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const extRegistry = makeTestExtRegistry()
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      extRegistry,
+      makeTestExtRegistry(),
       MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
@@ -54,7 +60,7 @@ describe("ActorProcess", () => {
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
+    return Layer.provideMerge(SessionRuntime.Live, Layer.merge(deps, eventPublisherLayer))
   }
 
   test("steerAgent delegates to AgentLoop.steer", async () => {
@@ -69,15 +75,16 @@ describe("ActorProcess", () => {
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
-      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
     })
 
-    const layer = makeActorProcessLayer(agentLoopLayer)
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const actorProcess = yield* ActorProcess
-        yield* actorProcess.steerAgent({
+        const sessionRuntime = yield* SessionRuntime
+        yield* sessionRuntime.steerAgent({
           _tag: "SwitchAgent",
           sessionId: "s1" as never,
           branchId: "b1" as never,
@@ -96,15 +103,16 @@ describe("ActorProcess", () => {
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
-      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
     })
 
-    const layer = makeActorProcessLayer(agentLoopLayer)
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const actorProcess = yield* ActorProcess
+        const sessionRuntime = yield* SessionRuntime
         const recorder = yield* SequenceRecorder
 
         const now = new Date()
@@ -124,7 +132,7 @@ describe("ActorProcess", () => {
           }),
         )
 
-        yield* actorProcess.sendUserMessage({
+        yield* sessionRuntime.sendUserMessage({
           sessionId: "defect-session" as never,
           branchId: "defect-branch" as never,
           content: "trigger defect",
@@ -132,16 +140,14 @@ describe("ActorProcess", () => {
 
         const calls = yield* recorder.getCalls()
         const publishedTags = calls
-          .filter((c) => c.service === "EventStore" && c.method === "publish")
-          .map((c) => (c.args as { _tag: string } | undefined)?._tag)
+          .filter((call) => call.service === "EventStore" && call.method === "publish")
+          .map((call) => (call.args as { _tag: string } | undefined)?._tag)
 
         expect(publishedTags).toContain("AgentRestarted")
         expect(publishedTags).toContain("ErrorOccurred")
-
-        // AgentRestarted should come before ErrorOccurred
-        const restartIdx = publishedTags.indexOf("AgentRestarted")
-        const errorIdx = publishedTags.indexOf("ErrorOccurred")
-        expect(restartIdx).toBeLessThan(errorIdx)
+        expect(publishedTags.indexOf("AgentRestarted")).toBeLessThan(
+          publishedTags.indexOf("ErrorOccurred"),
+        )
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -164,7 +170,8 @@ describe("ActorProcess", () => {
       followUp: () => Effect.void,
       isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
-      getState: () => Effect.succeed({ status: "idle" as const, agent: "cowork", queueDepth: 0 }),
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
     })
     const toolRunnerLayer = Layer.succeed(ToolRunner, {
       run: (toolCall) =>
@@ -178,11 +185,10 @@ describe("ActorProcess", () => {
         ),
     })
 
-    const extRegistry2 = makeTestExtRegistry()
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      extRegistry2,
+      makeTestExtRegistry(),
       MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
@@ -191,12 +197,12 @@ describe("ActorProcess", () => {
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    const layer = Layer.provideMerge(LocalActorProcessLive, Layer.merge(deps, eventPublisherLayer))
+    const layer = Layer.provideMerge(SessionRuntime.Live, Layer.merge(deps, eventPublisherLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const storage = yield* Storage
-        const actorProcess = yield* ActorProcess
+        const sessionRuntime = yield* SessionRuntime
         const recorder = yield* SequenceRecorder
         const now = new Date()
 
@@ -216,7 +222,7 @@ describe("ActorProcess", () => {
           }),
         )
 
-        yield* actorProcess.invokeTool({
+        yield* sessionRuntime.invokeTool({
           sessionId: "invoke-session" as never,
           branchId: "invoke-branch" as never,
           toolName: "read",
@@ -232,7 +238,6 @@ describe("ActorProcess", () => {
         expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
         expect(messages[0]?.parts[0]?.type).toBe("tool-call")
         expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-        // invokeTool no longer auto-schedules a follow-up turn — caller decides.
         expect(submitCount).toBe(0)
         expect(publishedTags).toContain("ToolCallStarted")
         expect(publishedTags).toContain("ToolCallSucceeded")
