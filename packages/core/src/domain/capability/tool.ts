@@ -102,8 +102,7 @@ export interface ToolInput<
  * typed handler shape; the leaf is widened to `AnyCapabilityContribution`
  * at the bucket boundary.
  *
- * The B11.5 migration-window overload accepting legacy `AnyToolDefinition`
- * was deleted in B11.5d.
+ * The legacy `defineTool` carrier was deleted in B11.5d.
  */
 export const tool = <
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

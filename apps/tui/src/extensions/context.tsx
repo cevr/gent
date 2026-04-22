@@ -253,6 +253,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       setServerCommands([])
       return
     }
+    setServerCommands([])
 
     let active = true
     onCleanup(() => {

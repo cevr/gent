@@ -1,8 +1,13 @@
 # Planify: Gent First-Principles Simplification
 
-Status: proposed  
+Status: completed  
 Updated: 2026-04-22  
+Completed: 2026-04-22  
 Design stance: correctness over pragmatism. Maximal simplicity over migration convenience.
+
+This file is now an execution record. The plan below was implemented on `main`
+in commit-batched waves; it is retained as the architectural contract and audit
+trail for the simplification, not as an open proposal.
 
 ## Context
 

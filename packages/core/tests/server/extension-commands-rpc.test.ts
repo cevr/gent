@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import type { GentExtension } from "@gent/core/domain/extension"
+import type { GentExtension, LoadedExtension } from "@gent/core/domain/extension"
 import { textStep } from "@gent/core/debug/provider"
 import { ExtensionRegistry, listSlashCommands } from "@gent/core/runtime/extensions/registry"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
@@ -10,6 +10,7 @@ import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
+import { buildExtensionRpcHandlers } from "@gent/core/server/rpc-handler-groups/extension"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
@@ -110,5 +111,113 @@ describe("extension command RPCs", () => {
     )
 
     expect(invoked).toEqual([{ args: "rpc-world", sessionId: createdSessionId }])
+  })
+
+  test("listCommands resolves through the active session profile", async () => {
+    const alphaExtension: LoadedExtension = {
+      manifest: { id: "@test/alpha" },
+      kind: "builtin",
+      sourcePath: "test",
+      contributions: {
+        capabilities: [
+          {
+            id: "alpha",
+            audiences: ["human-slash", "transport-public"],
+            intent: "write",
+            promptSnippet: "Alpha command",
+            input: Schema.String,
+            output: Schema.Void,
+            effect: () => Effect.void,
+          },
+        ],
+      },
+    }
+
+    const betaExtension: LoadedExtension = {
+      manifest: { id: "@test/beta" },
+      kind: "builtin",
+      sourcePath: "test",
+      contributions: {
+        capabilities: [
+          {
+            id: "beta",
+            audiences: ["human-slash", "transport-public"],
+            intent: "write",
+            promptSnippet: "Beta command",
+            input: Schema.String,
+            output: Schema.Void,
+            effect: () => Effect.void,
+          },
+        ],
+      },
+    }
+
+    const handlers = buildExtensionRpcHandlers({
+      resolveSessionProfile: (sessionId) =>
+        Effect.succeed({
+          registry: {
+            getResolved: () => ({
+              extensions: sessionId === "session-alpha" ? [alphaExtension] : [betaExtension],
+            }),
+          },
+          stateRuntime: {} as never,
+        }),
+    } as never)
+
+    const alpha = await Effect.runPromise(
+      handlers["extension.listCommands"]({ sessionId: "session-alpha" }),
+    )
+    const beta = await Effect.runPromise(
+      handlers["extension.listCommands"]({ sessionId: "session-beta" }),
+    )
+
+    expect(alpha.map((command) => command.name)).toEqual(["alpha"])
+    expect(beta.map((command) => command.name)).toEqual(["beta"])
+  })
+
+  test("listCommands omits human-slash capabilities that are not transport-public", async () => {
+    const handlers = buildExtensionRpcHandlers({
+      resolveSessionProfile: () =>
+        Effect.succeed({
+          registry: {
+            getResolved: () => ({
+              extensions: [
+                {
+                  manifest: { id: "@test/public-filter" },
+                  kind: "builtin",
+                  sourcePath: "test",
+                  contributions: {
+                    capabilities: [
+                      {
+                        id: "visible",
+                        audiences: ["human-slash", "transport-public"],
+                        intent: "write",
+                        input: Schema.String,
+                        output: Schema.Void,
+                        effect: () => Effect.void,
+                      },
+                      {
+                        id: "hidden",
+                        audiences: ["human-slash"],
+                        intent: "write",
+                        input: Schema.String,
+                        output: Schema.Void,
+                        effect: () => Effect.void,
+                      },
+                    ],
+                  },
+                } satisfies LoadedExtension,
+              ],
+            }),
+          },
+          stateRuntime: {} as never,
+        }),
+    } as never)
+
+    const commands = await Effect.runPromise(
+      handlers["extension.listCommands"]({ sessionId: "session-filter" }),
+    )
+
+    expect(commands.map((command) => command.name)).toEqual(["visible"])
   })
 })

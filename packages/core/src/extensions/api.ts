@@ -58,11 +58,10 @@ import type { AgentEvent, AgentEventTag } from "../domain/event.js"
 
 // ── Re-exports for full-power extension authors ──
 
-// `AnyToolDefinition` and `ToolContext` survive as the internal lowered
-// shape consumed by the provider bridge and the tool-runner registry.
-// Authors construct tools via `tool({...})` from `domain/capability/tool.ts`
-// (re-exported below). `defineTool` and `ToolDefinitionBrand` deleted in B11.5d.
-export type { AnyToolDefinition, ToolContext } from "../domain/tool.js"
+// `ToolContext` survives as the internal lowered execution context consumed by
+// the provider bridge and the tool-runner registry. Authors construct tools
+// via `tool({...})` from `domain/capability/tool.ts` (re-exported below).
+export type { ToolContext } from "../domain/tool.js"
 export {
   defineAgent,
   AgentDefinition,
