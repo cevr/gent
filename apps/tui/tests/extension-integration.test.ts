@@ -8,7 +8,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { loadTuiExtensions as _loadTuiExtensions } from "../src/extensions/loader-boundary"
 import {
@@ -1095,13 +1095,17 @@ describe("B11.6 transport-only widgets — startup with active session", () => {
           }),
         }),
         makeClientTransportLayer({
-          // Stub client+runtime — refetch will fail loudly if invoked
-          // (no `extension.request`/`ask`), but the widget's createEffect
-          // schedules the call asynchronously via void runRefetch(...) so
-          // the synchronous setup path completes successfully and the
-          // failing async call is swallowed by the widget's catch.
+          // Stub client+runtime — every transport call still fails loudly
+          // via `runtime.run`, but the client surface stays structurally
+          // complete so startup doesn't explode before the async boundary.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          client: { extension: {} } as any,
+          client: {
+            extension: {
+              ask: () => Effect.void,
+              request: () => Effect.void,
+              listCommands: () => Effect.succeed([]),
+            },
+          } as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           runtime: { run: () => Promise.reject(new Error("no transport in test")) } as any,
           // The key bit: a session is already active when setup runs.

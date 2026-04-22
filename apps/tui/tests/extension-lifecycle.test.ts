@@ -105,7 +105,13 @@ describe("transport-only widgets — stale-response gating", () => {
           // awaits the test-controlled Deferred so we can resolve the
           // refetch AFTER swapping `activeSession`.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          client: { extension: { ask: () => Deferred.await(askDeferred) } } as any,
+          client: {
+            extension: {
+              ask: () => Deferred.await(askDeferred),
+              request: () => Effect.void,
+              listCommands: () => Effect.succeed([]),
+            },
+          } as any,
           // runtime.run wraps an Effect into a Promise — use a real
           // Effect runtime under the hood.
           runtime: {

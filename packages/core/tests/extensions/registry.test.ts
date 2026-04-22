@@ -1,15 +1,14 @@
 import { describe, test, expect } from "bun:test"
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
-import type { AnyCapabilityContribution, CapabilityCoreContext } from "@gent/core/domain/capability"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 import {
   ExtensionRegistry,
   listSlashCommands,
   resolveExtensions,
-  type SlashCommand,
 } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
@@ -542,20 +541,10 @@ describe("ExtensionRegistry", () => {
   // (which only sees static sections from `Capability.prompt`).
 })
 
-// C4.3 command bridge — identity-first scope shadowing followed by
-// audience/intent authorization. These lock the four scenarios codex's C4.3
-// review called out. Commands are now built entirely from capabilities with
-// `audiences:["human-slash"]` — CommandContribution is deleted in C8.
-describe("resolveExtensions — command bridge (C4.3)", () => {
-  // Minimal `ModelCapabilityContext`-shaped stub.
-  const makeHostCtx = (cwd = "/test/cwd") =>
-    ({
-      sessionId: SessionId.of("test-session"),
-      branchId: BranchId.of("test-branch"),
-      cwd,
-      home: "/test/home",
-    }) as unknown as Parameters<SlashCommand["handler"]>[1]
-
+// Slash-command discovery — identity-first scope shadowing followed by
+// audience/intent authorization. These lock the C4.3 scenarios after
+// command contributions were collapsed into capabilities.
+describe("resolveExtensions — slash command discovery (C4.3)", () => {
   test('Capability(audiences:["human-slash"], intent:"write") appears in commands', () => {
     const cap: AnyCapabilityContribution = {
       id: "echo",
@@ -570,29 +559,6 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const commands = listSlashCommands(resolved.extensions)
     expect(commands.map((c) => c.name)).toContain("echo")
     expect(commands.find((c) => c.name === "echo")?.description).toBe("Echo the args back.")
-  })
-
-  test("invoking a synthesized command decodes args and runs the capability effect", async () => {
-    const seen: string[] = []
-    const cap: AnyCapabilityContribution = {
-      id: "remember",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Void,
-      effect: (input: string, _ctx: CapabilityCoreContext) =>
-        Effect.sync(() => {
-          seen.push(input)
-        }),
-    }
-    const resolved = resolveExtensions([
-      makeExt("@test/remember", "builtin", { capabilities: [cap] }),
-    ])
-    const commands = listSlashCommands(resolved.extensions)
-    const cmd = commands.find((c) => c.name === "remember")
-    expect(cmd).toBeDefined()
-    await Effect.runPromise(cmd!.handler("hello", makeHostCtx()))
-    expect(seen).toEqual(["hello"])
   })
 
   test("project capability narrowing audience to non-slash SHADOWS builtin slash command", () => {
@@ -821,26 +787,5 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     }
     const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { capabilities: [cap] })])
     expect(resolved.modelCapabilities.has("rpc-only")).toBe(false)
-  })
-
-  test("bridge dies (defect) when capability output fails to encode", async () => {
-    const cap: AnyCapabilityContribution = {
-      id: "lies",
-      audiences: ["human-slash"],
-      intent: "write",
-      input: Schema.String,
-      output: Schema.Number,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      effect: () => Effect.succeed("not a number" as unknown as number),
-    }
-    const resolved = resolveExtensions([makeExt("@test/lies", "builtin", { capabilities: [cap] })])
-    const commands = listSlashCommands(resolved.extensions)
-    const cmd = commands.find((c) => c.name === "lies")
-    expect(cmd).toBeDefined()
-    const exit = await Effect.runPromiseExit(cmd!.handler("ignored", makeHostCtx()))
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.hasDies(exit.cause)).toBe(true)
-    }
   })
 })

@@ -11,6 +11,7 @@
  */
 
 import {
+  createEffect,
   createContext,
   useContext,
   createSignal,
@@ -239,50 +240,69 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       setResolved(result)
 
       // Fetch server-side extension commands
-      transport.runtime.cast(
-        transport.client.extension.listCommands().pipe(
-          Effect.tap((cmds) =>
-            Effect.sync(() => {
-              setServerCommands(
-                cmds.map((c) => ({
-                  id: `server:${c.name}`,
-                  title: c.description ?? c.name,
-                  slash: c.name,
-                  category: "Extension",
-                  onSelect: () => {
-                    const sid = session.session()?.sessionId
-                    const bid = session.session()?.branchId
-                    if (sid !== undefined && bid !== undefined) {
-                      transport.runtime.cast(
-                        transport.client.extension
-                          .invokeCommand({ name: c.name, args: "", sessionId: sid, branchId: bid })
-                          .pipe(Effect.catchEager(() => Effect.void)),
-                      )
-                    }
-                  },
-                  onSlash: (args: string) => {
-                    const sid = session.session()?.sessionId
-                    const bid = session.session()?.branchId
-                    if (sid !== undefined && bid !== undefined) {
-                      transport.runtime.cast(
-                        transport.client.extension
-                          .invokeCommand({ name: c.name, args, sessionId: sid, branchId: bid })
-                          .pipe(Effect.catchEager(() => Effect.void)),
-                      )
-                    }
-                  },
-                })),
-              )
-            }),
-          ),
-          Effect.catchEager(() => Effect.void),
-        ),
-      )
     } catch (err) {
       console.log(`[tui-ext] Extension loading failed: ${err}`)
     } finally {
       setLoading(false)
     }
+  })
+
+  createEffect(() => {
+    const current = session.session()
+    if (current === null) {
+      setServerCommands([])
+      return
+    }
+
+    let active = true
+    onCleanup(() => {
+      active = false
+    })
+
+    transport.runtime.cast(
+      transport.client.extension.listCommands({ sessionId: current.sessionId }).pipe(
+        Effect.tap((cmds) =>
+          Effect.sync(() => {
+            if (!active) return
+            setServerCommands(
+              cmds.map((c) => {
+                const run = (args: string) => {
+                  const sid = session.session()?.sessionId
+                  const bid = session.session()?.branchId
+                  if (sid === undefined || bid === undefined) return
+                  transport.runtime.cast(
+                    transport.client.extension
+                      .request({
+                        sessionId: sid,
+                        extensionId: c.extensionId,
+                        capabilityId: c.capabilityId,
+                        intent: c.intent,
+                        input: args,
+                        branchId: bid,
+                      })
+                      .pipe(Effect.catchEager(() => Effect.void)),
+                  )
+                }
+
+                return {
+                  id: `server:${c.name}`,
+                  title: c.description ?? c.name,
+                  slash: c.name,
+                  category: "Extension",
+                  onSelect: () => run(""),
+                  onSlash: run,
+                }
+              }),
+            )
+          }),
+        ),
+        Effect.catchEager(() =>
+          Effect.sync(() => {
+            if (active) setServerCommands([])
+          }),
+        ),
+      ),
+    )
   })
 
   return (

@@ -1,22 +1,11 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import type { GentExtension } from "@gent/core/domain/extension"
-import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { textStep } from "@gent/core/debug/provider"
 import { ExtensionRegistry, listSlashCommands } from "@gent/core/runtime/extensions/registry"
-import { SessionId, BranchId } from "@gent/core/domain/ids"
-import {
-  makeExtensionHostContext,
-  type MakeExtensionHostContextDeps,
-} from "@gent/core/runtime/make-extension-host-context"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Provider } from "@gent/core/providers/provider"
-import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
@@ -37,12 +26,12 @@ describe("extension command RPCs", () => {
         capabilities: [
           {
             id: "greet",
-            audiences: ["human-slash"],
+            audiences: ["human-slash", "transport-public"],
             intent: "write",
             promptSnippet: "Say hello",
             input: Schema.String,
             output: Schema.Void,
-            effect: (args: string, ctx: ExtensionHostContext) =>
+            effect: (args: string, ctx) =>
               Effect.sync(() => {
                 invoked.push({ args, sessionId: ctx.sessionId })
               }),
@@ -85,55 +74,7 @@ describe("extension command RPCs", () => {
     )
   })
 
-  test("invokeCommand calls handler with ExtensionHostContext", async () => {
-    invoked.length = 0
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const registry = yield* ExtensionRegistry
-        const stateRuntime = yield* MachineEngine
-        const platform = yield* RuntimePlatform
-        const eventPublisher = yield* EventPublisher
-        const approval = yield* ApprovalService
-        const turnControl = yield* ExtensionTurnControl
-        const storage = yield* Storage
-
-        const cmds = listSlashCommands(registry.getResolved().extensions)
-        const cmd = cmds.find((c) => c.name === "greet")!
-
-        const hostCtx = makeExtensionHostContext(
-          { sessionId: SessionId.of("test-session"), branchId: BranchId.of("test-branch") },
-          {
-            platform,
-            extensionStateRuntime: stateRuntime,
-            approvalService: approval,
-            promptPresenter: {
-              present: () => Effect.void,
-              confirm: () => Effect.succeed("yes" as const),
-              review: () => Effect.succeed({ decision: "yes" as const, path: "", content: "" }),
-            } as MakeExtensionHostContextDeps["promptPresenter"],
-            extensionRegistry: registry,
-            turnControl: turnControl as MakeExtensionHostContextDeps["turnControl"],
-            storage,
-            searchStorage: {
-              searchMessages: () => Effect.succeed([]),
-            } as MakeExtensionHostContextDeps["searchStorage"],
-            agentRunner: {
-              run: () => Effect.die("not used in this test"),
-            } as MakeExtensionHostContextDeps["agentRunner"],
-            eventPublisher,
-          },
-        )
-        yield* cmd.handler("world", hostCtx)
-      }).pipe(Effect.provide(layer)),
-    )
-
-    expect(invoked).toHaveLength(1)
-    expect(invoked[0]!.args).toBe("world")
-    expect(invoked[0]!.sessionId).toBe("test-session")
-  })
-
-  test("RPC listCommands + invokeCommand round-trip through the transport boundary", async () => {
+  test("RPC listCommands + request round-trip through the transport boundary", async () => {
     invoked.length = 0
     let createdSessionId = ""
 
@@ -148,15 +89,20 @@ describe("extension command RPCs", () => {
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
           createdSessionId = sessionId
 
-          const commands = yield* client.extension.listCommands()
-          expect(commands.find((command) => command.name === "greet")?.description).toBe(
-            "Say hello",
-          )
+          const commands = yield* client.extension.listCommands({ sessionId })
+          expect(commands.map((command) => command.name)).toEqual(["greet"])
+          const greet = commands.find((command) => command.name === "greet")
+          expect(greet?.description).toBe("Say hello")
+          expect(greet?.extensionId).toBe("@test/commands")
+          expect(greet?.capabilityId).toBe("greet")
+          expect(greet?.intent).toBe("write")
 
-          yield* client.extension.invokeCommand({
-            name: "greet",
-            args: "rpc-world",
+          yield* client.extension.request({
             sessionId,
+            extensionId: greet!.extensionId,
+            capabilityId: greet!.capabilityId,
+            intent: greet!.intent,
+            input: "rpc-world",
             branchId,
           })
         }),

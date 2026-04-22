@@ -251,11 +251,9 @@ Rules:
 Extension shape lives in:
 
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
-- `packages/core/src/domain/contribution.ts` — `ExtensionContributions` typed-bucket carrier (six primitive sub-arrays)
+- `packages/core/src/domain/contribution.ts` — `ExtensionContributions` typed-bucket carrier (core primitives only)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
-- `packages/core/src/domain/extension-client.ts` — TUI contract (`ExtensionClientModule` + Effect-typed `ExtensionClientSetup`)
-- `packages/core/src/runtime/extensions/pipeline-host.ts` — pipeline compilation (`compilePipelines`)
-- `packages/core/src/runtime/extensions/subscription-host.ts` — subscription compilation (`compileSubscriptions`)
+- `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extensions/registry.ts` — server registry
 - `packages/extensions/src/` — all 27 builtin extension implementations
 - `apps/tui/src/extensions/` — TUI discovery, loading, resolution
@@ -283,10 +281,8 @@ Extensions may NOT import from `@gent/core/domain/*`, `@gent/core/runtime/*`, `@
 
 Rules:
 
-- hooks are typed descriptors
-- registration shape is structural — builtins, user, and project extensions share the same pipeline
-- dispatch compiles once, then runs from typed hook maps
-- extension hook boundaries are where plugin typing must stay strict
+- registration shape is structural — builtins, user, and project extensions share the same setup path
+- dispatch compiles once, then runs from typed registries and explicit runtime slots
 - actor snapshot schema is enforced at runtime — invalid public snapshots are dropped, not passed through
 - activation/startup failures degrade the extension instead of crashing host startup
 - `onInit` receives `sessionCwd` from the framework — extensions should not reach into `Storage`
@@ -296,20 +292,19 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, resources?, capabilities?, projections?, pipelines?, subscriptions?, drivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches a Projection placed in `capabilities` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
+One authoring shape: `defineExtension({ id, resources?, capabilities?, projections?, drivers? })`. Each typed sub-array is either a literal array, a `(ctx) => array` function, or a `(ctx) => Effect<array>` factory. The bucket name IS the discriminator — TypeScript catches a Projection placed in `capabilities` at the call site; runtime `validatePackageShape` adds field-local error messages for runtime-loaded modules.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. The C8 redesign collapsed 16 contribution kinds into the six-primitive set below. `ExtensionContributions` (`packages/core/src/domain/contribution.ts`) is the typed-bucket carrier; adding a new kind means adding a new bucket field, not a new union arm.
 
 - **Resource** — `defineResource({ scope, layer?, machine?, schedule?, subscriptions?, start?, stop? })`. Long-lived state with explicit `scope` ("process" | "cwd" | "session" | "branch"). Carries optional `effect-machine` machine + declared effects when the extension owns one. Replaces the legacy `layer`, `lifecycle`, `bus-subscription`, `job`, and `workflow` kinds. See `packages/core/src/domain/resource.ts` and `runtime/extensions/resource-host/`.
 - **Capability** — `tool(...)` / `request(...)` / `action(...)` smart constructors lowering to a single `CapabilityContribution`. `tool` = model-facing tool (audiences `["model"]`); `request` = transport-public or agent-protocol query/mutation (discriminated by `intent: "read" | "write"`); `action` = human-palette or human-slash command. The old `query(...)` / `mutation(...)` / `command(...)` / `agent(...)` factories and the `audiences + intent` flag matrix are deleted — use the three typed constructors instead. See `packages/core/src/domain/capability/{tool,request,action}.ts` and `runtime/extensions/capability-host.ts`.
-- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors (agent-loop only; UI deleted in C2; client widgets read state via transport-public Capabilities). The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
-- **Pipeline** (`pipeline(hook, handler)`) — transforming middleware at five hooks (`tool.execute`, `tool.result`, `permission.check`, `context.messages`, `message.input`). Handler shape: `(input, next, ctx) => Effect<output>`. Composition: builtin (innermost) → user → project (outermost). The `definePipeline` intermediate is deleted — pass `hook` and `handler` directly to `pipeline(...)`. See `packages/core/src/domain/pipeline.ts` and `runtime/extensions/pipeline-host.ts`.
-- **Subscription** (`subscription(event, failureMode, handler)`) — void observers at three events (`turn.before`, `turn.after`, `message.output`). No `next`; per-subscription failure policy (`continue` / `isolate` / `halt`). The `defineSubscription` intermediate is deleted — pass `event`, `failureMode`, and `handler` directly to `subscription(...)`. See `packages/core/src/domain/subscription.ts` and `runtime/extensions/subscription-host.ts`.
+- **Projection** (`projection(...)`) — read-only Effect that derives a value from services and surfaces it via `prompt` / `policy` projectors. The `R` channel is fenced read-only: `ProjectionContribution<A, R extends ReadOnly>` blocks write-capable service Tags at compile time. All services used in projections must carry the `ReadOnly` brand — `MachineExecute`, `TaskStorageReadOnly`, `MemoryVaultReadOnly`, `SkillsReadOnly`, `InteractionPendingReader`, etc. See `packages/core/src/domain/{projection,read-only}.ts` and `runtime/extensions/projection-registry.ts`.
 - **Driver** — `modelDriver(...)` / `externalDriver(...)` smart constructors lowering to a single `DriverContribution = { flavor: "model" | "external", driver }`. ModelDriver = LLM provider Layer + auth; ExternalDriver = TurnEvent stream (e.g. ACP). See `packages/core/src/domain/driver.ts` and `runtime/extensions/driver-registry.ts`.
 
 Other notes:
 
 - Lifecycle effects live on Resources as `start` / `stop`; `start` failures degrade the Resource (other Resources keep running), `stop` runs at scope teardown via Effect's per-scope LIFO finalizer ordering.
+- Prompt shaping, input normalization, permission policy, and turn reactions are explicit runtime slots compiled from Resources and Projections, not generic middleware buckets.
 - Agent override is turn-scoped via `QueuedTurnItem.agentOverride`, not persistent `SwitchAgent`.
 - `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
 

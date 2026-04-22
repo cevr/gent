@@ -1,8 +1,8 @@
 /**
  * CapabilityHost — typed dispatch over `CapabilityContribution[]`.
  *
- * One host for what the legacy substrate split across `tool-registry`,
- * `request` bridges, and `command-registry`. Routes
+ * One host for what the legacy substrate split across model tools, typed
+ * requests, and slash-command dispatch. Routes
  * `(extensionId, capabilityId, audience, input)` to the registered
  * Capability, validates input/output via Schema, runs the effect with the
  * extension's contributed Layer providing `R`.

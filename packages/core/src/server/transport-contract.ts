@@ -347,10 +347,10 @@ export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
  *  `extensionId` + `capabilityId` route to the registered capability;
  *  `intent` preserves the read/write fence at the transport boundary.
  *
- *  `branchId` is required so the C4.2 capability bridge can pass a
- *  fully-populated `CapabilityCoreContext` to the underlying handler
- *  without an `unknown` cast (codex BLOCK on C4.2). Callers that previously
- *  omitted it must now pass the active session's current branch.
+ *  `branchId` is required because capability requests execute against the
+ *  live session runtime, not a transport-local stub. Callers must pass the
+ *  active branch so the runtime can construct a complete
+ *  `CapabilityCoreContext` for the handler.
  */
 export const RequestCapabilityInput = Schema.Struct({
   sessionId: SessionId,
@@ -367,19 +367,19 @@ export const ListExtensionStatusInput = Schema.Struct({
 })
 export type ListExtensionStatusInput = typeof ListExtensionStatusInput.Type
 
+export const ListExtensionCommandsInput = Schema.Struct({
+  sessionId: SessionId,
+})
+export type ListExtensionCommandsInput = typeof ListExtensionCommandsInput.Type
+
 export const CommandInfo = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
+  extensionId: Schema.String,
+  capabilityId: Schema.String,
+  intent: Schema.Literals(["read", "write"]),
 })
 export type CommandInfo = typeof CommandInfo.Type
-
-export const InvokeCommandInput = Schema.Struct({
-  name: Schema.String,
-  args: Schema.String,
-  sessionId: SessionId,
-  branchId: BranchId,
-})
-export type InvokeCommandInput = typeof InvokeCommandInput.Type
 
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type

@@ -5,7 +5,7 @@ import {
   AskExtensionMessageInput,
   CommandInfo,
   ExtensionHealthSnapshot,
-  InvokeCommandInput,
+  ListExtensionCommandsInput,
   RequestCapabilityInput,
   ListExtensionStatusInput,
   SendExtensionMessageInput,
@@ -32,11 +32,8 @@ export class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("listCommands", {
+    payload: ListExtensionCommandsInput.fields,
     success: Schema.Array(CommandInfo),
-    error: GentRpcError,
-  }),
-  Rpc.make("invokeCommand", {
-    payload: InvokeCommandInput.fields,
     error: GentRpcError,
   }),
 ).prefix("extension.") {}

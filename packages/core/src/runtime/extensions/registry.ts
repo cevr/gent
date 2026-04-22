@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
 import type { ModelId } from "../../domain/model.js"
@@ -13,7 +13,6 @@ import type {
 import { type PromptSection } from "../../domain/prompt.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
-import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { compileRuntimeSlots, type CompiledRuntimeSlots } from "./runtime-slots.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
@@ -26,7 +25,9 @@ import { SCOPE_PRECEDENCE } from "./disabled.js"
 export interface SlashCommand {
   readonly name: string
   readonly description?: string
-  readonly handler: (args: string, ctx: ExtensionHostContext) => Effect.Effect<void>
+  readonly extensionId: string
+  readonly capabilityId: string
+  readonly intent: "read" | "write"
 }
 
 // Resolved snapshot — the immutable compiled state
@@ -86,47 +87,15 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-/**
- * Lower a `Capability` with `intent: "write"` and
- * `audiences.includes("human-slash")` into a `SlashCommand`. Args (a string)
- * are decoded through the capability's `input` schema (typically
- * `Schema.String`); any `CapabilityError` is escalated to a defect — slash
- * commands have no typed-failure channel today.
- */
-const capabilityToCommand = (cap: AnyCapabilityContribution): SlashCommand => ({
+const capabilityToCommand = (
+  extensionId: string,
+  cap: AnyCapabilityContribution,
+): SlashCommand => ({
   name: cap.id,
   ...(cap.promptSnippet !== undefined ? { description: cap.promptSnippet } : {}),
-  handler: (args, hostCtx) => {
-    // The capability's effect signature is wider than the command host
-    // surface (ModelCapabilityContext extends ExtensionHostContext), so the
-    // structural cast is sound — every field the capability core context
-    // demands is present on hostCtx. CommandContribution.handler returns
-    // `Effect<void>`; the capability's requirements + error channel are
-    // erased at this command-bridge boundary, mirroring the request
-    // registries — those services are provided by the extension's
-    // contributed Layer at composition time.
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
-    const wrapped = Effect.gen(function* () {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const decoded = yield* Schema.decodeUnknownEffect(cap.input as Schema.Any)(args).pipe(
-        Effect.orDie,
-      )
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
-      const output = yield* cap
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        .effect(decoded, hostCtx as Parameters<typeof cap.effect>[1])
-        .pipe(Effect.orDie)
-      // Validate the output even though the command surface discards it —
-      // keeps the bridge honest about CapabilityContribution's input/output
-      // boundary contract (codex ADVISORY 3 on C4.3). Misshape is a host
-      // bug, so coerce to defect.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      yield* Schema.encodeUnknownEffect(cap.output as Schema.Any)(output).pipe(Effect.orDie)
-    })
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return wrapped as Effect.Effect<void>
-  },
+  extensionId,
+  capabilityId: cap.id,
+  intent: cap.intent,
 })
 
 /** Compile prevalidated extensions into an immutable resolved snapshot. */
@@ -404,12 +373,22 @@ export class ExtensionRegistry extends Context.Service<
 
 export const listSlashCommands = (
   extensions: ReadonlyArray<LoadedExtension>,
+  options?: { readonly publicOnly?: boolean },
 ): ReadonlyArray<SlashCommand> => {
-  const winners = compileCapabilityWinners(sortExtensionsByScope(extensions))
+  const winners = new Map<
+    string,
+    { readonly extensionId: string; readonly cap: AnyCapabilityContribution }
+  >()
+  for (const ext of sortExtensionsByScope(extensions)) {
+    for (const cap of ext.contributions.capabilities ?? []) {
+      winners.set(cap.id, { extensionId: ext.manifest.id, cap })
+    }
+  }
   const commands: SlashCommand[] = []
-  for (const cap of winners.values()) {
+  for (const { extensionId, cap } of winners.values()) {
     if (!cap.audiences.includes("human-slash")) continue
-    commands.push(capabilityToCommand(cap))
+    if (options?.publicOnly === true && !cap.audiences.includes("transport-public")) continue
+    commands.push(capabilityToCommand(extensionId, cap))
   }
   return commands
 }
