@@ -8,7 +8,6 @@
   "type": "module",
   "scripts": {
     "typecheck": "turbo run typecheck",
-    "typecheck:locks": "turbo run typecheck:locks",
     "lint": "concurrently -n oxlint,effect -c yellow,blue \"oxlint --ignore-path=.oxlintignore\" \"turbo run lint\"",
     "lint:fix": "oxlint --ignore-path=.oxlintignore --fix",
     "fmt": "oxfmt",
@@ -16,7 +15,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "test:e2e": "turbo run test:e2e",
-    "gate": "concurrently -n type,locks,style,build,test -c blue,magenta,yellow,cyan,green \"bun run typecheck\" \"bun run typecheck:locks\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
+    "gate": "concurrently -n type,style,build,test -c blue,yellow,cyan,green \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"

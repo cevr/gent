@@ -7,8 +7,9 @@
  * stops erroring here, the read-only fence has regressed and write
  * capabilities can leak into projections again.
  *
- * Companion to `effect-purity-locks.test.ts`. Wired into `typecheck:locks`
- * via `tsconfig.locks.json` so a regression fails CI loudly.
+ * Companion to `effect-purity-locks.test.ts`. Wired into the core
+ * `typecheck` lock pass via `tsconfig.locks.json` so a regression fails
+ * CI loudly.
  *
  * Tied to B11.4 of the gent-v2 substrate cleanup plan.
  */

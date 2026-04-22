@@ -7,8 +7,8 @@
  * here, the typed-factory fence has regressed and the
  * `audiences[] + intent` flag matrix can leak back into the author surface.
  *
- * Tied to B11.5 of the gent-v2 substrate cleanup plan. Wired into
- * `typecheck:locks` via `tsconfig.locks.json`.
+ * Tied to B11.5 of the gent-v2 substrate cleanup plan. Wired into the
+ * core `typecheck` lock pass via `tsconfig.locks.json`.
  */
 
 import { describe, test, expect } from "bun:test"

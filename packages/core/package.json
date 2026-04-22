@@ -14,8 +14,7 @@
     "./test-utils/*": "./src/test-utils/*"
   },
   "scripts": {
-    "typecheck": "tsgo --noEmit",
-    "typecheck:locks": "tsgo --noEmit -p tsconfig.locks.json",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
     "lint": "effect-language-service diagnostics --project tsconfig.json",
     "test": "bun test tests/"
   },
