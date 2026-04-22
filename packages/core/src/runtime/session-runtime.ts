@@ -64,16 +64,33 @@ export const SendToolResultPayload = Schema.Struct({
 })
 export type SendToolResultPayload = typeof SendToolResultPayload.Type
 
-export const InterruptKind = Schema.Literals(["cancel", "interrupt", "interject"])
-export type InterruptKind = typeof InterruptKind.Type
-
-export const InterruptPayload = Schema.Struct({
+export const CancelInterruptPayload = Schema.TaggedStruct("Cancel", {
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
   branchId: BranchId,
-  kind: InterruptKind,
-  message: Schema.optional(Schema.String),
 })
+export type CancelInterruptPayload = typeof CancelInterruptPayload.Type
+
+export const InterruptTurnPayload = Schema.TaggedStruct("Interrupt", {
+  commandId: Schema.optional(ActorCommandId),
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+export type InterruptTurnPayload = typeof InterruptTurnPayload.Type
+
+export const InterjectPayload = Schema.TaggedStruct("Interject", {
+  commandId: Schema.optional(ActorCommandId),
+  sessionId: SessionId,
+  branchId: BranchId,
+  message: Schema.String,
+})
+export type InterjectPayload = typeof InterjectPayload.Type
+
+export const InterruptPayload = Schema.Union([
+  CancelInterruptPayload,
+  InterruptTurnPayload,
+  InterjectPayload,
+])
 export type InterruptPayload = typeof InterruptPayload.Type
 
 export const InvokeToolPayload = Schema.Struct({
@@ -216,21 +233,21 @@ export const invokeToolCommand = (input: InvokeToolPayload): InvokeToolCommand =
 })
 
 export const interruptPayloadToSteerCommand = (input: InterruptPayload): SteerCommandType => {
-  switch (input.kind) {
-    case "interject":
+  switch (input._tag) {
+    case "Interject":
       return {
         _tag: "Interject",
         sessionId: input.sessionId,
         branchId: input.branchId,
-        message: input.message ?? "",
+        message: input.message,
       }
-    case "cancel":
+    case "Cancel":
       return {
         _tag: "Cancel",
         sessionId: input.sessionId,
         branchId: input.branchId,
       }
-    case "interrupt":
+    case "Interrupt":
       return {
         _tag: "Interrupt",
         sessionId: input.sessionId,
@@ -451,11 +468,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
             return
           }
           case "ApplySteer":
-            if (command.command._tag === "Interject") {
-              if (command.command.message === undefined || command.command.message === "") {
-                return yield* new SessionRuntimeError({ message: "interject requires message" })
-              }
-            }
             yield* agentLoop.steer(command.command)
             return
           case "RespondInteraction":

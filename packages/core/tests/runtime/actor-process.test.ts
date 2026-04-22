@@ -136,9 +136,9 @@ describe("SessionRuntime", () => {
         yield* sessionRuntime.dispatch(
           applySteerCommand(
             interruptPayloadToSteerCommand({
+              _tag: "Interject",
               sessionId: "s1" as never,
               branchId: "b1" as never,
-              kind: "interject",
               message: "cut in",
             }),
           ),

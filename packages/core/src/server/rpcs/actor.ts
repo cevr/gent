@@ -24,7 +24,7 @@ export class ActorRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("interrupt", {
-    payload: InterruptPayload.fields,
+    payload: InterruptPayload,
     error: GentRpcError,
   }),
   Rpc.make("getState", {
