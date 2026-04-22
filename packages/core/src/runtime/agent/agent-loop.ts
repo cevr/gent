@@ -57,7 +57,7 @@ import {
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
-import { type ToolContext } from "../../domain/tool.js"
+import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
   unavailableHostDeps,
@@ -625,9 +625,9 @@ const executeToolCalls = (params: {
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
+  hostCtx: ExtensionHostContext
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime?: MachineEngineService
   permission?: PermissionService
   resourceManager: ResourceManagerService
 }) =>
@@ -645,29 +645,16 @@ const executeToolCalls = (params: {
           }),
         )
 
-        // Thin context — ToolRunner.run() enriches this via makeExtensionHostContext
-        const ctx: ToolContext = {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          toolCallId: toolCall.toolCallId,
-          agentName: params.currentTurnAgent,
-          cwd: "",
-          home: "",
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          extension: {} as ToolContext["extension"],
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          agent: {} as ToolContext["agent"],
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          session: {} as ToolContext["session"],
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          interaction: {} as ToolContext["interaction"],
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          turn: {} as ToolContext["turn"],
-        }
+        const ctx = makeToolContext(
+          {
+            ...params.hostCtx,
+            agentName: params.currentTurnAgent,
+          },
+          toolCall.toolCallId,
+        )
         const run = params.toolRunner
           .run(toolCall, ctx, {
             registry: params.extensionRegistry,
-            stateRuntime: params.extensionStateRuntime,
             ...(params.permission !== undefined ? { permission: params.permission } : {}),
           })
           .pipe(Effect.mapError((e) => new ToolInteractionPending(e, toolCall.toolCallId)))
@@ -1013,9 +1000,9 @@ const executeToolsPhase = (params: {
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
+  hostCtx: ExtensionHostContext
   toolRunner: ToolRunnerService
   extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime?: MachineEngineService
   permission?: PermissionService
   resourceManager: ResourceManagerService
   storage: StorageService
@@ -1101,6 +1088,7 @@ export const invokeToolPhase = (params: {
       sessionId: params.sessionId,
       branchId: params.branchId,
       currentTurnAgent: params.currentTurnAgent,
+      hostCtx: params.hostCtx,
       toolRunner: params.toolRunner,
       extensionRegistry: params.extensionRegistry,
       permission: params.permission,
@@ -1812,9 +1800,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       sessionId,
                       branchId,
                       currentTurnAgent,
+                      hostCtx: turnHostCtx,
                       toolRunner,
                       extensionRegistry: turnExtensionRegistry,
-                      extensionStateRuntime: turnExtensionStateRuntime,
                       permission: turnPermission,
                       resourceManager,
                       storage,
@@ -1950,9 +1938,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   sessionId,
                   branchId,
                   currentTurnAgent: resolved.currentTurnAgent,
+                  hostCtx: turnHostCtx,
                   toolRunner,
                   extensionRegistry: turnExtensionRegistry,
-                  extensionStateRuntime: turnExtensionStateRuntime,
                   permission: turnPermission,
                   resourceManager,
                   storage,

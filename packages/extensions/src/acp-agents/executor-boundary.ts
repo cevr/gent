@@ -13,7 +13,12 @@
  */
 
 import { Context, Effect } from "effect"
-import { ToolCallId, ToolRunner, type ToolContext } from "@gent/core/extensions/api"
+import {
+  ToolCallId,
+  ToolRunner,
+  makeToolContext,
+  type ToolContext,
+} from "@gent/core/extensions/api"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**
@@ -37,7 +42,7 @@ export const makeAcpRunTool = (params: {
 
   return (toolName, args) => {
     const toolCallId = ToolCallId.of(crypto.randomUUID())
-    const toolCtx: ToolContext = { ...params.hostCtx, toolCallId }
+    const toolCtx: ToolContext = makeToolContext(params.hostCtx, toolCallId)
     return runOnRuntime(toolRunner.run({ toolCallId, toolName, input: args }, toolCtx))
   }
 }

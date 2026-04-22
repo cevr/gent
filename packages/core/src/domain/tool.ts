@@ -53,6 +53,14 @@ export interface ToolContext extends ExtensionHostContext {
   readonly toolCallId: ToolCallId
 }
 
+export const makeToolContext = (
+  hostCtx: ExtensionHostContext,
+  toolCallId: ToolCallId,
+): ToolContext => ({
+  ...hostCtx,
+  toolCallId,
+})
+
 // `ToolDefinition` is the internal lowered LLM-tool shape consumed by the
 // provider bridge and tool-runner registry. Authoring stays on the typed
 // `tool({...})` factory at `domain/capability/tool.ts`.

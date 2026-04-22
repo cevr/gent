@@ -156,13 +156,14 @@ const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: AnyCapabilityContribution[] = [],
 ) => {
+  const turnControlLayer = ExtensionTurnControl.Live
   const extRegistry = makeExtRegistry(tools)
   const baseDeps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
     extRegistry,
     MachineEngine.Test(),
-    ExtensionTurnControl.Test(),
+    turnControlLayer,
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ConfigService.Test(),
     EventStore.Memory,
@@ -543,6 +544,57 @@ describe("streaming", () => {
             )
 
           expect(userTexts).toEqual(["first", "second\nthird"])
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("tool execution uses the runtime host context to queue follow-ups", async () => {
+    const QueueTool = tool({
+      id: "queue-tool",
+      description: "Queues a follow-up from tool context",
+      params: Schema.Struct({ content: Schema.String }),
+      execute: ({ content }, ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.turn.queueFollowUp({ content })
+          return { queued: content }
+        }),
+    })
+
+    const providerLayer = scriptedProvider([
+      [
+        new ToolCallChunk({
+          toolCallId: ToolCallId.of("tc-queue"),
+          toolName: "queue-tool",
+          input: { content: "queued from tool" },
+        }),
+        new FinishChunk({ finishReason: "tool_calls" }),
+      ],
+      [new FinishChunk({ finishReason: "stop" })],
+      [new FinishChunk({ finishReason: "stop" })],
+    ])
+
+    const layer = makeLiveToolLayer(providerLayer, [QueueTool])
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const storage = yield* Storage
+
+          yield* agentLoop.run(makeMessage("s1", "b1", "first"))
+
+          const messages = yield* storage.listMessages("b1")
+          const userTexts = messages
+            .filter((message) => message.role === "user")
+            .map((message) =>
+              message.parts
+                .filter((part): part is TextPart => part.type === "text")
+                .map((part) => part.text)
+                .join("\n"),
+            )
+
+          expect(userTexts).toEqual(["first", "queued from tool"])
         }).pipe(Effect.provide(layer)),
       ),
     )

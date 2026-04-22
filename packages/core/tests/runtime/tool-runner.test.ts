@@ -7,6 +7,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 describe("ToolRunner", () => {
   test("runs model capability directly and returns json output", async () => {
@@ -41,7 +42,12 @@ describe("ToolRunner", () => {
         const runner = yield* ToolRunner
         return yield* runner.run(
           { toolCallId: "tc1", toolName: "echo", input: { message: "hello" } },
-          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+          testToolContext({
+            sessionId: "s",
+            branchId: "b",
+            toolCallId: "tc1",
+            agentName: "cowork",
+          }),
         )
       }).pipe(Effect.provide(layer)),
     )
@@ -82,7 +88,12 @@ describe("ToolRunner", () => {
         const runner = yield* ToolRunner
         return yield* runner.run(
           { toolCallId: "tc1", toolName: "fail", input: {} },
-          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+          testToolContext({
+            sessionId: "s",
+            branchId: "b",
+            toolCallId: "tc1",
+            agentName: "cowork",
+          }),
         )
       }).pipe(Effect.provide(layer)),
     )
@@ -124,7 +135,12 @@ describe("ToolRunner", () => {
         const runner = yield* ToolRunner
         return yield* runner.run(
           { toolCallId: "tc1", toolName: "strict", input: { path: 42 } },
-          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+          testToolContext({
+            sessionId: "s",
+            branchId: "b",
+            toolCallId: "tc1",
+            agentName: "cowork",
+          }),
         )
       }).pipe(Effect.provide(layer)),
     )
@@ -172,7 +188,12 @@ describe("ToolRunner", () => {
         const runner = yield* ToolRunner
         return yield* runner.run(
           { toolCallId: "tc1", toolName: "safe", input: {} },
-          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+          testToolContext({
+            sessionId: "s",
+            branchId: "b",
+            toolCallId: "tc1",
+            agentName: "cowork",
+          }),
         )
       }).pipe(Effect.provide(layer)),
     )
@@ -180,5 +201,63 @@ describe("ToolRunner", () => {
     expect(result.output.type).toBe("error-json")
     const error = (result.output.value as { error?: string }).error ?? ""
     expect(error).toBe("Permission denied")
+  })
+
+  test("uses the provided tool context without reconstructing it", async () => {
+    const InspectTool = tool({
+      id: "inspect",
+      description: "Reads the provided execution context",
+      params: Schema.Struct({}),
+      execute: (_, ctx) =>
+        Effect.succeed({
+          cwd: ctx.cwd,
+          home: ctx.home,
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          agentName: ctx.agentName ?? null,
+        }),
+    })
+
+    const deps = Layer.mergeAll(
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test" },
+            kind: "builtin",
+            sourcePath: "test",
+            contributions: { capabilities: [InspectTool] },
+          },
+        ]),
+      ),
+      Permission.Test(),
+    )
+    const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc-inspect", toolName: "inspect", input: {} },
+          testToolContext({
+            sessionId: "session-inspect",
+            branchId: "branch-inspect",
+            toolCallId: "tc-inspect",
+            agentName: "deepwork",
+            cwd: "/runtime/cwd",
+            home: "/runtime/home",
+          }),
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("json")
+    expect(result.output.value).toEqual({
+      cwd: "/runtime/cwd",
+      home: "/runtime/home",
+      sessionId: "session-inspect",
+      branchId: "branch-inspect",
+      agentName: "deepwork",
+    })
   })
 })

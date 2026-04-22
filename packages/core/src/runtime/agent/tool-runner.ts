@@ -2,15 +2,9 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type { AnyCapabilityContribution } from "../../domain/capability.js"
 import { type ToolContext } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import {
-  MachineEngine,
-  type MachineEngineService,
-} from "../extensions/resource-host/machine-engine.js"
-import { RuntimePlatform } from "../runtime-platform.js"
 import { ToolResultPart } from "../../domain/message.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
 import { InteractionPendingError } from "../../domain/interaction-request.js"
-import { ApprovalService } from "../approval-service.js"
 import { formatSchemaError } from "../format-schema-error"
 import {
   withWideEvent,
@@ -19,43 +13,18 @@ import {
   ToolError,
   ToolWarning,
 } from "../wide-event-boundary"
-import {
-  makeExtensionHostContext,
-  unavailableHostDeps,
-  type MakeExtensionHostContextDeps,
-} from "../make-extension-host-context.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { AgentRunnerService } from "../../domain/agent.js"
-import { PromptPresenter } from "../../domain/prompt-presenter.js"
-import { ExtensionTurnControl } from "../extensions/turn-control.js"
-import { Storage } from "../../storage/sqlite-storage.js"
-import { SearchStorage } from "../../storage/search-storage.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
-import type { SessionId, ToolCallId } from "../../domain/ids.js"
-import type { StorageService } from "../../storage/sqlite-storage.js"
+import type { ToolCallId } from "../../domain/ids.js"
 import type { Option } from "effect"
-
-/** Resolve session cwd from storage. Extracted to reduce generator complexity. */
-const resolveSessionCwd = (
-  sessionId: SessionId,
-  storageOpt: Option.Option<StorageService>,
-): Effect.Effect<string | undefined> =>
-  storageOpt._tag === "Some"
-    ? storageOpt.value.getSession(sessionId).pipe(
-        Effect.map((s) => s?.cwd),
-        Effect.orElseSucceed(() => undefined),
-      )
-    : Effect.void.pipe(Effect.as(undefined as string | undefined))
 
 export interface ToolRunnerService {
   readonly run: (
     toolCall: { toolCallId: ToolCallId; toolName: string; input: unknown },
     ctx: ToolContext,
-    /** Per-session profile override. When provided, tool lookup, hooks, host context,
-     *  and extension state runtime use this instead of the server-wide services. */
+    /** Per-session profile override. When provided, tool lookup and permission
+     *  use this instead of the server-wide services. */
     profileOverride?: {
       readonly registry: ExtensionRegistryService
-      readonly stateRuntime?: MachineEngineService
       readonly permission?: PermissionService
     },
   ) => Effect.Effect<ToolResultPart, InteractionPendingError>
@@ -73,7 +42,6 @@ const resolveActivePermission = (
   profileOverride:
     | {
         readonly registry: ExtensionRegistryService
-        readonly stateRuntime?: MachineEngineService
         readonly permission?: PermissionService
       }
     | undefined,
@@ -107,18 +75,11 @@ const errorResult = (toolCall: { toolCallId: ToolCallId; toolName: string }, mes
 export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()(
   "@gent/core/src/runtime/agent/tool-runner/ToolRunner",
 ) {
-  static Live: Layer.Layer<
-    ToolRunner,
-    never,
-    ExtensionRegistry | ApprovalService | RuntimePlatform | MachineEngine
-  > = Layer.effect(
+  static Live: Layer.Layer<ToolRunner, never, ExtensionRegistry> = Layer.effect(
     ToolRunner,
     Effect.gen(function* () {
       const extensionRegistry = yield* ExtensionRegistry
       const basePermissionOpt = yield* Effect.serviceOption(Permission)
-      const approvalService = yield* ApprovalService
-      const platform = yield* RuntimePlatform
-      const extensionStateRuntime = yield* MachineEngine
 
       const run =
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -128,7 +89,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
             // Use per-session profile when provided, falling back to server-wide
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
-            const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
             const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
             const tool: AnyCapabilityContribution | undefined =
               yield* activeRegistry.getModelCapability(toolCall.toolName)
@@ -197,59 +157,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, message)
             }
 
-            // Resolve services lazily to avoid circular Layer deps
-            // (AgentRunnerService depends on AgentLoop which depends on ToolRunner)
-            const lazyDeps = yield* Effect.all({
-              agentRunner: Effect.serviceOption(AgentRunnerService),
-              promptPresenter: Effect.serviceOption(PromptPresenter),
-              turnControl: Effect.serviceOption(ExtensionTurnControl),
-              storage: Effect.serviceOption(Storage),
-              searchStorage: Effect.serviceOption(SearchStorage),
-              eventPublisherSvc: Effect.serviceOption(EventPublisher),
-            })
-
-            const fallback = unavailableHostDeps("ToolRunner")
-            const hostDeps: MakeExtensionHostContextDeps = {
-              platform,
-              extensionStateRuntime: activeStateRuntime,
-              approvalService,
-              promptPresenter:
-                lazyDeps.promptPresenter._tag === "Some"
-                  ? lazyDeps.promptPresenter.value
-                  : fallback.promptPresenter,
-              extensionRegistry: activeRegistry,
-              turnControl:
-                lazyDeps.turnControl._tag === "Some"
-                  ? lazyDeps.turnControl.value
-                  : fallback.turnControl,
-              storage: lazyDeps.storage._tag === "Some" ? lazyDeps.storage.value : fallback.storage,
-              searchStorage:
-                lazyDeps.searchStorage._tag === "Some"
-                  ? lazyDeps.searchStorage.value
-                  : fallback.searchStorage,
-              agentRunner:
-                lazyDeps.agentRunner._tag === "Some"
-                  ? lazyDeps.agentRunner.value
-                  : fallback.agentRunner,
-              eventPublisher:
-                lazyDeps.eventPublisherSvc._tag === "Some"
-                  ? lazyDeps.eventPublisherSvc.value
-                  : fallback.eventPublisher,
-            }
-
-            const sessionCwd = yield* resolveSessionCwd(ctx.sessionId, lazyDeps.storage)
-
-            const hostCtx = makeExtensionHostContext(
-              {
-                sessionId: ctx.sessionId,
-                branchId: ctx.branchId,
-                agentName: ctx.agentName,
-                sessionCwd,
-              },
-              hostDeps,
-            )
-            const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
-
             // Run the legacy tool.execute shim, falling back to direct tool execution.
             const executeResult = yield* activeRegistry.runtimeSlots
               .executeTool(
@@ -265,7 +172,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                     const output = yield* tool.effect(
                       decodedInput.success,
                       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                      richCtx as Parameters<typeof tool.effect>[1],
+                      ctx as Parameters<typeof tool.effect>[1],
                     )
                     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                     yield* Schema.encodeUnknownEffect(tool.output as Schema.Any)(output).pipe(
@@ -276,7 +183,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                   return wrapped as Effect.Effect<unknown>
                 },
-                richCtx,
+                ctx,
               )
               .pipe(Effect.result)
 
@@ -317,7 +224,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   sessionId: ctx.sessionId,
                   branchId: ctx.branchId,
                 },
-                richCtx,
+                ctx,
               )
               .pipe(
                 Effect.catchEager((e) =>
