@@ -136,7 +136,7 @@ const program = Effect.scoped(
     const allServices = Context.merge(coreServices, serverIdentityCtx)
     const coreServicesLive = Layer.succeedContext(allServices)
 
-    // Build all HTTP routes (RPC, REST, docs, identity)
+    // Build all HTTP routes (RPC + identity)
     const AllRoutes = buildServerRoutes(coreServicesLive, {
       identity: {
         serverId: config.serverId,
@@ -174,8 +174,6 @@ const program = Effect.scoped(
     } else {
       // @effect-diagnostics-next-line globalConsoleInEffect:off
       console.log(`Gent server ready on ${baseUrl}`)
-      // @effect-diagnostics-next-line globalConsoleInEffect:off
-      console.log(`Swagger UI: ${baseUrl}/docs`)
     }
 
     // Idle shutdown: worker mode waits for idle, standalone runs forever
