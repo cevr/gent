@@ -10,7 +10,7 @@
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json",
-    "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests integration"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests integration"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",

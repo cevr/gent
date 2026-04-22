@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/"
   }
 }

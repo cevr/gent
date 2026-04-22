@@ -13,9 +13,9 @@
     "fmt": "env -u FORCE_COLOR NO_COLOR=1 oxfmt",
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --check",
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 turbo run test",
     "test:e2e": "turbo run test:e2e",
-    "gate": "concurrently -n type,style,build,test \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
+    "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build,test \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"
