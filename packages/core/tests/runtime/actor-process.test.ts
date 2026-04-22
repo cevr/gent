@@ -95,6 +95,51 @@ describe("SessionRuntime", () => {
     )
   })
 
+  test("interrupt translates interject payloads onto a tagged steer command", async () => {
+    let commandSeen:
+      | {
+          _tag: string
+          sessionId: string
+          branchId: string
+          message?: string
+        }
+      | undefined
+
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: (command) =>
+        Effect.sync(() => {
+          commandSeen = command as typeof commandSeen
+        }),
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
+    })
+
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        yield* sessionRuntime.interrupt({
+          sessionId: "s1" as never,
+          branchId: "b1" as never,
+          kind: "interject",
+          message: "cut in",
+        })
+        expect(commandSeen).toEqual({
+          _tag: "Interject",
+          sessionId: "s1",
+          branchId: "b1",
+          message: "cut in",
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   test("sendUserMessage publishes AgentRestarted on defect", async () => {
     const agentLoopLayer = Layer.succeed(AgentLoop, {
       submit: () => Effect.die("boom"),
@@ -244,6 +289,49 @@ describe("SessionRuntime", () => {
         expect(
           publishedTags.filter((tag) => tag === "MessageReceived").length,
         ).toBeGreaterThanOrEqual(2)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("respondInteraction delegates to AgentLoop.respondInteraction", async () => {
+    let responseSeen:
+      | {
+          sessionId: string
+          branchId: string
+          requestId: string
+        }
+      | undefined
+
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+      respondInteraction: (input) =>
+        Effect.sync(() => {
+          responseSeen = input as typeof responseSeen
+        }),
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
+    })
+
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        yield* sessionRuntime.respondInteraction({
+          sessionId: "s1" as never,
+          branchId: "b1" as never,
+          requestId: "req-1",
+        })
+        expect(responseSeen).toEqual({
+          _tag: "RespondInteraction",
+          sessionId: "s1",
+          branchId: "b1",
+          requestId: "req-1",
+        })
       }).pipe(Effect.provide(layer)),
     )
   })

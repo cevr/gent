@@ -29,6 +29,7 @@ import {
   AgentRunError,
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
+  RunSpecSchema,
   resolveAgentDriver,
   resolveAgentModel,
   type AgentRunOverrides,
@@ -55,8 +56,7 @@ import {
 } from "../../domain/event.js"
 import { EventPublisher } from "../../domain/event-publisher.js"
 import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/message.js"
-import { MessageId, ToolCallId } from "../../domain/ids.js"
-import type { BranchId, SessionId } from "../../domain/ids.js"
+import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
@@ -1220,6 +1220,48 @@ export class AgentLoopError extends Schema.TaggedErrorClass<AgentLoopError>()("A
 import { SteerCommand } from "../../domain/steer.js"
 export { SteerCommand }
 
+const QueuedTurnCommandOptionFields = {
+  agentOverride: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  interactive: Schema.optional(Schema.Boolean),
+}
+
+const LoopTargetFields = {
+  sessionId: SessionId,
+  branchId: BranchId,
+}
+
+const SubmitTurnCommand = Schema.TaggedStruct("SubmitTurn", {
+  message: Message,
+  ...QueuedTurnCommandOptionFields,
+})
+type SubmitTurnCommand = typeof SubmitTurnCommand.Type
+
+const RunTurnCommand = Schema.TaggedStruct("RunTurn", {
+  message: Message,
+  ...QueuedTurnCommandOptionFields,
+})
+type RunTurnCommand = typeof RunTurnCommand.Type
+
+const ApplySteerCommand = Schema.TaggedStruct("ApplySteer", {
+  command: SteerCommand,
+})
+type ApplySteerCommand = typeof ApplySteerCommand.Type
+
+const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
+  ...LoopTargetFields,
+  requestId: Schema.String,
+})
+type RespondInteractionCommand = typeof RespondInteractionCommand.Type
+
+const LoopCommand = Schema.Union([
+  SubmitTurnCommand,
+  RunTurnCommand,
+  ApplySteerCommand,
+  RespondInteractionCommand,
+])
+type LoopCommand = typeof LoopCommand.Type
+
 // Agent Loop Context
 
 const resolveStoredAgent = (params: {
@@ -2189,19 +2231,99 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         })
 
         const buildQueuedTurnItem = (
-          message: Message,
-          options?:
-            | {
-                agentOverride?: AgentNameType
-                runSpec?: RunSpec
-                interactive?: boolean
-              }
-            | undefined,
+          command: SubmitTurnCommand | RunTurnCommand,
         ): QueuedTurnItem => ({
-          message,
-          ...(options?.agentOverride !== undefined ? { agentOverride: options.agentOverride } : {}),
-          ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
-          ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
+          message: command.message,
+          ...(command.agentOverride !== undefined ? { agentOverride: command.agentOverride } : {}),
+          ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
+          ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
+        })
+
+        const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
+          command: LoopCommand,
+        ) {
+          switch (command._tag) {
+            case "SubmitTurn": {
+              const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
+              const initialState = yield* loop.actor.snapshot
+              const item = buildQueuedTurnItem(command)
+
+              if (initialState._tag !== "Idle") {
+                yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
+                return
+              }
+
+              yield* loop.actor.call(AgentLoopEvent.Start({ item }))
+              return
+            }
+
+            case "RunTurn": {
+              const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
+              const initialState = yield* loop.actor.snapshot
+              const item = buildQueuedTurnItem(command)
+
+              if (initialState._tag !== "Idle") {
+                yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
+                return
+              }
+
+              yield* loop.actor.send(AgentLoopEvent.Start({ item }))
+              yield* loop.actor.waitFor((state) => state._tag === "Idle" && state !== initialState)
+              return
+            }
+
+            case "ApplySteer": {
+              const loop = yield* getLoop(command.command.sessionId, command.command.branchId)
+              const loopState = yield* loop.actor.snapshot
+
+              switch (command.command._tag) {
+                case "SwitchAgent":
+                  yield* loop.actor.cast(
+                    AgentLoopEvent.SwitchAgent({ agent: command.command.agent }),
+                  )
+                  return
+                case "Cancel":
+                case "Interrupt":
+                  if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+                    yield* loop.actor.cast(AgentLoopEvent.Interrupt)
+                  }
+                  return
+                case "Interject": {
+                  const interjectMessage = new Message({
+                    id: MessageId.of(Bun.randomUUIDv7()),
+                    sessionId: command.command.sessionId,
+                    branchId: command.command.branchId,
+                    kind: "interjection",
+                    role: "user",
+                    parts: [new TextPart({ type: "text", text: command.command.message })],
+                    createdAt: yield* DateTime.nowAsDate,
+                  })
+                  const item: QueuedTurnItem = {
+                    message: interjectMessage,
+                    ...(command.command.agent !== undefined
+                      ? { agentOverride: command.command.agent }
+                      : {}),
+                  }
+                  yield* loop.updateQueue((queue) => appendSteeringItem(queue, item))
+                  if (loopState._tag === "Running") {
+                    yield* interruptActiveStream(loop.activeStreamRef)
+                  }
+                  return
+                }
+              }
+            }
+
+            case "RespondInteraction": {
+              const loop = yield* findOrRestoreLoop(command.sessionId, command.branchId)
+              if (loop === undefined) return
+              const state = yield* loop.actor.snapshot
+              if (state._tag !== "WaitingForInteraction") return
+              yield* loop.actor.call(
+                AgentLoopEvent.InteractionResponded({ requestId: command.requestId }),
+              )
+              return
+            }
+          }
         })
 
         const service: AgentLoopService = {
@@ -2268,16 +2390,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               interactive?: boolean
             },
           ) {
-            const loop = yield* getLoop(message.sessionId, message.branchId)
-            const initialState = yield* loop.actor.snapshot
-            const item = buildQueuedTurnItem(message, options)
-
-            if (initialState._tag !== "Idle") {
-              yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
-              return
-            }
-
-            yield* loop.actor.call(AgentLoopEvent.Start({ item }))
+            return yield* dispatchLoopCommand({
+              _tag: "SubmitTurn",
+              message,
+              ...(options?.agentOverride !== undefined
+                ? { agentOverride: options.agentOverride }
+                : {}),
+              ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
+              ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
+            })
           }),
 
           run: Effect.fn("AgentLoop.run")(function* (
@@ -2288,56 +2409,18 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               interactive?: boolean
             },
           ) {
-            const loop = yield* getLoop(message.sessionId, message.branchId)
-            const initialState = yield* loop.actor.snapshot
-            const item = buildQueuedTurnItem(message, options)
-
-            if (initialState._tag !== "Idle") {
-              yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
-              return
-            }
-
-            yield* loop.actor.send(AgentLoopEvent.Start({ item }))
-            yield* loop.actor.waitFor((state) => state._tag === "Idle" && state !== initialState)
+            return yield* dispatchLoopCommand({
+              _tag: "RunTurn",
+              message,
+              ...(options?.agentOverride !== undefined
+                ? { agentOverride: options.agentOverride }
+                : {}),
+              ...(options?.runSpec !== undefined ? { runSpec: options.runSpec } : {}),
+              ...(options?.interactive !== undefined ? { interactive: options.interactive } : {}),
+            })
           }),
 
-          steer: (command) =>
-            Effect.gen(function* () {
-              const loop = yield* getLoop(command.sessionId, command.branchId)
-              const loopState = yield* loop.actor.snapshot
-
-              switch (command._tag) {
-                case "SwitchAgent":
-                  yield* loop.actor.cast(AgentLoopEvent.SwitchAgent({ agent: command.agent }))
-                  return
-                case "Cancel":
-                case "Interrupt":
-                  if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-                    yield* loop.actor.cast(AgentLoopEvent.Interrupt)
-                  }
-                  return
-                case "Interject": {
-                  const interjectMessage = new Message({
-                    id: MessageId.of(Bun.randomUUIDv7()),
-                    sessionId: command.sessionId,
-                    branchId: command.branchId,
-                    kind: "interjection",
-                    role: "user",
-                    parts: [new TextPart({ type: "text", text: command.message })],
-                    createdAt: yield* DateTime.nowAsDate,
-                  })
-                  const item: QueuedTurnItem = {
-                    message: interjectMessage,
-                    ...(command.agent !== undefined ? { agentOverride: command.agent } : {}),
-                  }
-                  yield* loop.updateQueue((queue) => appendSteeringItem(queue, item))
-                  if (loopState._tag === "Running") {
-                    yield* interruptActiveStream(loop.activeStreamRef)
-                  }
-                  return
-                }
-              }
-            }),
+          steer: (command) => dispatchLoopCommand({ _tag: "ApplySteer", command }),
 
           followUp: (message) =>
             Effect.gen(function* () {
@@ -2397,15 +2480,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             }),
 
           respondInteraction: (input) =>
-            Effect.gen(function* () {
-              const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
-              if (loop === undefined) return
-              const state = yield* loop.actor.snapshot
-              if (state._tag !== "WaitingForInteraction") return
-              yield* loop.actor.call(
-                AgentLoopEvent.InteractionResponded({ requestId: input.requestId }),
-              )
-            }),
+            dispatchLoopCommand({ _tag: "RespondInteraction", ...input }),
 
           getActor: (input) =>
             Effect.gen(function* () {
