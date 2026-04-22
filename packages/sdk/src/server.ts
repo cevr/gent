@@ -4,8 +4,6 @@
  * Two server topologies:
  * - owned: in-process handler context + HTTP listener (primary client gets direct RPC)
  * - attached: existing server found via registry (client connects via WS)
- *
- * Remote servers are created via Gent.client({ url }) directly.
  */
 
 import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -70,7 +68,6 @@ export interface GentServerOptions {
 export type GentServer =
   | { readonly _tag: "owned"; readonly url: string }
   | { readonly _tag: "attached"; readonly url: string }
-  | { readonly _tag: "remote"; readonly url: string }
 
 // ── Internal state for owned servers ──
 

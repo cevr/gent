@@ -372,14 +372,13 @@ export const Gent = {
     options: GentServerOptions,
   ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => resolveServer(options),
 
-  /** Connect to a server. Owned servers use direct RPC; attached/remote use WS. */
+  /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (
-    serverOrUrl: GentServer | { readonly url: string },
+    serverOrUrl: GentServer | string,
   ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
-      // URL shorthand → remote
-      if (!("_tag" in serverOrUrl)) {
-        return yield* connectWs(serverOrUrl.url)
+      if (typeof serverOrUrl === "string") {
+        return yield* connectWs(serverOrUrl)
       }
 
       switch (serverOrUrl._tag) {
@@ -405,7 +404,6 @@ export const Gent = {
           }
         }
         case "attached":
-        case "remote":
           return yield* connectWs(serverOrUrl.url)
       }
     }),

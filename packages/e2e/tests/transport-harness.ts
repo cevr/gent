@@ -224,7 +224,7 @@ const makeWorkerCase = (providerMode: HarnessProviderMode = "debug-scripted"): T
     const worker = await getOrStartWorker(providerMode)
     return Effect.runPromise(
       Effect.scoped(
-        Gent.client({ url: worker.url }).pipe(
+        Gent.client(worker.url).pipe(
           Effect.mapError((e) => new Error(e.message)),
           Effect.tap((bundle) => bundle.runtime.lifecycle.waitForReady),
           Effect.flatMap(assertion),

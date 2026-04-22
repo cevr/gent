@@ -213,7 +213,7 @@ const main = Command.make(
       }
 
       const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.client({ url: connect.value })
+        if (Option.isSome(connect)) return Gent.client(connect.value)
         const serverState = debug || isolate ? Gent.state.memory() : Gent.state.sqlite()
         const serverProvider = debug ? Gent.provider.mock() : Gent.provider.live()
         return Effect.flatMap(
@@ -340,7 +340,7 @@ const sessions = Command.make(
     Effect.gen(function* () {
       const cwd = process.cwd()
       const resolveBundle = () => {
-        if (Option.isSome(connect)) return Gent.client({ url: connect.value })
+        if (Option.isSome(connect)) return Gent.client(connect.value)
         const serverState = isolate ? Gent.state.memory() : Gent.state.sqlite()
         return Effect.flatMap(Gent.server({ cwd, state: serverState }), Gent.client)
       }

@@ -50,7 +50,7 @@ export const startWorkerWithClient = (options: {
     const supervisor = yield* startWorkerSupervisor(options).pipe(
       Effect.mapError((e) => new GentConnectionError({ message: e.message })),
     )
-    const bundle = yield* Gent.client({ url: supervisor.url })
+    const bundle = yield* Gent.client(supervisor.url)
     yield* bundle.runtime.lifecycle.waitForReady
     return bundle
   })
@@ -59,7 +59,7 @@ export const startWorkerWithClient = (options: {
 export const startWorkerWithSupervisor = (options: WorkerSupervisorOptions) =>
   Effect.gen(function* () {
     const supervisor = yield* startWorkerSupervisor(options)
-    const bundle = yield* Gent.client({ url: supervisor.url })
+    const bundle = yield* Gent.client(supervisor.url)
     yield* bundle.runtime.lifecycle.waitForReady
     return { ...supervisor, ...bundle }
   })

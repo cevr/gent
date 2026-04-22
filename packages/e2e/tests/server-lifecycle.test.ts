@@ -195,7 +195,7 @@ describe("server lifecycle", () => {
             env: { GENT_DATA_DIR: dataDir },
           })
 
-          const bundle = yield* Gent.client({ url: supervisor.url })
+          const bundle = yield* Gent.client(supervisor.url)
           yield* bundle.runtime.lifecycle.waitForReady
           const { client } = bundle
 
@@ -290,7 +290,7 @@ describe("server lifecycle", () => {
       // Connect a WS client with a manually managed scope so we control disconnect timing
       const clientScope = Effect.runSync(Scope.make())
       const bundle = await Effect.runPromise(
-        Gent.client({ url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
+        Gent.client(url).pipe(Effect.provideService(Scope.Scope, clientScope)),
       )
 
       // Wait for WS connection to establish
@@ -336,7 +336,7 @@ describe("server lifecycle", () => {
       // Connect with auto-reconnecting WS client
       const clientScope = Effect.runSync(Scope.make())
       const bundle = await Effect.runPromise(
-        Gent.client({ url: server.url }).pipe(Effect.provideService(Scope.Scope, clientScope)),
+        Gent.client(server.url).pipe(Effect.provideService(Scope.Scope, clientScope)),
       )
 
       // Wait for WS connection to establish
