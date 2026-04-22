@@ -103,6 +103,7 @@ const MachineState = MState({
     goal: Schema.String,
     learnings: Schema.Array(AutoLearning),
     metrics: Schema.Array(AutoMetricEntry),
+    promptPending: Schema.Boolean,
     turnsSinceCheckpoint: Schema.Number,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
@@ -113,6 +114,7 @@ const MachineState = MState({
     goal: Schema.String,
     learnings: Schema.Array(AutoLearning),
     metrics: Schema.Array(AutoMetricEntry),
+    promptPending: Schema.Boolean,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
   },
@@ -138,7 +140,7 @@ const MachineEvent = MEvent({
     nextIdea: Schema.optional(Schema.String),
   },
   ReviewSignal: {},
-  TurnTick: {},
+  TurnCompleted: {},
   IsActive: MEvent.reply({}, Schema.Boolean),
   /** Typed self-read for interceptors: replaces the workflow's loss of
    *  `getUiSnapshot` by exposing the projected snapshot through a typed
@@ -210,6 +212,7 @@ const autoMachine = Machine.make({
       goal: event.goal,
       learnings: [],
       metrics: [],
+      promptPending: true,
       turnsSinceCheckpoint: 0,
     }),
   )
@@ -246,6 +249,7 @@ const autoMachine = Machine.make({
       goal: state.goal,
       learnings: newLearnings,
       metrics: newMetrics,
+      promptPending: true,
       lastSummary: event.summary,
       nextIdea: event.nextIdea,
     })
@@ -265,22 +269,30 @@ const autoMachine = Machine.make({
       goal: state.goal,
       learnings: state.learnings,
       metrics: state.metrics,
+      promptPending: true,
       turnsSinceCheckpoint: 0,
       lastSummary: state.lastSummary,
       nextIdea: state.nextIdea,
     })
   })
-  // Working + TurnTick → Working (increment) or Inactive (wedge threshold)
-  .on(MachineState.Working, MachineEvent.TurnTick, ({ state }) => {
+  // Working + TurnCompleted → Working (increment) or Inactive (wedge threshold)
+  .on(MachineState.Working, MachineEvent.TurnCompleted, ({ state }) => {
     const next = state.turnsSinceCheckpoint + 1
     if (next >= MAX_TURNS_WITHOUT_CHECKPOINT) {
       return MachineState.Inactive({ reason: "wedged" })
     }
     return MachineState.Working({
       ...state,
+      promptPending: false,
       turnsSinceCheckpoint: next,
     })
   })
+  .on(MachineState.AwaitingReview, MachineEvent.TurnCompleted, ({ state }) =>
+    MachineState.AwaitingReview({
+      ...state,
+      promptPending: false,
+    }),
+  )
   // Cancel from any active state
   .on(MachineState.Working, MachineEvent.CancelAuto, () =>
     MachineState.Inactive({ reason: "cancelled" }),
@@ -339,36 +351,39 @@ const afterTransition = (
   before: MachineState,
   after: MachineState,
 ): ReadonlyArray<ExtensionEffect> => {
-  // Persist happens in the actor runtime on each state change.
   const effects: ExtensionEffect[] = []
 
-  // → Working: only on genuine entry (not TurnTick which keeps Working → Working at same iteration)
-  if (after._tag === "Working") {
-    const isNewEntry =
-      before._tag !== "Working" ||
-      (before._tag === "Working" && before.iteration !== after.iteration)
-    if (isNewEntry) {
-      if (after.iteration === 1) {
-        // Kickoff — journal start is handled by tool.result pipeline
-        effects.push({
-          _tag: "QueueFollowUp",
-          content: `Begin: ${after.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`,
-          metadata: { extensionId: "auto", hidden: true },
-        })
-      } else {
-        // Next iteration
-        const hint = after.nextIdea ?? after.goal
-        effects.push({
-          _tag: "QueueFollowUp",
-          content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`,
-          metadata: { extensionId: "auto", hidden: true },
-        })
-      }
+  // Emit queued follow-ups only after the turn boundary. That prevents
+  // transient mid-turn states (continue → review → complete) from leaving
+  // stale hidden follow-ups behind.
+  if (
+    before._tag === "Working" &&
+    after._tag === "Working" &&
+    before.promptPending &&
+    !after.promptPending
+  ) {
+    if (after.iteration === 1) {
+      effects.push({
+        _tag: "QueueFollowUp",
+        content: `Begin: ${after.goal}. Update \`.gent/auto/findings.md\` as you work. Call \`auto_checkpoint\` when this iteration is done.`,
+        metadata: { extensionId: "auto", hidden: true },
+      })
+    } else {
+      const hint = after.nextIdea ?? after.goal
+      effects.push({
+        _tag: "QueueFollowUp",
+        content: `Iteration ${after.iteration}/${after.maxIterations}. ${hint}. Review learnings, update findings doc. Call \`auto_checkpoint\` when done.`,
+        metadata: { extensionId: "auto", hidden: true },
+      })
     }
   }
 
-  // → AwaitingReview: queue review instruction
-  if (after._tag === "AwaitingReview") {
+  if (
+    before._tag === "AwaitingReview" &&
+    after._tag === "AwaitingReview" &&
+    before.promptPending &&
+    !after.promptPending
+  ) {
     effects.push({
       _tag: "QueueFollowUp",
       content:
@@ -407,7 +422,7 @@ const mapEvent = (event: AgentEvent): MachineEvent | undefined => {
   }
 
   if (event._tag === "TurnCompleted") {
-    return MachineEvent.TurnTick
+    return MachineEvent.TurnCompleted
   }
 
   return undefined

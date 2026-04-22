@@ -166,7 +166,6 @@ export const countQueuedFollowUps = (queue: LoopQueueState) => queue.followUp.le
 // ── Shared field groups ──
 
 const LoopStateBaseFields = {
-  queue: LoopQueueState,
   currentAgent: Schema.optional(AgentName),
 }
 
@@ -236,9 +235,6 @@ export const AgentLoopEvent = Event({
     draft: AssistantDraftSchema,
   },
   InteractionResponded: { requestId: Schema.String },
-  QueueFollowUp: { item: QueuedTurnItemSchema, resumeIfIdle: Schema.Boolean },
-  QueueSteering: { item: QueuedTurnItemSchema, urgent: Schema.Boolean },
-  ClearQueue: {},
   SwitchAgent: { agent: AgentName },
   Interrupt: {},
 })
@@ -267,21 +263,16 @@ export type LoopRuntimeState = {
 
 // ── State builders ──
 
-export const buildIdleState = (params?: {
-  queue?: LoopQueueState
-  currentAgent?: AgentNameType
-}): IdleState =>
+export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
   AgentLoopState.Idle({
-    queue: params?.queue ?? emptyLoopQueueState(),
     currentAgent: params?.currentAgent,
   })
 
 export const buildRunningState = (
-  base: { queue: LoopQueueState; currentAgent?: AgentNameType },
+  base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
 ): RunningState =>
   AgentLoopState.Running({
-    queue: base.queue,
     currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: Date.now(),
@@ -306,18 +297,13 @@ export const toWaitingForInteractionState = (params: {
     pendingToolCallId: params.pendingToolCallId,
   })
 
-// ── Queue helpers on state ──
-
-export const updateQueueOnState = <S extends LoopState>(state: S, queue: LoopQueueState): S =>
-  AgentLoopState.with(state, { queue })
-
 export const updateCurrentAgentOnState = <S extends LoopState>(
   state: S,
   currentAgent: AgentNameType,
 ): S => AgentLoopState.with(state, { currentAgent })
 
-export const queueSnapshotFromState = (state: LoopState): QueueSnapshot =>
-  toQueueSnapshot(state.queue.steering, state.queue.followUp)
+export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
+  toQueueSnapshot(queue.steering, queue.followUp)
 
 export const queueContainsContent = (
   queue: ReadonlyArray<QueuedTurnItem>,
@@ -326,16 +312,19 @@ export const queueContainsContent = (
 
 // ── Runtime state projection ──
 
-export const runtimeStateFromLoopState = (state: LoopState): LoopRuntimeState => {
+export const runtimeStateFromLoopState = (
+  state: LoopState,
+  queue: LoopQueueState,
+): LoopRuntimeState => {
   const agent = state.currentAgent ?? DEFAULT_AGENT_NAME
-  const queue = queueSnapshotFromState(state)
+  const queueSnapshot = queueSnapshotFromQueueState(queue)
 
   switch (state._tag) {
     case "Idle":
-      return { phase: "idle", status: "idle", agent, queue }
+      return { phase: "idle", status: "idle", agent, queue: queueSnapshot }
     case "Running":
-      return { phase: "running", status: "running", agent, queue }
+      return { phase: "running", status: "running", agent, queue: queueSnapshot }
     case "WaitingForInteraction":
-      return { phase: "waiting-for-interaction", status: "running", agent, queue }
+      return { phase: "waiting-for-interaction", status: "running", agent, queue: queueSnapshot }
   }
 }

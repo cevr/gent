@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
-import { AgentLoop, AgentLoopError, type AgentLoopService } from "./agent/agent-loop.js"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { AgentLoop, AgentLoopError } from "./agent/agent-loop.js"
 import {
   ActorProcess,
   ActorProcessError,
@@ -8,11 +8,22 @@ import {
   type ActorProcessState,
   type ActorTarget,
 } from "./actor-process.js"
-import type { QueueSnapshot } from "../domain/queue.js"
+import { AgentName } from "../domain/agent.js"
+import { QueueSnapshot } from "../domain/queue.js"
 
 export const SessionRuntimeErrorSchema = Schema.Union([ActorProcessError, AgentLoopError])
 export type SessionRuntimeError = typeof SessionRuntimeErrorSchema.Type
-export type SessionRuntimeState = ReturnType<AgentLoopService["toRuntimeState"]>
+export const SessionRuntimePhase = Schema.Literals(["idle", "running", "waiting-for-interaction"])
+export type SessionRuntimePhase = typeof SessionRuntimePhase.Type
+export const SessionRuntimeStatus = Schema.Literals(["idle", "running", "interrupted"])
+export type SessionRuntimeStatus = typeof SessionRuntimeStatus.Type
+export const SessionRuntimeStateSchema = Schema.Struct({
+  phase: SessionRuntimePhase,
+  status: SessionRuntimeStatus,
+  agent: AgentName,
+  queue: QueueSnapshot,
+})
+export type SessionRuntimeState = typeof SessionRuntimeStateSchema.Type
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -68,11 +79,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         getState: actorProcess.getState,
         getMetrics: actorProcess.getMetrics,
         respondInteraction: agentLoop.respondInteraction,
-        watchState: (input) =>
-          Effect.gen(function* () {
-            const actor = yield* agentLoop.getActor(input)
-            return SubscriptionRef.changes(actor.state).pipe(Stream.map(agentLoop.toRuntimeState))
-          }),
+        watchState: agentLoop.watchState,
       } satisfies SessionRuntimeService
     }),
   )

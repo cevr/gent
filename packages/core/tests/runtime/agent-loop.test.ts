@@ -1589,6 +1589,7 @@ describe("recovery", () => {
 
   const seedCheckpoint = (params: {
     state: LoopState
+    queue?: ReturnType<typeof emptyLoopQueueState>
     checkpointRecord?: AgentLoopCheckpointRecord
   }) =>
     Effect.gen(function* () {
@@ -1606,6 +1607,7 @@ describe("recovery", () => {
           sessionId: session.id,
           branchId: branch.id,
           state: params.state,
+          queue: params.queue ?? emptyLoopQueueState(),
         }))
       yield* cs.upsert(record)
 
@@ -1618,10 +1620,7 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const running = buildRunningState(
-        { queue: emptyLoopQueueState(), currentAgent: "cowork" },
-        { message },
-      )
+      const running = buildRunningState({ currentAgent: "cowork" }, { message })
 
       const providerCalls = Ref.makeUnsafe(0)
       const layer = makeRecoveryLayer({ dbPath, providerCalls })
@@ -1629,7 +1628,7 @@ describe("recovery", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            yield* seedCheckpoint({ state: running })
+            yield* seedCheckpoint({ state: running, queue: emptyLoopQueueState() })
             const agentLoop = yield* AgentLoop
 
             const state = yield* waitFor(
@@ -1667,11 +1666,11 @@ describe("recovery", () => {
 
       const idleWithQueue = {
         _tag: "Idle" as const,
-        queue: appendFollowUpQueueState(emptyLoopQueueState(), {
-          message: queuedMessage,
-        }),
         currentAgent: "cowork" as const,
       } as LoopState
+      const idleQueue = appendFollowUpQueueState(emptyLoopQueueState(), {
+        message: queuedMessage,
+      })
 
       const providerCalls = Ref.makeUnsafe(0)
       const layer = makeRecoveryLayer({ dbPath, providerCalls })
@@ -1679,7 +1678,7 @@ describe("recovery", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            yield* seedCheckpoint({ state: idleWithQueue })
+            yield* seedCheckpoint({ state: idleWithQueue, queue: idleQueue })
             const agentLoop = yield* AgentLoop
 
             const state = yield* waitFor(
@@ -1706,16 +1705,14 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const running = buildRunningState(
-        { queue: emptyLoopQueueState(), currentAgent: "cowork" },
-        { message },
-      )
+      const running = buildRunningState({ currentAgent: "cowork" }, { message })
 
       const record = await Effect.runPromise(
         buildLoopCheckpointRecord({
           sessionId: running.message.sessionId,
           branchId: running.message.branchId,
           state: running,
+          queue: emptyLoopQueueState(),
         }),
       )
       const staleRecord = { ...record, version: 999 }
@@ -1726,7 +1723,11 @@ describe("recovery", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            yield* seedCheckpoint({ state: running, checkpointRecord: staleRecord })
+            yield* seedCheckpoint({
+              state: running,
+              queue: emptyLoopQueueState(),
+              checkpointRecord: staleRecord,
+            })
             const agentLoop = yield* AgentLoop
 
             const state = yield* agentLoop.getState({

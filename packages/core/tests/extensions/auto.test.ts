@@ -368,6 +368,7 @@ describe("Auto runtime integration", () => {
           { iteration: 2, content: "fixed XSS" },
         ],
         metrics: [],
+        promptPending: false,
         turnsSinceCheckpoint: 1,
       }
       yield* storage.saveExtensionState({

@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import type { Effect } from "effect"
-import { RunSpecSchema, AgentName, DriverRef, ReasoningEffort } from "../domain/agent.js"
+import { RunSpecSchema, DriverRef, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
 import {
   AuthProviderInfo,
@@ -13,6 +13,11 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
+import {
+  SessionRuntimePhase as SessionRuntimePhaseSchema,
+  SessionRuntimeStateSchema,
+  SessionRuntimeStatus as SessionRuntimeStatusSchema,
+} from "../runtime/session-runtime.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -229,18 +234,13 @@ export const SessionSnapshot = Schema.Struct({
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
 
-export const RuntimePhase = Schema.Literals(["idle", "running", "waiting-for-interaction"])
+export const RuntimePhase = SessionRuntimePhaseSchema
 export type RuntimePhase = typeof RuntimePhase.Type
 
-export const RuntimeStatus = Schema.Literals(["idle", "running", "interrupted"])
+export const RuntimeStatus = SessionRuntimeStatusSchema
 export type RuntimeStatus = typeof RuntimeStatus.Type
 
-export const SessionRuntime = Schema.Struct({
-  phase: RuntimePhase,
-  status: RuntimeStatus,
-  agent: AgentName,
-  queue: QueueSnapshot,
-})
+export const SessionRuntime = SessionRuntimeStateSchema
 export type SessionRuntime = typeof SessionRuntime.Type
 
 export { SteerCommand } from "../domain/steer.js"
