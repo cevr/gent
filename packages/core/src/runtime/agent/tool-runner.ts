@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { type ToolContext, type AnyToolDefinition, type ToolDefinition } from "../../domain/tool.js"
+import type { AnyCapabilityContribution } from "../../domain/capability.js"
+import { type ToolContext } from "../../domain/tool.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import {
   MachineEngine,
@@ -119,8 +120,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const platform = yield* RuntimePlatform
       const extensionStateRuntime = yield* MachineEngine
 
-      return ToolRunner.of({
-        run: Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
+      const run =
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
 
@@ -128,9 +130,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
             const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
-            const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
-              toolCall.toolName,
-            )
+            const tool: AnyCapabilityContribution | undefined =
+              yield* activeRegistry.getModelCapability(toolCall.toolName)
             if (tool === undefined) {
               yield* WideEvent.set({ toolError: ToolError.Unknown })
               yield* Effect.logInfo("tool.unknown").pipe(
@@ -178,18 +179,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               return errorResult(toolCall, "Permission denied")
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            const toolDefinition = tool as ToolDefinition<
-              string,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              Schema.Decoder<any, never>,
-              unknown,
-              unknown,
-              never
-            >
-            const decodedInput = yield* Schema.decodeUnknownEffect(toolDefinition.params)(
-              toolCall.input,
-            ).pipe(Effect.result)
+            const decodedInput = yield* Schema.decodeUnknownEffect(tool.input)(toolCall.input).pipe(
+              Effect.result,
+            )
             if (decodedInput._tag === "Failure") {
               const failure = decodedInput.failure
               const message = Schema.isSchemaError(failure)
@@ -268,9 +260,22 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   sessionId: ctx.sessionId,
                   branchId: ctx.branchId,
                 },
-                () =>
+                () => {
+                  const wrapped = Effect.gen(function* () {
+                    const output = yield* tool.effect(
+                      decodedInput.success,
+                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                      richCtx as Parameters<typeof tool.effect>[1],
+                    )
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                    yield* Schema.encodeUnknownEffect(tool.output as Schema.Any)(output).pipe(
+                      Effect.orDie,
+                    )
+                    return output
+                  })
                   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-                  toolDefinition.execute(decodedInput.success, richCtx) as Effect.Effect<unknown>,
+                  return wrapped as Effect.Effect<unknown>
+                },
                 richCtx,
               )
               .pipe(Effect.result)
@@ -330,8 +335,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
               output: { type: "json", value: enrichedResult },
             })
           }).pipe(withWideEvent(toolBoundary(toolCall.toolName, toolCall.toolCallId)))
-        }),
-      })
+        }) as ToolRunnerService["run"]
+
+      return ToolRunner.of({ run })
     }),
   )
 

@@ -69,9 +69,9 @@ describe("scope precedence", () => {
         ext("c", "project", { capabilities: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.tools.get("greet")!
+      const resolvedTool = resolved.modelCapabilities.get("greet")!
       return resolvedTool
-        .execute({}, {} as never)
+        .effect({}, {} as never)
         .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-project"))))
     })
 
@@ -175,9 +175,9 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.tools.get("greet")!
+      const resolvedTool = resolved.modelCapabilities.get("greet")!
       return resolvedTool
-        .execute({}, {} as never)
+        .effect({}, {} as never)
         .pipe(Effect.tap((r) => Effect.sync(() => expect(r).toBe("from-z"))))
     })
   })

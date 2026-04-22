@@ -9,6 +9,47 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 
 describe("ToolRunner", () => {
+  test("runs model capability directly and returns json output", async () => {
+    const EchoTool = tool({
+      id: "echo",
+      description: "Echo input",
+      params: Schema.Struct({ message: Schema.String }),
+      execute: ({ message }) => Effect.succeed({ echoed: message }),
+    })
+
+    const deps = Layer.mergeAll(
+      ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: "test" },
+            kind: "builtin",
+            sourcePath: "test",
+            contributions: { capabilities: [EchoTool] },
+          },
+        ]),
+      ),
+      Permission.Test(),
+      ApprovalService.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      MachineEngine.Test(),
+    )
+    const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        return yield* runner.run(
+          { toolCallId: "tc1", toolName: "echo", input: { message: "hello" } },
+          { sessionId: "s", branchId: "b", toolCallId: "tc1", agentName: "cowork" },
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result.output.type).toBe("json")
+    expect(result.output.value).toEqual({ echoed: "hello" })
+  })
+
   test("returns error result when tool fails", async () => {
     const FailTool = tool({
       id: "fail",

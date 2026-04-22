@@ -409,7 +409,7 @@ describe("extension activation isolation", () => {
       })
 
       expect(result.resolved.extensions.map((ext) => ext.manifest.id)).toEqual(["healthy-ext"])
-      expect(result.resolved.tools.size).toBe(1)
+      expect(result.resolved.modelCapabilities.size).toBe(1)
       expect(result.resolved.failedExtensions).toEqual([
         {
           manifest: { id: "broken-setup" },

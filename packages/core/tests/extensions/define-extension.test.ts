@@ -242,7 +242,7 @@ describe("defineExtension", () => {
         contributions,
       }
       const resolved = resolveExtensions([loaded])
-      expect(resolved.tools.get("from-define")?.name).toBe("from-define")
+      expect(resolved.modelCapabilities.get("from-define")?.id).toBe("from-define")
 
       const compiled = compileRuntimeSlots([loaded])
       const result = yield* compiled.resolveSystemPrompt(

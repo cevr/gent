@@ -82,7 +82,7 @@ const runCtx: RunContext = {
 describe("resolveExtensions", () => {
   test("empty extensions produce empty maps", () => {
     const resolved = resolveExtensions([])
-    expect(resolved.tools.size).toBe(0)
+    expect(resolved.modelCapabilities.size).toBe(0)
     expect(resolved.agents.size).toBe(0)
   })
 
@@ -91,10 +91,10 @@ describe("resolveExtensions", () => {
       makeExt("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
       makeExt("b", "builtin", { tools: [makeTool("bash")] }),
     ])
-    expect(resolved.tools.size).toBe(3)
-    expect(resolved.tools.has("read")).toBe(true)
-    expect(resolved.tools.has("write")).toBe(true)
-    expect(resolved.tools.has("bash")).toBe(true)
+    expect(resolved.modelCapabilities.size).toBe(3)
+    expect(resolved.modelCapabilities.has("read")).toBe(true)
+    expect(resolved.modelCapabilities.has("write")).toBe(true)
+    expect(resolved.modelCapabilities.has("bash")).toBe(true)
   })
 
   test("later scope wins for same-name tool", () => {
@@ -106,7 +106,7 @@ describe("resolveExtensions", () => {
       makeExt("b", "project", { tools: [projectRead] }),
     ])
 
-    expect(resolved.tools.get("read")?.description).toBe("project override")
+    expect(resolved.modelCapabilities.get("read")?.description).toBe("project override")
   })
 
   test("later scope wins for same-name agent", () => {
@@ -223,8 +223,8 @@ describe("resolveExtensions — disabled filtering", () => {
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
     const resolved = resolveExtensions(enabled)
 
-    expect(resolved.tools.has("read")).toBe(true)
-    expect(resolved.tools.has("add_todo")).toBe(false)
+    expect(resolved.modelCapabilities.has("read")).toBe(true)
+    expect(resolved.modelCapabilities.has("add_todo")).toBe(false)
     expect(resolved.extensions.length).toBe(1)
   })
 
@@ -240,7 +240,7 @@ describe("resolveExtensions — disabled filtering", () => {
     const resolved = resolveExtensions(enabled)
 
     expect(resolved.agents.size).toBe(0)
-    expect(resolved.tools.has("read")).toBe(true)
+    expect(resolved.modelCapabilities.has("read")).toBe(true)
   })
 
   test("disabled extensions providers are excluded", () => {
@@ -269,8 +269,8 @@ describe("resolveExtensions — disabled filtering", () => {
     const enabled = extensions.filter((ext) => !disabledSet.has(ext.manifest.id))
     const resolved = resolveExtensions(enabled)
 
-    expect(resolved.tools.size).toBe(1)
-    expect(resolved.tools.has("read")).toBe(true)
+    expect(resolved.modelCapabilities.size).toBe(1)
+    expect(resolved.modelCapabilities.has("read")).toBe(true)
     expect(resolved.agents.size).toBe(0)
     expect(resolved.modelDrivers.size).toBe(0)
   })
@@ -306,15 +306,15 @@ describe("ExtensionRegistry", () => {
     )
   }
 
-  test("registered tool is findable by name", async () => {
+  test("registered model capability is findable by name", async () => {
     const registry = await buildRegistry([makeExt("a", "builtin", { tools: [makeTool("read")] })])
-    const tool = await Effect.runPromise(registry.getTool("read"))
-    expect(tool?.name).toBe("read")
+    const tool = await Effect.runPromise(registry.getModelCapability("read"))
+    expect(tool?.id).toBe("read")
   })
 
-  test("unregistered tool name returns undefined", async () => {
+  test("unregistered model capability name returns undefined", async () => {
     const registry = await buildRegistry([])
-    const tool = await Effect.runPromise(registry.getTool("nonexistent"))
+    const tool = await Effect.runPromise(registry.getModelCapability("nonexistent"))
     expect(tool).toBeUndefined()
   })
 
@@ -717,9 +717,9 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     expect(commands.map((c) => c.name)).not.toContain("run")
   })
 
-  // ── C4.4 tool bridge ────────────────────────────────────────────────
+  // ── Model capability surface ────────────────────────────────────────
 
-  test('Capability(audiences:["model"]) appears as a tool', () => {
+  test('Capability(audiences:["model"]) appears as a model capability', () => {
     const cap: AnyCapabilityContribution = {
       id: "echo",
       description: "Echo input back as output.",
@@ -730,38 +730,8 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       effect: () => Effect.succeed(undefined),
     }
     const resolved = resolveExtensions([makeExt("@test/echo", "builtin", { capabilities: [cap] })])
-    expect(resolved.tools.has("echo")).toBe(true)
-    expect(resolved.tools.get("echo")?.description).toBe("Echo input back as output.")
-  })
-
-  test("invoking a synthesized tool runs the capability effect", async () => {
-    const seen: string[] = []
-    const cap: AnyCapabilityContribution = {
-      id: "remember-tool",
-      description: "Record input.",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Struct({ msg: Schema.String }),
-      output: Schema.Unknown,
-      effect: (input: { msg: string }) =>
-        Effect.sync(() => {
-          seen.push(input.msg)
-          return undefined
-        }),
-    }
-    const resolved = resolveExtensions([
-      makeExt("@test/remember", "builtin", { capabilities: [cap] }),
-    ])
-    const tool = resolved.tools.get("remember-tool")
-    expect(tool).toBeDefined()
-    await Effect.runPromise(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      tool!.execute(
-        { msg: "hello" },
-        makeHostCtx() as unknown as Parameters<typeof tool.execute>[1],
-      ),
-    )
-    expect(seen).toEqual(["hello"])
+    expect(resolved.modelCapabilities.has("echo")).toBe(true)
+    expect(resolved.modelCapabilities.get("echo")?.description).toBe("Echo input back as output.")
   })
 
   test('project capability with audiences:["agent-protocol"] SHADOWS builtin tool', () => {
@@ -777,7 +747,7 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.tools.has("act")).toBe(false)
+    expect(resolved.modelCapabilities.has("act")).toBe(false)
   })
 
   test('project capability with audiences:["transport-public"] SHADOWS builtin tool', () => {
@@ -793,7 +763,7 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.tools.has("look")).toBe(false)
+    expect(resolved.modelCapabilities.has("look")).toBe(false)
   })
 
   test("project capability with audiences including model OVERRIDES builtin tool", () => {
@@ -810,37 +780,11 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
     const project = makeExt("@test/shadow", "project", { capabilities: [projectCap] })
 
     const resolved = resolveExtensions([builtin, project])
-    expect(resolved.tools.has("run")).toBe(true)
-    expect(resolved.tools.get("run")?.description).toBe("project run override")
+    expect(resolved.modelCapabilities.has("run")).toBe(true)
+    expect(resolved.modelCapabilities.get("run")?.description).toBe("project run override")
   })
 
-  test("synthesized tool dies (defect) when capability output fails to encode", async () => {
-    const cap: AnyCapabilityContribution = {
-      id: "tool-lies",
-      description: "Returns the wrong shape on purpose.",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Unknown,
-      output: Schema.Number,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      effect: () => Effect.succeed("not a number" as unknown as number),
-    }
-    const resolved = resolveExtensions([
-      makeExt("@test/tool-lies", "builtin", { capabilities: [cap] }),
-    ])
-    const tool = resolved.tools.get("tool-lies")
-    expect(tool).toBeDefined()
-    const exit = await Effect.runPromiseExit(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      tool!.execute({}, makeHostCtx() as unknown as Parameters<typeof tool.execute>[1]),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.hasDies(exit.cause)).toBe(true)
-    }
-  })
-
-  test("synthesized tool preserves all ModelAudienceFields", () => {
+  test("model capability preserves all ModelAudienceFields", () => {
     const cap: AnyCapabilityContribution = {
       id: "rich",
       description: "rich tool",
@@ -856,7 +800,7 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       effect: () => Effect.succeed(undefined),
     }
     const resolved = resolveExtensions([makeExt("@test/rich", "builtin", { capabilities: [cap] })])
-    const tool = resolved.tools.get("rich")
+    const tool = resolved.modelCapabilities.get("rich")
     expect(tool).toBeDefined()
     expect(tool?.description).toBe("rich tool")
     expect(tool?.resources).toEqual(["fs:/tmp", "net:443"])
@@ -876,7 +820,7 @@ describe("resolveExtensions — command bridge (C4.3)", () => {
       effect: () => Effect.succeed(undefined),
     }
     const resolved = resolveExtensions([makeExt("@test/rpc", "builtin", { capabilities: [cap] })])
-    expect(resolved.tools.has("rpc-only")).toBe(false)
+    expect(resolved.modelCapabilities.has("rpc-only")).toBe(false)
   })
 
   test("bridge dies (defect) when capability output fails to encode", async () => {

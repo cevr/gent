@@ -11,7 +11,6 @@ import type {
   ScheduledJobFailureInfo,
 } from "../../domain/extension.js"
 import { type PromptSection } from "../../domain/prompt.js"
-import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
@@ -34,7 +33,6 @@ export interface SlashCommand {
 
 export interface ResolvedExtensions {
   readonly modelCapabilities: ReadonlyMap<string, AnyCapabilityContribution>
-  readonly tools: ReadonlyMap<string, AnyToolDefinition>
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
@@ -87,70 +85,6 @@ const sortExtensionsByScope = (
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })
-
-/**
- * C4.4 bridge — lower a `Capability` whose `audiences` includes `"model"`
- * into an `AnyToolDefinition` so the existing `ToolRunner` (which still
- * consumes `tool: AnyToolDefinition` from the registry) keeps working
- * unchanged.
- *
- * Field mapping:
- *   `cap.id`               → `tool.name`
- *   `cap.description ?? ""` → `tool.description` (lint enforces non-empty
- *                             at construction time; this is a defense for
- *                             the rare null escape)
- *   `cap.input`            → `tool.params`
- *   `cap.effect`           → `tool.execute` (CapabilityCoreContext is a
- *                             structural subtype of ToolContext, so any
- *                             handler that asks for the narrower type
- *                             remains well-typed at the contravariant arg)
- *
- * `ModelAudienceFields` (`resources`, `idempotent`, `promptSnippet`,
- * `promptGuidelines`, `interactive`) flow through unchanged.
- *
- * Output validation: the bridge encodes through `cap.output` after the
- * effect runs. CapabilityContribution's contract is "input/output validated
- * at the host boundary" (see `capability-host.ts:184`); the legacy
- * ToolRunner only validates input. We restore the missing half here so
- * Capability semantics hold even when tools dispatch through ToolRunner
- * instead of CapabilityHost (codex BLOCK 1 on C4.4a). Misshape coerces
- * to defect — ToolRunner has no typed-failure channel that maps to schema
- * violations.
- *
- * C4.5 deletes this wrapper along with the `ToolDefinition` type once
- * the runner consumes Capability directly.
- */
-const capabilityToTool = (cap: AnyCapabilityContribution): AnyToolDefinition => ({
-  name: cap.id,
-  description: cap.description ?? "",
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  params: cap.input as AnyToolDefinition["params"],
-  ...(cap.resources !== undefined ? { resources: cap.resources } : {}),
-  ...(cap.idempotent !== undefined ? { idempotent: cap.idempotent } : {}),
-  ...(cap.promptSnippet !== undefined ? { promptSnippet: cap.promptSnippet } : {}),
-  ...(cap.promptGuidelines !== undefined ? { promptGuidelines: cap.promptGuidelines } : {}),
-  ...(cap.interactive !== undefined ? { interactive: cap.interactive } : {}),
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at tool-bridge boundary
-  execute: (params, ctx) => {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at tool-bridge boundary
-    const wrapped = Effect.gen(function* () {
-      const output = yield* cap.effect(
-        params,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        ctx as Parameters<typeof cap.effect>[1],
-      )
-      // Validate output against the capability's declared schema. For tools
-      // whose output is `Schema.Unknown` this is a no-op; for any tool with
-      // a typed output schema it catches host-side misshape. Misshape →
-      // defect; ToolRunner has no typed channel for schema violations.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      yield* Schema.encodeUnknownEffect(cap.output as Schema.Any)(output).pipe(Effect.orDie)
-      return output
-    })
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return wrapped as ReturnType<AnyToolDefinition["execute"]>
-  },
-})
 
 /**
  * Lower a `Capability` with `intent: "write"` and
@@ -216,11 +150,6 @@ export const resolveExtensions = (
     modelCapabilities.set(id, cap)
   }
 
-  const tools = new Map<string, AnyToolDefinition>()
-  for (const [name, cap] of modelCapabilities) {
-    tools.set(name, capabilityToTool(cap))
-  }
-
   const agents = compileBucket(
     sorted,
     (e) => e.contributions.agents,
@@ -281,7 +210,6 @@ export const resolveExtensions = (
 
   return {
     modelCapabilities,
-    tools,
     agents,
     modelDrivers,
     externalDrivers,
@@ -376,8 +304,10 @@ export const compileToolPolicy = (
 // Extension Registry Service
 
 export interface ExtensionRegistryService {
-  // Tool resolution
-  readonly getTool: (name: string) => Effect.Effect<AnyToolDefinition | undefined>
+  // Model capability resolution
+  readonly getModelCapability: (
+    name: string,
+  ) => Effect.Effect<AnyCapabilityContribution | undefined>
   readonly listModelCapabilities: () => Effect.Effect<ReadonlyArray<AnyCapabilityContribution>>
   /** Resolve tools + prompt sections for an agent turn, applying extension projections. */
   readonly resolveToolPolicy: (
@@ -416,7 +346,7 @@ export class ExtensionRegistry extends Context.Service<
 >()("@gent/core/src/runtime/extensions/registry/ExtensionRegistry") {
   static fromResolved = (resolved: ResolvedExtensions): Layer.Layer<ExtensionRegistry> =>
     Layer.succeed(ExtensionRegistry, {
-      getTool: (name) => Effect.succeed(resolved.tools.get(name)),
+      getModelCapability: (name) => Effect.succeed(resolved.modelCapabilities.get(name)),
       listModelCapabilities: () => Effect.succeed([...resolved.modelCapabilities.values()]),
       resolveToolPolicy: (agent, runContext, extensionProjections) =>
         Effect.succeed(
