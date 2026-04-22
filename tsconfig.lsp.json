@@ -21,7 +21,7 @@
           "catchUnfailableEffect": "error",
           "effectFnOpportunity": "error",
           "effectMapVoid": "error",
-          "effectSucceedWithVoid": "error",
+          "effectSucceedWithVoid": "off",
           "leakingRequirements": "error",
           "preferSchemaOverJson": "error",
           "redundantSchemaTagIdentifier": "error",

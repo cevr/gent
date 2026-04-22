@@ -60,7 +60,6 @@ import type { BranchId, SessionId } from "../../domain/ids.js"
 import { type ToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import {
-  makeExtensionHostContext,
   unavailableHostDeps,
   type MakeExtensionHostContextDeps,
 } from "../make-extension-host-context.js"
@@ -96,6 +95,7 @@ import type { TurnError, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import type { PermissionService } from "../../domain/permission.js"
+import { resolveSessionRuntimeContext } from "../session-runtime-context.js"
 import {
   AGENT_LOOP_CHECKPOINT_VERSION,
   buildLoopCheckpointRecord,
@@ -1607,8 +1607,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               eventPublisher,
             }
 
-            const defaultHostCtx = makeExtensionHostContext({ sessionId, branchId }, hostDeps)
-
             const profileCache =
               lazyDeps.sessionProfileCache._tag === "Some"
                 ? lazyDeps.sessionProfileCache.value
@@ -1616,43 +1614,27 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
             /** Resolve per-turn context: session cwd → profile → registry + baseSections + hostCtx.
              *  Falls back to server-wide defaults when no profile cache or no session cwd. */
-            const resolveTurnProfile = Effect.gen(function* () {
-              const session = yield* storage
-                .getSession(sessionId)
-                .pipe(Effect.orElseSucceed(() => undefined))
-              const sessionCwd = session?.cwd
-
-              if (profileCache !== undefined && sessionCwd !== undefined) {
-                const profile = yield* profileCache.resolve(sessionCwd)
-                const turnHostCtx = makeExtensionHostContext(
-                  { sessionId, branchId, sessionCwd },
-                  {
-                    ...hostDeps,
-                    extensionRegistry: profile.registryService,
-                    extensionStateRuntime: profile.extensionStateRuntime,
-                  },
-                )
-                return {
-                  turnExtensionRegistry: profile.registryService,
-                  turnDriverRegistry: profile.driverRegistryService,
-                  turnExtensionStateRuntime: profile.extensionStateRuntime,
-                  turnPermission: profile.permissionService,
-                  turnBaseSections: profile.baseSections,
-                  turnHostCtx,
-                  turnSessionCwd: sessionCwd,
-                }
-              }
-
-              return {
-                turnExtensionRegistry: extensionRegistry as ExtensionRegistryService,
-                turnDriverRegistry: driverRegistry as DriverRegistryService,
-                turnExtensionStateRuntime: extensionStateRuntime as MachineEngineService,
-                turnPermission: undefined,
-                turnBaseSections: config.baseSections,
-                turnHostCtx: defaultHostCtx,
-                turnSessionCwd: sessionCwd,
-              }
-            })
+            const resolveTurnProfile = resolveSessionRuntimeContext({
+              sessionId,
+              branchId,
+              storage,
+              hostDeps,
+              profileCache,
+              defaults: {
+                driverRegistry,
+                baseSections: config.baseSections,
+              },
+            }).pipe(
+              Effect.map((ctx) => ({
+                turnExtensionRegistry: ctx.extensionRegistry,
+                turnDriverRegistry: ctx.driverRegistry ?? driverRegistry,
+                turnExtensionStateRuntime: ctx.extensionStateRuntime,
+                turnPermission: ctx.permission,
+                turnBaseSections: ctx.baseSections ?? config.baseSections,
+                turnHostCtx: ctx.hostCtx,
+                turnSessionCwd: ctx.sessionCwd,
+              })),
+            )
 
             const loopScope = yield* Scope.make()
             const activeStreamRef = yield* Ref.make<ActiveStreamHandle | undefined>(undefined)

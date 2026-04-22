@@ -15,10 +15,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
-import {
-  makeExtensionHostContext,
-  type MakeExtensionHostContextDeps,
-} from "./make-extension-host-context.js"
+import { type MakeExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -28,6 +25,7 @@ import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { ResourceManager } from "./resource-manager.js"
 import type { SteerCommand } from "../domain/steer.js"
+import { resolveSessionRuntimeContext } from "./session-runtime-context.js"
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -214,21 +212,16 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         sendUserMessage: (input) =>
           Effect.gen(function* () {
             const commandId = input.commandId ?? makeCommandId()
-            const session = yield* storage
-              .getSession(input.sessionId)
-              .pipe(Effect.orElseSucceed(() => undefined))
-            const profile =
-              profileCache !== undefined && session?.cwd !== undefined
-                ? yield* profileCache.resolve(session.cwd)
-                : undefined
-            const activeRegistry = profile?.registryService ?? extensionRegistry
-            const hostCtx = makeExtensionHostContext(
-              { sessionId: input.sessionId, branchId: input.branchId, sessionCwd: session?.cwd },
-              { ...hostDeps, extensionRegistry: activeRegistry },
-            )
-            const content = yield* activeRegistry.runtimeSlots.normalizeMessageInput(
+            const runtimeCtx = yield* resolveSessionRuntimeContext({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              storage,
+              hostDeps,
+              profileCache,
+            })
+            const content = yield* runtimeCtx.extensionRegistry.runtimeSlots.normalizeMessageInput(
               { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
-              hostCtx,
+              runtimeCtx.hostCtx,
             )
 
             const message = new Message({
@@ -324,22 +317,13 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
             const commandId = input.commandId ?? makeCommandId()
             const toolCallId = toolCallIdForCommand(commandId)
             const currentTurnAgent = (yield* agentLoop.getState(input)).agent
-            const session = yield* storage
-              .getSession(input.sessionId)
-              .pipe(Effect.orElseSucceed(() => undefined))
-            const profile =
-              profileCache !== undefined && session?.cwd !== undefined
-                ? yield* profileCache.resolve(session.cwd)
-                : undefined
-            const activeRegistry = profile?.registryService ?? extensionRegistry
-            const hostCtx = makeExtensionHostContext(
-              {
-                sessionId: input.sessionId,
-                branchId: input.branchId,
-                sessionCwd: session?.cwd,
-              },
-              { ...hostDeps, extensionRegistry: activeRegistry },
-            )
+            const runtimeCtx = yield* resolveSessionRuntimeContext({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              storage,
+              hostDeps,
+              profileCache,
+            })
 
             yield* invokeToolPhase({
               assistantMessageId: assistantMessageIdForCommand(commandId),
@@ -353,9 +337,9 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
               branchId: input.branchId,
               currentTurnAgent,
               toolRunner,
-              extensionRegistry: activeRegistry,
-              permission: profile?.permissionService,
-              hostCtx,
+              extensionRegistry: runtimeCtx.extensionRegistry,
+              permission: runtimeCtx.permission,
+              hostCtx: runtimeCtx.hostCtx,
               resourceManager,
               storage,
             })
