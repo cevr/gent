@@ -36,6 +36,7 @@ import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
+import type { ProviderError } from "../providers/provider.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Note: TurnExecutor is defined below alongside the driver primitives — no
@@ -264,6 +265,17 @@ export interface TurnContext {
  *  Counsel C5 — drop the dead optional rather than keep it as a no-op stub. */
 export interface TurnExecutor {
   readonly executeTurn: (ctx: TurnContext) => Stream.Stream<TurnEvent, TurnError>
+}
+
+export type TurnToolEventMode = "capture-tool-calls" | "observe-external-tools"
+
+export interface TurnSource {
+  readonly driverKind: "model" | "external"
+  readonly driverId?: string
+  readonly stream: Stream.Stream<TurnEvent, ProviderError | TurnError>
+  readonly toolEventMode: TurnToolEventMode
+  readonly formatStreamError: (streamError: ProviderError | TurnError) => string
+  readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
 // ── ExternalDriverContribution — turn-executor-shaped driver ──

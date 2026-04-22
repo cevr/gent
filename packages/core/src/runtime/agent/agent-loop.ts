@@ -91,7 +91,7 @@ import {
 } from "../extensions/resource-host/machine-engine.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
-import type { TurnError, TurnEvent } from "../../domain/driver.js"
+import type { TurnError, TurnEvent, TurnSource } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import type { PermissionService } from "../../domain/permission.js"
@@ -115,6 +115,7 @@ import {
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
   toWaitingForInteractionState,
+  AssistantDraftSchema,
   updateCurrentAgentOnState,
   type LoopQueueState,
   type AssistantDraft,
@@ -552,6 +553,14 @@ const collectTurnResponse = (params: {
     }
   })
 
+const CollectedTurnResponseSchema = Schema.Struct({
+  draft: AssistantDraftSchema,
+  interrupted: Schema.Boolean,
+  streamFailed: Schema.Boolean,
+})
+type CollectedTurnResponse = typeof CollectedTurnResponseSchema.Type
+const isCollectedTurnResponse = Schema.is(CollectedTurnResponseSchema)
+
 const persistAssistantTurn = (params: {
   storage: StorageService
   publishEvent: PublishEvent
@@ -786,7 +795,8 @@ const resolveTurnEventStream = (params: {
       }
 
       return {
-        kind: "external" as const,
+        driverKind: "external" as const,
+        driverId: resolved.driver.id,
         toolEventMode: "observe-external-tools" as const,
         stream: executor.executeTurn({
           sessionId: params.sessionId,
@@ -801,7 +811,8 @@ const resolveTurnEventStream = (params: {
         }),
         formatStreamError: (streamError: unknown) =>
           `External turn executor error: ${formatStreamErrorMessage(streamError)}`,
-      }
+        collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+      } satisfies TurnSource
     }
 
     const streamEffect = yield* withRetry(
@@ -837,11 +848,26 @@ const resolveTurnEventStream = (params: {
     )
 
     return {
-      kind: "model" as const,
+      driverKind: "model" as const,
       toolEventMode: "capture-tool-calls" as const,
       stream: toTurnEventStream(streamEffect),
       formatStreamError: formatStreamErrorMessage,
-    }
+      collect: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          const result = yield* effect
+          if (isCollectedTurnResponse(result)) {
+            const collected: CollectedTurnResponse = result
+            yield* WideEvent.set({
+              inputTokens: collected.draft.usage?.inputTokens ?? 0,
+              outputTokens: collected.draft.usage?.outputTokens ?? 0,
+              toolCallCount: collected.draft.toolCalls.length,
+              interrupted: collected.interrupted,
+              streamFailed: collected.streamFailed,
+            })
+          }
+          return result
+        }).pipe(withWideEvent(providerStreamBoundary(resolved.modelId))),
+    } satisfies TurnSource
   })
 
 const runTurnStreamPhase = (params: {
@@ -898,11 +924,9 @@ const runTurnStreamPhase = (params: {
     yield* Effect.logInfo("turn-stream.start").pipe(
       Effect.annotateLogs({
         agent: params.resolved.currentTurnAgent,
-        driverKind: source.kind,
+        driverKind: source.driverKind,
         model: params.resolved.modelId,
-        ...(params.resolved.driver?._tag === "external"
-          ? { driverId: params.resolved.driver.id }
-          : {}),
+        ...(source.driverId !== undefined ? { driverId: source.driverId } : {}),
       }),
     )
 
@@ -917,20 +941,7 @@ const runTurnStreamPhase = (params: {
       persistAssistantText: persistAssistantTextLocal,
     })
 
-    const collected =
-      source.kind === "model"
-        ? yield* Effect.gen(function* () {
-            const result = yield* collect
-            yield* WideEvent.set({
-              inputTokens: result.draft.usage?.inputTokens ?? 0,
-              outputTokens: result.draft.usage?.outputTokens ?? 0,
-              toolCallCount: result.draft.toolCalls.length,
-              interrupted: result.interrupted,
-              streamFailed: result.streamFailed,
-            })
-            return result
-          }).pipe(withWideEvent(providerStreamBoundary(params.resolved.modelId)))
-        : yield* collect
+    const collected = yield* source.collect(collect)
 
     if (collected.interrupted) {
       yield* params
@@ -959,7 +970,7 @@ const runTurnStreamPhase = (params: {
       .pipe(Effect.orDie)
     yield* Effect.logInfo("stream.end").pipe(
       Effect.annotateLogs({
-        driverKind: source.kind,
+        driverKind: source.driverKind,
         inputTokens: collected.draft.usage?.inputTokens ?? 0,
         outputTokens: collected.draft.usage?.outputTokens ?? 0,
         toolCallCount: collected.draft.toolCalls.length,
