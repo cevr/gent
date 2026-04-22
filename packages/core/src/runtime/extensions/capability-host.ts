@@ -2,7 +2,7 @@
  * CapabilityHost — typed dispatch over `CapabilityContribution[]`.
  *
  * One host for what the legacy substrate split across `tool-registry`,
- * `query-registry`, `mutation-registry`, and `command-registry`. Routes
+ * `request` bridges, and `command-registry`. Routes
  * `(extensionId, capabilityId, audience, input)` to the registered
  * Capability, validates input/output via Schema, runs the effect with the
  * extension's contributed Layer providing `R`.
@@ -10,13 +10,12 @@
  * Sequencing per `migrate-callers-then-delete-legacy-apis`:
  *   - C4.1 (here): host skeleton + compileCapabilities; no migration yet.
  *     Legacy hosts continue to serve their kinds.
- *   - C4.2/3/4: migrate query / mutation / command / tool, one kind per
- *     commit, smart constructors emit Capability under the hood.
+ *   - C4.2/3/4: migrate request / command / tool, one kind per commit,
+ *     smart constructors emit Capability under the hood.
  *   - C4.5: delete the legacy hosts + per-kind types.
  *
  * Scope precedence: project > user > builtin (highest-precedence
- * registration for a given `(extensionId, capabilityId)` wins). Same rule
- * as queries/mutations.
+ * registration for a given `(extensionId, capabilityId)` wins).
  *
  * Audience filtering: callers pass the audience they're invoking from
  * (e.g., the tool-runner passes `"model"`, the slash-command dispatcher
@@ -87,9 +86,7 @@ export interface CapabilityRunOptions {
    *  `undefined` ONLY when the caller genuinely accepts both intents (e.g.,
    *  an internal admin path); typical callers pass `"read"` or `"write"` to
    *  prevent a same-id write capability from being invoked through a
-   *  read-only entry point and vice versa (dropping the intent gate
-   *  would let `query()` invoke a write capability and `mutate()`
-   *  invoke a read capability if their ids matched). */
+   *  read-only request boundary and vice versa. */
   readonly intent?: Intent
 }
 
@@ -108,8 +105,8 @@ export interface CompiledCapabilities {
     capabilityId: string,
     audience: Audience,
     input: unknown,
-    // Accept the narrow `CapabilityCoreContext` shape so RPC entry points
-    // (query/mutation via `agent-protocol` audience) can dispatch without
+    // Accept the narrow `CapabilityCoreContext` shape so request RPC entry
+    // points (`agent-protocol` audience) can dispatch without
     // assembling the full `ModelCapabilityContext` (which only makes sense
     // for the model audience). Handlers that ask for the wider
     // `ModelCapabilityContext` will get their structurally-narrower view at

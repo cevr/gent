@@ -1096,7 +1096,7 @@ describe("B11.6 transport-only widgets — startup with active session", () => {
         }),
         makeClientTransportLayer({
           // Stub client+runtime — refetch will fail loudly if invoked
-          // (no `extension.query`/`ask`), but the widget's createEffect
+          // (no `extension.request`/`ask`), but the widget's createEffect
           // schedules the call asynchronously via void runRefetch(...) so
           // the synchronous setup path completes successfully and the
           // failing async call is swallowed by the widget's catch.

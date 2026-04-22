@@ -59,7 +59,7 @@ export interface ProjectionTurnContext {
 /** Context handed to a projection's `query` Effect.
  *
  *  Read-only by design — no mutation/control surfaces here. If a projection
- *  needs to mutate state, author a `MutationContribution` instead.
+ *  needs to mutate state, author a write-intent `request(...)` capability instead.
  */
 export type ProjectionContext = ProjectionTurnContext
 

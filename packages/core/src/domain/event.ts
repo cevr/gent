@@ -287,7 +287,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   /**
    * Typed pulse emitted whenever an extension's externally-observable state
    * may have changed. Carries no payload — clients fetch via the extension's
-   * typed `QueryContribution` (the published transport surface).
+   * typed request capability (the published transport surface).
    *
    * Replaces `ExtensionUiSnapshot`'s privileged out-of-band channel. The pulse
    * is honest: it tells subscribers "extension X has news" without coupling a

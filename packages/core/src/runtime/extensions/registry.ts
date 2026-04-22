@@ -102,7 +102,7 @@ const capabilityToCommand = (cap: AnyCapabilityContribution): SlashCommand => ({
     // structural cast is sound — every field the capability core context
     // demands is present on hostCtx. CommandContribution.handler returns
     // `Effect<void>`; the capability's requirements + error channel are
-    // erased at this command-bridge boundary, mirroring the query/mutation
+    // erased at this command-bridge boundary, mirroring the request
     // registries — those services are provided by the extension's
     // contributed Layer at composition time.
     // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at command bridge

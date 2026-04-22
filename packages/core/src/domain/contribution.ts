@@ -9,7 +9,7 @@
  * Capabilities (B11.5): authored exclusively through the typed factories
  * `tool({...})` / `request({...})` / `action({...})` at
  * `domain/capability/{tool,request,action}.ts`. The legacy lowering smart
- * constructors `tool` / `query` / `mutation` were deleted in B11.5d.
+ * constructors `tool` / `request` aliases from the old split were deleted in B11.5d.
  *
  * Pipeline / Subscription / Resource keep identity smart constructors
  * (`pipeline`, `subscription`, `resource`) below — they exist to widen
@@ -106,11 +106,9 @@ export const subscription = <K extends SubscriptionKey, E, R>(
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   ({ event, handler, failureMode }) as unknown as AnySubscriptionContribution
 
-// `query` and `mutation` smart constructors deleted in B11.5d. Authors
-// use the unified `request({ intent: "read" | "write", ... })` factory
-// at `domain/capability/request.ts`. The internal `QueryContribution`
-// and `MutationContribution` interfaces remain for the registry-side
-// dispatch but are no longer authored directly.
+// The old query/mutation smart constructors are gone. Authors use the
+// unified `request({ intent: "read" | "write", ... })` factory at
+// `domain/capability/request.ts`.
 
 // `defineResource` is exported directly from `./resource.ts` — returns the
 // Resource leaf that goes straight into the `resources` bucket. After C8 it

@@ -262,8 +262,8 @@ describe("capability-host", () => {
 
   // ── intent gate ──
   // A same-id write capability must be invisible to a
-  // `{ intent: "read" }` dispatch (and vice versa) — otherwise `query()`
-  // could invoke a write capability and `mutate()` could invoke a read
+  // `{ intent: "read" }` dispatch (and vice versa) — otherwise one request
+  // surface could invoke the wrong same-id capability
   // capability if their ids matched.
 
   it.live("rejects with CapabilityNotFoundError when required intent does not match", () =>

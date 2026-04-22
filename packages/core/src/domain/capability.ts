@@ -1,12 +1,12 @@
 /**
  * Capability — typed callable endpoint shared by all "the runtime calls this
- * Effect" contribution kinds (today: tool, query, mutation, command).
+ * Effect" contribution kinds (today: tool, request, command).
  *
- * Will collapse the five per-kind callable contributions (`tool`, `query`,
- * `mutation`, `command`) into one shape distinguished by `audiences` (who
+ * Will collapse the per-kind callable contributions (`tool`, `request`,
+ * `command`) into one shape distinguished by `audiences` (who
  * may invoke) and `intent` (read vs write). Smart constructors keep the
- * domain names — authors still write `tool(...)`, `query(...)`,
- * `mutation(...)`, `command(...)`.
+ * domain names — authors still write `tool(...)`, `request(...)`,
+ * `command(...)`.
  *
  * `agent` stays as its own contribution kind (it is a configuration spec
  * with no handler — wrapping it as a Capability would be ceremony).
@@ -14,7 +14,7 @@
  * Sequencing per `migrate-callers-then-delete-legacy-apis`:
  *   - C4.1 (here): Capability shape + CapabilityHost skeleton; legacy
  *     tool/query/mutation/command kinds untouched.
- *   - C4.2: migrate query + mutation (only `task-tools` declares them today).
+ *   - C4.2: migrate request read/write flows (only `task-tools` declared them then).
  *   - C4.3: migrate command (only `executor` declares them).
  *   - C4.4: migrate tool (~50 files).
  *   - C4.5: delete legacy types + per-kind registries.
@@ -31,7 +31,7 @@
  *   - `"human-slash"`   — slash-command surface in the TUI.
  *   - `"human-palette"` — command-palette surface in the TUI.
  *
- * `intent` is a typed mode replacing the query/mutation discriminator.
+ * `intent` is a typed mode replacing the old query/mutation split.
  * `intent: "read"` is enforced read-only via the lint rule that scans the
  * effect's R channel for write-tagged services (the same rule that fences
  * `ProjectionContribution.query` today).
@@ -78,7 +78,7 @@ export type Intent = "read" | "write"
 
 /**
  * Per codex BLOCK on C4.1: a single fat `CapabilityContext extends
- * ExtensionHostContext` would expose `extension.mutate`, session mutation,
+ * ExtensionHostContext` would expose typed request dispatch, session mutation,
  * interaction, and turn-control surfaces to every read capability — making
  * the `intent: "read"` fence dishonest at the context level even when lint
  * stops write-shaped service calls.
@@ -206,11 +206,8 @@ export type CapabilityToken = AnyCapabilityContribution & {
 
 /**
  * Reference object handed to callers so they can route + decode through the
- * runtime's Capability dispatcher. The actual invoker on
- * `ExtensionHostContext.Extension` is wired in C4.2 (when query/mutation
- * migrate); until then this type is consumed only by C4-internal code. The
- * `query` / `mutate` methods on `ExtensionHostContext.Extension` keep their
- * existing typed-RPC role for the duration of the C4.2-4 migration.
+ * runtime's Capability dispatcher. The public invoker is
+ * `ExtensionHostContext.Extension.request(ref, input)`.
  */
 export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: string
