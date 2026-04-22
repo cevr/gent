@@ -192,6 +192,11 @@ export const TurnEvent = TaggedEnumClass("TurnEvent", {
   "reasoning-delta": {
     text: Schema.String,
   },
+  "tool-call": {
+    toolCallId: Schema.String,
+    toolName: Schema.String,
+    input: Schema.Unknown,
+  },
   "tool-started": {
     toolCallId: Schema.String,
     toolName: Schema.String,
@@ -219,6 +224,8 @@ export const TextDelta = TurnEvent["text-delta"]
 export type TextDelta = (typeof TurnEvent)["text-delta"]["Type"]
 export const ReasoningDelta = TurnEvent["reasoning-delta"]
 export type ReasoningDelta = (typeof TurnEvent)["reasoning-delta"]["Type"]
+export const ToolCall = TurnEvent["tool-call"]
+export type ToolCall = (typeof TurnEvent)["tool-call"]["Type"]
 export const ToolStarted = TurnEvent["tool-started"]
 export type ToolStarted = (typeof TurnEvent)["tool-started"]["Type"]
 export const ToolCompleted = TurnEvent["tool-completed"]

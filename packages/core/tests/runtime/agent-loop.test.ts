@@ -13,10 +13,12 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import {
   Provider,
   ProviderError,
   FinishChunk,
+  ReasoningChunk,
   TextChunk,
   ToolCallChunk,
   type StreamChunk,
@@ -35,9 +37,11 @@ import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
+  assistantDraftFromMessage,
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
 } from "@gent/core/runtime/agent/agent-loop.utils"
+import type { TurnError, TurnEvent } from "@gent/core/domain/driver"
 import {
   buildLoopCheckpointRecord,
   type AgentLoopCheckpointRecord,
@@ -194,6 +198,73 @@ const makeLayerWithEvents = (
     Storage.TestWithSql(),
     providerLayer,
     makeExtRegistry(tools),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    makeCountingEventStore(eventsRef),
+    ToolRunner.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
+}
+
+const parityExternalAgent = new AgentDefinition({
+  name: "test-external-parity" as never,
+  driver: new ExternalDriverRef({ id: "test-parity-driver" }),
+})
+
+const makeExternalLayerWithEvents = (
+  events: ReadonlyArray<TurnEvent>,
+  eventsRef: Ref.Ref<AgentEvent[]>,
+) => {
+  const resolved = resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      kind: "builtin" as const,
+      sourcePath: "test",
+      contributions: {
+        agents: Object.values(Agents),
+      },
+    },
+    {
+      manifest: { id: "external-parity" },
+      kind: "builtin" as const,
+      sourcePath: "test",
+      contributions: {
+        agents: [parityExternalAgent],
+        externalDrivers: [
+          {
+            id: "test-parity-driver",
+            executor: {
+              executeTurn: () => Stream.fromIterable<TurnEvent, TurnError>(events),
+            },
+            invalidate: () => Effect.void,
+          },
+        ],
+      },
+    },
+  ])
+  const registryLayer = Layer.merge(
+    ExtensionRegistry.fromResolved(resolved),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    }),
+  )
+  const providerLayer = Layer.succeed(Provider, {
+    stream: () => Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+    generate: () => Effect.succeed("unused"),
+  })
+  const deps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    registryLayer,
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -1147,6 +1218,90 @@ describe("continuation", () => {
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.runPromise))
+})
+
+describe("turn stream parity", () => {
+  test("model and external turns produce the same assistant draft and lifecycle tags", () =>
+    Effect.gen(function* () {
+      const expectedTags = [
+        "MessageReceived",
+        "StreamStarted",
+        "StreamChunk",
+        "StreamEnded",
+        "MessageReceived",
+        "TurnCompleted",
+      ]
+
+      const modelEventsRef = yield* Ref.make<AgentEvent[]>([])
+      const externalEventsRef = yield* Ref.make<AgentEvent[]>([])
+
+      const modelDraft = yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("model-parity-session", "model-parity-branch", "hello")
+
+        yield* agentLoop.run(message)
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant).toBeDefined()
+        return assistantDraftFromMessage(assistant!)
+      }).pipe(
+        Effect.provide(
+          makeLayerWithEvents(
+            scriptedProvider([
+              [
+                new ReasoningChunk({ text: "thinking" }),
+                new TextChunk({ text: "hello from parity" }),
+                new FinishChunk({
+                  finishReason: "stop",
+                  usage: { inputTokens: 3, outputTokens: 5 },
+                }),
+              ],
+            ]),
+            modelEventsRef,
+          ),
+        ),
+      )
+
+      const externalDraft = yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("external-parity-session", "external-parity-branch", "hello")
+
+        yield* agentLoop.run(message, { agentOverride: "test-external-parity" as never })
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant).toBeDefined()
+        return assistantDraftFromMessage(assistant!)
+      }).pipe(
+        Effect.provide(
+          makeExternalLayerWithEvents(
+            [
+              { _tag: "reasoning-delta", text: "thinking" },
+              { _tag: "text-delta", text: "hello from parity" },
+              {
+                _tag: "finished",
+                stopReason: "stop",
+                usage: { inputTokens: 3, outputTokens: 5 },
+              },
+            ],
+            externalEventsRef,
+          ),
+        ),
+      )
+
+      expect(modelDraft).toEqual(externalDraft)
+      expect(
+        (yield* Ref.get(modelEventsRef))
+          .map((event) => event._tag)
+          .filter((tag) => tag !== "MachineInspected"),
+      ).toEqual(expectedTags)
+      expect(
+        (yield* Ref.get(externalEventsRef))
+          .map((event) => event._tag)
+          .filter((tag) => tag !== "MachineInspected"),
+      ).toEqual(expectedTags)
     }).pipe(Effect.runPromise))
 })
 

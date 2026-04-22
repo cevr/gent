@@ -4,7 +4,15 @@ import type { AnyToolDefinition } from "../domain/tool.js"
 import { ToolCallId } from "../domain/ids.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
-import type { ProviderAuthInfo, ProviderHints } from "../domain/driver.js"
+import {
+  Finished,
+  ReasoningDelta,
+  TextDelta,
+  ToolCall,
+  type ProviderAuthInfo,
+  type ProviderHints,
+  type TurnEvent,
+} from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
@@ -161,6 +169,29 @@ export const ReasoningChunk = StreamChunk.ReasoningChunk
 export type ReasoningChunk = (typeof StreamChunk)["ReasoningChunk"]["Type"]
 export const FinishChunk = StreamChunk.FinishChunk
 export type FinishChunk = (typeof StreamChunk)["FinishChunk"]["Type"]
+
+export const toTurnEvent = (chunk: StreamChunk): TurnEvent => {
+  switch (chunk._tag) {
+    case "TextChunk":
+      return new TextDelta({ text: chunk.text })
+    case "ReasoningChunk":
+      return new ReasoningDelta({ text: chunk.text })
+    case "ToolCallChunk":
+      return new ToolCall({
+        toolCallId: chunk.toolCallId,
+        toolName: chunk.toolName,
+        input: chunk.input,
+      })
+    case "FinishChunk":
+      return new Finished({
+        stopReason: chunk.finishReason,
+        ...(chunk.usage !== undefined ? { usage: chunk.usage } : {}),
+      })
+  }
+}
+
+export const toTurnEventStream = (stream: Stream.Stream<StreamChunk, ProviderError>) =>
+  stream.pipe(Stream.map(toTurnEvent))
 
 // ── Provider Request ──
 
