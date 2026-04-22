@@ -9,7 +9,9 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ActorProcess } from "../runtime/actor-process.js"
+import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
   BranchInfo,
@@ -56,6 +58,8 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
       const eventStorage = yield* EventStorage
       const relationshipStorage = yield* RelationshipStorage
       const actorProcess = yield* ActorProcess
+      const agentLoop = yield* AgentLoop
+      const sessionRuntime = SessionRuntime.make({ actorProcess, agentLoop })
 
       const listSessions = Effect.fn("SessionQueries.listSessions")(function* () {
         const sessions = yield* sessionStorage.listSessions()
@@ -148,7 +152,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           agent: DEFAULT_AGENT_NAME,
           queue: { steering: [], followUp: [] },
         }
-        const runtime = yield* actorProcess
+        const runtime = yield* sessionRuntime
           .getState({ sessionId: input.sessionId, branchId: input.branchId })
           .pipe(
             Effect.map((state) => ({

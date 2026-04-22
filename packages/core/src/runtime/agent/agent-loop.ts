@@ -1628,7 +1628,7 @@ const makeRecoveryDecision = (params: {
     return Option.none()
   })
 
-// Agent Loop Service
+// Internal turn engine. Server-facing callers should go through SessionRuntime.
 
 export interface AgentLoopService {
   readonly runOnce: (input: {

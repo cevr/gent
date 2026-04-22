@@ -1,4 +1,4 @@
-import { Clock, Effect, Stream, SubscriptionRef } from "effect"
+import { Clock, Effect, Stream } from "effect"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
@@ -39,6 +39,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { ConnectionTracker } from "./connection-tracker.js"
 import { ServerIdentity } from "./server-identity.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 
 const isPublicTransportEvent = (envelope: EventEnvelope) =>
   envelope.event._tag !== "MachineInspected" &&
@@ -96,6 +97,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
     const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
     const storageForProfile = yield* Effect.serviceOption(Storage)
+    const sessionRuntime = SessionRuntime.make({ actorProcess, agentLoop })
 
     /** Resolve per-session profile services. Falls back to server-wide. */
     const resolveSessionProfile = (sessionId: string) =>
@@ -191,18 +193,18 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       "session.watchRuntime": ({ sessionId, branchId }) =>
         Stream.unwrap(
           Effect.gen(function* () {
-            const actor = yield* agentLoop.getActor({ sessionId, branchId })
             yield* Effect.logInfo("watchRuntime.open").pipe(
               Effect.annotateLogs({ sessionId, branchId }),
             )
-            return SubscriptionRef.changes(actor.state).pipe(
-              Stream.map(agentLoop.toRuntimeState),
-              Stream.ensuring(
-                Effect.logInfo("watchRuntime.close").pipe(
-                  Effect.annotateLogs({ sessionId, branchId }),
+            return sessionRuntime
+              .watchState({ sessionId, branchId })
+              .pipe(
+                Stream.ensuring(
+                  Effect.logInfo("watchRuntime.close").pipe(
+                    Effect.annotateLogs({ sessionId, branchId }),
+                  ),
                 ),
-              ),
-            )
+              )
           }),
         ),
 
@@ -607,18 +609,19 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
 
       // -- actor --
-      "actor.sendUserMessage": (input) => actorProcess.sendUserMessage(input),
+      "actor.sendUserMessage": (input) => sessionRuntime.sendUserMessage(input),
 
-      "actor.sendToolResult": (input) => actorProcess.sendToolResult(input),
+      "actor.sendToolResult": (input) => sessionRuntime.sendToolResult(input),
 
-      "actor.invokeTool": (input) => actorProcess.invokeTool(input),
+      "actor.invokeTool": (input) => sessionRuntime.invokeTool(input),
 
-      "actor.interrupt": (input) => actorProcess.interrupt(input),
+      "actor.interrupt": (input) => sessionRuntime.interrupt(input),
 
-      "actor.getState": ({ sessionId, branchId }) => actorProcess.getState({ sessionId, branchId }),
+      "actor.getState": ({ sessionId, branchId }) =>
+        sessionRuntime.getState({ sessionId, branchId }),
 
       "actor.getMetrics": ({ sessionId, branchId }) =>
-        actorProcess.getMetrics({ sessionId, branchId }),
+        sessionRuntime.getMetrics({ sessionId, branchId }),
 
       // -- server --
       "server.status": () =>

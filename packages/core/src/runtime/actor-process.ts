@@ -126,6 +126,7 @@ export interface ActorProcessService {
   readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
 }
 
+// Legacy compatibility facade. New server callers should use SessionRuntime.
 export class ActorProcess extends Context.Service<ActorProcess, ActorProcessService>()(
   "@gent/core/src/runtime/actor-process/ActorProcess",
 ) {
