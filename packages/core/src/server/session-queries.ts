@@ -195,5 +195,5 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         getSessionSnapshot,
       } satisfies SessionQueriesService
     }),
-  ).pipe(Layer.provideMerge(SessionRuntime.Live))
+  )
 }

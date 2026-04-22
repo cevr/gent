@@ -1,23 +1,13 @@
-export {
-  AgentLoop,
-  AgentLoopError,
-  SteerCommand,
-  InProcessRunner,
-  SubprocessRunner,
-  ToolRunner,
-} from "./agent"
+export { InProcessRunner, SubprocessRunner, ToolRunner } from "./agent"
 
+export { LocalActorProcessLive } from "./actor-process"
 export {
-  ActorProcess,
-  ActorProcessError,
-  ActorTarget,
-  SendUserMessagePayload,
-  SendToolResultPayload,
-  InterruptPayload,
-  ActorProcessState,
-  ActorProcessMetrics,
-  LocalActorProcessLive,
-} from "./actor-process"
+  SessionRuntime,
+  SessionRuntimeErrorSchema,
+  type SessionRuntimeError,
+  type SessionRuntimeService,
+  type SessionRuntimeState,
+} from "./session-runtime"
 
 export {
   estimateTokens,

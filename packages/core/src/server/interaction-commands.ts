@@ -1,9 +1,10 @@
 import { Effect, Layer, Context } from "effect"
 import { ApprovalService } from "../runtime/approval-service.js"
-import { InteractionResolved, type EventStoreError } from "../domain/event.js"
+import { InteractionResolved } from "../domain/event.js"
 import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
+import type { AppServiceError } from "./errors.js"
 
 export interface RespondInteractionInput {
   readonly requestId: string
@@ -14,7 +15,7 @@ export interface RespondInteractionInput {
 }
 
 export interface InteractionCommandsService {
-  readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, EventStoreError>
+  readonly respond: (input: RespondInteractionInput) => Effect.Effect<void, AppServiceError>
 }
 
 export class InteractionCommands extends Context.Service<
@@ -62,5 +63,5 @@ export class InteractionCommands extends Context.Service<
         }),
       } satisfies InteractionCommandsService
     }),
-  ).pipe(Layer.provideMerge(SessionRuntime.Live))
+  )
 }

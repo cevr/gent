@@ -1,8 +1,8 @@
-import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect"
-import { AgentLoop, type AgentLoopError, type AgentLoopService } from "./agent/agent-loop.js"
+import { Context, Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
+import { AgentLoop, AgentLoopError, type AgentLoopService } from "./agent/agent-loop.js"
 import {
   ActorProcess,
-  type ActorProcessError,
+  ActorProcessError,
   type ActorProcessMetrics,
   type ActorProcessService,
   type ActorProcessState,
@@ -10,26 +10,42 @@ import {
 } from "./actor-process.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 
+export const SessionRuntimeErrorSchema = Schema.Union([ActorProcessError, AgentLoopError])
+export type SessionRuntimeError = typeof SessionRuntimeErrorSchema.Type
+export type SessionRuntimeState = ReturnType<AgentLoopService["toRuntimeState"]>
+
 export interface SessionRuntimeService {
-  readonly sendUserMessage: ActorProcessService["sendUserMessage"]
-  readonly sendToolResult: ActorProcessService["sendToolResult"]
-  readonly invokeTool: ActorProcessService["invokeTool"]
-  readonly interrupt: ActorProcessService["interrupt"]
-  readonly steerAgent: ActorProcessService["steerAgent"]
+  readonly sendUserMessage: (
+    input: Parameters<ActorProcessService["sendUserMessage"]>[0],
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly sendToolResult: (
+    input: Parameters<ActorProcessService["sendToolResult"]>[0],
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly invokeTool: (
+    input: Parameters<ActorProcessService["invokeTool"]>[0],
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly interrupt: (
+    input: Parameters<ActorProcessService["interrupt"]>[0],
+  ) => Effect.Effect<void, SessionRuntimeError>
+  readonly steerAgent: (
+    input: Parameters<ActorProcessService["steerAgent"]>[0],
+  ) => Effect.Effect<void, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: ActorTarget,
-  ) => Effect.Effect<QueueSnapshot, ActorProcessError>
+  ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
   readonly getQueuedMessages: (
     input: ActorTarget,
-  ) => Effect.Effect<QueueSnapshot, ActorProcessError>
-  readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, ActorProcessError>
-  readonly getMetrics: (input: ActorTarget) => Effect.Effect<ActorProcessMetrics, ActorProcessError>
+  ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
+  readonly getState: (input: ActorTarget) => Effect.Effect<ActorProcessState, SessionRuntimeError>
+  readonly getMetrics: (
+    input: ActorTarget,
+  ) => Effect.Effect<ActorProcessMetrics, SessionRuntimeError>
   readonly respondInteraction: (
     input: Pick<ActorTarget, "sessionId" | "branchId"> & { requestId: string },
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, SessionRuntimeError>
   readonly watchState: (
     input: ActorTarget,
-  ) => Stream.Stream<ReturnType<AgentLoopService["toRuntimeState"]>, AgentLoopError>
+  ) => Effect.Effect<Stream.Stream<SessionRuntimeState>, SessionRuntimeError>
 }
 
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
@@ -53,12 +69,10 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         getMetrics: actorProcess.getMetrics,
         respondInteraction: agentLoop.respondInteraction,
         watchState: (input) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const actor = yield* agentLoop.getActor(input)
-              return SubscriptionRef.changes(actor.state).pipe(Stream.map(agentLoop.toRuntimeState))
-            }),
-          ),
+          Effect.gen(function* () {
+            const actor = yield* agentLoop.getActor(input)
+            return SubscriptionRef.changes(actor.state).pipe(Stream.map(agentLoop.toRuntimeState))
+          }),
       } satisfies SessionRuntimeService
     }),
   )
@@ -81,6 +95,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
       respondInteraction: () => Effect.void,
-      watchState: () => Stream.empty,
+      watchState: () => Effect.succeed(Stream.empty),
     })
 }

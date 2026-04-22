@@ -391,7 +391,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         ),
       } satisfies SessionCommandsService
     }),
-  ).pipe(Layer.provideMerge(SessionRuntime.Live))
+  )
 
   /**
    * Domain-tier deleter Layer — projects `SessionCommands.deleteSession`

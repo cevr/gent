@@ -26,6 +26,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { ServerProfileService } from "../runtime/scope-brands.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
@@ -114,10 +115,21 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     LocalActorProcessLive,
     Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive),
   )
+  const sessionRuntimeLive = Layer.provide(
+    SessionRuntime.Live,
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, actorProcessLive),
+  )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, actorProcessLive),
+    Layer.mergeAll(
+      baseDeps,
+      eventStoreLive,
+      eventPublisherLive,
+      agentLoopLive,
+      actorProcessLive,
+      sessionRuntimeLive,
+    ),
   )
 }
 

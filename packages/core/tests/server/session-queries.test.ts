@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { EventStore, AgentSwitched } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
@@ -10,20 +10,20 @@ import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionQueries } from "@gent/core/server/session-queries"
 import { SessionCommands } from "@gent/core/server/session-commands"
-import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
+import { SessionRuntime } from "@gent/core/runtime/session-runtime"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
 describe("Session Snapshot", () => {
   it.live("getSessionSnapshot only returns persisted state", () => {
     const eventStoreLayer = EventStore.Memory
-    const actorProcessLayer = Layer.succeed(ActorProcess, {
+    const sessionRuntimeLayer = Layer.succeed(SessionRuntime, {
       sendUserMessage: () => Effect.void,
       sendToolResult: () => Effect.void,
       invokeTool: () => Effect.void,
@@ -41,12 +41,14 @@ describe("Session Snapshot", () => {
         }),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
     })
     const baseWithEventStore = Layer.mergeAll(
       Storage.TestWithSql(),
       Provider.Debug(),
       eventStoreLayer,
-      actorProcessLayer,
+      sessionRuntimeLayer,
       MachineEngine.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
@@ -94,13 +96,13 @@ describe("Session Tree", () => {
       Storage.TestWithSql(),
       Provider.Debug(),
       eventStoreLayer,
-      ActorProcess.Test(),
       MachineEngine.Test(),
       Permission.Live([], "allow"),
       ConfigService.Test(),
       emptyRegistryLayer,
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       SessionCwdRegistry.Test(),
+      SessionRuntime.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
     const deps = Layer.mergeAll(

@@ -129,26 +129,7 @@ export interface ActorProcessService {
 // Legacy compatibility facade. New server callers should use SessionRuntime.
 export class ActorProcess extends Context.Service<ActorProcess, ActorProcessService>()(
   "@gent/core/src/runtime/actor-process/ActorProcess",
-) {
-  static Test = (): Layer.Layer<ActorProcess> =>
-    Layer.succeed(ActorProcess, {
-      sendUserMessage: () => Effect.void,
-      sendToolResult: () => Effect.void,
-      invokeTool: () => Effect.void,
-      interrupt: () => Effect.void,
-      steerAgent: () => Effect.void,
-      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getState: () =>
-        Effect.succeed({
-          phase: "idle" as const,
-          status: "idle" as const,
-          queue: { steering: [], followUp: [] },
-        }),
-      getMetrics: () =>
-        Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
-    })
-}
+) {}
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new ActorProcessError({ message, cause })

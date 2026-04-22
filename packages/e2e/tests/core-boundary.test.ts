@@ -17,6 +17,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { SessionRuntime } from "@gent/core/runtime/session-runtime"
 
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -111,7 +112,13 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test(), runtimePlatformLayer)
+    const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
+    const deps = Layer.mergeAll(
+      baseWithActorProcess,
+      sessionRuntimeLayer,
+      ApprovalService.Test(),
+      runtimePlatformLayer,
+    )
     return Layer.provideMerge(AppServicesLive, deps)
   }
 
@@ -211,7 +218,13 @@ describe("SessionCommands → ActorProcess integration", () => {
       Permission.Live([], "allow"),
       ConfigService.Test(),
     )
-    const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test(), runtimePlatformLayer)
+    const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
+    const deps = Layer.mergeAll(
+      baseWithActorProcess,
+      sessionRuntimeLayer,
+      ApprovalService.Test(),
+      runtimePlatformLayer,
+    )
     const layer = Layer.provideMerge(AppServicesLive, deps)
 
     await Effect.runPromise(

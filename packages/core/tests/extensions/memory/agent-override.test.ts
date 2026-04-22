@@ -22,6 +22,7 @@ import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machi
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { Provider } from "@gent/core/providers/provider"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { SessionRuntime } from "@gent/core/runtime/session-runtime"
 
 const testExtensions = resolveExtensions([
   {
@@ -84,7 +85,8 @@ const makeTestLayer = (logs: {
     Permission.Live([], "allow"),
     ConfigService.Test(),
   )
-  const deps = Layer.mergeAll(baseWithActorProcess, ApprovalService.Test())
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseWithActorProcess)
+  const deps = Layer.mergeAll(baseWithActorProcess, sessionRuntimeLayer, ApprovalService.Test())
   return Layer.provideMerge(AppServicesLive, deps)
 }
 

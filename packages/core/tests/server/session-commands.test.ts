@@ -5,7 +5,6 @@ import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { SessionId } from "@gent/core/domain/ids"
 import { Permission } from "@gent/core/domain/permission"
 import { Provider } from "@gent/core/providers/provider"
-import { ActorProcess } from "@gent/core/runtime/actor-process"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -17,6 +16,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
+import { SessionRuntime } from "@gent/core/runtime/session-runtime"
 
 describe("SessionCommands", () => {
   it.live("deleteSession terminates event delivery workers before removing state", () =>
@@ -28,7 +28,6 @@ describe("SessionCommands", () => {
         Storage.TestWithSql(),
         Provider.Debug(),
         baseEventStore,
-        ActorProcess.Test(),
         AgentLoop.Test(),
         MachineEngine.Test(),
         ExtensionRegistry.fromResolved(resolveExtensions([])),
@@ -37,6 +36,7 @@ describe("SessionCommands", () => {
         ApprovalService.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         SessionCwdRegistry.Test(),
+        SessionRuntime.Test(),
       )
 
       // Wrap real EventPublisherLive to record terminateSession calls

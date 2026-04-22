@@ -40,6 +40,7 @@ import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { LocalActorProcessLive } from "../runtime/actor-process.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
+import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
@@ -249,6 +250,17 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         LocalActorProcessLive,
         Layer.mergeAll(agentLoopDeps, agentLoopLive),
       )
+      const sessionRuntimeLive = Layer.provide(
+        SessionRuntime.Live,
+        Layer.mergeAll(
+          baseDeps,
+          baseEventStoreLive,
+          eventPublisherLive,
+          toolRunnerLive,
+          agentLoopLive,
+          actorProcessLive,
+        ),
+      )
 
       return Layer.provideMerge(
         AppServicesLive,
@@ -259,6 +271,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           toolRunnerLive,
           agentLoopLive,
           actorProcessLive,
+          sessionRuntimeLive,
         ),
       )
     }),

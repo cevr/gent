@@ -1,4 +1,4 @@
-import { Clock, Effect, Layer, Stream } from "effect"
+import { Clock, Effect, Stream } from "effect"
 import { BranchId, SessionId } from "../domain/ids.js"
 import { withWideEvent, WideEvent, rpcBoundary } from "../runtime/wide-event-boundary"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
@@ -189,20 +189,22 @@ export const RpcHandlersLive = GentRpcs.toLayer(
 
       "session.watchRuntime": ({ sessionId, branchId }) =>
         Stream.unwrap(
-          Effect.gen(function* () {
-            yield* Effect.logInfo("watchRuntime.open").pipe(
-              Effect.annotateLogs({ sessionId, branchId }),
-            )
-            return sessionRuntime
-              .watchState({ sessionId, branchId })
-              .pipe(
+          sessionRuntime.watchState({ sessionId, branchId }).pipe(
+            Effect.tap(() =>
+              Effect.logInfo("watchRuntime.open").pipe(
+                Effect.annotateLogs({ sessionId, branchId }),
+              ),
+            ),
+            Effect.map((stateStream) =>
+              stateStream.pipe(
                 Stream.ensuring(
                   Effect.logInfo("watchRuntime.close").pipe(
                     Effect.annotateLogs({ sessionId, branchId }),
                   ),
                 ),
-              )
-          }),
+              ),
+            ),
+          ),
         ),
 
       // -- branch --
@@ -642,4 +644,4 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         }),
     }
   }),
-).pipe(Layer.provideMerge(SessionRuntime.Live))
+)
