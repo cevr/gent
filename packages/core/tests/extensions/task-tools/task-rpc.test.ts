@@ -16,8 +16,12 @@ import { textStep } from "@gent/core/debug/provider"
 import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
-import { TaskCreateRef, TaskUpdateRef, TaskDeleteRef } from "@gent/extensions/task-tools/mutations"
-import { TaskListRef } from "@gent/extensions/task-tools/queries"
+import {
+  TaskCreateRef,
+  TaskDeleteRef,
+  TaskListRef,
+  TaskUpdateRef,
+} from "@gent/extensions/task-tools/requests"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset"

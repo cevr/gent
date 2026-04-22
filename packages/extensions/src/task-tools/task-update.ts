@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool, TaskId, type TaskStatus } from "@gent/core/extensions/api"
-import { TaskUpdateRef } from "./mutations.js"
+import { TaskUpdateRef } from "./requests.js"
 
 export const TaskUpdateParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to update" }),

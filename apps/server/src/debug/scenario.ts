@@ -32,9 +32,9 @@ import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain
 import {
   TaskCreateRef,
   TaskDeleteRef,
+  TaskListRef,
   TaskUpdateRef,
-} from "@gent/extensions/task-tools/mutations.js"
-import { TaskListRef } from "@gent/extensions/task-tools/queries.js"
+} from "@gent/extensions/task-tools/requests.js"
 
 export interface DebugScenarioParams {
   sessionId: SessionId

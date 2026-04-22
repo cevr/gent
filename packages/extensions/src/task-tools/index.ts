@@ -4,13 +4,13 @@
  * Composition:
  *   - Tools (task_create / task_list / task_get / task_update) for the LLM
  *   - TaskProjection — derives UI snapshot from TaskStorage on demand
- *   - Queries: TaskGet, TaskList, TaskGetDeps
- *   - Mutations: TaskCreate, TaskUpdate, TaskDelete, TaskAddDep, TaskRemoveDep
+ *   - Requests: TaskGet, TaskList, TaskGetDeps, TaskCreate, TaskUpdate,
+ *     TaskDelete, TaskAddDep, TaskRemoveDep
  *   - Layer: TaskStorage.Live + TaskService.Live
  *
  * The extension has NO actor. The legacy `TaskProtocol` actor (which was a
  * pure RPC dispatcher mapping ExtensionMessage.reply requests to TaskService
- * calls) has been replaced with typed Query/Mutation contributions consumed
+ * calls) has been replaced with typed request capabilities consumed
  * via `ctx.extension.request(ref, input)`.
  *
  * @module
@@ -25,14 +25,16 @@ import { TaskStorage } from "../task-tools-storage.js"
 import { TaskService } from "../task-tools-service.js"
 import { TaskProjection } from "./projection.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
-import { TaskGetQuery, TaskListQuery, TaskGetDepsQuery } from "./queries.js"
 import {
-  TaskCreateMutation,
-  TaskUpdateMutation,
-  TaskDeleteMutation,
-  TaskAddDepMutation,
-  TaskRemoveDepMutation,
-} from "./mutations.js"
+  TaskGetRequest,
+  TaskListRequest,
+  TaskGetDepsRequest,
+  TaskCreateRequest,
+  TaskUpdateRequest,
+  TaskDeleteRequest,
+  TaskAddDepRequest,
+  TaskRemoveDepRequest,
+} from "./requests.js"
 
 export type { TaskEntry } from "./identity.js"
 
@@ -43,14 +45,14 @@ export const TaskExtension = defineExtension({
     TaskListTool,
     TaskGetTool,
     TaskUpdateTool,
-    TaskGetQuery,
-    TaskListQuery,
-    TaskGetDepsQuery,
-    TaskCreateMutation,
-    TaskUpdateMutation,
-    TaskDeleteMutation,
-    TaskAddDepMutation,
-    TaskRemoveDepMutation,
+    TaskGetRequest,
+    TaskListRequest,
+    TaskGetDepsRequest,
+    TaskCreateRequest,
+    TaskUpdateRequest,
+    TaskDeleteRequest,
+    TaskAddDepRequest,
+    TaskRemoveDepRequest,
   ],
   projections: [TaskProjection],
   resources: [
@@ -59,7 +61,7 @@ export const TaskExtension = defineExtension({
       layer: Layer.merge(TaskStorage.Live, TaskService.Live),
     }),
   ],
-  // Query-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
+  // Request-backed snapshot — `EventPublisher` will emit `ExtensionStateChanged`
   // for `@gent/task-tools` whenever any of these tags is published, so the
   // TUI widget refetches `TaskListRef` on every relevant mutation.
   pulseTags: ["TaskCreated", "TaskUpdated", "TaskCompleted", "TaskDeleted"],

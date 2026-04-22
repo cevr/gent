@@ -9,8 +9,7 @@ import {
   type SessionId,
   type Task,
 } from "@gent/core/extensions/api"
-import { TaskCreateRef, TaskUpdateRef } from "../task-tools/mutations.js"
-import { TaskGetRef } from "../task-tools/queries.js"
+import { TaskCreateRef, TaskGetRef, TaskUpdateRef } from "../task-tools/requests.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4

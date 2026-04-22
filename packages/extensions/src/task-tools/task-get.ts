@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool, TaskId } from "@gent/core/extensions/api"
-import { TaskGetRef, TaskGetDepsRef } from "./queries.js"
+import { TaskGetDepsRef, TaskGetRef } from "./requests.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),

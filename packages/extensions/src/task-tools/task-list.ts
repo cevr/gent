@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool } from "@gent/core/extensions/api"
-import { TaskListRef } from "./queries.js"
+import { TaskListRef } from "./requests.js"
 
 export const TaskListParams = Schema.Struct({})
 

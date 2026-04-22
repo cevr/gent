@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { tool, AgentName, TaskId } from "@gent/core/extensions/api"
-import { TaskCreateRef, TaskAddDepRef } from "./mutations.js"
+import { TaskAddDepRef, TaskCreateRef } from "./requests.js"
 
 export const TaskCreateParams = Schema.Struct({
   subject: Schema.String.annotate({ description: "Brief task title in imperative form" }),
