@@ -205,7 +205,7 @@ describe("worker supervisor", () => {
                 })
                 .pipe(
                   Stream.runForEach((state) =>
-                    state.status === "idle" && state.queue.followUp.length === 0
+                    state._tag === "Idle" && state.queue.followUp.length === 0
                       ? Deferred.succeed(states, created.sessionId).pipe(Effect.ignore)
                       : Effect.void,
                   ),
@@ -246,7 +246,7 @@ describe("worker supervisor", () => {
 
           yield* worker.client.auth.setKey({ provider: "anthropic", key: "test-anthropic-key" })
 
-          const beforeRestart = yield* waitFor(worker.client.auth.listProviders(), (providers) =>
+          const beforeRestart = yield* waitFor(worker.client.auth.listProviders({}), (providers) =>
             providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
           )
           expect(beforeRestart.find((provider) => provider.provider === "anthropic")).toMatchObject(
@@ -257,7 +257,7 @@ describe("worker supervisor", () => {
           yield* waitForRpcReady(worker.client)
 
           const afterRestart = yield* waitFor(
-            worker.client.auth.listProviders(),
+            worker.client.auth.listProviders({}),
             (providers) =>
               providers.some((provider) => provider.provider === "anthropic" && provider.hasKey),
             10_000,

@@ -45,8 +45,7 @@ const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
   )
 
 const idleLoopState = {
-  phase: "idle" as const,
-  status: "idle" as const,
+  _tag: "Idle" as const,
   agent: "cowork" as const,
   queue: { steering: [], followUp: [] },
 }

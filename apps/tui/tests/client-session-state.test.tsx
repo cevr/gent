@@ -185,8 +185,7 @@ describe("ClientProvider session lifecycle", () => {
             lastEventId: null,
             reasoningLevel: undefined,
             runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "cowork" as const,
               queue: { steering: [], followUp: [] },
             },
@@ -240,8 +239,7 @@ describe("ClientProvider session lifecycle", () => {
               lastEventId: null
               reasoningLevel: undefined
               runtime: {
-                phase: "idle"
-                status: "idle"
+                _tag: "Idle"
                 agent: "cowork"
                 queue: { steering: []; followUp: [] }
               }
@@ -268,8 +266,7 @@ describe("ClientProvider session lifecycle", () => {
             lastEventId: null,
             reasoningLevel: undefined,
             runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "cowork" as const,
               queue: { steering: [], followUp: [] },
             },
@@ -307,8 +304,7 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: null,
         reasoningLevel: undefined,
         runtime: {
-          phase: "idle",
-          status: "idle",
+          _tag: "Idle",
           agent: "cowork",
           queue: { steering: [], followUp: [] },
         },

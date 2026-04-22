@@ -18,8 +18,7 @@ describe("resolveStartupAuthState", () => {
             lastEventId: null,
             reasoningLevel: undefined,
             runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "deepwork" as AgentName,
               queue: { steering: [], followUp: [] },
             },
@@ -81,8 +80,7 @@ describe("resolveStartupAuthState", () => {
             lastEventId: null,
             reasoningLevel: undefined,
             runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "cowork" as AgentName,
               queue: { steering: [], followUp: [] },
             },

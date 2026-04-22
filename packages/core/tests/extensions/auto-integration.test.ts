@@ -7,6 +7,7 @@ import {
   withTinyContextWindow,
   trackingApprovalService,
 } from "@gent/core/test-utils/e2e-layer"
+import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -71,6 +72,20 @@ const runE2ETest = (
       yield* test(controls)
     }).pipe(Effect.provide(e2eLayer))
   })
+
+const waitForAutoActive = (
+  runtime: typeof MachineEngine.Type,
+  active: boolean,
+  timeoutMs = 3_000,
+) =>
+  waitFor(
+    runtime
+      .execute(sessionId, AutoProtocol.GetSnapshot(), branchId)
+      .pipe(Effect.catchEager(() => Effect.succeed(undefined as { active: boolean } | undefined))),
+    (snap) => (snap as { active: boolean } | undefined)?.active === active,
+    timeoutMs,
+    `auto active = ${String(active)}`,
+  )
 
 describe("Auto extension E2E", () => {
   it.live("single iteration: start → checkpoint(complete)", () =>
@@ -244,11 +259,7 @@ describe("Auto extension E2E", () => {
           yield* agentLoop.run(makeMessage(`follow-up ${i + 1}`))
         }
 
-        const model = (yield* stateRuntime.execute(
-          sessionId,
-          AutoProtocol.GetSnapshot(),
-          branchId,
-        )) as { active: boolean }
+        const model = yield* waitForAutoActive(stateRuntime, false)
         expect(model.active).toBe(false)
       }).pipe(Effect.provide(e2eLayer))
     }),

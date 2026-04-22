@@ -13,8 +13,9 @@ import {
 } from "../../domain/agent.js"
 import { Message, TextPart, ToolCallPart, ToolResultPart } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
-import { QueueEntryInfo, type QueueSnapshot } from "../../domain/queue.js"
+import { QueueEntryInfo, QueueSnapshot } from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
+import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
 
 // ── Queue ──
@@ -248,18 +249,26 @@ export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForI
 export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
 
 // ── Runtime projection (transport/UI) ──
-// Phases mirror the 3-state machine 1:1. Sub-phase tracking (resolving,
-// executing-tools, finalizing) was declared but never emitted — collapsed
-// into "running" until we have an honest sub-phase signal.
+// Public runtime state mirrors the machine directly. No parallel `phase/status`
+// matrix — the discriminator is the state.
 
-export type LoopRuntimePhase = "idle" | "running" | "waiting-for-interaction"
-export type LoopRuntimeStatus = "idle" | "running" | "interrupted"
-export type LoopRuntimeState = {
-  phase: LoopRuntimePhase
-  status: LoopRuntimeStatus
-  agent: AgentNameType
-  queue: QueueSnapshot
-}
+export const LoopRuntimeStateSchema = TaggedEnumClass("LoopRuntimeState", {
+  Idle: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+  Running: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+  WaitingForInteraction: {
+    agent: AgentName,
+    queue: QueueSnapshot,
+  },
+})
+export type LoopRuntimeState = Schema.Schema.Type<typeof LoopRuntimeStateSchema>
+
+export const isLoopRuntimeIdle = (state: LoopRuntimeState): boolean => state._tag === "Idle"
 
 // ── State builders ──
 
@@ -321,10 +330,10 @@ export const runtimeStateFromLoopState = (
 
   switch (state._tag) {
     case "Idle":
-      return { phase: "idle", status: "idle", agent, queue: queueSnapshot }
+      return new LoopRuntimeStateSchema.Idle({ agent, queue: queueSnapshot })
     case "Running":
-      return { phase: "running", status: "running", agent, queue: queueSnapshot }
+      return new LoopRuntimeStateSchema.Running({ agent, queue: queueSnapshot })
     case "WaitingForInteraction":
-      return { phase: "waiting-for-interaction", status: "running", agent, queue: queueSnapshot }
+      return new LoopRuntimeStateSchema.WaitingForInteraction({ agent, queue: queueSnapshot })
   }
 }

@@ -35,7 +35,7 @@ export const runSessionSubscriptionAttempt = Effect.fn("runSessionSubscriptionAt
     lastEventId: snapshot.lastEventId,
     after,
     agent: snapshot.runtime.agent,
-    status: snapshot.runtime.status,
+    runtimeTag: snapshot.runtime._tag,
   })
 
   yield* Effect.sync(() => {

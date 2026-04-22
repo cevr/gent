@@ -10,6 +10,7 @@ import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
+import { LoopRuntimeStateSchema } from "../runtime/agent/agent-loop.state.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
   BranchInfo,
@@ -141,24 +142,14 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           branchId: input.branchId,
         })
 
-        // Fetch current runtime state — idle sessions return idle runtime
-        const idleRuntime = {
-          phase: "idle" as const,
-          status: "idle" as const,
+        // Fetch current runtime state — idle sessions return Idle runtime
+        const idleRuntime = new LoopRuntimeStateSchema.Idle({
           agent: DEFAULT_AGENT_NAME,
           queue: { steering: [], followUp: [] },
-        }
+        })
         const runtime = yield* sessionRuntime
           .getState({ sessionId: input.sessionId, branchId: input.branchId })
-          .pipe(
-            Effect.map((state) => ({
-              phase: state.phase,
-              status: state.status,
-              agent: state.agent ?? DEFAULT_AGENT_NAME,
-              queue: state.queue,
-            })),
-            Effect.catchEager(() => Effect.succeed(idleRuntime)),
-          )
+          .pipe(Effect.catchEager(() => Effect.succeed(idleRuntime)))
 
         // Extension state is no longer hydrated through the session snapshot —
         // clients call the extension's typed `client.extension.request(...)` on

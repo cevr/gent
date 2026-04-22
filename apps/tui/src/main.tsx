@@ -102,6 +102,7 @@ const runHeadlessTurn = (
     }
 
     const parentSpan = yield* resolveParentSpan()
+    yield* bundle.runtime.lifecycle.waitForReady
 
     yield* runHeadless(
       bundle.client,

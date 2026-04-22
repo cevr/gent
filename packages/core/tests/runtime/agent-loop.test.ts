@@ -286,16 +286,16 @@ const makeExternalLayerWithEvents = (
 const waitForPhase = (
   agentLoop: AgentLoop,
   params: { sessionId: string; branchId: string },
-  phase: string,
+  runtimeTag: string,
   attempts = 50,
 ) =>
   Effect.gen(function* () {
     for (let i = 0; i < attempts; i++) {
       const state = yield* agentLoop.getState(params)
-      if (state.phase === phase) return state
+      if (state._tag === runtimeTag) return state
       yield* Effect.sleep("1 millis")
     }
-    throw new Error(`Timed out waiting for phase "${phase}"`)
+    throw new Error(`Timed out waiting for runtime state "${runtimeTag}"`)
   })
 
 // ============================================================================
@@ -1253,7 +1253,7 @@ describe("continuation", () => {
         yield* waitForPhase(
           agentLoop,
           { sessionId: contSessionId, branchId: contBranchId },
-          "idle",
+          "Idle",
           200,
         )
 
@@ -1476,9 +1476,9 @@ describe("interaction", () => {
           const state = yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
-            "waiting-for-interaction",
+            "WaitingForInteraction",
           )
-          expect(state.status).toBe("running")
+          expect(state._tag).toBe("WaitingForInteraction")
           expect(Ref.getUnsafe(callCount)).toBe(1)
 
           const calls = yield* recorder.getCalls()
@@ -1519,7 +1519,7 @@ describe("interaction", () => {
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
-            "waiting-for-interaction",
+            "WaitingForInteraction",
           )
 
           yield* agentLoop.steer({
@@ -1534,7 +1534,7 @@ describe("interaction", () => {
             sessionId: intSessionId,
             branchId: intBranchId,
           })
-          expect(stateAfter.phase).toBe("idle")
+          expect(stateAfter._tag).toBe("Idle")
           expect(Ref.getUnsafe(callCount)).toBe(1)
         }).pipe(Effect.provide(layer)),
       ),
@@ -1587,7 +1587,7 @@ describe("interaction", () => {
             sessionId: intSessionId,
             branchId: intBranchId,
           })
-          expect(state.phase).toBe("idle")
+          expect(state._tag).toBe("Idle")
         }).pipe(Effect.provide(loopLayer)),
       ),
     )
@@ -1635,7 +1635,7 @@ describe("interaction", () => {
           yield* waitForPhase(
             agentLoop,
             { sessionId: intSessionId, branchId: intBranchId },
-            "waiting-for-interaction",
+            "WaitingForInteraction",
           )
           expect(Ref.getUnsafe(providerCallsRef)).toBe(1)
 
@@ -1843,10 +1843,10 @@ describe("recovery", () => {
                 sessionId: running.message.sessionId,
                 branchId: running.message.branchId,
               }),
-              (s) => s.phase === "idle",
+              (s) => s._tag === "Idle",
             )
 
-            expect(state.phase).toBe("idle")
+            expect(state._tag).toBe("Idle")
             expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
           }).pipe(Effect.provide(layer)),
         ),
@@ -1893,10 +1893,10 @@ describe("recovery", () => {
                 sessionId: message.sessionId,
                 branchId: message.branchId,
               }),
-              (s) => s.phase === "idle",
+              (s) => s._tag === "Idle",
             )
 
-            expect(state.phase).toBe("idle")
+            expect(state._tag).toBe("Idle")
             expect(yield* Ref.get(providerCalls)).toBeGreaterThanOrEqual(1)
           }).pipe(Effect.provide(layer)),
         ),
@@ -1942,7 +1942,7 @@ describe("recovery", () => {
               branchId: running.message.branchId,
             })
 
-            expect(state.phase).toBe("idle")
+            expect(state._tag).toBe("Idle")
             expect(yield* Ref.get(providerCalls)).toBe(0)
 
             const cs = yield* CheckpointStorage

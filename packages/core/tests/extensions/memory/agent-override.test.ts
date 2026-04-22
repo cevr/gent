@@ -54,8 +54,7 @@ const makeTestLayer = (logs: {
     watchState: () => Effect.succeed(Stream.empty),
     getState: () =>
       Effect.succeed({
-        phase: "idle" as const,
-        status: "idle" as const,
+        _tag: "Idle" as const,
         agent: "cowork" as const,
         queue: { steering: [], followUp: [] },
       }),

@@ -13,11 +13,7 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
-import {
-  SessionRuntimePhase as SessionRuntimePhaseSchema,
-  SessionRuntimeStateSchema,
-  SessionRuntimeStatus as SessionRuntimeStatusSchema,
-} from "../runtime/session-runtime.js"
+import { SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -229,16 +225,10 @@ export const SessionSnapshot = Schema.Struct({
   lastEventId: Schema.NullOr(Schema.Number),
   reasoningLevel: Schema.optional(ReasoningEffort),
   activeBranchId: Schema.optional(BranchId),
-  /** Current runtime state (phase/status/agent/queue). Idle sessions return idle runtime. */
+  /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntime),
 })
 export type SessionSnapshot = typeof SessionSnapshot.Type
-
-export const RuntimePhase = SessionRuntimePhaseSchema
-export type RuntimePhase = typeof RuntimePhase.Type
-
-export const RuntimeStatus = SessionRuntimeStatusSchema
-export type RuntimeStatus = typeof RuntimeStatus.Type
 
 export const SessionRuntime = SessionRuntimeStateSchema
 export type SessionRuntime = typeof SessionRuntime.Type

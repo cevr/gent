@@ -1,6 +1,6 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { RunSpecSchema, AgentName, AgentRunnerService } from "../domain/agent.js"
-import { QueueSnapshot } from "../domain/queue.js"
+import type { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
   ErrorOccurred,
@@ -26,6 +26,7 @@ import { SessionProfileCache } from "./session-profile.js"
 import { ResourceManager } from "./resource-manager.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { resolveSessionRuntimeContext } from "./session-runtime-context.js"
+import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
   "SessionRuntimeError",
@@ -164,19 +165,8 @@ export const RuntimeCommand = Schema.Union([
 ])
 export type RuntimeCommand = typeof RuntimeCommand.Type
 
-export const SessionRuntimePhase = Schema.Literals(["idle", "running", "waiting-for-interaction"])
-export type SessionRuntimePhase = typeof SessionRuntimePhase.Type
-
-export const SessionRuntimeStatus = Schema.Literals(["idle", "running", "interrupted"])
-export type SessionRuntimeStatus = typeof SessionRuntimeStatus.Type
-
-export const SessionRuntimeStateSchema = Schema.Struct({
-  phase: SessionRuntimePhase,
-  status: SessionRuntimeStatus,
-  agent: AgentName,
-  queue: QueueSnapshot,
-})
-export type SessionRuntimeState = typeof SessionRuntimeStateSchema.Type
+export const SessionRuntimeStateSchema = LoopRuntimeStateSchema
+export type SessionRuntimeState = LoopRuntimeState
 
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Number,
@@ -503,12 +493,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         getState: (input) =>
           Effect.gen(function* () {
             const loopState = yield* agentLoop.getState(input)
-            return {
-              phase: loopState.phase,
-              status: loopState.status,
-              agent: loopState.agent,
-              queue: loopState.queue,
-            } satisfies SessionRuntimeState
+            return loopState satisfies SessionRuntimeState
           }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
         getMetrics: (input) =>
@@ -572,12 +557,12 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
-        Effect.succeed({
-          phase: "idle" as const,
-          status: "idle" as const,
-          agent: "cowork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
+        Effect.succeed(
+          new SessionRuntimeStateSchema.Idle({
+            agent: "cowork" as const,
+            queue: { steering: [], followUp: [] },
+          }),
+        ),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
       watchState: () => Effect.succeed(Stream.empty),

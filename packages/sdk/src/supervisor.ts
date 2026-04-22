@@ -124,18 +124,26 @@ const waitForWorkerReady = (
         const decoder = new TextDecoder()
         let buffer = ""
         let settled = false
+        let ready = false
 
-        const finish = (error?: WorkerSupervisorError) => {
+        const fail = (error: WorkerSupervisorError) => {
           if (settled) return
           settled = true
           clearTimeout(timeout)
           void reader.cancel().catch(() => undefined)
-          if (error !== undefined) reject(error)
-          else resolve()
+          reject(error)
+        }
+
+        const markReady = () => {
+          if (settled) return
+          settled = true
+          ready = true
+          clearTimeout(timeout)
+          resolve()
         }
 
         const timeout = setTimeout(() => {
-          finish(
+          fail(
             new WorkerSupervisorError({
               message: `worker did not become ready within ${timeoutMs}ms`,
             }),
@@ -143,7 +151,8 @@ const waitForWorkerReady = (
         }, timeoutMs)
 
         void proc.exited.then(() => {
-          finish(
+          if (ready) return
+          fail(
             new WorkerSupervisorError({
               message: `worker exited before ready${proc.exitCode !== null ? ` (${proc.exitCode})` : ""}`,
             }),
@@ -158,8 +167,7 @@ const waitForWorkerReady = (
             const line = buffer.slice(0, newline).trim()
             buffer = buffer.slice(newline + 1)
             if (line.startsWith(WORKER_READY_PREFIX)) {
-              finish()
-              return
+              markReady()
             }
           }
         }
@@ -169,14 +177,17 @@ const waitForWorkerReady = (
             .read()
             .then(({ done, value }) => {
               if (done) {
-                finish(new WorkerSupervisorError({ message: "worker stdout closed before ready" }))
+                if (!ready) {
+                  fail(new WorkerSupervisorError({ message: "worker stdout closed before ready" }))
+                }
                 return
               }
               handleText(decoder.decode(value, { stream: true }))
-              if (!settled) readLoop()
+              readLoop()
             })
             .catch((error: unknown) => {
-              finish(
+              if (ready) return
+              fail(
                 new WorkerSupervisorError({
                   message: `failed to read worker readiness: ${String(error)}`,
                 }),

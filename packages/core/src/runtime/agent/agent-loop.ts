@@ -111,6 +111,8 @@ import {
   buildRunningState,
   countQueuedFollowUps,
   emptyLoopQueueState,
+  isLoopRuntimeIdle,
+  LoopRuntimeStateSchema,
   queueSnapshotFromQueueState,
   runtimeStateFromLoopState,
   takeNextQueuedTurn,
@@ -120,9 +122,7 @@ import {
   type LoopQueueState,
   type AssistantDraft,
   type LoopActor,
-  type LoopRuntimePhase,
   type LoopRuntimeState,
-  type LoopRuntimeStatus,
   type LoopState,
   type QueuedTurnItem,
   type ResolvedTurn,
@@ -1536,12 +1536,10 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<LoopActor>
-  readonly getState: (input: { sessionId: SessionId; branchId: BranchId }) => Effect.Effect<{
-    phase: LoopRuntimePhase
-    status: LoopRuntimeStatus
-    agent: AgentNameType
-    queue: QueueSnapshot
-  }>
+  readonly getState: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+  }) => Effect.Effect<LoopRuntimeState>
   readonly watchState: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -2238,42 +2236,48 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
         })
 
+        const currentRuntimeState = (loop: LoopHandle) => SubscriptionRef.get(loop.runtimeStateRef)
+
+        const submitTurn = Effect.fn("AgentLoop.submitTurn")(function* (
+          command: SubmitTurnCommand,
+        ) {
+          const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
+          const item = buildQueuedTurnItem(command)
+          const loopState = yield* loop.actor.snapshot
+          if (loopState._tag !== "Idle") {
+            yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
+            return
+          }
+
+          yield* loop.actor.call(AgentLoopEvent.Start({ item }))
+        })
+
+        const runTurn = Effect.fn("AgentLoop.runTurn")(function* (command: RunTurnCommand) {
+          const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
+          const item = buildQueuedTurnItem(command)
+          const initialState = yield* loop.actor.snapshot
+          if (initialState._tag !== "Idle") {
+            yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
+            return
+          }
+
+          yield* loop.actor.send(AgentLoopEvent.Start({ item }))
+          yield* loop.actor.waitFor((state) => state._tag === "Idle" && state !== initialState)
+        })
+
         const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
           command: LoopCommand,
         ) {
           switch (command._tag) {
-            case "SubmitTurn": {
-              const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
-              const initialState = yield* loop.actor.snapshot
-              const item = buildQueuedTurnItem(command)
+            case "SubmitTurn":
+              return yield* submitTurn(command)
 
-              if (initialState._tag !== "Idle") {
-                yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
-                return
-              }
-
-              yield* loop.actor.call(AgentLoopEvent.Start({ item }))
-              return
-            }
-
-            case "RunTurn": {
-              const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
-              const initialState = yield* loop.actor.snapshot
-              const item = buildQueuedTurnItem(command)
-
-              if (initialState._tag !== "Idle") {
-                yield* loop.updateQueue((queue) => appendFollowUpQueueState(queue, item))
-                return
-              }
-
-              yield* loop.actor.send(AgentLoopEvent.Start({ item }))
-              yield* loop.actor.waitFor((state) => state._tag === "Idle" && state !== initialState)
-              return
-            }
+            case "RunTurn":
+              return yield* runTurn(command)
 
             case "ApplySteer": {
               const loop = yield* getLoop(command.command.sessionId, command.command.branchId)
-              const loopState = yield* loop.actor.snapshot
+              const projectedState = yield* currentRuntimeState(loop)
 
               switch (command.command._tag) {
                 case "SwitchAgent":
@@ -2283,6 +2287,14 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   return
                 case "Cancel":
                 case "Interrupt":
+                  if (
+                    projectedState._tag === "Running" ||
+                    projectedState._tag === "WaitingForInteraction"
+                  ) {
+                    yield* loop.actor.cast(AgentLoopEvent.Interrupt)
+                    return
+                  }
+                  const loopState = yield* loop.actor.snapshot
                   if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
                     yield* loop.actor.cast(AgentLoopEvent.Interrupt)
                   }
@@ -2304,6 +2316,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       : {}),
                   }
                   yield* loop.updateQueue((queue) => appendSteeringItem(queue, item))
+                  if (projectedState._tag === "Running") {
+                    yield* interruptActiveStream(loop.activeStreamRef)
+                    return
+                  }
+                  const loopState = yield* loop.actor.snapshot
                   if (loopState._tag === "Running") {
                     yield* interruptActiveStream(loop.activeStreamRef)
                   }
@@ -2315,8 +2332,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             case "RespondInteraction": {
               const loop = yield* findOrRestoreLoop(command.sessionId, command.branchId)
               if (loop === undefined) return
-              const state = yield* loop.actor.snapshot
-              if (state._tag !== "WaitingForInteraction") return
+              const projectedState = yield* currentRuntimeState(loop)
+              if (projectedState._tag !== "WaitingForInteraction") {
+                const state = yield* loop.actor.snapshot
+                if (state._tag !== "WaitingForInteraction") return
+              }
               yield* loop.actor.call(
                 AgentLoopEvent.InteractionResponded({ requestId: command.requestId }),
               )
@@ -2425,7 +2445,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const existingLoop = yield* findLoop(message.sessionId, message.branchId)
               const loop = existingLoop ?? (yield* getLoop(message.sessionId, message.branchId))
-              const loopState = yield* loop.actor.snapshot
               const queue = yield* Ref.get(loop.queueRef)
               if (countQueuedFollowUps(queue) >= DEFAULTS.followUpQueueMax) {
                 return yield* new AgentLoopError({
@@ -2437,6 +2456,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 yield* loop.updateQueue((nextQueue) => appendFollowUpQueueState(nextQueue, item))
                 return
               }
+              const loopState = yield* loop.actor.snapshot
               if (loopState._tag !== "Idle") {
                 yield* loop.updateQueue((nextQueue) => appendFollowUpQueueState(nextQueue, item))
                 return
@@ -2472,9 +2492,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) return false
-              return (
-                runtimeStateFromLoopState(yield* loop.actor.snapshot, yield* Ref.get(loop.queueRef))
-                  .status !== "idle"
+              return !isLoopRuntimeIdle(
+                runtimeStateFromLoopState(
+                  yield* loop.actor.snapshot,
+                  yield* Ref.get(loop.queueRef),
+                ),
               )
             }),
 
@@ -2577,12 +2599,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       respondInteraction: () => Effect.void,
       getActor: () => Effect.die("AgentLoop.Test.getActor not implemented"),
       getState: () =>
-        Effect.succeed({
-          phase: "idle",
-          status: "idle",
-          agent: DEFAULT_AGENT_NAME,
-          queue: { steering: [], followUp: [] },
-        }),
+        Effect.succeed(
+          new LoopRuntimeStateSchema.Idle({
+            agent: DEFAULT_AGENT_NAME,
+            queue: { steering: [], followUp: [] },
+          }),
+        ),
       watchState: () => Effect.succeed(Stream.empty),
       toRuntimeState: runtimeStateFromLoopState,
     })

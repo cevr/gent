@@ -218,8 +218,7 @@ describe("App auth gate", () => {
             lastEventId: null,
             reasoningLevel: undefined,
             runtime: {
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "deepwork" as const,
               queue: { steering: [], followUp: [] },
             },

@@ -570,7 +570,7 @@ export function ClientProvider(props: ClientProviderProps) {
                     })
                   }
                   const rt = snapshot.runtime
-                  const status = rt.status === "idle" ? AgentStatus.idle() : AgentStatus.streaming()
+                  const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
                   setAgentStore({ agent: rt.agent, status })
 
                   // No initial-snapshot fan-out: the UI snapshot channel is gone.

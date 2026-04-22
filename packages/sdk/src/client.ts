@@ -218,7 +218,7 @@ const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
 const toWsUrl = (httpUrl: string): string => httpUrl.replace(/^http(s?):\/\//, "ws$1://")
 
 const WsTransport = (url: string): Layer.Layer<RpcClient.Protocol> =>
-  RpcClient.layerProtocolSocket().pipe(
+  RpcClient.layerProtocolSocket({ retryTransientErrors: true }).pipe(
     Layer.provide(
       Socket.layerWebSocket(toWsUrl(url)).pipe(
         Layer.tapCause((cause) =>
@@ -311,14 +311,14 @@ const connectWs = (
         }),
       ),
       waitForReady: Effect.suspend(() => {
-        if (currentState._tag === "connected" || currentState._tag === "disconnected") {
+        if (currentState._tag === "connected") {
           return Effect.void
         }
         return Effect.promise(
           () =>
             new Promise<void>((resolve) => {
               const unsub = lifecycle.subscribe((s) => {
-                if (s._tag === "connected" || s._tag === "disconnected") {
+                if (s._tag === "connected") {
                   unsub()
                   resolve()
                 }

@@ -29,8 +29,7 @@ describe("Session Snapshot", () => {
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
         Effect.succeed({
-          phase: "running" as const,
-          status: "running" as const,
+          _tag: "Running" as const,
           agent: "deepwork" as const,
           queue: { steering: [], followUp: [] },
         }),

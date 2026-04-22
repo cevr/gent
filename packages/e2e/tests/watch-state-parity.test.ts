@@ -50,10 +50,10 @@ describe("runtime watch parity", () => {
 
             const initial = yield* waitFor(
               Ref.get(runtime),
-              (current) => current[0]?.status === "idle",
+              (current) => current[0]?._tag === "Idle",
               timeoutMs,
             )
-            expect(initial[0]?.status).toBe("idle")
+            expect(initial[0]?._tag).toBe("Idle")
             expect(initial[0]?.queue.followUp).toEqual([])
             expect(initial[0]?.queue.steering).toEqual([])
 
@@ -67,11 +67,11 @@ describe("runtime watch parity", () => {
 
             const updated = yield* waitFor(
               Ref.get(runtime),
-              (current) => current.some((state) => state.status !== "idle"),
+              (current) => current.some((state) => state._tag !== "Idle"),
               timeoutMs,
             )
 
-            expect(updated.some((state) => state.status !== "idle")).toBe(true)
+            expect(updated.some((state) => state._tag !== "Idle")).toBe(true)
 
             const persisted = yield* waitFor(
               client.session
@@ -136,7 +136,7 @@ describe("runtime watch parity", () => {
 
           yield* waitFor(
             Ref.get(runtime),
-            (current) => current.some((state) => state.status !== "idle"),
+            (current) => current.some((state) => state._tag !== "Idle"),
             timeoutMs,
           )
 

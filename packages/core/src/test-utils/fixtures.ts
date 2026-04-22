@@ -5,7 +5,7 @@
 
 // @effect-diagnostics nodeBuiltinImport:off
 import { afterEach } from "bun:test"
-import { Clock, Effect, Schema } from "effect"
+import { Cause, Clock, Effect, Schema } from "effect"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -74,10 +74,16 @@ export const waitFor = <A>(
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
     const loop: Effect.Effect<A, WaitForError> = Effect.gen(function* () {
-      const value = yield* effect.pipe(Effect.mapError(toWaitForError))
-      if (predicate(value)) return value
+      const attempt = yield* effect.pipe(Effect.exit)
+      if (attempt._tag === "Success" && predicate(attempt.value)) {
+        return attempt.value
+      }
       if ((yield* Clock.currentTimeMillis) >= deadline) {
-        return yield* new WaitForError({ message: `timed out waiting for ${label}` })
+        const errorMessage =
+          attempt._tag === "Failure"
+            ? `timed out waiting for ${label}: ${toWaitForError(Cause.squash(attempt.cause)).message}`
+            : `timed out waiting for ${label}`
+        return yield* new WaitForError({ message: errorMessage })
       }
       yield* Effect.sleep("25 millis")
       return yield* loop

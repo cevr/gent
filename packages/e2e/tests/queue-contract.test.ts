@@ -58,7 +58,7 @@ describe("queue seam contract", () => {
 
         yield* waitFor(
           Ref.get(runtime),
-          (states) => states.some((state) => state.status !== "idle"),
+          (states) => states.some((state) => state._tag !== "Idle"),
           10_000,
         )
 
@@ -149,7 +149,7 @@ describe("queue seam contract", () => {
 
         yield* waitFor(
           Ref.get(runtime),
-          (states) => states.some((state) => state.status !== "idle"),
+          (states) => states.some((state) => state._tag !== "Idle"),
           10_000,
         )
 

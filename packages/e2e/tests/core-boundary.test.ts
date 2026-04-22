@@ -89,8 +89,7 @@ describe("SessionCommands → SessionRuntime integration", () => {
           watchState: () => Effect.succeed(Stream.empty),
           getState: () =>
             Effect.succeed({
-              phase: "idle" as const,
-              status: "idle" as const,
+              _tag: "Idle" as const,
               agent: "cowork" as const,
               queue: { steering: [], followUp: [] },
             }),
@@ -174,8 +173,7 @@ describe("SessionCommands → SessionRuntime integration", () => {
       watchState: () => Effect.succeed(Stream.empty),
       getState: () =>
         Effect.succeed({
-          phase: "idle" as const,
-          status: "idle" as const,
+          _tag: "Idle" as const,
           agent: "cowork" as const,
           queue: { steering: [], followUp: [] },
         }),
@@ -223,8 +221,7 @@ describe("SessionCommands → SessionRuntime integration", () => {
       watchState: () => Effect.succeed(Stream.empty),
       getState: () =>
         Effect.succeed({
-          phase: "running" as const,
-          status: "interrupted" as const,
+          _tag: "Running" as const,
           agent: "deepwork" as const,
           queue: {
             steering: [{ content: "steer" }],
@@ -260,8 +257,7 @@ describe("SessionCommands → SessionRuntime integration", () => {
     )
 
     expect(result).toEqual({
-      phase: "running",
-      status: "interrupted",
+      _tag: "Running",
       agent: "deepwork",
       queue: {
         steering: [{ content: "steer" }],
