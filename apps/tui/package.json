@@ -9,7 +9,7 @@
     "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts src/main.tsx",
     "build": "bun scripts/build.ts",
     "typecheck": "tsgo --noEmit",
-    "lint": "effect-language-service diagnostics --project tsconfig.json",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json",
     "test": "bun test --preload ./node_modules/@opentui/solid/scripts/preload.ts tests integration"
   },
   "dependencies": {

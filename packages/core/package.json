@@ -15,7 +15,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.locks.json",
-    "lint": "effect-language-service diagnostics --project tsconfig.json",
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json",
     "test": "bun test tests/"
   },
   "dependencies": {

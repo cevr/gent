@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun run --watch src/main.ts",
     "typecheck": "tsgo --noEmit",
-    "lint": "effect-language-service diagnostics --project tsconfig.json"
+    "lint": "env -u FORCE_COLOR NO_COLOR=1 effect-language-service diagnostics --project tsconfig.json"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
