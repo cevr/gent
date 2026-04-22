@@ -15,8 +15,6 @@ import type { AnyToolDefinition } from "../../domain/tool.js"
 import type { PermissionRule } from "../../domain/permission.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import { type CompiledPipelines, compilePipelines } from "./pipeline-host.js"
-import { type CompiledSubscriptions, compileSubscriptions } from "./subscription-host.js"
 import { compileRuntimeSlots, type CompiledRuntimeSlots } from "./runtime-slots.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
@@ -42,8 +40,6 @@ export interface ResolvedExtensions {
   readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly commands: ReadonlyArray<SlashCommand>
   readonly permissionRules: ReadonlyArray<PermissionRule>
-  readonly pipelines: CompiledPipelines
-  readonly subscriptions: CompiledSubscriptions
   readonly runtimeSlots: CompiledRuntimeSlots
   readonly projections: CompiledProjections
   readonly capabilities: CompiledCapabilities
@@ -271,9 +267,7 @@ export const resolveExtensions = (
     commands.push(capabilityToCommand(cap))
   }
 
-  const pipelines = compilePipelines(sorted)
-  const subscriptions = compileSubscriptions(sorted)
-  const runtimeSlots = compileRuntimeSlots(sorted, pipelines, subscriptions)
+  const runtimeSlots = compileRuntimeSlots(sorted)
   const projections = compileProjections(sorted)
   const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -303,8 +297,6 @@ export const resolveExtensions = (
     promptSections: promptSectionsMap,
     commands,
     permissionRules,
-    pipelines,
-    subscriptions,
     runtimeSlots,
     projections,
     capabilities,
@@ -425,9 +417,6 @@ export interface ExtensionRegistryService {
   readonly listFailedExtensions: () => Effect.Effect<ReadonlyArray<FailedExtension>>
   readonly listExtensionStatuses: () => Effect.Effect<ReadonlyArray<ExtensionStatusInfo>>
 
-  // Pipelines (transformers with `next`) and Subscriptions (void observers)
-  readonly pipelines: CompiledPipelines
-  readonly subscriptions: CompiledSubscriptions
   readonly runtimeSlots: CompiledRuntimeSlots
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
@@ -484,8 +473,6 @@ export class ExtensionRegistry extends Context.Service<
       listPromptSections: () => Effect.succeed([...resolved.promptSections.values()]),
       listFailedExtensions: () => Effect.succeed(resolved.failedExtensions),
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
-      pipelines: resolved.pipelines,
-      subscriptions: resolved.subscriptions,
       runtimeSlots: resolved.runtimeSlots,
       getResolved: () => resolved,
     })

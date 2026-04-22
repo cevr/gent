@@ -18,10 +18,10 @@ import type {
   LoadedExtension,
   TurnAfterInput,
 } from "@gent/core/domain/extension"
-import { compileSubscriptions } from "@gent/core/runtime/extensions/subscription-host"
 import { subscription } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 
 const stubCtx = {
   sessionId: "test-session",
@@ -62,12 +62,12 @@ describe("subscription host", () => {
         }),
       )
 
-      const compiled = compileSubscriptions([
+      const compiled = compileRuntimeSlots([
         ext("a", "builtin", { subscriptions: [failing] }),
         ext("b", "builtin", { subscriptions: [after] }),
       ])
 
-      const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
+      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
     }),
@@ -86,12 +86,12 @@ describe("subscription host", () => {
         }),
       )
 
-      const compiled = compileSubscriptions([
+      const compiled = compileRuntimeSlots([
         ext("a", "builtin", { subscriptions: [failing] }),
         ext("b", "builtin", { subscriptions: [after] }),
       ])
 
-      const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
+      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(["failing", "after"])
     }),
@@ -110,12 +110,12 @@ describe("subscription host", () => {
         }),
       )
 
-      const compiled = compileSubscriptions([
+      const compiled = compileRuntimeSlots([
         ext("a", "builtin", { subscriptions: [halting] }),
         ext("b", "builtin", { subscriptions: [afterHalt] }),
       ])
 
-      const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
+      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
         expect(Cause.hasDies(exit.cause)).toBe(true)
@@ -135,22 +135,22 @@ describe("subscription host", () => {
           }),
         )
 
-      const compiled = compileSubscriptions([
+      const compiled = compileRuntimeSlots([
         // pass out of order to calls sorting
         ext("z-project", "project", { subscriptions: [make("project")] }),
         ext("a-builtin", "builtin", { subscriptions: [make("builtin")] }),
         ext("m-user", "user", { subscriptions: [make("user")] }),
       ])
 
-      yield* compiled.emit("turn.after", stubEvent, stubCtx)
+      yield* compiled.emitTurnAfter(stubEvent, stubCtx)
       expect(calls).toEqual(["builtin", "user", "project"])
     }),
   )
 
   it.live("empty registry is a no-op", () =>
     Effect.gen(function* () {
-      const compiled = compileSubscriptions([])
-      const exit = yield* Effect.exit(compiled.emit("turn.after", stubEvent, stubCtx))
+      const compiled = compileRuntimeSlots([])
+      const exit = yield* Effect.exit(compiled.emitTurnAfter(stubEvent, stubCtx))
       expect(Exit.isSuccess(exit)).toBe(true)
     }),
   )

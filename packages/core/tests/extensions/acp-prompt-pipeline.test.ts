@@ -1,16 +1,19 @@
 /**
- * ACP system-prompt pipeline — when the resolved driver is an ACP
+ * ACP system-prompt slot — when the resolved driver is an ACP
  * external driver, the prompt gains a "codemode" tool surface section.
  *
- * Tests run the registered pipeline directly (not through the full agent
+ * Tests run the registered runtime slot directly (not through the full agent
  * loop) so the mapping is exercised without a real session.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { withSectionMarkers } from "@gent/core/server/system-prompt"
 import type { AnyToolDefinition } from "@gent/core/domain/tool"
+import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
+import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const baseAgent = new AgentDefinition({
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -24,28 +27,50 @@ const fakeTool: AnyToolDefinition = {
   execute: () => Effect.succeed({ ok: true }),
 }
 
-const getPromptPipeline = async () => {
+const stubHostCtx = {} as ExtensionHostContext
+const stubProjectionCtx = {
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  cwd: "/tmp",
+  home: "/home/x",
+  turn: {
+    sessionId: SessionId.of("test-session"),
+    branchId: BranchId.of("test-branch"),
+    agent: baseAgent,
+    allTools: [],
+    agentName: "cowork",
+  },
+}
+
+const getRuntimeSlots = async () => {
   const contributions = await Effect.runPromise(
     AcpAgentsExtension.setup({ cwd: "/tmp", home: "/home/x" } as never),
   )
-  const pipelines = contributions.pipelines ?? []
-  const promptPipeline = pipelines.find((p) => p.hook === "prompt.system")
-  if (promptPipeline === undefined) throw new Error("prompt.system pipeline not registered")
-  return promptPipeline
+  return compileRuntimeSlots([
+    {
+      manifest: AcpAgentsExtension.manifest,
+      kind: "builtin",
+      sourcePath: "test",
+      contributions,
+    },
+  ])
 }
 
-const runHandler = async (
-  input: Parameters<Awaited<ReturnType<typeof getPromptPipeline>>["handler"]>[0],
-): Promise<string> => {
-  const p = await getPromptPipeline()
-  const result = await Effect.runPromise(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    p.handler(input, (i) => Effect.succeed(i.basePrompt), {} as never) as Effect.Effect<string>,
+const runHandler = async (input: {
+  readonly basePrompt: string
+  readonly agent: AgentDefinition
+  readonly driverSource?: "config" | "default"
+  readonly driverToolSurface?: "native" | "codemode"
+  readonly tools?: ReadonlyArray<AnyToolDefinition>
+}) =>
+  Effect.runPromise(
+    (await getRuntimeSlots()).resolveSystemPrompt(input, {
+      projection: { ...stubProjectionCtx, turn: { ...stubProjectionCtx.turn, agent: input.agent } },
+      host: stubHostCtx,
+    }),
   )
-  return result
-}
 
-describe("ACP prompt.system pipeline", () => {
+describe("ACP prompt.system slot", () => {
   test("appends codemode section when driverToolSurface is codemode", async () => {
     const result = await runHandler({
       basePrompt: "BASE",

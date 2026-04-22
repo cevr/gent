@@ -12,8 +12,6 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { pipeline, defineResource } from "@gent/core/domain/contribution"
-import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
-import { compileSubscriptions } from "@gent/core/runtime/extensions/subscription-host"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 
 const stubHostCtx = {
@@ -73,11 +71,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(
-      extensions,
-      compilePipelines(extensions),
-      compileSubscriptions(extensions),
-    )
+    const slots = compileRuntimeSlots(extensions)
 
     return slots
       .resolveSystemPrompt(
@@ -125,11 +119,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(
-      extensions,
-      compilePipelines(extensions),
-      compileSubscriptions(extensions),
-    )
+    const slots = compileRuntimeSlots(extensions)
 
     return slots
       .resolveContextMessages(
@@ -170,11 +160,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(
-      extensions,
-      compilePipelines(extensions),
-      compileSubscriptions(extensions),
-    )
+    const slots = compileRuntimeSlots(extensions)
 
     return slots
       .transformToolResult(
@@ -248,11 +234,7 @@ describe("runtime slots", () => {
       }),
     ]
 
-    const slots = compileRuntimeSlots(
-      extensions,
-      compilePipelines(extensions),
-      compileSubscriptions(extensions),
-    )
+    const slots = compileRuntimeSlots(extensions)
 
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(

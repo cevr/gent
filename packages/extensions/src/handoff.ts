@@ -4,7 +4,6 @@ import {
   defineExtension,
   defineResource,
   resource,
-  subscription,
   type ExtensionHostContext,
   type Message,
   type ResourceMachine,
@@ -127,7 +126,6 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 export const HandoffExtension = defineExtension({
   id: EXTENSION_ID,
   capabilities: [HandoffTool],
-  subscriptions: [subscription("turn.after", "isolate", autoHandoffImpl)],
   // Cooldown machine — process-scope, no service, supervised by MachineEngine.
   resources: [
     resource(
@@ -135,6 +133,12 @@ export const HandoffExtension = defineExtension({
         scope: "process",
         layer: Layer.empty,
         machine: cooldownWorkflow,
+        runtime: {
+          turnAfter: {
+            failureMode: "isolate",
+            handler: autoHandoffImpl,
+          },
+        },
       }),
     ),
   ],

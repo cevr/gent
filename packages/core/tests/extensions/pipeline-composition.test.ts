@@ -10,9 +10,9 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
-import { Agents } from "@gent/extensions/all-agents"
-import type { LoadedExtension } from "@gent/core/domain/extension"
-import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
+import type { LoadedExtension, ToolExecuteInput } from "@gent/core/domain/extension"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import { pipeline } from "@gent/core/domain/contribution"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -22,6 +22,14 @@ const stubCtx = {
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
+
+const stubToolExecuteInput: ToolExecuteInput = {
+  toolCallId: "tc-1",
+  toolName: "echo",
+  input: { text: "hi" },
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+}
 
 const makeExt = (
   id: string,
@@ -42,26 +50,25 @@ describe("pipeline composition", () => {
   it.live("short-circuit: skipping next prevents inner chain from running", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipeline("prompt.system", (input, next) => {
+      pipeline("tool.execute", (input, next) => {
         log.push("inner")
         return next(input)
       }),
     ])
     const outer = makeExt("outer", "project", [
-      pipeline("prompt.system", (_input, _next) => {
+      pipeline("tool.execute", (_input, _next) => {
         log.push("outer-short-circuit")
         return Effect.succeed("override")
       }),
     ])
 
-    const compiled = compilePipelines([inner, outer])
+    const compiled = compileRuntimeSlots([inner, outer])
     return compiled
-      .runPipeline(
-        "prompt.system",
-        { basePrompt: "real", agent: Agents.cowork },
-        (input) => {
+      .executeTool(
+        stubToolExecuteInput,
+        () => {
           log.push("base")
-          return Effect.succeed(input.basePrompt)
+          return Effect.succeed("real")
         },
         stubCtx,
       )
@@ -78,7 +85,7 @@ describe("pipeline composition", () => {
   it.live("multiple next() calls re-runs inner chain (retry semantics allowed)", () => {
     let baseCalls = 0
     const retrying = makeExt("retrier", "project", [
-      pipeline("prompt.system", (input, next) =>
+      pipeline("tool.execute", (input, next) =>
         Effect.gen(function* () {
           const first = yield* next(input)
           const second = yield* next(input)
@@ -87,14 +94,13 @@ describe("pipeline composition", () => {
       ),
     ])
 
-    const compiled = compilePipelines([retrying])
+    const compiled = compileRuntimeSlots([retrying])
     return compiled
-      .runPipeline(
-        "prompt.system",
-        { basePrompt: "p", agent: Agents.cowork },
-        (input) => {
+      .executeTool(
+        stubToolExecuteInput,
+        () => {
           baseCalls += 1
-          return Effect.succeed(`${input.basePrompt}-${String(baseCalls)}`)
+          return Effect.succeed(`p-${String(baseCalls)}`)
         },
         stubCtx,
       )
@@ -111,17 +117,16 @@ describe("pipeline composition", () => {
   it.live("typed errors from inner chain propagate to outer", () => {
     const passThrough = makeExt("pass", "project", [
       pipeline(
-        "prompt.system",
+        "tool.execute",
         // outer doesn't catch — error must propagate
         (input, next) => next(input),
       ),
     ])
 
-    const compiled = compilePipelines([passThrough])
+    const compiled = compileRuntimeSlots([passThrough])
     return compiled
-      .runPipeline(
-        "prompt.system",
-        { basePrompt: "p", agent: Agents.cowork },
+      .executeTool(
+        stubToolExecuteInput,
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         () => Effect.fail(new CustomError({ reason: "boom" })) as never,
         stubCtx,
@@ -135,32 +140,31 @@ describe("pipeline composition", () => {
   it.live("defect in middle pipeline falls through to outer's previous", () => {
     const log: string[] = []
     const inner = makeExt("inner", "builtin", [
-      pipeline("prompt.system", (input, next) => {
+      pipeline("tool.execute", (input, next) => {
         log.push("inner")
         return next(input)
       }),
     ])
     const middle = makeExt("middle", "user", [
-      pipeline("prompt.system", () => {
+      pipeline("tool.execute", () => {
         log.push("middle-defect")
         throw new Error("middle blew up")
       }),
     ])
     const outer = makeExt("outer", "project", [
-      pipeline("prompt.system", (input, next) => {
+      pipeline("tool.execute", (input, next) => {
         log.push("outer")
         return next(input).pipe(Effect.map((r) => `${r}!`))
       }),
     ])
 
-    const compiled = compilePipelines([inner, middle, outer])
+    const compiled = compileRuntimeSlots([inner, middle, outer])
     return compiled
-      .runPipeline(
-        "prompt.system",
-        { basePrompt: "ok", agent: Agents.cowork },
-        (input) => {
+      .executeTool(
+        stubToolExecuteInput,
+        () => {
           log.push("base")
-          return Effect.succeed(input.basePrompt)
+          return Effect.succeed("ok")
         },
         stubCtx,
       )

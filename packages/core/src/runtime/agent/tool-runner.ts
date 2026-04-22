@@ -258,10 +258,9 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             )
             const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
 
-            // Run tool.execute interceptor, falling back to direct tool execution
-            const executeResult = yield* activeRegistry.pipelines
-              .runPipeline(
-                "tool.execute",
+            // Run the legacy tool.execute shim, falling back to direct tool execution.
+            const executeResult = yield* activeRegistry.runtimeSlots
+              .executeTool(
                 {
                   toolCallId: toolCall.toolCallId,
                   toolName: toolCall.toolName,

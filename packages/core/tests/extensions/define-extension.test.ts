@@ -20,7 +20,8 @@ import {
   type SystemPromptInput,
 } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import { testSetupCtx } from "@gent/core/test-utils"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
@@ -30,6 +31,20 @@ const stubHostCtx = {
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
+
+const stubProjectionCtx = {
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  cwd: "/tmp",
+  home: "/tmp",
+  turn: {
+    sessionId: SessionId.of("test-session"),
+    branchId: BranchId.of("test-branch"),
+    agent: Agents.cowork,
+    allTools: [],
+    agentName: "cowork",
+  },
+}
 
 const setupOf = (ext: ReturnType<typeof defineExtension>) => ext.setup(testSetupCtx())
 
@@ -229,12 +244,10 @@ describe("defineExtension", () => {
       const resolved = resolveExtensions([loaded])
       expect(resolved.tools.get("from-define")?.name).toBe("from-define")
 
-      const compiled = compilePipelines([loaded])
-      const result = yield* compiled.runPipeline(
-        "prompt.system",
+      const compiled = compileRuntimeSlots([loaded])
+      const result = yield* compiled.resolveSystemPrompt(
         { basePrompt: "yo", agent: Agents.cowork },
-        (input) => Effect.succeed(input.basePrompt),
-        stubHostCtx,
+        { projection: stubProjectionCtx, host: stubHostCtx },
       )
       expect(result).toBe("yo!!")
     }),

@@ -13,8 +13,9 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/extension"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { compilePipelines } from "@gent/core/runtime/extensions/pipeline-host"
+import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { pipeline } from "@gent/core/domain/contribution"
 import { tool } from "@gent/core/extensions/api"
@@ -26,6 +27,20 @@ const stubCtx = {
   cwd: "/tmp",
   home: "/tmp",
 } as unknown as ExtensionHostContext
+
+const stubProjectionCtx = {
+  sessionId: SessionId.of("test-session"),
+  branchId: BranchId.of("test-branch"),
+  cwd: "/tmp",
+  home: "/tmp",
+  turn: {
+    sessionId: SessionId.of("test-session"),
+    branchId: BranchId.of("test-branch"),
+    agent: Agents.cowork,
+    allTools: [],
+    agentName: "cowork",
+  },
+}
 
 const toolReturning = (name: string, label: string) =>
   tool({
@@ -186,18 +201,16 @@ describe("scope precedence", () => {
         })
 
       // Pass out of order to prove sorting, not insertion
-      const compiled = compilePipelines([
+      const compiled = compileRuntimeSlots([
         make("p", "project"),
         make("a", "builtin"),
         make("u", "user"),
       ])
 
       return compiled
-        .runPipeline(
-          "prompt.system",
+        .resolveSystemPrompt(
           { basePrompt: "x", agent: Agents.cowork },
-          () => Effect.succeed("base"),
-          stubCtx,
+          { projection: stubProjectionCtx, host: stubCtx },
         )
         .pipe(
           Effect.tap(() =>

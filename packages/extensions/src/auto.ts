@@ -19,8 +19,6 @@ import {
   defineExtension,
   defineResource,
   isRecord,
-  pipeline,
-  subscription,
   type ResourceMachine,
   type ExtensionEffect,
   type ToolResultInput,
@@ -678,8 +676,6 @@ export const AutoExtension = defineExtension({
   id: EXTENSION_ID,
   projections: [AutoProjection],
   capabilities: [AutoCheckpointTool],
-  pipelines: [pipeline("tool.result", journalInterceptorImpl)],
-  subscriptions: [subscription("turn.after", "isolate", autoHandoffImpl)],
   // Single Resource carries the AutoJournal service layer AND the auto
   // workflow machine. The machine declares `AutoJournal` in its `slots`
   // requirements; the `layer` here provides it. C3.5b merge per the
@@ -690,6 +686,14 @@ export const AutoExtension = defineExtension({
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),
       machine: autoWorkflow,
+      runtime: {
+        toolResult: (input, hostCtx) =>
+          journalInterceptorImpl(input, (state) => Effect.succeed(state.result), hostCtx),
+        turnAfter: {
+          failureMode: "isolate",
+          handler: autoHandoffImpl,
+        },
+      },
     }),
   ],
 })

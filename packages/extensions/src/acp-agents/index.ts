@@ -23,7 +23,7 @@ import {
   defineExtension,
   defineResource,
   ExternalDriverRef,
-  pipeline,
+  type ProjectionContribution,
   resource,
   sectionPatternFor,
 } from "@gent/core/extensions/api"
@@ -146,54 +146,35 @@ const stripNativeToolSections = (compiled: string): { stripped: string; anyStrip
 const looksLikeNativeToolSurface = (s: string): boolean =>
   s.includes("## Available Tools") || s.includes("## Tool Guidelines")
 
+const CodemodePromptProjection: ProjectionContribution<true> = {
+  id: "acp-codemode-prompt",
+  query: () => Effect.succeed(true),
+  systemPrompt: (_value, input) =>
+    Effect.gen(function* () {
+      if (input.driverToolSurface !== "codemode") return input.basePrompt
+      const tools = input.tools ?? []
+      if (tools.length === 0) return input.basePrompt
+      const codemode = codemodeInstructions(generateToolDescription(tools))
+      const { stripped } = stripNativeToolSections(input.basePrompt)
+      if (looksLikeNativeToolSurface(stripped)) {
+        yield* Effect.logWarning(
+          "acp.codemode.native-tool-surface-leak — " +
+            "prompt still contains '## Available Tools' / '## Tool Guidelines' " +
+            "after marker stripping. The model will see contradictory tool " +
+            "surfaces (codemode block + native section). Wrap native tool " +
+            "section content with `withSectionMarkers(id, content)` from " +
+            "`@gent/core/extensions/api`, or remove the upstream native " +
+            "section entirely.",
+        )
+      }
+      return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
+    }),
+}
+
 export const AcpAgentsExtension = defineExtension({
   id: "@gent/acp-agents",
   agents: [claudeCodeAgent, ...protocolAgents],
-  pipelines: [
-    // When the resolved driver declares `toolSurface: "codemode"`, replace
-    // the native tool sections (`tool-list` + `tool-guidelines`) with a
-    // codemode section — the model would otherwise see two contradictory
-    // tool surfaces. Detection keys off driver metadata, not driver-id
-    // prefix.
-    pipeline("prompt.system", (input, next) =>
-      Effect.gen(function* () {
-        // Always run downstream first so this hook composes on top of
-        // any upstream pipeline edits (additions, rewrites). We then
-        // strip native tool sections via the marker sentinels and
-        // append the codemode block — composing with the
-        // post-`next(input)` string instead of recompiling from raw
-        // sections preserves edits another extension may have made.
-        const base = yield* next(input)
-        if (input.driverToolSurface !== "codemode") return base
-        const tools = input.tools ?? []
-        if (tools.length === 0) return base
-        const codemode = codemodeInstructions(generateToolDescription(tools))
-        const { stripped } = stripNativeToolSections(base)
-        // Counsel C6 + C8 deep — warn whenever the post-strip prompt
-        // still looks like a native tool surface. Covers two cases:
-        //   (a) hand-rolled extension emitted a tool section without
-        //       wrapping it in `withSectionMarkers` (no markers found);
-        //   (b) only some marker-wrapped sections were found, but raw
-        //       `## Available Tools` / `## Tool Guidelines` text from
-        //       another source still leaks through.
-        // Either way the model sees two contradictory tool surfaces.
-        // Failing loudly would break (a) on first turn; logging keeps
-        // the defect visible without regressing compatibility.
-        if (looksLikeNativeToolSurface(stripped)) {
-          yield* Effect.logWarning(
-            "acp.codemode.native-tool-surface-leak — " +
-              "prompt still contains '## Available Tools' / '## Tool Guidelines' " +
-              "after marker stripping. The model will see contradictory tool " +
-              "surfaces (codemode block + native section). Wrap native tool " +
-              "section content with `withSectionMarkers(id, content)` from " +
-              "`@gent/core/extensions/api`, or remove the upstream native " +
-              "section entirely.",
-          )
-        }
-        return stripped.length === 0 ? codemode : `${stripped}\n\n${codemode}`
-      }),
-    ),
-  ],
+  projections: [CodemodePromptProjection],
   externalDrivers: () => {
     const claudeCodeId = `acp-${CLAUDE_CODE_AGENT_NAME}`
     const claudeCode = {
