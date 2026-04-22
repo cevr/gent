@@ -1,10 +1,18 @@
 /**
- * PipelineContribution — transforming middleware with `next`.
+ * PipelineContribution — legacy transforming middleware migration shim.
  *
- * Six hooks where the runtime invokes a chain of contributions, each of which
+ * Historical six-hook middleware shape where the runtime invokes a chain of contributions, each of which
  * may transform input, transform output, or short-circuit. The handler shape
  * is `(input, next, ctx) => Effect<output>` — `next` actually does work and
  * the return value is meaningful (output type ≠ void).
+ *
+ * New runtime code should prefer explicit slots:
+ * - `Projection.systemPrompt`
+ * - `Projection.contextMessages`
+ * - `Resource.runtime.toolResult`
+ *
+ * This file remains only as a migration bridge until builtin callers move off
+ * string-keyed middleware and the host can be deleted.
  *
  * Sister primitive: `SubscriptionContribution` for void observers (`turn.before`,
  * `turn.after`, `message.output`) where `next` was bookkeeping in the legacy

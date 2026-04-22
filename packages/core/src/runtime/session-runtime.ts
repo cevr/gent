@@ -226,10 +226,8 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
               { sessionId: input.sessionId, branchId: input.branchId, sessionCwd: session?.cwd },
               { ...hostDeps, extensionRegistry: activeRegistry },
             )
-            const content = yield* activeRegistry.pipelines.runPipeline(
-              "message.input",
+            const content = yield* activeRegistry.runtimeSlots.normalizeMessageInput(
               { content: input.content, sessionId: input.sessionId, branchId: input.branchId },
-              (state) => Effect.succeed(state.content),
               hostCtx,
             )
 

@@ -17,6 +17,7 @@ import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { type CompiledPipelines, compilePipelines } from "./pipeline-host.js"
 import { type CompiledSubscriptions, compileSubscriptions } from "./subscription-host.js"
+import { compileRuntimeSlots, type CompiledRuntimeSlots } from "./runtime-slots.js"
 import { compileProjections, type CompiledProjections } from "./projection-registry.js"
 import { compileCapabilities, type CompiledCapabilities } from "./capability-host.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
@@ -43,6 +44,7 @@ export interface ResolvedExtensions {
   readonly permissionRules: ReadonlyArray<PermissionRule>
   readonly pipelines: CompiledPipelines
   readonly subscriptions: CompiledSubscriptions
+  readonly runtimeSlots: CompiledRuntimeSlots
   readonly projections: CompiledProjections
   readonly capabilities: CompiledCapabilities
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -271,6 +273,7 @@ export const resolveExtensions = (
 
   const pipelines = compilePipelines(sorted)
   const subscriptions = compileSubscriptions(sorted)
+  const runtimeSlots = compileRuntimeSlots(sorted, pipelines, subscriptions)
   const projections = compileProjections(sorted)
   const capabilities = compileCapabilities(sorted)
   const extensionStatuses: ExtensionStatusInfo[] = [
@@ -302,6 +305,7 @@ export const resolveExtensions = (
     permissionRules,
     pipelines,
     subscriptions,
+    runtimeSlots,
     projections,
     capabilities,
     extensions: sorted,
@@ -424,6 +428,7 @@ export interface ExtensionRegistryService {
   // Pipelines (transformers with `next`) and Subscriptions (void observers)
   readonly pipelines: CompiledPipelines
   readonly subscriptions: CompiledSubscriptions
+  readonly runtimeSlots: CompiledRuntimeSlots
 
   // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
@@ -481,6 +486,7 @@ export class ExtensionRegistry extends Context.Service<
       listExtensionStatuses: () => Effect.succeed(resolved.extensionStatuses),
       pipelines: resolved.pipelines,
       subscriptions: resolved.subscriptions,
+      runtimeSlots: resolved.runtimeSlots,
       getResolved: () => resolved,
     })
 

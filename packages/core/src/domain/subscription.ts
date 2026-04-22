@@ -1,10 +1,18 @@
 /**
- * SubscriptionContribution — ordered void observers with declared failure policy.
+ * SubscriptionContribution — legacy ordered observer migration shim.
  *
- * Three hooks where the runtime fans out an event to all subscribers and
+ * Historical three-hook shape where the runtime fans out an event to all subscribers and
  * doesn't care about return values: `turn.before`, `turn.after`,
  * `message.output`. Authoring shape is `(event, ctx) => Effect<void>` — no
  * `next`, no return value.
+ *
+ * New runtime code should prefer explicit slots:
+ * - `Resource.runtime.turnBefore`
+ * - `Resource.runtime.turnAfter`
+ * - `Resource.runtime.messageOutput`
+ *
+ * This file remains only as a migration bridge until builtin callers move off
+ * the generic keyed observer registry and the host can be deleted.
  *
  * Sister primitive: `PipelineContribution` for transformers that genuinely
  * use `next` and return a meaningful output. The codex C6 correction was

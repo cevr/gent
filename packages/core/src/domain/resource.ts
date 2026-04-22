@@ -36,11 +36,18 @@ import type { Context, Effect, Layer, Schema } from "effect"
 import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentName } from "./agent.js"
 import type { AgentEvent } from "./event.js"
-import type { ExtensionEffect } from "./extension.js"
+import type {
+  ExtensionEffect,
+  MessageOutputInput,
+  ToolResultInput,
+  TurnAfterInput,
+  TurnBeforeInput,
+} from "./extension.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
 } from "./extension-protocol.js"
+import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
 
@@ -125,6 +132,33 @@ export interface ResourceSchedule {
   }
 }
 
+// ── Explicit runtime slots ──
+
+/** Failure policy for explicit Resource-owned runtime reactions. */
+export type ResourceReactionFailureMode = "continue" | "isolate" | "halt"
+
+export interface ResourceReaction<Input, E = never, R = never> {
+  readonly failureMode: ResourceReactionFailureMode
+  readonly handler: (input: Input, ctx: ExtensionHostContext) => Effect.Effect<void, E, R>
+}
+
+export interface ResourceRuntimeSlots<E = never, R = never> {
+  readonly turnBefore?: ResourceReaction<TurnBeforeInput, E, R>
+  readonly turnAfter?: ResourceReaction<TurnAfterInput, E, R>
+  readonly messageOutput?: ResourceReaction<MessageOutputInput, E, R>
+  /**
+   * Explicit tool-result rewrite slot.
+   *
+   * Replaces the generic `"tool.result"` pipeline for long-lived behaviors
+   * that enrich or persist tool results based on resource-owned state.
+   * The handler receives the current result and returns the next result.
+   */
+  readonly toolResult?: (
+    input: ToolResultInput,
+    ctx: ExtensionHostContext,
+  ) => Effect.Effect<unknown, E, R>
+}
+
 // ── The Resource machine sub-shape (C3.5) ──
 
 /** Effects a Resource machine may declare in `afterTransition`. Same shape
@@ -194,6 +228,9 @@ export type AnyResourceMachine = ResourceMachine<any, any, any, any>
  * - `machine` — optional state machine + mappers + declared effects.
  *   `MachineEngine` (resource-host/machine-engine.ts) supervises one
  *   actor per session per Resource that declares `machine`.
+ * - `runtime` — explicit runtime slots for long-lived behavior that reacts
+ *   to turns/messages or enriches tool results without going through a
+ *   string-keyed middleware registry.
  *
  * Authors typically create a Resource through the smart constructor
  * `defineResource(...)`. The `tag` is the canonical entry into the service
@@ -222,6 +259,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
   readonly machine?: AnyResourceMachine
+  readonly runtime?: ResourceRuntimeSlots<E, A | R>
 }
 
 /**
@@ -249,6 +287,7 @@ export interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> 
   readonly subscriptions?: ReadonlyArray<ResourceSubscription>
   readonly schedule?: ReadonlyArray<ResourceSchedule>
   readonly machine?: AnyResourceMachine
+  readonly runtime?: ResourceRuntimeSlots<E, NoInfer<A> | R>
 }
 
 /**

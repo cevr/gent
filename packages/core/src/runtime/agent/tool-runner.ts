@@ -23,6 +23,7 @@ import {
   unavailableHostDeps,
   type MakeExtensionHostContextDeps,
 } from "../make-extension-host-context.js"
+import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { AgentRunnerService } from "../../domain/agent.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { ExtensionTurnControl } from "../extensions/turn-control.js"
@@ -81,12 +82,11 @@ const resolveActivePermission = (
 
 const runPermissionCheck = (params: {
   toolCall: { toolName: string; input: unknown }
-  ctx: ToolContext
-  pipelines: ExtensionRegistryService["pipelines"]
+  ctx: ExtensionHostContext
+  runtimeSlots: ExtensionRegistryService["runtimeSlots"]
   permission: PermissionService
 }): Effect.Effect<"allowed" | "denied"> =>
-  params.pipelines.runPipeline(
-    "permission.check",
+  params.runtimeSlots.checkPermission(
     { toolName: params.toolCall.toolName, input: params.toolCall.input },
     (input) => params.permission.check(input.toolName, input.input),
     params.ctx,
@@ -128,8 +128,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const activeRegistry = profileOverride?.registry ?? extensionRegistry
             const activeStateRuntime = profileOverride?.stateRuntime ?? extensionStateRuntime
             const activePermission = resolveActivePermission(basePermissionOpt, profileOverride)
-            const activePipelines = activeRegistry.pipelines
-
             const tool: AnyToolDefinition | undefined = yield* activeRegistry.getTool(
               toolCall.toolName,
             )
@@ -148,7 +146,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const permCheckResult = yield* runPermissionCheck({
               toolCall,
               ctx,
-              pipelines: activePipelines,
+              runtimeSlots: activeRegistry.runtimeSlots,
               permission: activePermission,
             }).pipe(
               Effect.catchEager((e) =>
@@ -261,7 +259,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const richCtx: ToolContext = { ...hostCtx, toolCallId: ctx.toolCallId }
 
             // Run tool.execute interceptor, falling back to direct tool execution
-            const executeResult = yield* activePipelines
+            const executeResult = yield* activeRegistry.pipelines
               .runPipeline(
                 "tool.execute",
                 {
@@ -304,9 +302,8 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             }
 
             // Run tool.result interceptor — extensions can enrich/append to tool results
-            const enrichedResult = yield* activePipelines
-              .runPipeline(
-                "tool.result",
+            const enrichedResult = yield* activeRegistry.runtimeSlots
+              .transformToolResult(
                 {
                   toolCallId: toolCall.toolCallId,
                   toolName: toolCall.toolName,
@@ -316,7 +313,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   sessionId: ctx.sessionId,
                   branchId: ctx.branchId,
                 },
-                (input) => Effect.succeed(input.result),
                 richCtx,
               )
               .pipe(

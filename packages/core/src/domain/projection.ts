@@ -17,14 +17,22 @@
  *   2. Optionally exposes the projected value through:
  *      - `prompt` — additional `PromptSection`s injected into the system prompt
  *      - `policy` — `ToolPolicyFragment` shaping the active tool set
+ *      - `systemPrompt` — explicit system-prompt rewrite slot
+ *      - `contextMessages` — explicit context-message rewrite slot
  *   3. Is evaluated on demand by `ProjectionRegistry.evaluateTurn(ctx)`
  *      during prompt assembly. There is no per-event reducer.
  *
  * @module
  */
 import { Schema, type Effect } from "effect"
-import type { ExtensionTurnContext, ToolPolicyFragment } from "./extension.js"
+import type {
+  ContextMessagesInput,
+  ExtensionTurnContext,
+  SystemPromptInput,
+  ToolPolicyFragment,
+} from "./extension.js"
 import type { BranchId, SessionId } from "./ids.js"
+import type { Message } from "./message.js"
 import type { PromptSection } from "./prompt.js"
 import type { ReadOnlyTag } from "./read-only.js"
 
@@ -84,6 +92,33 @@ export interface ProjectionContribution<A = unknown, R extends ReadOnlyTag = nev
 
   /** Project the queried value into a tool policy fragment. */
   readonly policy?: (value: A, ctx: ProjectionContext) => ToolPolicyFragment
+
+  /**
+   * Explicit system-prompt rewrite slot.
+   *
+   * Replaces the generic `"prompt.system"` pipeline for read-only,
+   * turn-scoped prompt shaping. The input carries the already-compiled
+   * prompt string plus the structured sections used to build it; return the
+   * final prompt string the runtime should send.
+   */
+  readonly systemPrompt?: (
+    value: A,
+    input: SystemPromptInput,
+    ctx: ProjectionTurnContext,
+  ) => Effect.Effect<string>
+
+  /**
+   * Explicit context-message rewrite slot.
+   *
+   * Replaces the generic `"context.messages"` pipeline for read-only,
+   * turn-scoped context shaping. Return the message list the runtime should
+   * send to the driver.
+   */
+  readonly contextMessages?: (
+    value: A,
+    input: ContextMessagesInput,
+    ctx: ProjectionTurnContext,
+  ) => Effect.Effect<ReadonlyArray<Message>>
 }
 
 /**

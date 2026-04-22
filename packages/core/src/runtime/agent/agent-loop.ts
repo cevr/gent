@@ -297,23 +297,7 @@ const resolveTurnContext = (params: {
         ? new AgentDefinition({ ...effectiveAgent, driver: driverResolution.driver })
         : effectiveAgent
 
-    // Run context.messages pipeline — extensions can inject hidden context or filter messages
-    const interceptedMessages = yield* params.extensionRegistry.pipelines.runPipeline(
-      "context.messages",
-      {
-        messages: rawMessages,
-        agent: effectiveAgent,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-      },
-      (input) => Effect.succeed(input.messages),
-      params.hostCtx,
-    )
-
-    // Filter out hidden messages — visible in transcript but excluded from LLM context
-    const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
-
-    // Derive extension projections from state machines
+    // Derive extension projections from state machines and explicit prompt/message slots.
     const allTools = yield* params.extensionRegistry.listTools()
     const turnCtx = {
       sessionId: params.sessionId,
@@ -325,15 +309,32 @@ const resolveTurnContext = (params: {
       agentName: currentAgent,
       parentToolCallId: params.runSpec?.parentToolCallId,
     }
-    // Evaluate `ProjectionContribution`-based projections — workflows no
-    // longer carry a `turn.project` bridge field; per-turn prompt/policy is
-    // exclusively the projection registry's responsibility now.
-    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateTurn({
+    const projectionCtx = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       cwd: params.hostCtx.cwd,
       home: params.hostCtx.home,
+      ...(params.sessionCwd !== undefined ? { sessionCwd: params.sessionCwd } : {}),
       turn: turnCtx,
+    }
+    const interceptedMessages = yield* params.extensionRegistry.runtimeSlots.resolveContextMessages(
+      {
+        messages: rawMessages,
+        agent: effectiveAgent,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+      },
+      { projection: projectionCtx, host: params.hostCtx },
+    )
+
+    // Filter out hidden messages — visible in transcript but excluded from LLM context
+    const messages = interceptedMessages.filter((m) => m.metadata?.hidden !== true)
+
+    // Evaluate `ProjectionContribution`-based projections — workflows no
+    // longer carry a `turn.project` bridge field; per-turn prompt/policy is
+    // exclusively the projection registry's responsibility now.
+    const projEval = yield* params.extensionRegistry.getResolved().projections.evaluateTurn({
+      ...projectionCtx,
     })
     const extensionProjections = [
       ...projEval.policyFragments.map((p) => ({ toolPolicy: p })),
@@ -371,8 +372,7 @@ const resolveTurnContext = (params: {
     )
     const turnPrompt = compileSystemPrompt(sections)
     const driverToolSurface = yield* resolveDriverToolSurface(dispatchAgent, params.driverRegistry)
-    const systemPrompt = yield* params.extensionRegistry.pipelines.runPipeline(
-      "prompt.system",
+    const systemPrompt = yield* params.extensionRegistry.runtimeSlots.resolveSystemPrompt(
       {
         basePrompt: turnPrompt,
         agent: dispatchAgent,
@@ -382,8 +382,7 @@ const resolveTurnContext = (params: {
         ...(driverToolSurface !== undefined ? { driverToolSurface } : {}),
         sections,
       },
-      (input) => Effect.succeed(input.basePrompt),
-      params.hostCtx,
+      { projection: projectionCtx, host: params.hostCtx },
     )
     const session = yield* params.storage
       .getSession(params.sessionId)
@@ -585,13 +584,8 @@ const persistAssistantTurn = (params: {
     const existing = yield* params.storage.getMessage(assistantMessage.id)
     if (existing !== undefined) return
 
-    // Fire message.output subscription — only for new messages (idempotent).
-    // SubscriptionHost handles per-subscriber failureMode internally; the
-    // overall emit Effect never fails (succeeds with void), so no
-    // catch-and-swallow at the call site.
     if (params.extensionRegistry !== undefined && params.hostCtx !== undefined) {
-      yield* params.extensionRegistry.subscriptions.emit(
-        "message.output",
+      yield* params.extensionRegistry.runtimeSlots.emitMessageOutput(
         {
           sessionId: params.sessionId,
           branchId: params.branchId,
@@ -765,8 +759,7 @@ const runTurnBeforeHook = (
   branchId: BranchId,
   hostCtx: ExtensionHostContext,
 ) =>
-  extensionRegistry.subscriptions.emit(
-    "turn.before",
+  extensionRegistry.runtimeSlots.emitTurnBefore(
     {
       sessionId,
       branchId,
@@ -1168,11 +1161,8 @@ const finalizeTurnPhase = (params: {
       )
       .pipe(Effect.orDie)
 
-    // Fire turn.after subscription — extensions can schedule follow-ups, count
-    // turns, etc. Per-subscriber failureMode handled inside the host.
     yield* Effect.logDebug("finalize.turn-after.start")
-    yield* params.extensionRegistry.subscriptions.emit(
-      "turn.after",
+    yield* params.extensionRegistry.runtimeSlots.emitTurnAfter(
       {
         sessionId: params.sessionId,
         branchId: params.branchId,
