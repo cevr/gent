@@ -25,7 +25,7 @@ import { formatToolInput } from "../components/message-list-utils"
 import { formatConnectionIssue } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
 import { backfillBranchMessages } from "./use-session-feed-boundary"
-import type { ClientContextValue } from "../client/context"
+import type { ClientSessionValue, ClientTransportValue } from "../client/context"
 
 // ── Types ──
 
@@ -44,6 +44,12 @@ export interface SessionFeed {
   activeTool: () => string | undefined
   clear: () => void
 }
+
+type SessionFeedClient = Pick<ClientSessionValue, "session"> &
+  Pick<
+    ClientTransportValue,
+    "client" | "runtime" | "log" | "setConnectionIssue" | "waitForTransportReady"
+  >
 
 type SessionFeedStore = {
   messages: Message[]
@@ -256,7 +262,7 @@ const isToolResultEvent = (event: AgentEvent): event is ToolResultEvent =>
 export function useSessionFeed(
   sessionId: () => SessionId,
   branchId: () => BranchId,
-  client: ClientContextValue,
+  client: SessionFeedClient,
   cast: <A, E>(effect: Effect.Effect<A, E, never>) => void,
   callbacks: SessionFeedCallbacks,
   initialPrompt?: string,

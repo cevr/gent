@@ -6,7 +6,7 @@ import { Exit, Fiber, Cause } from "effect"
 import type { Effect } from "effect"
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js"
 import { type Result, initial, success, failure } from "../atom-solid/result"
-import { useClient } from "../client/index"
+import { useClientRuntime } from "../client/index"
 
 export interface UseRuntimeReturn {
   /** Run Effect, track result in signal. Returns [result accessor, cancel fn] */
@@ -19,9 +19,7 @@ export interface UseRuntimeReturn {
  * Hook to run Effects via the client's GentRuntime
  */
 export function useRuntime(): UseRuntimeReturn {
-  const client = useClient()
-  const runtime = client.runtime
-  const log = client.log
+  const { runtime, log } = useClientRuntime()
 
   const call = <A, E, R>(effect: Effect.Effect<A, E, R>): [Accessor<Result<A, E>>, () => void] => {
     const [result, setResult] = createSignal<Result<A, E>>(initial<A, E>(true))

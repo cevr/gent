@@ -25,7 +25,13 @@ import {
   type ComposerEvent,
   ComposerState,
 } from "../components/composer-state"
-import { useClient } from "../client/index"
+import {
+  useClientActions,
+  useClientAgent,
+  useClientSession,
+  useClientTransport,
+  type ClientContextValue,
+} from "../client/index"
 import { executeSlashCommand } from "../commands/slash-commands"
 import { useCommand } from "../command/index"
 import type { Command } from "../command/types"
@@ -57,7 +63,7 @@ type QueueState = {
 }
 
 export interface SessionController {
-  client: ReturnType<typeof useClient>
+  client: ClientContextValue
   items: () => SessionItem[]
   messages: () => Message[]
   queueState: () => QueueState
@@ -141,7 +147,16 @@ export function createSessionController(props: {
   debugMode?: boolean
   missingAuthProviders?: readonly string[]
 }): SessionController {
-  const client = useClient()
+  const transport = useClientTransport()
+  const sessionClient = useClientSession()
+  const agent = useClientAgent()
+  const actions = useClientActions()
+  const client: ClientContextValue = {
+    ...transport,
+    ...sessionClient,
+    ...agent,
+    ...actions,
+  }
   const command = useCommand()
   const ext = useExtensionUI()
   const router = useRouter()

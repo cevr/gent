@@ -38,7 +38,12 @@ import {
   makeClientLifecycleLayer,
 } from "./client-services"
 import { useWorkspace } from "../workspace/index"
-import { useClient } from "../client/context"
+import {
+  useClientActions,
+  useClientSession,
+  useClientTransport,
+  useClientTransportState,
+} from "../client/context"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SolidComponent = (props?: any) => _JSX.Element
@@ -91,7 +96,10 @@ const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
 export function ExtensionUIProvider(props: { children: JSX.Element }) {
   const workspace = useWorkspace()
-  const clientCtx = useClient()
+  const transport = useClientTransport()
+  const session = useClientSession()
+  const actions = useClientActions()
+  const transportState = useClientTransportState()
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<Command>>([])
@@ -147,14 +155,14 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       BunFileSystem.layer,
       BunServices.layer,
       makeClientTransportLayer({
-        client: clientCtx.client,
-        runtime: clientCtx.runtime,
+        client: transport.client,
+        runtime: transport.runtime,
         currentSession: () => {
-          const session = clientCtx.session()
-          if (session === null) return undefined
-          return { sessionId: session.sessionId, branchId: session.branchId }
+          const current = session.session()
+          if (current === null) return undefined
+          return { sessionId: current.sessionId, branchId: current.branchId }
         },
-        onExtensionStateChanged: (cb) => clientCtx.onExtensionStateChanged(cb),
+        onExtensionStateChanged: (cb) => transportState.onExtensionStateChanged(cb),
       }),
       makeClientWorkspaceLayer({
         cwd: workspace.cwd,
@@ -162,17 +170,17 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       }),
       makeClientShellLayer({
         send: (message) => {
-          const session = clientCtx.session()
-          if (session === null) return
-          clientCtx.runtime.cast(
-            clientCtx.client.extension.send({
-              sessionId: session.sessionId,
+          const current = session.session()
+          if (current === null) return
+          transport.runtime.cast(
+            transport.client.extension.send({
+              sessionId: current.sessionId,
               message,
-              branchId: session.branchId,
+              branchId: current.branchId,
             }),
           )
         },
-        sendMessage: (content) => clientCtx.sendMessage(content),
+        sendMessage: (content) => actions.sendMessage(content),
         openOverlay: (id) => overlayDispatch().open(id),
         closeOverlay: () => overlayDispatch().close(),
       }),
@@ -231,8 +239,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
       setResolved(result)
 
       // Fetch server-side extension commands
-      clientCtx.runtime.cast(
-        clientCtx.client.extension.listCommands().pipe(
+      transport.runtime.cast(
+        transport.client.extension.listCommands().pipe(
           Effect.tap((cmds) =>
             Effect.sync(() => {
               setServerCommands(
@@ -242,22 +250,22 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                   slash: c.name,
                   category: "Extension",
                   onSelect: () => {
-                    const sid = clientCtx.session()?.sessionId
-                    const bid = clientCtx.session()?.branchId
+                    const sid = session.session()?.sessionId
+                    const bid = session.session()?.branchId
                     if (sid !== undefined && bid !== undefined) {
-                      clientCtx.runtime.cast(
-                        clientCtx.client.extension
+                      transport.runtime.cast(
+                        transport.client.extension
                           .invokeCommand({ name: c.name, args: "", sessionId: sid, branchId: bid })
                           .pipe(Effect.catchEager(() => Effect.void)),
                       )
                     }
                   },
                   onSlash: (args: string) => {
-                    const sid = clientCtx.session()?.sessionId
-                    const bid = clientCtx.session()?.branchId
+                    const sid = session.session()?.sessionId
+                    const bid = session.session()?.branchId
                     if (sid !== undefined && bid !== undefined) {
-                      clientCtx.runtime.cast(
-                        clientCtx.client.extension
+                      transport.runtime.cast(
+                        transport.client.extension
                           .invokeCommand({ name: c.name, args, sessionId: sid, branchId: bid })
                           .pipe(Effect.catchEager(() => Effect.void)),
                       )
@@ -292,8 +300,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
         setDynamicAutocomplete,
         setOverlayDispatch,
         setComposerStateProvider,
-        sessionId: () => clientCtx.session()?.sessionId,
-        branchId: () => clientCtx.session()?.branchId,
+        sessionId: () => session.session()?.sessionId,
+        branchId: () => session.session()?.branchId,
         clientRuntime,
       }}
     >

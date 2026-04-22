@@ -13,7 +13,7 @@ import {
   type ChildSessionEntry,
   type ChildToolCall,
 } from "../services/child-session-tracker"
-import type { ClientContextValue } from "../client/context"
+import type { ClientSessionValue, ClientTransportValue } from "../client/context"
 
 // Re-export types for consumers
 export type { ChildToolCall, ChildSessionEntry }
@@ -22,7 +22,10 @@ export interface UseChildSessionsReturn {
   getChildren: (toolCallId: string) => ChildSessionEntry[]
 }
 
-export function useChildSessions(client: ClientContextValue): UseChildSessionsReturn {
+type ChildSessionClient = Pick<ClientSessionValue, "session"> &
+  Pick<ClientTransportValue, "runtime">
+
+export function useChildSessions(client: ChildSessionClient): UseChildSessionsReturn {
   const [store, setStore] = createStore<{ entries: Record<string, ChildSessionEntry> }>({
     entries: {},
   })

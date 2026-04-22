@@ -88,10 +88,10 @@ export interface AgentState {
 }
 
 // =============================================================================
-// Client Context Value
+// Focused Client Surfaces
 // =============================================================================
 
-export interface ClientContextValue {
+export interface ClientTransportValue {
   /** Namespaced RPC client — returns Effects */
   client: GentNamespacedClient
   /** Runtime for executing Effects */
@@ -99,23 +99,6 @@ export interface ClientContextValue {
   /** Structured logger — flows through Effect's logger layer */
   log: ClientLog
 
-  // Session state (union)
-  sessionState: () => SessionState
-  session: () => Session | null
-  isActive: () => boolean
-  isLoading: () => boolean
-
-  // Agent state (derived from events)
-  agent: () => AgentName | undefined
-  agentStatus: () => AgentStatus
-  cost: () => number
-  model: () => string
-  // Derived accessors
-  isStreaming: () => boolean
-  isError: () => boolean
-  error: () => string | null
-  latestInputTokens: () => number
-  modelInfo: () => Model | undefined
   connectionState: () => ConnectionState | undefined
   waitForTransportReady: () => Effect.Effect<void>
   isReconnecting: () => boolean
@@ -123,12 +106,27 @@ export interface ClientContextValue {
   connectionIssue: () => string | null
   extensionHealth: () => ExtensionHealthSnapshot
 
-  // Agent state setters (for local errors only)
-  setError: (error: string | null) => void
   setConnectionIssue: (error: string | null) => void
 
+  // Extension state-change pulse subscription. Fires once per
+  // `ExtensionStateChanged` event seen on the active session for each
+  // registered subscriber. The pulse carries no payload — consumers
+  // refetch via the extension's typed `client.extension.request(...)`.
+  // Returns an unsubscribe function. Replaces a single-slot callback so
+  // multiple widgets can listen for their own extension's pulses.
+  onExtensionStateChanged: (
+    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
+  ) => () => void
+}
+
+export interface ClientSessionValue {
+  // Session state (union)
+  sessionState: () => SessionState
+  session: () => Session | null
+  isActive: () => boolean
+  isLoading: () => boolean
+
   // Session actions (fire-and-forget, update state internally)
-  sendMessage: (content: string) => void
   createSession: (onCreated?: (sessionId: SessionId, branchId: BranchId) => void) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
@@ -146,24 +144,44 @@ export interface ClientContextValue {
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentRpcError>
   drainQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
   getQueuedMessages: () => Effect.Effect<QueueSnapshot, GentRpcError>
+
   // Branch navigation (fire-and-forget)
   switchBranch: (branchId: BranchId, summarize?: boolean) => void
-
-  // Steering (fire-and-forget)
-  steer: (command: SteerCommandInput) => void
-
-  // Extension state-change pulse subscription. Fires once per
-  // `ExtensionStateChanged` event seen on the active session for each
-  // registered subscriber. The pulse carries no payload — consumers
-  // refetch via the extension's typed `client.extension.request(...)`.
-  // Returns an unsubscribe function. Replaces a single-slot callback so
-  // multiple widgets can listen for their own extension's pulses.
-  onExtensionStateChanged: (
-    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
-  ) => () => void
 }
 
-const ClientContext = createContext<ClientContextValue>()
+export interface ClientAgentValue {
+  // Agent state (derived from events)
+  agent: () => AgentName | undefined
+  agentStatus: () => AgentStatus
+  cost: () => number
+  model: () => string
+  // Derived accessors
+  isStreaming: () => boolean
+  isError: () => boolean
+  error: () => string | null
+  latestInputTokens: () => number
+  modelInfo: () => Model | undefined
+
+  // Agent state setters (for local errors only)
+  setError: (error: string | null) => void
+}
+
+export interface ClientActionValue {
+  // Session actions (fire-and-forget, update state internally)
+  sendMessage: (content: string) => void
+  // Steering (fire-and-forget)
+  steer: (command: SteerCommandInput) => void
+}
+
+export type ClientContextValue = ClientTransportValue &
+  ClientSessionValue &
+  ClientAgentValue &
+  ClientActionValue
+
+const ClientTransportContext = createContext<ClientTransportValue>()
+const ClientSessionContext = createContext<ClientSessionValue>()
+const ClientAgentContext = createContext<ClientAgentValue>()
+const ClientActionContext = createContext<ClientActionValue>()
 
 const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   extensions: [],
@@ -175,10 +193,76 @@ const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   },
 }
 
-export function useClient(): ClientContextValue {
-  const ctx = useContext(ClientContext)
-  if (ctx === undefined) throw new Error("useClient must be used within ClientProvider")
+const useRequiredContext = <T,>(ctx: T | undefined, name: string): T => {
+  if (ctx === undefined) throw new Error(`${name} must be used within ClientProvider`)
   return ctx
+}
+
+export function useClientTransport(): ClientTransportValue {
+  return useRequiredContext(useContext(ClientTransportContext), "ClientTransportContext")
+}
+
+export function useClientSession(): ClientSessionValue {
+  return useRequiredContext(useContext(ClientSessionContext), "ClientSessionContext")
+}
+
+export function useClientAgent(): ClientAgentValue {
+  return useRequiredContext(useContext(ClientAgentContext), "ClientAgentContext")
+}
+
+export function useClientActions(): ClientActionValue {
+  return useRequiredContext(useContext(ClientActionContext), "ClientActionContext")
+}
+
+export function useClient(): ClientContextValue {
+  const transport = useClientTransport()
+  const session = useClientSession()
+  const agent = useClientAgent()
+  const actions = useClientActions()
+  return {
+    ...transport,
+    ...session,
+    ...agent,
+    ...actions,
+  }
+}
+
+export function useClientRuntime(): Pick<ClientTransportValue, "runtime" | "log"> {
+  const { runtime, log } = useClientTransport()
+  return { runtime, log }
+}
+
+export function useClientTransportState(): Pick<
+  ClientTransportValue,
+  | "connectionState"
+  | "waitForTransportReady"
+  | "isReconnecting"
+  | "connectionGeneration"
+  | "connectionIssue"
+  | "extensionHealth"
+  | "setConnectionIssue"
+  | "onExtensionStateChanged"
+> {
+  const {
+    connectionState,
+    waitForTransportReady,
+    isReconnecting,
+    connectionGeneration,
+    connectionIssue,
+    extensionHealth,
+    setConnectionIssue,
+    onExtensionStateChanged,
+  } = useClientTransport()
+  return {
+    connectionState,
+    waitForTransportReady,
+    isReconnecting,
+    connectionGeneration,
+    connectionIssue,
+    extensionHealth,
+    setConnectionIssue,
+    onExtensionStateChanged,
+  }
 }
 
 interface ClientProviderProps extends ParentProps {
@@ -203,7 +287,7 @@ export function ClientProvider(props: ClientProviderProps) {
   // through `ClientTransport.onExtensionStateChanged`. Fires once per
   // `ExtensionStateChanged` event seen on the active session for each
   // subscriber. The pulse carries no payload — consumers refetch via
-  // the extension's typed `client.extension.ask(...)`.
+  // the extension's typed `client.extension.request(...)`.
   type ExtensionPulseCallback = (s: {
     sessionId: SessionId
     branchId: BranchId
@@ -524,32 +608,11 @@ export function ClientProvider(props: ClientProviderProps) {
     }),
   )
 
-  const value: ClientContextValue = {
+  const transportValue: ClientTransportValue = {
     client,
     runtime,
     log,
 
-    // Session state
-    sessionState,
-    session,
-    isActive,
-    isLoading,
-
-    // Agent state
-    agent: () => agentStore.agent,
-    agentStatus: () => agentStore.status,
-    cost: () => agentStore.cost,
-    model: () => {
-      const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- cowork always registered
-      return resolveAgentModel(agentDef ?? AgentsByName["cowork"]!)
-    },
-    // Derived accessors
-    isStreaming: () => agentStore.status._tag === "streaming",
-    isError: () => agentStore.status._tag === "error",
-    error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
-    latestInputTokens,
-    modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
     connectionState,
     waitForTransportReady: () => runtime.lifecycle.waitForReady,
     isReconnecting,
@@ -562,37 +625,21 @@ export function ClientProvider(props: ClientProviderProps) {
       return 0
     },
     connectionIssue,
-
-    // Agent state setters (for local errors only)
-    setError: (error) =>
-      setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
     setConnectionIssue,
-
-    // Fire-and-forget actions
-    sendMessage: (content) => {
-      const s = session()
-      if (s === null) return
-
-      const requestId = crypto.randomUUID()
-      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-      cast(
-        client.message
-          .send({
-            sessionId: s.sessionId,
-            branchId: s.branchId,
-            content,
-            requestId,
-          })
-          .pipe(
-            Effect.tapError((err) =>
-              Effect.sync(() => {
-                setConnectionIssue(formatConnectionIssue(err))
-              }),
-            ),
-            Effect.withSpan("TUI.sendMessage"),
-          ),
-      )
+    onExtensionStateChanged: (cb) => {
+      extensionStateChangedSubscribers.add(cb)
+      return () => {
+        extensionStateChangedSubscribers.delete(cb)
+      }
     },
+  }
+
+  const sessionValue: ClientSessionValue = {
+    // Session state
+    sessionState,
+    session,
+    isActive,
+    isLoading,
 
     createSession: (onCreated) => {
       const requestId = crypto.randomUUID()
@@ -628,7 +675,6 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name, agent) => {
       const currentSessionId = session()?.sessionId
-      // Reset agent state and activate new session
       setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
       setLatestInputTokens(0)
       setConnectionIssue(null)
@@ -649,7 +695,6 @@ export function ClientProvider(props: ClientProviderProps) {
       setExtensionHealth(EMPTY_EXTENSION_HEALTH)
     },
 
-    // Return Effects for caller to run
     listMessages: () => {
       const s = session()
       if (s === null) return Effect.succeed([] as readonly MessageInfoReadonly[])
@@ -725,34 +770,6 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.queue.get({ sessionId: s.sessionId, branchId: s.branchId })
     },
 
-    // Fire-and-forget steering
-    steer: (command) => {
-      const s = session()
-      if (s === null) {
-        if (command._tag === "SwitchAgent") {
-          setAgentStore({ agent: command.agent })
-        }
-        return
-      }
-      const fullCommand: SteerCommand = {
-        ...command,
-        sessionId: s.sessionId,
-        branchId: s.branchId,
-      }
-      // Update local agent immediately for responsive UI
-      if (fullCommand._tag === "SwitchAgent") {
-        setAgentStore({ agent: fullCommand.agent })
-      }
-      cast(client.steer.command({ command: fullCommand }))
-    },
-
-    onExtensionStateChanged: (cb) => {
-      extensionStateChangedSubscribers.add(cb)
-      return () => {
-        extensionStateChangedSubscribers.delete(cb)
-      }
-    },
-
     switchBranch: (branchId, summarize) => {
       const s = session()
       if (s === null) return
@@ -776,5 +793,81 @@ export function ClientProvider(props: ClientProviderProps) {
     },
   }
 
-  return <ClientContext.Provider value={value}>{props.children}</ClientContext.Provider>
+  const agentValue: ClientAgentValue = {
+    // Agent state
+    agent: () => agentStore.agent,
+    agentStatus: () => agentStore.status,
+    cost: () => agentStore.cost,
+    model: () => {
+      const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- cowork always registered
+      return resolveAgentModel(agentDef ?? AgentsByName["cowork"]!)
+    },
+    // Derived accessors
+    isStreaming: () => agentStore.status._tag === "streaming",
+    isError: () => agentStore.status._tag === "error",
+    error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
+    latestInputTokens,
+    modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
+    setError: (error) =>
+      setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
+  }
+
+  const actionValue: ClientActionValue = {
+    sendMessage: (content) => {
+      const s = session()
+      if (s === null) return
+
+      const requestId = crypto.randomUUID()
+      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+      cast(
+        client.message
+          .send({
+            sessionId: s.sessionId,
+            branchId: s.branchId,
+            content,
+            requestId,
+          })
+          .pipe(
+            Effect.tapError((err) =>
+              Effect.sync(() => {
+                setConnectionIssue(formatConnectionIssue(err))
+              }),
+            ),
+            Effect.withSpan("TUI.sendMessage"),
+          ),
+      )
+    },
+    steer: (command) => {
+      const s = session()
+      if (s === null) {
+        if (command._tag === "SwitchAgent") {
+          setAgentStore({ agent: command.agent })
+        }
+        return
+      }
+      const fullCommand: SteerCommand = {
+        ...command,
+        sessionId: s.sessionId,
+        branchId: s.branchId,
+      }
+      // Update local agent immediately for responsive UI
+      if (fullCommand._tag === "SwitchAgent") {
+        setAgentStore({ agent: fullCommand.agent })
+      }
+      cast(client.steer.command({ command: fullCommand }))
+    },
+  }
+
+  return (
+    <ClientTransportContext.Provider value={transportValue}>
+      <ClientSessionContext.Provider value={sessionValue}>
+        <ClientAgentContext.Provider value={agentValue}>
+          <ClientActionContext.Provider value={actionValue}>
+            {props.children}
+          </ClientActionContext.Provider>
+        </ClientAgentContext.Provider>
+      </ClientSessionContext.Provider>
+    </ClientTransportContext.Provider>
+  )
 }
