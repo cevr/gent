@@ -1,7 +1,12 @@
 import { describe, it, expect } from "effect-bun-test"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import { Database } from "bun:sqlite"
 import { test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   Session,
@@ -412,6 +417,147 @@ describe("Storage", () => {
         )
       }).pipe(Effect.provide(Storage.Test())),
     )
+
+    it.live("stores message parts in shared content chunks", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const sharedPart = new TextPart({ type: "text", text: "dedupe me" })
+
+        yield* storage.createSession(
+          new Session({ id: "chunk-s", createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "chunk-b", sessionId: "chunk-s", createdAt: new Date() }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "chunk-a",
+            sessionId: "chunk-s",
+            branchId: "chunk-b",
+            role: "user",
+            parts: [sharedPart],
+            createdAt: new Date(1000),
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "chunk-b-msg",
+            sessionId: "chunk-s",
+            branchId: "chunk-b",
+            role: "assistant",
+            parts: [sharedPart],
+            createdAt: new Date(2000),
+          }),
+        )
+
+        const chunkRows = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM content_chunks`
+        const refRows = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
+        const legacyRows = yield* sql<{
+          parts: string
+        }>`SELECT parts FROM messages WHERE id = ${"chunk-a"}`
+        const messages = yield* storage.listMessages("chunk-b")
+
+        expect(chunkRows[0]?.count).toBe(1)
+        expect(refRows[0]?.count).toBe(2)
+        expect(legacyRows[0]?.parts).toBe("[]")
+        expect(messages.map((message) => message.parts)).toEqual([[sharedPart], [sharedPart]])
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    test("backfills legacy message blobs into content chunks on startup", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "gent-content-chunks-"))
+      const dbPath = join(dir, "gent.db")
+      try {
+        const db = new Database(dbPath)
+        db.run(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            cwd TEXT,
+            bypass INTEGER,
+            reasoning_level TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE branches (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            parent_branch_id TEXT,
+            parent_message_id TEXT,
+            name TEXT,
+            created_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            parts TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            turn_duration_ms INTEGER
+          )
+        `)
+        db.run(`INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, [
+          "legacy-s",
+          "legacy",
+          0,
+          0,
+        ])
+        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
+          "legacy-b",
+          "legacy-s",
+          "main",
+          0,
+        ])
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "legacy-m",
+            "legacy-s",
+            "legacy-b",
+            "user",
+            JSON.stringify([{ type: "text", text: "legacy searchable content" }]),
+            1000,
+            null,
+          ],
+        )
+        db.close()
+
+        const layer = Storage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const storage = yield* Storage
+            const sql = yield* SqlClient.SqlClient
+
+            const message = yield* storage.getMessage(MessageId.of("legacy-m"))
+            expect(message?.parts).toEqual([
+              new TextPart({ type: "text", text: "legacy searchable content" }),
+            ])
+            const chunkRows = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM content_chunks`
+            const ftsRows = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM messages_fts WHERE messages_fts MATCH ${"searchable"}`
+            expect(chunkRows[0]?.count).toBe(1)
+            expect(ftsRows[0]?.count).toBe(1)
+          }).pipe(Effect.provide(layer)),
+        )
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
 
     it.live("counts messages in a branch", () =>
       Effect.gen(function* () {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { test as bunTest } from "bun:test"
 import { Effect } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SearchStorage, sanitizeFts5Query } from "@gent/core/storage/search-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
@@ -71,6 +72,22 @@ describe("searchMessages", () => {
       const searchStore = yield* SearchStorage
       const results = yield* searchStore.searchMessages("authentication")
       expect(results.length).toBeGreaterThan(0)
+      expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
+    }))
+
+  test("indexes reconstructed chunk text rather than the legacy parts blob", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId } = yield* createFixture()
+      const message = yield* addMessage(sessionId, branchId, "user", "chunk projection keyword")
+      const sql = yield* SqlClient.SqlClient
+      const legacyRows = yield* sql<{
+        parts: string
+      }>`SELECT parts FROM messages WHERE id = ${message.id}`
+
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("projection keyword")
+
+      expect(legacyRows[0]?.parts).toBe("[]")
       expect(results.some((r) => r.sessionId === sessionId)).toBe(true)
     }))
 

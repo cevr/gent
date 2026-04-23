@@ -1,4 +1,5 @@
 import type { PlatformError } from "effect"
+import { createHash } from "node:crypto"
 import { Clock, Context, Effect, Layer, Option, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart, MessageMetadata } from "../domain/message.js"
 import { AgentEvent, EventEnvelope, EventId, getEventSessionId } from "../domain/event.js"
@@ -22,6 +23,9 @@ import { ExtensionStateStorage } from "./extension-state-storage.js"
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
 const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
 const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
+const MessagePartJson = Schema.fromJsonString(MessagePart)
+const decodeMessagePart = Schema.decodeUnknownEffect(MessagePartJson)
+const encodeMessagePart = Schema.encodeEffect(MessagePartJson)
 const EventJson = Schema.fromJsonString(Schema.Unknown)
 const encodeEvent = Schema.encodeEffect(EventJson)
 const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
@@ -209,6 +213,11 @@ interface MessageRow {
   metadata: string | null
 }
 
+interface MessageChunkRow extends MessageRow {
+  chunk_ordinal: number | null
+  chunk_part_json: string | null
+}
+
 interface EventRow {
   id: number
   event_json: string
@@ -245,9 +254,9 @@ const branchFromRow = (row: BranchRow) =>
     createdAt: new Date(row.created_at),
   })
 
-const decodeStoredMessage = (row: MessageRow) =>
+const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.map(
-    decodeMessageParts(row.parts),
+    Effect.forEach(partJsons, (partJson) => decodeMessagePart(partJson)),
     (parts) =>
       new Message({
         id: row.id,
@@ -266,10 +275,144 @@ const decodeStoredMessage = (row: MessageRow) =>
   )
 
 const encodeStoredMessage = (message: Message) =>
-  Effect.map(encodeMessageParts([...message.parts]), (partsJson) => ({
-    partsJson,
-    metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
+  Effect.gen(function* () {
+    const partJsons = yield* Effect.forEach(message.parts, (part) => encodeMessagePart(part))
+    return {
+      legacyPartsJson: yield* encodeMessageParts([]),
+      partJsons,
+      metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
+    }
+  })
+
+const contentChunkId = (partJson: string): string =>
+  createHash("sha256").update(partJson).digest("hex")
+
+const stringifySearchValue = (value: unknown): string => {
+  if (typeof value === "string") return value
+  if (value === undefined) return ""
+  const encoded = JSON.stringify(value)
+  return encoded === undefined ? "" : encoded
+}
+
+const messagePartSearchText = (part: MessagePart): string => {
+  switch (part.type) {
+    case "text":
+    case "reasoning":
+      return part.text
+    case "image":
+      return [part.mediaType, part.image].filter((value) => value !== undefined).join(" ")
+    case "tool-call":
+      return [part.toolName, stringifySearchValue(part.input)]
+        .filter((text) => text !== "")
+        .join(" ")
+    case "tool-result":
+      return [part.toolName, stringifySearchValue(part.output.value)]
+        .filter((text) => text !== "")
+        .join(" ")
+  }
+}
+
+const messageSearchText = (parts: ReadonlyArray<MessagePart>): string =>
+  parts
+    .map(messagePartSearchText)
+    .filter((text) => text.length > 0)
+    .join("\n")
+
+const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
+  const grouped = new Map<
+    MessageId,
+    {
+      row: MessageRow
+      parts: Array<{ ordinal: number; json: string }>
+    }
+  >()
+
+  for (const row of rows) {
+    let entry = grouped.get(row.id)
+    if (entry === undefined) {
+      entry = { row, parts: [] }
+      grouped.set(row.id, entry)
+    }
+    if (row.chunk_ordinal !== null && row.chunk_part_json !== null) {
+      entry.parts.push({ ordinal: row.chunk_ordinal, json: row.chunk_part_json })
+    }
+  }
+
+  return [...grouped.values()].map((entry) => ({
+    row: entry.row,
+    partJsons: entry.parts.sort((a, b) => a.ordinal - b.ordinal).map((part) => part.json),
   }))
+}
+
+const insertMessageContent = Effect.fn("Storage.insertMessageContent")(function* (
+  messageId: MessageId,
+  partJsons: ReadonlyArray<string>,
+) {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql`DELETE FROM message_chunks WHERE message_id = ${messageId}`
+  yield* Effect.forEach(
+    partJsons,
+    (partJson, ordinal) =>
+      Effect.gen(function* () {
+        const chunkId = contentChunkId(partJson)
+        const part = yield* decodeMessagePart(partJson)
+        yield* sql`INSERT OR IGNORE INTO content_chunks (id, part_type, part_json) VALUES (${chunkId}, ${part.type}, ${partJson})`
+        yield* sql`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (${messageId}, ${ordinal}, ${chunkId})`
+      }),
+    { discard: true },
+  )
+})
+
+const indexMessageSearch = Effect.fn("Storage.indexMessageSearch")(function* (
+  message: Pick<Message, "id" | "sessionId" | "branchId" | "role" | "parts">,
+) {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql`DELETE FROM messages_fts WHERE message_id = ${message.id}`
+  yield* sql`INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (${messageSearchText(message.parts)}, ${message.id}, ${message.sessionId}, ${message.branchId}, ${message.role})`
+})
+
+const backfillMessageContentChunks = Effect.fn("Storage.backfillMessageContentChunks")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<
+      Pick<MessageRow, "id" | "parts">
+    >`SELECT id, parts FROM messages WHERE NOT EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = messages.id)`
+    yield* Effect.forEach(
+      rows,
+      (row) =>
+        Effect.gen(function* () {
+          const parts = yield* decodeMessageParts(row.parts)
+          const partJsons = yield* Effect.forEach(parts, (part) => encodeMessagePart(part))
+          yield* insertMessageContent(row.id, partJsons)
+        }),
+      { discard: true },
+    )
+  },
+)
+
+const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<MessageChunkRow>`SELECT
+      m.id,
+      m.session_id,
+      m.branch_id,
+      m.kind,
+      m.role,
+      m.parts,
+      m.created_at,
+      m.turn_duration_ms,
+      m.metadata,
+      mc.ordinal as chunk_ordinal,
+      c.part_json as chunk_part_json
+    FROM messages m
+    LEFT JOIN message_chunks mc ON mc.message_id = m.id
+    LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+    ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+  const messages = yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
+    decodeStoredMessage(row, partJsons),
+  )
+  yield* Effect.forEach(messages, (message) => indexMessageSearch(message), { discard: true })
+})
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -333,6 +476,27 @@ const initSchema = Effect.gen(function* () {
 
   yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN kind TEXT`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN metadata TEXT`).pipe(Effect.ignoreCause)
+
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS content_chunks (
+      id TEXT PRIMARY KEY,
+      part_type TEXT NOT NULL,
+      part_json TEXT NOT NULL
+    )
+  `)
+
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS message_chunks (
+      message_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL,
+      chunk_id TEXT NOT NULL,
+      PRIMARY KEY (message_id, ordinal),
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (chunk_id) REFERENCES content_chunks(id)
+    )
+  `)
+
+  yield* backfillMessageContentChunks()
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS events (
@@ -421,6 +585,9 @@ const initSchema = Effect.gen(function* () {
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_messages_branch_created ON messages(branch_id, created_at, id)`,
   )
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_message_chunks_chunk ON message_chunks(chunk_id)`,
+  )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_events_session_branch ON events(session_id, branch_id, id)`,
@@ -455,23 +622,17 @@ const initSchema = Effect.gen(function* () {
     )
     .pipe(Effect.ignoreCause)
 
-  yield* sql
-    .unsafe(
-      `CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) VALUES (new.parts, new.id, new.session_id, new.branch_id, new.role); END`,
-    )
-    .pipe(Effect.ignoreCause)
-
-  // Backfill FTS from existing messages
-  yield* sql
-    .unsafe(
-      `INSERT INTO messages_fts(content, message_id, session_id, branch_id, role) SELECT parts, id, session_id, branch_id, role FROM messages WHERE id NOT IN (SELECT message_id FROM messages_fts)`,
-    )
-    .pipe(Effect.ignoreCause)
+  yield* backfillMessageSearchIndex()
 })
 
 const makeStorage = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* Effect.orDie(initSchema)
+  const insertContent = (messageId: MessageId, partJsons: ReadonlyArray<string>) =>
+    insertMessageContent(messageId, partJsons).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+  const indexSearch = (
+    message: Pick<Message, "id" | "sessionId" | "branchId" | "role" | "parts">,
+  ) => indexMessageSearch(message).pipe(Effect.provideService(SqlClient.SqlClient, sql))
 
   return {
     // Sessions
@@ -622,10 +783,12 @@ const makeStorage = Effect.gen(function* () {
     // Messages
     createMessage: Effect.fn("Storage.createMessage")(
       function* (message) {
-        const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
+        const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* insertContent(message.id, partJsons)
+            yield* indexSearch(message)
             yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
           }),
         )
@@ -636,14 +799,16 @@ const makeStorage = Effect.gen(function* () {
 
     createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
       function* (message) {
-        const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
+        const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
             const rows = yield* sql<{
               changed: number
             }>`SELECT changes() as changed`
             if ((rows[0]?.changed ?? 0) > 0) {
+              yield* insertContent(message.id, partJsons)
+              yield* indexSearch(message)
               yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
             }
           }),
@@ -655,20 +820,53 @@ const makeStorage = Effect.gen(function* () {
 
     getMessage: Effect.fn("Storage.getMessage")(
       function* (id) {
-        const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE id = ${id}`
-        const row = rows[0]
-        if (row === undefined) return undefined
-        return yield* decodeStoredMessage(row)
+        const rows = yield* sql<MessageChunkRow>`SELECT
+            m.id,
+            m.session_id,
+            m.branch_id,
+            m.kind,
+            m.role,
+            m.parts,
+            m.created_at,
+            m.turn_duration_ms,
+            m.metadata,
+            mc.ordinal as chunk_ordinal,
+            c.part_json as chunk_part_json
+          FROM messages m
+          LEFT JOIN message_chunks mc ON mc.message_id = m.id
+          LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+          WHERE m.id = ${id}
+          ORDER BY mc.ordinal ASC`
+        const grouped = groupMessageChunkRows(rows)
+        const entry = grouped[0]
+        if (entry === undefined) return undefined
+        return yield* decodeStoredMessage(entry.row, entry.partJsons)
       },
       Effect.mapError(mapError("Failed to get message")),
     ),
 
     listMessages: Effect.fn("Storage.listMessages")(
       function* (branchId) {
-        const rows =
-          yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branchId} ORDER BY created_at ASC, id ASC`
-        return yield* Effect.forEach(rows, decodeStoredMessage)
+        const rows = yield* sql<MessageChunkRow>`SELECT
+            m.id,
+            m.session_id,
+            m.branch_id,
+            m.kind,
+            m.role,
+            m.parts,
+            m.created_at,
+            m.turn_duration_ms,
+            m.metadata,
+            mc.ordinal as chunk_ordinal,
+            c.part_json as chunk_part_json
+          FROM messages m
+          LEFT JOIN message_chunks mc ON mc.message_id = m.id
+          LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+          WHERE m.branch_id = ${branchId}
+          ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+        return yield* Effect.forEach(groupMessageChunkRows(rows), ({ row, partJsons }) =>
+          decodeStoredMessage(row, partJsons),
+        )
       },
       Effect.mapError(mapError("Failed to list messages")),
     ),
@@ -858,9 +1056,27 @@ const makeStorage = Effect.gen(function* () {
         // Get messages per branch
         const result = yield* Effect.forEach(branches, (branch) =>
           Effect.gen(function* () {
-            const msgRows =
-              yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branch.id} ORDER BY created_at ASC, id ASC`
-            const messages = yield* Effect.forEach(msgRows, decodeStoredMessage)
+            const msgRows = yield* sql<MessageChunkRow>`SELECT
+                m.id,
+                m.session_id,
+                m.branch_id,
+                m.kind,
+                m.role,
+                m.parts,
+                m.created_at,
+                m.turn_duration_ms,
+                m.metadata,
+                mc.ordinal as chunk_ordinal,
+                c.part_json as chunk_part_json
+              FROM messages m
+              LEFT JOIN message_chunks mc ON mc.message_id = m.id
+              LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+              WHERE m.branch_id = ${branch.id}
+              ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+            const messages = yield* Effect.forEach(
+              groupMessageChunkRows(msgRows),
+              ({ row, partJsons }) => decodeStoredMessage(row, partJsons),
+            )
             return { branch, messages }
           }),
         )
