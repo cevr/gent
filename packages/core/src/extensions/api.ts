@@ -106,6 +106,7 @@ export {
   ExtensionMessageEnvelope,
   getExtensionMessageMetadata,
   getExtensionReplySchema,
+  isExtensionRequestDefinition,
   isExtensionRequestMessage,
   listExtensionProtocolDefinitions,
   type ExtensionProtocol,

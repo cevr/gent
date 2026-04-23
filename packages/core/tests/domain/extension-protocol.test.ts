@@ -5,6 +5,7 @@ import {
   getExtensionMessageMetadata,
   getExtensionReplyDecoder,
   getExtensionReplySchema,
+  isExtensionRequestDefinition,
   isExtensionRequestMessage,
   type ExtractExtensionReply,
 } from "@gent/core/domain/extension-protocol"
@@ -21,7 +22,7 @@ describe("extension protocol branding", () => {
     expect(Object.keys(message)).toEqual(["extensionId", "_tag"])
 
     const metadata = getExtensionMessageMetadata(message)
-    expect(metadata?.kind).toBe("command")
+    expect(metadata?._tag).toBe("command")
     expect(metadata?.extensionId).toBe("plan")
     expect(metadata?.tag).toBe("TogglePlan")
 
@@ -45,7 +46,8 @@ describe("extension protocol branding", () => {
     void _typedReply
 
     expect(isExtensionRequestMessage(request)).toBe(true)
-    expect(getExtensionMessageMetadata(request)?.kind).toBe("request")
+    expect(isExtensionRequestDefinition(GetTask)).toBe(true)
+    expect(getExtensionMessageMetadata(request)?._tag).toBe("request")
     expect(getExtensionReplySchema(request)).toBe(GetTask.replySchema)
     expect(getExtensionReplyDecoder(request)).toBe(GetTask.replyDecoder)
     expect(Object.keys(request)).toEqual(["extensionId", "_tag", "taskId"])

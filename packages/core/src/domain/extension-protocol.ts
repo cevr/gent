@@ -70,7 +70,6 @@ export type ExtensionCommandDefinition<
 > = MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>> & {
   readonly extensionId: Id
   readonly _tag: Tag
-  readonly kind: "command"
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly schema: Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
   readonly is: (message: AnyExtensionMessage) => message is ExtensionCommandMessage<Id, Tag, F>
@@ -84,7 +83,6 @@ export type ExtensionRequestDefinition<
 > = MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>> & {
   readonly extensionId: Id
   readonly _tag: Tag
-  readonly kind: "request"
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly replySchema: Schema.Codec<R, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<R>
@@ -123,17 +121,17 @@ export type AnyExtensionMessage = AnyExtensionCommandMessage | AnyExtensionReque
 export type ExtensionProtocol = Readonly<Record<string, unknown>>
 
 interface ExtensionCommandMetadata {
+  readonly _tag: "command"
   readonly extensionId: string
   readonly tag: string
-  readonly kind: "command"
   readonly payloadSchema: Schema.Schema<unknown>
   readonly schema: Schema.Decoder<unknown>
 }
 
 interface ExtensionRequestMetadata {
+  readonly _tag: "request"
   readonly extensionId: string
   readonly tag: string
-  readonly kind: "request"
   readonly payloadSchema: Schema.Schema<unknown>
   readonly schema: Schema.Decoder<unknown>
   readonly replySchema: Schema.Codec<unknown, unknown, never, never>
@@ -175,9 +173,9 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
   }) as unknown as Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
 
   const metadata: ExtensionCommandMetadata = {
+    _tag: "command",
     extensionId,
     tag,
-    kind: "command",
     payloadSchema,
     schema,
   }
@@ -197,14 +195,16 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
   const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
     message.extensionId === extensionId && message._tag === tag
 
-  return Object.assign(make, {
-    extensionId,
-    _tag: tag,
-    kind: "command" as const,
-    payloadSchema,
-    schema,
-    is,
-  })
+  return attachMetadata(
+    Object.assign(make, {
+      extensionId,
+      _tag: tag,
+      payloadSchema,
+      schema,
+      is,
+    }),
+    metadata,
+  )
 }
 
 const createRequest = <
@@ -228,9 +228,9 @@ const createRequest = <
   }) as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>>>
 
   const metadata: ExtensionRequestMetadata = {
+    _tag: "request",
     extensionId,
     tag,
-    kind: "request",
     payloadSchema,
     schema,
     replySchema,
@@ -255,16 +255,18 @@ const createRequest = <
   ): message is ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>> =>
     message.extensionId === extensionId && message._tag === tag
 
-  return Object.assign(make, {
-    extensionId,
-    _tag: tag,
-    kind: "request" as const,
-    payloadSchema,
-    replySchema,
-    replyDecoder: metadata.replyDecoder,
-    schema,
-    is,
-  })
+  return attachMetadata(
+    Object.assign(make, {
+      extensionId,
+      _tag: tag,
+      payloadSchema,
+      replySchema,
+      replyDecoder: metadata.replyDecoder,
+      schema,
+      is,
+    }),
+    metadata,
+  )
 }
 
 export const ExtensionMessage = Object.assign(createCommand, {
@@ -274,7 +276,9 @@ export const ExtensionMessage = Object.assign(createCommand, {
 export const getExtensionMessageMetadata = (
   message: unknown,
 ): ExtensionMessageMetadata | undefined => {
-  if (typeof message !== "object" || message === null) return undefined
+  if ((typeof message !== "object" && typeof message !== "function") || message === null) {
+    return undefined
+  }
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return (message as Record<PropertyKey, unknown>)[ExtensionMessageMetadataSymbol] as
     | ExtensionMessageMetadata
@@ -285,7 +289,7 @@ export const getExtensionReplySchema = <M>(
   message: M,
 ): Schema.Schema<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
-  if (metadata?.kind !== "request") return undefined
+  if (metadata?._tag !== "request") return undefined
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return metadata.replySchema as Schema.Schema<ExtractExtensionReply<M>>
 }
@@ -294,7 +298,7 @@ export const getExtensionReplyDecoder = <M>(
   message: M,
 ): Schema.Decoder<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
-  if (metadata?.kind !== "request") return undefined
+  if (metadata?._tag !== "request") return undefined
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   return metadata.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>
 }
@@ -302,45 +306,44 @@ export const getExtensionReplyDecoder = <M>(
 export const isExtensionRequestMessage = (
   message: unknown,
 ): message is ExtensionRequestMessage<string, string, ExtensionFields, unknown> =>
-  getExtensionMessageMetadata(message)?.kind === "request"
+  getExtensionMessageMetadata(message)?._tag === "request"
+
+export const isExtensionRequestDefinition = (
+  definition: unknown,
+): definition is AnyExtensionRequestDefinition =>
+  getExtensionMessageMetadata(definition)?._tag === "request"
 
 export const listExtensionProtocolDefinitions = (
   protocol: ExtensionProtocol,
 ): ReadonlyArray<AnyExtensionMessageDefinition> =>
   Object.entries(protocol).map(([key, value]) => {
-    if (typeof value !== "function") {
+    const metadata = getExtensionMessageMetadata(value)
+    if (typeof value !== "function" || metadata === undefined) {
       throw new ExtensionProtocolError({
-        extensionId: "(unknown)",
+        extensionId: metadata?.extensionId ?? "(unknown)",
         tag: key,
         phase: "registration",
         message: `protocol entry "${key}" is not a message definition`,
       })
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const definition = value as Partial<AnyExtensionMessageDefinition>
-    if (
-      typeof definition.extensionId !== "string" ||
-      typeof definition._tag !== "string" ||
-      (definition.kind !== "command" && definition.kind !== "request") ||
-      definition.schema === undefined
-    ) {
+    if (typeof metadata.extensionId !== "string" || typeof metadata.tag !== "string") {
       throw new ExtensionProtocolError({
-        extensionId: definition.extensionId ?? "(unknown)",
-        tag: definition._tag ?? key,
+        extensionId: metadata.extensionId,
+        tag: metadata.tag,
         phase: "registration",
         message: `protocol entry "${key}" is not a valid message definition`,
       })
     }
-    if (definition.kind === "request" && definition.replySchema === undefined) {
+    if (metadata._tag === "request" && metadata.replySchema === undefined) {
       throw new ExtensionProtocolError({
-        extensionId: definition.extensionId,
-        tag: definition._tag,
+        extensionId: metadata.extensionId,
+        tag: metadata.tag,
         phase: "registration",
         message: `request protocol entry "${key}" is missing a reply schema`,
       })
     }
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return definition as AnyExtensionMessageDefinition
+    return value as AnyExtensionMessageDefinition
   })
 
 export const ExtensionMessageEnvelope = Schema.StructWithRest(

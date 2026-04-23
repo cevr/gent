@@ -51,6 +51,7 @@ import type {
 } from "../../../domain/extension-protocol.js"
 import {
   ExtensionProtocolError,
+  isExtensionRequestDefinition,
   listExtensionProtocolDefinitions,
 } from "../../../domain/extension-protocol.js"
 import { CurrentExtensionSession, CurrentMailboxSession } from "../extension-actor-shared.js"
@@ -570,12 +571,13 @@ export const makeMachineEngine = (
             `extension "${message.extensionId}" has no protocol definition for "${message._tag}"`,
           )
         }
-        if (definition.kind !== expectedKind) {
+        const actualKind = isExtensionRequestDefinition(definition) ? "request" : "command"
+        if (actualKind !== expectedKind) {
           return yield* protocolError(
             message.extensionId,
             message._tag,
             expectedKind,
-            `extension "${message.extensionId}" message "${message._tag}" is registered as a ${definition.kind}, not a ${expectedKind}`,
+            `extension "${message.extensionId}" message "${message._tag}" is registered as a ${actualKind}, not a ${expectedKind}`,
           )
         }
         return yield* Schema.decodeUnknownEffect(definition.schema)(message).pipe(
@@ -663,7 +665,7 @@ export const makeMachineEngine = (
         const entries = yield* getOrSpawnActors(sessionId, branchId)
         const decoded = yield* decodeMessage(message, "request")
         const definition = protocols.get(decoded.extensionId, decoded._tag)
-        if (definition === undefined || definition.kind !== "request") {
+        if (definition === undefined || !isExtensionRequestDefinition(definition)) {
           return yield* protocolError(
             decoded.extensionId,
             decoded._tag,
