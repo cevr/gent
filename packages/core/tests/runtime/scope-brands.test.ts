@@ -5,6 +5,11 @@
  * violation is caught at compile time. Removing the brand from the
  * relevant API would silently flip these to "unused expect-error", and
  * `bun run typecheck` would fail — so the file doubles as a guardrail.
+ *
+ * Suppression policy note: the few casts in this file are deliberate
+ * test-fixture debt. Production scope-brand escapes are fenced separately by
+ * `gent/brand-constructor-callers`, `gent/no-scope-brand-cast`, and the
+ * suppression policy lock in `packages/tooling/tests/suppression-policy.test.ts`.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Context, type Scope } from "effect"

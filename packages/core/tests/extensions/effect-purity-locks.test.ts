@@ -6,6 +6,11 @@
  * If TypeScript ever stops erroring on these, the surface has regressed and
  * Promise edges have leaked back in.
  *
+ * Suppression policy note: this file is intentionally in the "tests and
+ * harnesses" bucket from `packages/tooling/tests/suppression-policy.test.ts`.
+ * The point is to lock the public type fence, not to simulate production code
+ * with hand-built runtime fixtures.
+ *
  * Tied to Commit 0 of the planify plan and the project_effect_purity_boundaries
  * memory. After C12 the surface is `defineExtension` + smart constructors
  * (no fluent builder), so the locks are written against those primitives.
