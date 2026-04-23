@@ -54,7 +54,6 @@ import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
 import { ToolRunner } from "./agent/tool-runner.js"
-import { AgentLoop } from "./agent/agent-loop.js"
 import { SessionRuntime } from "./session-runtime.js"
 
 /**
@@ -133,8 +132,6 @@ export interface EphemeralOverrides {
   readonly resourceManager?: OpaqueLayer
   /** Tool runner wired to local deps. Omits ToolRunner. */
   readonly toolRunner?: OpaqueLayer
-  /** Agent loop wired to local deps. Omits AgentLoop. */
-  readonly loop?: OpaqueLayer
   /** Session runtime wired to local deps. Omits SessionRuntime. */
   readonly sessionRuntime?: OpaqueLayer
 }
@@ -161,7 +158,6 @@ type EphemeralOverrideProvides =
   | PromptPresenter
   | ResourceManager
   | ToolRunner
-  | AgentLoop
   | SessionRuntime
 
 /**
@@ -198,8 +194,6 @@ const OVERRIDE_TAG_SETS: Record<
   resourceManager: [ResourceManager] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   toolRunner: [ToolRunner] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  loop: [AgentLoop] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   sessionRuntime: [SessionRuntime] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
 }
@@ -333,7 +327,6 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       addOverride("promptPresenter")
       addOverride("resourceManager")
       addOverride("toolRunner")
-      addOverride("loop")
       addOverride("sessionRuntime")
       return makeBuilder({
         ...state,

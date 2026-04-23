@@ -70,7 +70,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 22,
       "eslint:@typescript-eslint/no-explicit-any": 8,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 29,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 28,
     },
   },
   {

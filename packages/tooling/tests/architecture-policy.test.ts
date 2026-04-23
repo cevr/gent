@@ -127,11 +127,29 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\|\s+AgentLoop\b/)
   })
 
+  test("runtime composer does not expose a raw AgentLoop override seam", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/composer.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).not.toMatch(/\breadonly loop\?:/)
+    expect(source).not.toMatch(/\baddOverride\("loop"\)/)
+    expect(source).not.toMatch(/\bAgentLoop\b/)
+  })
+
   test("session runtime does not export direct prompt-run helpers", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/session-runtime.ts")
     const source = readFileSync(file, "utf8")
 
     expect(source).not.toMatch(/\bexport\s+(const|interface)\s+(makeRunPrompt|RunPromptInput)\b/)
+  })
+
+  test("package exports do not expose agent-loop as a public subpath", () => {
+    const file = pathResolve(ROOT, "packages/core/package.json")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).toContain('"./runtime/agent/agent-loop": null')
+    expect(source).toContain('"./runtime/agent/agent-loop.js": null')
+    expect(source).toContain('"./runtime/agent/agent-loop.ts": null')
   })
 
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {
