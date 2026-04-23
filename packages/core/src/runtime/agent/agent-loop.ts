@@ -68,7 +68,7 @@ import type { ExtensionHostContext } from "../../domain/extension-host-context.j
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { ConfigService } from "../config-service.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
-import type { PromptSection } from "../../server/system-prompt.js"
+import type { PromptSection } from "../../domain/prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
 import { Storage, type StorageError, type StorageService } from "../../storage/sqlite-storage.js"
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
@@ -137,7 +137,7 @@ import {
   resolveReasoning,
   toolResultMessageIdForTurn,
 } from "./agent-loop.utils.js"
-import { compileSystemPrompt } from "../../server/system-prompt.js"
+import { compileSystemPrompt } from "../../domain/prompt.js"
 import * as Response from "effect/unstable/ai/Response"
 
 // ============================================================================

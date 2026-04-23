@@ -54,7 +54,7 @@ import type {
   ScheduledJobCommand,
   SchedulerFailure,
 } from "./extensions/resource-host/schedule-engine.js"
-import { buildBasePromptSections } from "../server/system-prompt.js"
+import { buildBasePromptSections } from "../domain/prompt.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 
 /**

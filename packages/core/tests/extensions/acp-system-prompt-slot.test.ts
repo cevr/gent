@@ -11,7 +11,7 @@ import { AcpAgentsExtension } from "@gent/extensions/acp-agents"
 import { AgentDefinition, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { withSectionMarkers } from "@gent/core/server/system-prompt"
+import { withSectionMarkers } from "@gent/core/domain/prompt"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 

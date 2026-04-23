@@ -11,11 +11,7 @@ import {
 import { MessageId } from "../../domain/ids.js"
 import { Schema } from "effect"
 import type { ProviderRequest } from "../../providers/provider.js"
-import {
-  compileSystemPrompt,
-  withSectionMarkers,
-  type PromptSection,
-} from "../../server/system-prompt.js"
+import { compileSystemPrompt, withSectionMarkers, type PromptSection } from "../../domain/prompt.js"
 import type { AssistantDraft } from "./agent-loop.state.js"
 
 const isReasoningEffort = Schema.is(ReasoningEffort)

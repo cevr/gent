@@ -242,9 +242,23 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bInteractionPendingReader\b/)
     expect(source).not.toMatch(/\bEventPublisher\b/)
     expect(source).not.toMatch(/\.\.\/runtime\//)
+    expect(source).not.toMatch(/\.\.\/server\//)
     expect(pkg).not.toMatch(/"\.\/extensions\/internal"/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal": null/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal\.js": null/)
+  })
+
+  test("runtime modules do not import server prompt internals", () => {
+    const violations = collectSourceFiles()
+      .filter((file) => file.includes("/packages/core/src/runtime/"))
+      .flatMap((file) =>
+        sourceLines(file)
+          .filter(({ text }) => !isCommentLine(text))
+          .filter(({ text }) => /\.\.\/(?:\.\.\/)?server\/system-prompt/.test(text))
+          .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+      )
+
+    expect(violations).toEqual([])
   })
 
   test("production TUI shell does not import app runtime wiring directly", () => {

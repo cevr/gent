@@ -124,7 +124,7 @@ export {
   sectionEndMarker,
   sectionPatternFor,
   withSectionMarkers,
-} from "../server/system-prompt.js"
+} from "../domain/prompt.js"
 export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
 export {
   TurnError,

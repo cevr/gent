@@ -6,7 +6,7 @@ import {
   compileSystemPrompt,
   sectionPatternFor,
   withSectionMarkers,
-} from "@gent/core/server/system-prompt"
+} from "@gent/core/domain/prompt"
 import { buildTurnPrompt } from "@gent/core/runtime/agent/agent-loop.utils"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"

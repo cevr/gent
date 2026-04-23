@@ -56,7 +56,7 @@ import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
 import { RuntimeComposer } from "../composer.js"
 import { runWithBuiltLayer } from "../run-with-built-layer.js"
-import type { PromptSection } from "../../server/system-prompt.js"
+import type { PromptSection } from "../../domain/prompt.js"
 
 interface ChildMetadata {
   usage?: { input: number; output: number }
