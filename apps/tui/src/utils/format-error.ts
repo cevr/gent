@@ -30,6 +30,12 @@ export const formatError = (error: UiError): string => {
       return `Platform: ${error.message}`
     case "ProviderAuthError":
       return `Auth: ${error.message}`
+    case "ExtensionProtocolError":
+      return `Extension protocol: ${error.message}`
+    case "RpcClientError":
+      return `Connection: ${error.message}`
+    case "@gent/core/GentConnectionError":
+      return `Connection: ${error.message}`
     default:
       return "Unknown error"
   }

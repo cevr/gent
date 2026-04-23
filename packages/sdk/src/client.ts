@@ -1,9 +1,13 @@
 import { Effect, Layer } from "effect"
-import type { Context, Scope } from "effect"
+import type { Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
-import type { RpcGroup } from "effect/unstable/rpc"
 import { Socket } from "effect/unstable/socket"
-import { GentRpcs, type GentRpcsClient } from "@gent/core/server/rpcs.js"
+import {
+  GentRpcs,
+  type GentRpcClient,
+  type GentRpcClientError,
+  type GentRpcsClient,
+} from "@gent/core/server/rpcs.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import {
   GentConnectionError,
@@ -20,7 +24,6 @@ import {
   type CreateSessionResult,
   type ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract.js"
-import type { GentRpcError } from "@gent/core/server/errors.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
 import type { AuthProviderInfo } from "@gent/core/domain/auth-guard.js"
 import type { PermissionRule } from "@gent/core/domain/permission.js"
@@ -84,11 +87,10 @@ export { GentConnectionError }
 export type { GentNamespacedClient, GentRuntime }
 export type { GentServer, GentServerOptions, StateSpec, ProviderSpec }
 
-// Re-export RPC types
-export type { GentRpcsClient, GentRpcError }
-
-// RPC client type alias
-export type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
+// Re-export RPC types. SDK clients can fail with both server-declared RPC errors
+// and transport-level RpcClientError values from the Effect RPC client.
+export type { GentRpcClient, GentRpcClientError, GentRpcsClient }
+export type GentRpcError = GentRpcClientError
 
 // ---------------------------------------------------------------------------
 // Utility functions (unchanged)
@@ -237,13 +239,7 @@ const WsTransport = (url: string): Layer.Layer<RpcClient.Protocol> =>
 // ---------------------------------------------------------------------------
 
 const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Scope.Scope> =
-  Effect.gen(function* () {
-    const rpcClient = yield* RpcClient.make(GentRpcs)
-    // SAFETY: RpcClient.make returns RpcClientError in error types, but GentRpcs
-    // defines GentRpcError as the error schema. The cast narrows to our specific error type.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return rpcClient as unknown as GentRpcClient
-  })
+  RpcClient.make(GentRpcs)
 
 // ---------------------------------------------------------------------------
 // Gent — unified client constructors
@@ -253,9 +249,9 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 
-export interface GentClientBundle {
+export interface GentClientBundle<Services = Scope.Scope> {
   readonly client: GentNamespacedClient
-  readonly runtime: GentRuntime
+  readonly runtime: GentRuntime<Services>
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +263,7 @@ export interface GentClientBundle {
  *  connect/disconnect via hooks and project onto GentLifecycle. */
 const connectWs = (
   url: string,
-): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
+): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     let generation = 0
@@ -294,7 +290,7 @@ const connectWs = (
       scope,
     )
     const rpcClient = yield* makeRpcClient.pipe(Effect.provide(transport))
-    const services = yield* Effect.context<never>()
+    const services = yield* Effect.context<Scope.Scope>()
 
     const lifecycle: GentLifecycle = {
       getState: () => currentState,
@@ -333,8 +329,7 @@ const connectWs = (
 
     return {
       client: makeNamespacedClient(rpcClient),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      runtime: makeRuntime(services as Context.Context<unknown>, lifecycle),
+      runtime: makeRuntime(services, lifecycle),
     }
   })
 
@@ -346,21 +341,14 @@ export const Gent = {
   /** In-process client for tests and embedding. */
   test: <E, R>(
     handlersLayer: Layer.Layer<RpcHandlersContext, E, R>,
-  ): Effect.Effect<GentClientBundle, E, R | Scope.Scope> =>
+  ): Effect.Effect<GentClientBundle<R | Scope.Scope>, E, R | Scope.Scope> =>
     Effect.gen(function* () {
       const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
-        Effect.provide(context),
-      ) as Effect.Effect<GentRpcClient>
-      const services = yield* Effect.context<never>()
+      const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
+      const services = yield* Effect.context<R | Scope.Scope>()
       return {
         client: makeNamespacedClient(rpcClient),
-        runtime: makeRuntime(
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          services as Context.Context<unknown>,
-          staticLifecycle({ _tag: "connected", generation: 0 }),
-        ),
+        runtime: makeRuntime(services, staticLifecycle({ _tag: "connected", generation: 0 })),
       }
     }),
 
@@ -378,7 +366,7 @@ export const Gent = {
   /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (
     serverOrUrl: GentServer | string,
-  ): Effect.Effect<GentClientBundle, GentConnectionError, Scope.Scope> =>
+  ): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
     Effect.gen(function* () {
       if (typeof serverOrUrl === "string") {
         return yield* connectWs(serverOrUrl)
@@ -395,15 +383,11 @@ export const Gent = {
           }
           const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
             Effect.provide(internal.handlerContext),
-          ) as Effect.Effect<GentRpcClient>
-          const services = yield* Effect.context<never>()
+          )
+          const services = yield* Effect.context<Scope.Scope>()
           return {
             client: makeNamespacedClient(rpcClient),
-            runtime: makeRuntime(
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              services as Context.Context<unknown>,
-              staticLifecycle({ _tag: "connected", generation: 0 }),
-            ),
+            runtime: makeRuntime(services, staticLifecycle({ _tag: "connected", generation: 0 })),
           }
         }
         case "attached":

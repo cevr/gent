@@ -1,6 +1,7 @@
 import {
   RpcGroup,
   type RpcClient,
+  type RpcClientError,
   type RpcGroup as RpcGroupNs,
   type Rpc,
 } from "effect/unstable/rpc"
@@ -17,6 +18,7 @@ import { DriverRpcs } from "./rpcs/driver.js"
 import { ExtensionRpcs } from "./rpcs/extension.js"
 import { ActorRpcs } from "./rpcs/actor.js"
 import { ServerRpcs } from "./rpcs/server.js"
+import type { GentConnectionError } from "./transport-contract.js"
 
 // Re-export sub-groups for handler wiring
 export {
@@ -115,8 +117,14 @@ export class GentRpcs extends RpcGroup.make().merge(
 // RPC Client Types
 // ============================================================================
 
-export type GentRpcClient = RpcClient.RpcClient<RpcGroupNs.Rpcs<typeof GentRpcs>>
+export type GentRpcClient = RpcClient.RpcClient<
+  RpcGroupNs.Rpcs<typeof GentRpcs>,
+  RpcClientError.RpcClientError | GentConnectionError
+>
 
-export type GentRpcClientError = Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
+export type GentRpcClientError =
+  | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
+  | RpcClientError.RpcClientError
+  | GentConnectionError
 
 export type GentRpcsClient = GentRpcClient

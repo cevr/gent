@@ -42,6 +42,10 @@ import { findOpenPort } from "./supervisor.js"
 
 // ── Types ──
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
+type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
+
 export type StateSpec =
   | { readonly _tag: "sqlite"; readonly home?: string; readonly dbPath?: string }
   | { readonly _tag: "memory" }
@@ -74,7 +78,7 @@ export type GentServer =
 // ── Internal state for owned servers ──
 
 interface OwnedServerInternal {
-  readonly handlerContext: Context.Context<unknown>
+  readonly handlerContext: Context.Context<BuiltRpcHandlers>
   readonly port: number
   readonly serverId: string
 }
@@ -256,8 +260,7 @@ const buildOwnedServer = (
 
       const server: GentServer = { _tag: "owned", url }
       ownedInternals.set(server, {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        handlerContext: handlersContext as Context.Context<unknown>,
+        handlerContext: handlersContext,
         port,
         serverId,
       })

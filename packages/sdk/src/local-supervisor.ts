@@ -1,15 +1,16 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore } from "effect"
-import type { RpcClient, RpcGroup } from "effect/unstable/rpc"
-import type { GentRpcs } from "@gent/core/server/rpcs.js"
+import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore, Stream } from "effect"
+import type { GentRpcClient } from "@gent/core/server/rpcs.js"
 import {
   GentConnectionError,
   type ConnectionState,
   type GentLifecycle,
 } from "@gent/core/server/transport-contract.js"
-import { makeNamespacedClient, type GentNamespacedClient } from "./namespaced-client.js"
+import {
+  makeFlatRpcClient,
+  makeNamespacedClient,
+  type GentNamespacedClient,
+} from "./namespaced-client.js"
 import { runSupervisorRestart } from "./supervisor-boundary.js"
-
-type GentRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof GentRpcs>>
 
 type BuildLocalRpcClient<E, R> = (scope: Scope.Closeable) => Effect.Effect<GentRpcClient, E, R>
 
@@ -26,28 +27,28 @@ const makeSwappableClient = (
   clientRef: Ref.Ref<GentRpcClient | undefined>,
   stateRef: Ref.Ref<ConnectionState>,
 ): GentNamespacedClient => {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const flatClient = new Proxy({} as GentRpcClient, {
-    get(_target, key: string) {
-      return (...args: ReadonlyArray<unknown>) => {
-        const client = Ref.getUnsafe(clientRef)
-        if (client === undefined) {
-          const state = Ref.getUnsafe(stateRef)
-          const reason =
-            state._tag === "disconnected"
-              ? state.reason
-              : `local runtime unavailable (state: ${state._tag})`
-          return Effect.fail(new GentConnectionError({ message: reason }))
-        }
-        const method = (client as Record<string, unknown>)[key]
-        if (typeof method !== "function") {
-          return Effect.fail(new GentConnectionError({ message: `rpc method missing: ${key}` }))
-        }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        return (method as (...methodArgs: ReadonlyArray<unknown>) => unknown)(...args)
+  const route = <K extends keyof GentRpcClient>(key: K): GentRpcClient[K] => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return ((...args: ReadonlyArray<unknown>) => {
+      const client = Ref.getUnsafe(clientRef)
+      if (client === undefined) {
+        const state = Ref.getUnsafe(stateRef)
+        const reason =
+          state._tag === "disconnected"
+            ? state.reason
+            : `local runtime unavailable (state: ${state._tag})`
+        const error = new GentConnectionError({ message: reason })
+        return key === "session.events" || key === "session.watchRuntime"
+          ? Stream.fail(error)
+          : Effect.fail(error)
       }
-    },
-  })
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const method = client[key] as (...methodArgs: ReadonlyArray<unknown>) => unknown
+      return method(...args)
+    }) as GentRpcClient[K]
+  }
+
+  const flatClient = makeFlatRpcClient(route)
 
   return makeNamespacedClient(flatClient)
 }

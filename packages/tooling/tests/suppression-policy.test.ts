@@ -97,7 +97,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:globalConsoleInEffect:off": 2,
       "effect:nodeBuiltinImport:off": 4,
       "effect:strictEffectProvide:off": 8,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 7,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 6,
     },
   },
   {
@@ -141,7 +141,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),
     counts: {
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 22,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 16,
     },
   },
   {

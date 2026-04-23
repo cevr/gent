@@ -15,10 +15,10 @@
 import { Effect, type Context } from "effect"
 import type { GentLifecycle, GentRuntime } from "./namespaced-client.js"
 
-export const makeGentRuntime = (
-  services: Context.Context<unknown>,
+export const makeGentRuntime = <Services>(
+  services: Context.Context<Services>,
   lifecycle: GentLifecycle,
-): GentRuntime => ({
+): GentRuntime<Services> => ({
   cast: (effect) => {
     Effect.runForkWith(services)(effect)
   },
