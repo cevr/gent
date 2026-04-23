@@ -6,12 +6,8 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
-import {
-  Provider,
-  finishPart,
-  toolCallPart,
-  type ProviderResolution,
-} from "@gent/core/providers/provider"
+import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
+import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 

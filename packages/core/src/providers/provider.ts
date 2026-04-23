@@ -136,8 +136,8 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 
 // ── Provider Stream Parts ──
 
-export type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
-export type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
+type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
+type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
 
 const toUsage = (usage: Response.FinishPart["usage"]) =>
   usage !== undefined
@@ -155,10 +155,10 @@ const toUsage = (usage: Response.FinishPart["usage"]) =>
 let _streamPartIdCounter = 0
 const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
 
-export const textDeltaPart = (text: string, id = makeStreamPartId("text")): ProviderStreamPart =>
+const textDeltaPart = (text: string, id = makeStreamPartId("text")): ProviderStreamPart =>
   Response.makePart("text-delta", { id, delta: text })
 
-export const toolCallPart = (
+const toolCallPart = (
   toolName: string,
   input: unknown,
   options?: { toolCallId?: ToolCallId },
@@ -170,12 +170,7 @@ export const toolCallPart = (
     providerExecuted: false,
   })
 
-export const reasoningDeltaPart = (
-  text: string,
-  id = makeStreamPartId("reasoning"),
-): ProviderStreamPart => Response.makePart("reasoning-delta", { id, delta: text })
-
-export const finishPart = (params: {
+const finishPart = (params: {
   finishReason: Response.FinishReason
   usage?: { inputTokens: number; outputTokens: number }
 }): ProviderStreamPart =>

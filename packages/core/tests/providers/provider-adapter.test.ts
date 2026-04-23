@@ -3,14 +3,10 @@ import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { Finished, ReasoningDelta, TextDelta, ToolCall } from "@gent/core/domain/driver"
 import * as AiError from "effect/unstable/ai/AiError"
+import type * as AiTool from "effect/unstable/ai/Tool"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
-import {
-  convertMessages,
-  convertTools,
-  toTurnEvent,
-  type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+import { convertMessages, convertTools, toTurnEvent } from "@gent/core/providers/provider"
 import {
   Message,
   TextPart,
@@ -33,6 +29,7 @@ const makeMsg = (role: "user" | "assistant" | "system" | "tool", parts: Message[
   })
 
 const tcId = ToolCallId.make("tc-1")
+type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
 
 // ── convertMessages ──
 

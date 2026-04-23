@@ -3,13 +3,13 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import type { ToolCallId } from "../domain/ids.js"
+import { Provider } from "../providers/provider.js"
 import {
-  Provider,
   finishPart,
   textDeltaPart,
   toolCallPart,
   type ProviderStreamPart,
-} from "../providers/provider.js"
+} from "../debug/provider.js"
 import {
   EventStore,
   EventEnvelope,

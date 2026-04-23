@@ -14,15 +14,16 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
+import { Provider, ProviderError } from "@gent/core/providers/provider"
 import {
-  Provider,
-  ProviderError,
   finishPart,
   reasoningDeltaPart,
   textDeltaPart,
+  textStep,
+  toolCallStep,
   toolCallPart,
   type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+} from "@gent/core/debug/provider"
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
@@ -34,7 +35,6 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
-import { toolCallStep, textStep } from "@gent/core/debug/provider"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   assistantDraftFromMessage,

@@ -1,12 +1,14 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema, Stream } from "effect"
+import { Provider } from "@gent/core/providers/provider"
 import {
-  Provider,
   finishPart,
   textDeltaPart,
+  textStep,
+  toolCallStep,
   toolCallPart,
   type ProviderStreamPart,
-} from "@gent/core/providers/provider"
+} from "@gent/core/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
@@ -28,7 +30,6 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
 import { EventStoreLive } from "@gent/core/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
-import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
   MachineEngine,
   type MachineEngineService,
