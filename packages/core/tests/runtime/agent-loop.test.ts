@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -598,10 +599,10 @@ describe("streaming", () => {
 
     const providerLayer = Layer.succeed(Provider, {
       stream: (request) => {
-        const latestUserText = [...request.messages]
+        const latestUserText = [...Prompt.make(request.prompt).content]
           .reverse()
           .find((message) => message.role === "user")
-          ?.parts.filter((part): part is TextPart => part.type === "text")
+          ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
           .map((part) => part.text)
           .join("\n")
 
@@ -734,13 +735,13 @@ describe("streaming", () => {
     let streamCalls = 0
 
     const providerLayer = Layer.succeed(Provider, {
-      stream: ({ messages }) => {
+      stream: (request) => {
         const latestUserText =
-          messages
-            .slice()
+          Prompt.make(request.prompt)
+            .content.slice()
             .reverse()
-            .flatMap((message) => message.parts)
-            .find((part): part is TextPart => part.type === "text")?.text ?? ""
+            .flatMap((message) => message.content)
+            .find((part): part is Prompt.TextPart => part.type === "text")?.text ?? ""
 
         providerCalls.push(latestUserText)
         streamCalls += 1

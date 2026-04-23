@@ -7,6 +7,7 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
 import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
+import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
@@ -95,8 +96,7 @@ describe("Provider model resolution", () => {
         // Should resolve successfully (the stream will fail with stub error, not resolution error)
         const stream = yield* provider.stream({
           model: "custom/gpt-5",
-          messages: [],
-          systemPrompt: "",
+          prompt: [],
         })
         // Consume one chunk to trigger the stream — expect the stub error, not "Unknown provider"
         yield* Stream.runHead(stream)
@@ -117,8 +117,7 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         yield* provider.stream({
           model: "unknown-provider/some-model",
-          messages: [],
-          systemPrompt: "",
+          prompt: [],
         })
       }).pipe(Effect.provide(layer)),
     )
@@ -139,8 +138,7 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         yield* provider.stream({
           model: "broken/model",
-          messages: [],
-          systemPrompt: "",
+          prompt: [],
         })
       }).pipe(Effect.provide(layer)),
     )
@@ -176,8 +174,7 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         const stream = yield* provider.stream({
           model: "shadowed/some-model",
-          messages: [],
-          systemPrompt: "",
+          prompt: [],
           driverRegistry: overrideRegistry,
         })
         yield* Stream.runHead(stream)
@@ -226,8 +223,7 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         const stream = yield* provider.stream({
           model: "primary/foo",
-          messages: [],
-          systemPrompt: "",
+          prompt: [],
           driverId: "alt",
         })
         yield* Stream.runHead(stream)
@@ -290,9 +286,8 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         const stream = yield* provider.stream({
           model: "tools-live/gpt-5",
-          messages: [],
+          prompt: [],
           tools: [echoCapability],
-          systemPrompt: "",
         })
         return yield* Stream.runCollect(stream)
       }).pipe(Effect.provide(layer)),
@@ -369,41 +364,43 @@ describe("Provider model resolution", () => {
         const provider = yield* Provider
         const stream = yield* provider.stream({
           model: "prompt-live/gpt-5",
-          systemPrompt: "System policy.",
-          messages: [
-            new Message({
-              id: "user-image",
-              sessionId: "prompt-session",
-              branchId: "prompt-branch",
-              role: "user",
-              parts: [
-                new TextPart({ type: "text", text: "inspect" }),
-                new ImagePart({
-                  type: "image",
-                  image: "data:image/jpeg;base64,abc",
-                  mediaType: "image/jpeg",
-                }),
-              ],
-              createdAt: new Date(0),
-            }),
-            new Message({
-              id: "assistant-reasoning",
-              sessionId: "prompt-session",
-              branchId: "prompt-branch",
-              role: "assistant",
-              parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
-              createdAt: new Date(0),
-            }),
-            new Message({
-              id: "hidden",
-              sessionId: "prompt-session",
-              branchId: "prompt-branch",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: "should not reach model" })],
-              createdAt: new Date(0),
-              metadata: { hidden: true },
-            }),
-          ],
+          prompt: toPrompt(
+            [
+              new Message({
+                id: "user-image",
+                sessionId: "prompt-session",
+                branchId: "prompt-branch",
+                role: "user",
+                parts: [
+                  new TextPart({ type: "text", text: "inspect" }),
+                  new ImagePart({
+                    type: "image",
+                    image: "data:image/jpeg;base64,abc",
+                    mediaType: "image/jpeg",
+                  }),
+                ],
+                createdAt: new Date(0),
+              }),
+              new Message({
+                id: "assistant-reasoning",
+                sessionId: "prompt-session",
+                branchId: "prompt-branch",
+                role: "assistant",
+                parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
+                createdAt: new Date(0),
+              }),
+              new Message({
+                id: "hidden",
+                sessionId: "prompt-session",
+                branchId: "prompt-branch",
+                role: "user",
+                parts: [new TextPart({ type: "text", text: "should not reach model" })],
+                createdAt: new Date(0),
+                metadata: { hidden: true },
+              }),
+            ],
+            { systemPrompt: "System policy." },
+          ),
         })
         yield* Stream.runCollect(stream)
       }).pipe(Effect.provide(layer)),

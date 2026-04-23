@@ -17,7 +17,7 @@ import {
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
-import { Provider } from "../providers/provider.js"
+import { Provider, providerRequestFromMessages } from "../providers/provider.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import {
   SessionRuntime,
@@ -114,11 +114,13 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        const streamEffect = yield* provider.stream({
-          model: NAME_GEN_MODEL,
-          messages: [summaryMessage],
-          maxTokens: 400,
-        })
+        const streamEffect = yield* provider.stream(
+          providerRequestFromMessages({
+            model: NAME_GEN_MODEL,
+            messages: [summaryMessage],
+            maxTokens: 400,
+          }),
+        )
 
         const parts: string[] = []
         yield* Stream.runForEach(streamEffect, (part) =>

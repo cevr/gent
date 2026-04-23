@@ -12,7 +12,7 @@ import { Provider, type ProviderRequest } from "@gent/core/providers/provider"
 
 const dummyRequest: ProviderRequest = {
   model: "test/model",
-  messages: [],
+  prompt: [],
 }
 
 const callProvider = Effect.gen(function* () {

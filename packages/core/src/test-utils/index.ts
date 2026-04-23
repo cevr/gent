@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ExtensionSetupContext } from "../domain/extension.js"
 import type { ToolCallId } from "../domain/ids.js"
 import { Provider } from "../providers/provider.js"
@@ -75,7 +76,10 @@ export const RecordingProvider = (
           yield* recorder.record({
             service: "Provider",
             method: "stream",
-            args: { model: request.model, messageCount: request.messages.length },
+            args: {
+              model: request.model,
+              messageCount: Prompt.make(request.prompt).content.length,
+            },
           })
           const parts = responses[idx] ?? [finishPart({ finishReason: "stop" })]
           return Stream.fromIterable(parts)

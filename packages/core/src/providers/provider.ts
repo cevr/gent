@@ -1,6 +1,6 @@
 import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
-import type { Message, TextPart } from "../domain/message.js"
+import type { Message } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
 import {
@@ -226,9 +226,8 @@ export const toTurnEventStream = (model: string, stream: ProviderStream) =>
 
 export interface ProviderRequest {
   readonly model: string
-  readonly messages: ReadonlyArray<Message>
+  readonly prompt: Prompt.RawInput
   readonly tools?: ReadonlyArray<AnyCapabilityContribution>
-  readonly systemPrompt?: string
   readonly maxTokens?: number
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
@@ -240,12 +239,25 @@ export interface ProviderRequest {
   readonly driverId?: string
 }
 
+export interface ProviderMessageRequest extends Omit<ProviderRequest, "prompt"> {
+  readonly messages: ReadonlyArray<Message>
+  readonly systemPrompt?: string
+}
+
+export const providerRequestFromMessages = ({
+  messages,
+  systemPrompt,
+  ...request
+}: ProviderMessageRequest): ProviderRequest => ({
+  ...request,
+  prompt: toPrompt(messages, { systemPrompt }),
+})
+
 // Simple generate request (no tools, no streaming)
 
 export interface GenerateRequest {
   readonly model: string
-  readonly prompt: string
-  readonly systemPrompt?: string
+  readonly prompt: Prompt.RawInput
   readonly maxTokens?: number
   /** Per-turn driver registry override (per-cwd profile). */
   readonly driverRegistry?: DriverRegistryService
@@ -304,11 +316,13 @@ function convertTools(
 
 // ── Debug providers ──
 
-const _extractLatestUserText = (messages: ReadonlyArray<Message>): string => {
-  const latest = [...messages].reverse().find((message) => message.role === "user")
+const _extractLatestUserText = (promptInput: Prompt.RawInput): string => {
+  const latest = [...Prompt.make(promptInput).content]
+    .reverse()
+    .find((message) => message.role === "user")
   if (latest === undefined) return ""
-  return latest.parts
-    .filter((part): part is TextPart => part.type === "text")
+  return latest.content
+    .filter((part): part is Prompt.TextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n")
 }
@@ -376,7 +390,7 @@ const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
 
       const stream = (request: ProviderRequest) =>
         Effect.suspend(() => {
-          const latestUserText = _extractLatestUserText(request.messages)
+          const latestUserText = _extractLatestUserText(request.prompt)
           const key = `${request.model}:${latestUserText}`
           const seen = attempts.get(key) ?? 0
           const retryBudget = retries ? _retryBudgetFor(latestUserText) : 0
@@ -449,8 +463,6 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           )
           const modelLayer = resolution.layer
 
-          const prompt = toPrompt(request.messages, { systemPrompt: request.systemPrompt })
-
           // Build tools
           const withHandler = request.tools !== undefined ? convertTools(request.tools) : undefined
 
@@ -458,12 +470,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           const rawStream =
             withHandler !== undefined
               ? LanguageModel.streamText({
-                  prompt,
+                  prompt: request.prompt,
                   toolkit: withHandler,
                   disableToolCallResolution: true as const,
                 })
               : LanguageModel.streamText({
-                  prompt,
+                  prompt: request.prompt,
                 })
 
           return rawStream.pipe(
@@ -490,16 +502,8 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           )
           const modelLayer = resolution.layer
 
-          const promptMessages: Prompt.Message[] =
-            request.systemPrompt !== undefined && request.systemPrompt !== ""
-              ? [
-                  Prompt.systemMessage({ content: request.systemPrompt }),
-                  Prompt.userMessage({ content: [Prompt.textPart({ text: request.prompt })] }),
-                ]
-              : [Prompt.userMessage({ content: [Prompt.textPart({ text: request.prompt })] })]
-
           const result = yield* LanguageModel.generateText({
-            prompt: Prompt.make(promptMessages),
+            prompt: request.prompt,
           }).pipe(
             // @effect-diagnostics-next-line strictEffectProvide:off
             Effect.provide(modelLayer),

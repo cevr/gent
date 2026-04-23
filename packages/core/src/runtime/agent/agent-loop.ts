@@ -67,6 +67,7 @@ import { Storage, type StorageError, type StorageService } from "../../storage/s
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import {
   Provider,
+  providerRequestFromMessages,
   type ProviderError,
   type ProviderService,
   toTurnEventStream,
@@ -808,19 +809,21 @@ const resolveTurnEventStream = (params: {
     }
 
     const streamEffect = yield* withRetry(
-      params.provider.stream({
-        model: resolved.modelId,
-        messages: [...resolved.messages],
-        tools: [...resolved.tools],
-        systemPrompt: resolved.systemPrompt,
-        abortSignal: params.activeStream.abortController.signal,
-        ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
-        ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
-        driverRegistry: params.driverRegistry,
-        ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
-          ? { driverId: resolved.driver.id }
-          : {}),
-      }),
+      params.provider.stream(
+        providerRequestFromMessages({
+          model: resolved.modelId,
+          messages: [...resolved.messages],
+          tools: [...resolved.tools],
+          systemPrompt: resolved.systemPrompt,
+          abortSignal: params.activeStream.abortController.signal,
+          ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+          ...(resolved.reasoning !== undefined ? { reasoning: resolved.reasoning } : {}),
+          driverRegistry: params.driverRegistry,
+          ...(resolved.driver?._tag === "model" && resolved.driver.id !== undefined
+            ? { driverId: resolved.driver.id }
+            : {}),
+        }),
+      ),
       undefined,
       {
         onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
