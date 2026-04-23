@@ -12,7 +12,9 @@ import { isRecord, isRecordArray } from "@gent/core/extensions/api"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {
+  type ExecutorInteraction,
   type ExecutorMcpInspection,
+  type ExecutorStructuredContent,
   type ExecutorMcpToolResult,
   type ResumeAction,
   ExecutorMcpError,
@@ -21,6 +23,7 @@ import {
 // ── Result normalization ──
 
 const DEFAULT_TEXT = "(no result)"
+const EMPTY_LOGS: ReadonlyArray<string> = []
 
 const collectText = (content: ReadonlyArray<Record<string, unknown>>): string => {
   const parts: string[] = []
@@ -32,9 +35,132 @@ const collectText = (content: ReadonlyArray<Record<string, unknown>>): string =>
   return parts.join("\n").trim()
 }
 
+const readLogs = (value: unknown): ReadonlyArray<string> =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : EMPTY_LOGS
+
+const normalizeInteraction = (structured: unknown): ExecutorInteraction | undefined => {
+  if (!isRecord(structured)) return undefined
+  const taggedKind = structured["_tag"]
+  if (taggedKind === "form" && typeof structured["message"] === "string") {
+    return {
+      _tag: "form",
+      message: structured["message"],
+      ...(isRecord(structured["requestedSchema"])
+        ? { requestedSchema: structured["requestedSchema"] }
+        : {}),
+    }
+  }
+  if (
+    taggedKind === "url" &&
+    typeof structured["message"] === "string" &&
+    typeof structured["url"] === "string"
+  ) {
+    return {
+      _tag: "url",
+      message: structured["message"],
+      url: structured["url"],
+    }
+  }
+
+  const wireKind = structured["kind"]
+  if (wireKind === "form" && typeof structured["message"] === "string") {
+    return {
+      _tag: "form",
+      message: structured["message"],
+      ...(isRecord(structured["requestedSchema"])
+        ? { requestedSchema: structured["requestedSchema"] }
+        : {}),
+    }
+  }
+  if (
+    wireKind === "url" &&
+    typeof structured["message"] === "string" &&
+    typeof structured["url"] === "string"
+  ) {
+    return {
+      _tag: "url",
+      message: structured["message"],
+      url: structured["url"],
+    }
+  }
+  return undefined
+}
+
+const normalizeStructuredContent = (structured: unknown): unknown => {
+  if (!isRecord(structured)) return structured
+
+  if (structured["_tag"] === "completed") {
+    return {
+      _tag: "completed",
+      result: structured["result"],
+      logs: [...readLogs(structured["logs"])],
+    } satisfies ExecutorStructuredContent
+  }
+
+  if (structured["_tag"] === "error" && typeof structured["error"] === "string") {
+    return {
+      _tag: "error",
+      error: structured["error"],
+      logs: [...readLogs(structured["logs"])],
+    } satisfies ExecutorStructuredContent
+  }
+
+  if (
+    structured["_tag"] === "waiting_for_interaction" &&
+    typeof structured["executionId"] === "string"
+  ) {
+    const interaction = normalizeInteraction(structured["interaction"])
+    if (interaction !== undefined) {
+      return {
+        _tag: "waiting_for_interaction",
+        executionId: structured["executionId"],
+        interaction,
+      } satisfies ExecutorStructuredContent
+    }
+  }
+
+  if (structured["status"] === "completed") {
+    return {
+      _tag: "completed",
+      result: structured["result"],
+      logs: [...readLogs(structured["logs"])],
+    } satisfies ExecutorStructuredContent
+  }
+
+  if (structured["status"] === "error") {
+    let error = "Executor failed"
+    if (typeof structured["error"] === "string") {
+      error = structured["error"]
+    } else if (typeof structured["errorMessage"] === "string") {
+      error = structured["errorMessage"]
+    }
+    return {
+      _tag: "error",
+      error,
+      logs: [...readLogs(structured["logs"])],
+    } satisfies ExecutorStructuredContent
+  }
+
+  if (
+    structured["status"] === "waiting_for_interaction" &&
+    typeof structured["executionId"] === "string"
+  ) {
+    const interaction = normalizeInteraction(structured["interaction"])
+    if (interaction !== undefined) {
+      return {
+        _tag: "waiting_for_interaction",
+        executionId: structured["executionId"],
+        interaction,
+      } satisfies ExecutorStructuredContent
+    }
+  }
+
+  return structured
+}
+
 export const readExecutionId = (structured: unknown): string | undefined => {
   if (!isRecord(structured)) return undefined
-  return structured["status"] === "waiting_for_interaction" &&
+  return structured["_tag"] === "waiting_for_interaction" &&
     typeof structured["executionId"] === "string"
     ? structured["executionId"]
     : undefined
@@ -55,7 +181,7 @@ export const normalizeToolResult = (
 
   const content = isRecordArray(raw.content) ? raw.content : []
   const structured: unknown = raw.structuredContent
-    ? JSON.parse(JSON.stringify(raw.structuredContent))
+    ? normalizeStructuredContent(JSON.parse(JSON.stringify(raw.structuredContent)))
     : undefined
   const text = collectText(content)
 

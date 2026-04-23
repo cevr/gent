@@ -97,42 +97,39 @@ export const ExecutorMcpToolResult = Schema.Struct({
 })
 export type ExecutorMcpToolResult = typeof ExecutorMcpToolResult.Type
 
-/** Structured content from executor — discriminated on `status` */
-export const ExecutorStructuredCompleted = Schema.Struct({
-  status: Schema.Literal("completed"),
+/** Structured content from executor — normalized to tagged variants. */
+export const ExecutorCompleted = Schema.TaggedStruct("completed", {
   result: Schema.Unknown,
   logs: Schema.Array(Schema.String),
 })
 
-export const ExecutorStructuredError = Schema.Struct({
-  status: Schema.Literal("error"),
+export const ExecutorFailed = Schema.TaggedStruct("error", {
   error: Schema.String,
   logs: Schema.Array(Schema.String),
 })
 
 export const ExecutorInteraction = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("form"),
+  Schema.TaggedStruct("form", {
     message: Schema.String,
     requestedSchema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
-  Schema.Struct({
-    kind: Schema.Literal("url"),
+  Schema.TaggedStruct("url", {
     message: Schema.String,
     url: Schema.String,
   }),
 ])
+export type ExecutorInteraction = typeof ExecutorInteraction.Type
 
-export const ExecutorStructuredWaiting = Schema.Struct({
-  status: Schema.Literal("waiting_for_interaction"),
+export const ExecutorWaitingForInteraction = Schema.TaggedStruct("waiting_for_interaction", {
   executionId: Schema.String,
   interaction: ExecutorInteraction,
 })
+export type ExecutorWaitingForInteraction = typeof ExecutorWaitingForInteraction.Type
 
 export const ExecutorStructuredContent = Schema.Union([
-  ExecutorStructuredCompleted,
-  ExecutorStructuredError,
-  ExecutorStructuredWaiting,
+  ExecutorCompleted,
+  ExecutorFailed,
+  ExecutorWaitingForInteraction,
 ])
 export type ExecutorStructuredContent = typeof ExecutorStructuredContent.Type
 

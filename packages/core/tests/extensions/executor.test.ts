@@ -103,7 +103,7 @@ describe("ExecutorProjection prompt + policy", () => {
 
   test("Error: excludes execute + resume", () => {
     const policy = ExecutorProjection.policy!(
-      { status: "error", errorMessage: "boom" },
+      { status: "error", errorMessage: "boom", baseUrl: undefined, executorPrompt: undefined },
       undefined as never,
     )
     expect(policy).toEqual({ exclude: ["execute", "resume"] })
@@ -168,13 +168,17 @@ describe("Executor settings", () => {
 
 describe("Executor MCP normalization", () => {
   test("readExecutionId extracts from waiting_for_interaction", () => {
-    expect(readExecutionId({ status: "waiting_for_interaction", executionId: "exec-1" })).toBe(
-      "exec-1",
-    )
+    expect(
+      readExecutionId({
+        _tag: "waiting_for_interaction",
+        executionId: "exec-1",
+        interaction: { _tag: "form", message: "Approve?" },
+      }),
+    ).toBe("exec-1")
   })
 
   test("readExecutionId returns undefined for non-waiting status", () => {
-    expect(readExecutionId({ status: "completed" })).toBeUndefined()
+    expect(readExecutionId({ _tag: "completed", result: { ok: true }, logs: [] })).toBeUndefined()
   })
 
   test("readExecutionId returns undefined for non-object", () => {
@@ -237,16 +241,43 @@ describe("normalizeToolResult", () => {
   test("executionId from waiting_for_interaction", () => {
     const result = normalizeToolResult({
       content: [{ type: "text", text: "waiting" }],
-      structuredContent: { status: "waiting_for_interaction", executionId: "exec-xyz" },
+      structuredContent: {
+        status: "waiting_for_interaction",
+        executionId: "exec-xyz",
+        interaction: { kind: "form", message: "Approve?" },
+      },
     })
     expect(result.executionId).toBe("exec-xyz")
+    expect(result.structuredContent).toEqual({
+      _tag: "waiting_for_interaction",
+      executionId: "exec-xyz",
+      interaction: { _tag: "form", message: "Approve?" },
+    })
   })
 
   test("no executionId when status is not waiting_for_interaction", () => {
     const result = normalizeToolResult({
       content: [{ type: "text", text: "done" }],
-      structuredContent: { status: "completed" },
+      structuredContent: { status: "completed", result: { ok: true } },
     })
     expect(result.executionId).toBeUndefined()
+    expect(result.structuredContent).toEqual({
+      _tag: "completed",
+      result: { ok: true },
+      logs: [],
+    })
+  })
+
+  test("error status normalizes to tagged error content", () => {
+    const result = normalizeToolResult({
+      content: [{ type: "text", text: "boom" }],
+      structuredContent: { status: "error", errorMessage: "boom" },
+      isError: true,
+    })
+    expect(result.structuredContent).toEqual({
+      _tag: "error",
+      error: "boom",
+      logs: [],
+    })
   })
 })
