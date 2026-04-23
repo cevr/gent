@@ -45,7 +45,7 @@ import {
   type InitialState,
 } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
-import { Gent, type GentClientBundle } from "@gent/sdk"
+import { Gent, GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import {
   listRegistryEntries,
   validateRegistryEntry,
@@ -102,7 +102,20 @@ const runHeadlessTurn = (
     }
 
     const parentSpan = yield* resolveParentSpan()
-    yield* bundle.runtime.lifecycle.waitForReady
+    yield* bundle.runtime.lifecycle.waitForReady.pipe(
+      Effect.timeoutOption("15 seconds"),
+      Effect.flatMap((ready) =>
+        Option.match(ready, {
+          onNone: () =>
+            Effect.fail(
+              new GentConnectionError({
+                message: "connection did not become ready within 15 seconds",
+              }),
+            ),
+          onSome: () => Effect.void,
+        }),
+      ),
+    )
 
     yield* runHeadless(
       bundle.client,

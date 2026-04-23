@@ -1,7 +1,7 @@
-import { Deferred, Effect, Fiber, Schedule, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Schedule, Stream } from "effect"
 import type { RunSpec } from "@gent/core/domain/agent.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { GentNamespacedClient } from "@gent/sdk"
+import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
 
 const isTransientTransportOpenError = (error: unknown): boolean => {
   const text = String(error)
@@ -62,7 +62,6 @@ export const runHeadless = (
             }
           }),
         ),
-        Stream.interruptWhen(Deferred.await(done)),
         Stream.runDrain,
         Effect.forkScoped,
       )
@@ -84,7 +83,27 @@ export const runHeadless = (
         Effect.withSpan("Headless.sendMessage"),
       )
 
-      yield* Deferred.await(done)
+      yield* Effect.raceFirst(
+        Deferred.await(done),
+        Fiber.await(streamFiber).pipe(
+          Effect.flatMap((exit) =>
+            Exit.match(exit, {
+              onFailure: (cause) =>
+                Effect.fail(
+                  new GentConnectionError({
+                    message: Cause.pretty(cause),
+                  }),
+                ),
+              onSuccess: () =>
+                Effect.fail(
+                  new GentConnectionError({
+                    message: "headless event stream ended before turn completion",
+                  }),
+                ),
+            }),
+          ),
+        ),
+      )
       yield* Fiber.interrupt(streamFiber).pipe(Effect.asVoid)
     }),
   )

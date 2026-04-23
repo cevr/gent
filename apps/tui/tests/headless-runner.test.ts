@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Stream } from "effect"
+import { Cause, Effect, Stream } from "effect"
 import { EventEnvelope, TurnCompleted } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { GentConnectionError } from "@gent/sdk"
 import { runHeadless } from "../src/headless-runner"
 import { createMockClient } from "./render-harness"
 
@@ -39,5 +40,28 @@ describe("runHeadless", () => {
 
     expect(exit._tag).toBe("Success")
     expect(sent).toBe(true)
+  })
+
+  test("fails when the event stream ends before turn completion", async () => {
+    const sessionId = SessionId.of("session-test")
+    const branchId = BranchId.of("branch-test")
+
+    const client = createMockClient({
+      session: {
+        events: () => Stream.empty,
+      },
+      message: {
+        send: () => Effect.void,
+      },
+    })
+
+    const exit = await Effect.runPromiseExit(runHeadless(client, sessionId, branchId, "Say hi"))
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag !== "Failure") return
+    expect(Cause.squash(exit.cause)).toBeInstanceOf(GentConnectionError)
+    expect(String(Cause.squash(exit.cause))).toContain(
+      "headless event stream ended before turn completion",
+    )
   })
 })
