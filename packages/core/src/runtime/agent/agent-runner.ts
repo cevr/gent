@@ -41,9 +41,8 @@ import { Session, Branch, type Message } from "../../domain/message.js"
 import { SessionId, BranchId } from "../../domain/ids.js"
 import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
-import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
-import { makeRunPrompt } from "../session-runtime.js"
+import { SessionRuntime } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
 import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
@@ -509,7 +508,9 @@ const buildEphemeralLayer = (params: {
     ToolRunner.Live,
     Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimePlatformLayer),
   )
-  const loopLayer = AgentLoop.Live({ baseSections: params.config.baseSections ?? [] }).pipe(
+  const sessionRuntimeLayer = SessionRuntime.Live({
+    baseSections: params.config.baseSections ?? [],
+  }).pipe(
     Layer.provide(
       Layer.mergeAll(
         storageLayer,
@@ -538,7 +539,7 @@ const buildEphemeralLayer = (params: {
       promptPresenter: promptPresenterLayer,
       resourceManager: ResourceManagerLive,
       toolRunner: toolRunnerLayer,
-      loop: loopLayer,
+      sessionRuntime: sessionRuntimeLayer,
     })
     .merge(extensionLayers)
     .build()
@@ -618,7 +619,7 @@ const runEphemeralAgent = (params: {
     const localStorage = yield* Storage
     const localEventStore = yield* EventStore
     const localEventPublisher = yield* EventPublisher
-    const runPrompt = yield* makeRunPrompt
+    const sessionRuntime = yield* SessionRuntime
     const now = yield* DateTime.nowAsDate
 
     yield* localStorage.createSession(
@@ -666,7 +667,7 @@ const runEphemeralAgent = (params: {
           ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
           : normalizedRunSpec
       yield* runWithTimeout(
-        runPrompt({
+        sessionRuntime.runPrompt({
           sessionId,
           branchId,
           agentName: params.agentName,
@@ -700,7 +701,7 @@ const runEphemeralAgent = (params: {
     })
 
     // Ephemeral child run is its own composition root — provide the per-run
-    // layer (in-memory storage, auto-resolve approval, fresh AgentLoop) and
+    // layer (in-memory storage, auto-resolve approval, fresh SessionRuntime) and
     // wrap in `Effect.scoped` so the layer's resources release deterministically
     // when the child finishes/interrupts.
     //
@@ -763,7 +764,7 @@ export const InProcessRunner = (
   | Storage
   | EventStore
   | EventPublisher
-  | AgentLoop
+  | SessionRuntime
   | ExtensionRegistry
   | Provider
   | ServerProfileService
@@ -774,7 +775,7 @@ export const InProcessRunner = (
       const storage = yield* Storage
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
-      const runPrompt = yield* makeRunPrompt
+      const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
@@ -892,7 +893,7 @@ export const InProcessRunner = (
                     ? { ...(normalizedRunSpec ?? {}), parentToolCallId: toolCallId }
                     : normalizedRunSpec
                 yield* runWithTimeout(
-                  runPrompt({
+                  sessionRuntime.runPrompt({
                     sessionId,
                     branchId,
                     agentName: params.agent.name,

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
 import { Provider } from "@gent/core/providers/provider"
 import {
   createSequenceProvider,
@@ -13,7 +13,6 @@ import {
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
-import { AgentLoop, type AgentLoopService } from "@gent/core/runtime/agent/agent-loop"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
@@ -21,7 +20,6 @@ import {
   AgentRunnerService,
   AgentRunError,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
-  type RunSpec,
 } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
@@ -40,6 +38,11 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ServerProfileService } from "@gent/core/runtime/scope-brands"
+import {
+  SessionRuntime,
+  SessionRuntimeStateSchema,
+  type SessionRuntimeService,
+} from "@gent/core/runtime/session-runtime"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 
@@ -101,18 +104,49 @@ const ephemeralParentDeps = Layer.mergeAll(
   ConfigService.Test(),
 )
 
-const agentLoopStub = (runOnce: AgentLoopService["runOnce"] = () => Effect.void) =>
-  Layer.succeed(AgentLoop, {
-    runOnce,
-    submit: () => Effect.void,
-    run: () => Effect.void,
-    steer: () => Effect.void,
-    drainQueue: () => Effect.succeed(emptyQueueSnapshot()),
-    getQueue: () => Effect.succeed(emptyQueueSnapshot()),
-    respondInteraction: () => Effect.void,
-    getState: () => Effect.die("AgentLoop.getState not used in AgentRunner tests"),
-    watchState: () => Effect.die("AgentLoop.watchState not used in AgentRunner tests"),
-  })
+const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () => Effect.void) =>
+  Layer.effect(
+    SessionRuntime,
+    Effect.gen(function* () {
+      const runtimeState = yield* SubscriptionRef.make(
+        new SessionRuntimeStateSchema.Idle({
+          agent: "cowork" as const,
+          queue: emptyQueueSnapshot(),
+        }),
+      )
+
+      return {
+        dispatch: () => Effect.void,
+        runPrompt: (input) =>
+          Effect.gen(function* () {
+            yield* SubscriptionRef.set(
+              runtimeState,
+              new SessionRuntimeStateSchema.Running({
+                agent: input.agentName,
+                queue: emptyQueueSnapshot(),
+              }),
+            )
+            yield* runPrompt(input).pipe(
+              Effect.ensuring(
+                SubscriptionRef.set(
+                  runtimeState,
+                  new SessionRuntimeStateSchema.Idle({
+                    agent: input.agentName,
+                    queue: emptyQueueSnapshot(),
+                  }),
+                ),
+              ),
+            )
+          }),
+        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getState: () => SubscriptionRef.get(runtimeState),
+        getMetrics: () =>
+          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
+      } satisfies SessionRuntimeService
+    }),
+  )
 
 describe("RunSpec", () => {
   test("dual model pair resolves to cowork and deepwork models", () => {
@@ -134,17 +168,8 @@ describe("RunSpec", () => {
     }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
-  test("runSpec reaches agent loop", async () => {
-    let capturedInput:
-      | {
-          sessionId: SessionId
-          branchId: BranchId
-          agentName: string
-          prompt: string
-          interactive?: boolean
-          runSpec?: RunSpec
-        }
-      | undefined
+  test("runSpec reaches session runtime prompt execution", async () => {
+    let capturedInput: Parameters<SessionRuntimeService["runPrompt"]>[0] | undefined
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
@@ -153,7 +178,7 @@ describe("RunSpec", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      agentLoopStub((input) => {
+      sessionRuntimeStub((input) => {
         capturedInput = input
         return Effect.void
       }),
@@ -218,7 +243,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      agentLoopStub(),
+      sessionRuntimeStub(),
       recorderLayer,
       eventStoreLayer,
       eventPublisherLayer,
@@ -295,7 +320,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      agentLoopStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
+      sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
       recorderLayer,
       eventStoreLayer,
       eventPublisherLayer,
@@ -349,7 +374,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      agentLoopStub(() => Effect.sleep("50 millis")),
+      sessionRuntimeStub(() => Effect.sleep("50 millis")),
       eventStoreLayer,
       eventPublisherLayer,
     )
@@ -406,7 +431,7 @@ describe("AgentRunner", () => {
         [textDeltaPart("ephemeral response"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      agentLoopStub(),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -473,7 +498,7 @@ describe("AgentRunner", () => {
         [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      agentLoopStub(),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -564,7 +589,7 @@ describe("AgentRunner", () => {
         [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      agentLoopStub(),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -615,7 +640,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      agentLoopStub(),
+      sessionRuntimeStub(),
       eventStoreLayer,
       eventPublisherLayer,
     )
@@ -671,7 +696,7 @@ describe("AgentRunner", () => {
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
     // Mock agent loop that writes a reasoning-only assistant message
-    const mockRuntime = agentLoopStub((input) =>
+    const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -742,7 +767,7 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
-    const mockRuntime = agentLoopStub((input) =>
+    const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -811,7 +836,7 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
-    const mockRuntime = agentLoopStub((input) =>
+    const mockRuntime = sessionRuntimeStub((input) =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const now = new Date()
@@ -1021,7 +1046,7 @@ describe("ephemeral service propagation", () => {
       eventPublisherLayer,
       testRegistryLayer,
       providerLayer,
-      agentLoopStub(),
+      sessionRuntimeStub(),
       ephemeralParentDeps,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
@@ -1113,7 +1138,7 @@ describe("ephemeral service propagation", () => {
         eventPublisherLayer,
         toolRegistry,
         providerLayer,
-        agentLoopStub(),
+        sessionRuntimeStub(),
         ephemeralParentDeps,
       )
       const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))

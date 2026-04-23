@@ -37,6 +37,7 @@ describe("InteractionCommands", () => {
                 }),
               )
             }),
+          runPrompt: () => Effect.die("unused"),
           drainQueuedMessages: () => Effect.die("unused"),
           getQueuedMessages: () => Effect.die("unused"),
           getState: () => Effect.die("unused"),

@@ -55,6 +55,7 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { AgentLoop } from "./agent/agent-loop.js"
+import { SessionRuntime } from "./session-runtime.js"
 
 /**
  * A typed handle to a service-layer pair. Pairs a `Context.Key` with the
@@ -134,6 +135,8 @@ export interface EphemeralOverrides {
   readonly toolRunner?: OpaqueLayer
   /** Agent loop wired to local deps. Omits AgentLoop. */
   readonly loop?: OpaqueLayer
+  /** Session runtime wired to local deps. Omits SessionRuntime. */
+  readonly sessionRuntime?: OpaqueLayer
 }
 
 /**
@@ -159,6 +162,7 @@ type EphemeralOverrideProvides =
   | ResourceManager
   | ToolRunner
   | AgentLoop
+  | SessionRuntime
 
 /**
  * Maps each override field to the complete set of Tags it should omit from
@@ -196,6 +200,8 @@ const OVERRIDE_TAG_SETS: Record<
   toolRunner: [ToolRunner] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   loop: [AgentLoop] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  sessionRuntime: [SessionRuntime] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
 }
 
 export interface EphemeralComposerBuilder<Provides> {
@@ -328,6 +334,7 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       addOverride("resourceManager")
       addOverride("toolRunner")
       addOverride("loop")
+      addOverride("sessionRuntime")
       return makeBuilder({
         ...state,
         ownedKeys: [...state.ownedKeys, ...extraKeys],

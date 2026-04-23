@@ -15,7 +15,6 @@ import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
-import type { AgentLoopService } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -53,15 +52,6 @@ export const SendUserMessagePayload = Schema.Struct({
   runSpec: Schema.optional(RunSpecSchema),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
-
-export interface RunPromptInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName: AgentName
-  readonly prompt: string
-  readonly interactive?: boolean
-  readonly runSpec?: RunSpec
-}
 
 export const SendToolResultPayload = Schema.Struct({
   commandId: Schema.optional(ActorCommandId),
@@ -189,6 +179,14 @@ export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 export interface SessionRuntimeService {
   readonly dispatch: (command: RuntimeCommand) => Effect.Effect<void, SessionRuntimeError>
+  readonly runPrompt: (input: {
+    sessionId: SessionId
+    branchId: BranchId
+    agentName: AgentName
+    prompt: string
+    interactive?: boolean
+    runSpec?: RunSpec
+  }) => Effect.Effect<void, AgentRunError>
   readonly drainQueuedMessages: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>
@@ -268,27 +266,14 @@ export const respondInteractionCommand = (
   ...input,
 })
 
-const runPromptWithLoop = (agentLoop: AgentLoopService) =>
-  Effect.fn("SessionRuntime.runPromptWithLoop")(function* (input: RunPromptInput) {
-    return yield* agentLoop.runOnce(input).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentRunError({
-            message: cause.message,
-            cause,
-          }),
-      ),
-    )
-  })
-
-export const makeRunPrompt: Effect.Effect<
-  (input: RunPromptInput) => Effect.Effect<void, AgentRunError>,
-  never,
-  AgentLoop
-> = Effect.gen(function* () {
-  const agentLoop = yield* AgentLoop
-  return runPromptWithLoop(agentLoop)
-})
+interface RunPromptInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: AgentName
+  readonly prompt: string
+  readonly interactive?: boolean
+  readonly runSpec?: RunSpec
+}
 
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
@@ -484,6 +469,17 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
             Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
           ),
 
+        runPrompt: (input: RunPromptInput) =>
+          agentLoop.runOnce(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AgentRunError({
+                  message: cause.message,
+                  cause,
+                }),
+            ),
+          ),
+
         drainQueuedMessages: (input) =>
           agentLoop
             .drainQueue(input)
@@ -571,6 +567,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {
       dispatch: () => Effect.void,
+      runPrompt: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>

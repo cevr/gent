@@ -89,7 +89,7 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bexport const\s+(Queue|MutableQueue|QueueRef|TurnControlRef)\b/)
   })
 
-  test("SessionRuntime public surface does not expose direct turn execution", () => {
+  test("SessionRuntime owns prompt execution directly", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/session-runtime.ts")
     const source = readFileSync(file, "utf8")
     const serviceMatch = source.match(/export interface SessionRuntimeService \{([\s\S]*?)\n\}/)
@@ -97,6 +97,7 @@ describe("architecture policy", () => {
     expect(serviceMatch).not.toBeNull()
 
     const body = serviceMatch?.[1] ?? ""
+    expect(body).toMatch(/\brunPrompt\b/)
     expect(body).not.toMatch(/\brunOnce\b/)
   })
 
@@ -113,8 +114,24 @@ describe("architecture policy", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/agent/agent-runner.ts")
     const source = readFileSync(file, "utf8")
 
-    expect(source).not.toMatch(/yield\*\s+AgentLoop\b/)
-    expect(source).not.toMatch(/\bagentLoop\.runOnce\b/)
+    expect(source).not.toMatch(/\bAgentLoop\b/)
+    expect(source).not.toMatch(/\bmakeRunPrompt\b/)
+    expect(source).toMatch(/\bSessionRuntime\b/)
+  })
+
+  test("agent runner public layer depends on SessionRuntime, not AgentLoop", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/agent/agent-runner.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).toMatch(/\|\s+SessionRuntime\b/)
+    expect(source).not.toMatch(/\|\s+AgentLoop\b/)
+  })
+
+  test("session runtime does not export direct prompt-run helpers", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/session-runtime.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).not.toMatch(/\bexport\s+(const|interface)\s+(makeRunPrompt|RunPromptInput)\b/)
   })
 
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {
