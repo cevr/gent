@@ -3,7 +3,7 @@
  *
  * Every test here MUST need real subprocess isolation (restart, SIGKILL,
  * process cleanup). Transport/runtime behavior that can be tested in-process
- * belongs in the default test pipeline (event-stream-parity, watch-state-parity, etc).
+ * belongs in the default test pipeline (event-stream-direct, watch-state-direct, etc).
  */
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Option, Stream } from "effect"

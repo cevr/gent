@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Ref, Stream } from "effect"
+import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { transportCases, waitFor } from "./transport-harness"
 
@@ -8,7 +8,7 @@ import { transportCases, waitFor } from "./transport-harness"
 // server's stream fiber). This causes CPU spin on the shared worker after
 // streaming tests complete. Until Effect fixes upstream scope propagation,
 // streaming tests only run on the direct transport.
-const streamingCases = transportCases.filter((c) => c.name === "direct")
+const directStreamingCases = transportCases.filter((c) => c.name === "direct")
 
 const startCollecting = (
   client: {
@@ -24,11 +24,17 @@ const startCollecting = (
 ) =>
   Effect.gen(function* () {
     const events = yield* Ref.make<EventEnvelope[]>([])
+    const ready = yield* Deferred.make<void>()
     const fiber = yield* client.session.events(input).pipe(
-      Stream.runForEach((envelope) => Ref.update(events, (current) => [...current, envelope])),
+      Stream.runForEach((envelope) =>
+        Effect.gen(function* () {
+          yield* Ref.update(events, (current) => [...current, envelope])
+          yield* Deferred.succeed(ready, void 0).pipe(Effect.ignore)
+        }),
+      ),
       Effect.forkScoped,
     )
-    yield* Effect.sleep("50 millis")
+    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return { events, fiber }
   })
 
@@ -61,8 +67,8 @@ const waitForTaggedEvent = (
     ),
   )
 
-describe("event stream parity", () => {
-  for (const transport of streamingCases) {
+describe("direct event stream contracts", () => {
+  for (const transport of directStreamingCases) {
     const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
@@ -132,7 +138,7 @@ describe("event stream parity", () => {
 
             expect(firstTurnMaxId).toBeDefined()
 
-            // Batch 2 is stream parity, not actor command timing.
+            // This batch asserts stream liveness, not actor command timing.
             // Use a session event outside the turn loop to prove the stream stays alive.
             yield* client.branch
               .create({ sessionId: created.sessionId, name: "stream-live-branch" })

@@ -3,8 +3,8 @@ import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
-// See event-stream-parity.test.ts for why streaming tests are direct-only.
-const streamingCases = transportCases.filter((c) => c.name === "direct")
+// See event-stream-direct.test.ts for why streaming tests are direct-only.
+const directStreamingCases = transportCases.filter((c) => c.name === "direct")
 
 const collectSnapshots = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -28,8 +28,8 @@ const collectSnapshots = <A, E>(
     return values
   })
 
-describe("runtime watch parity", () => {
-  for (const transport of streamingCases) {
+describe("direct runtime watch contracts", () => {
+  for (const transport of directStreamingCases) {
     const timeoutMs = 15_000
 
     test(

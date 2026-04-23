@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
-// See event-stream-parity.test.ts for why streaming tests are direct-only.
-const streamingCases = transportCases.filter((c) => c.name === "direct")
+// See event-stream-direct.test.ts for why streaming tests are direct-only.
+const directStreamingCases = transportCases.filter((c) => c.name === "direct")
 
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
@@ -27,8 +27,8 @@ const collectLiveEvents = <A, E>(
     return values
   })
 
-describe("live event parity", () => {
-  for (const transport of streamingCases) {
+describe("direct live event contracts", () => {
+  for (const transport of directStreamingCases) {
     const timeoutMs = 15_000
 
     test(
