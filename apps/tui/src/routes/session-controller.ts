@@ -679,6 +679,7 @@ export function createSessionController(props: {
   const closeOverlay = () => dispatchSessionUi({ _tag: "CloseOverlay" })
 
   const resolveAuthGate = () => {
+    authCheckVersion++
     setValidatedAgent(client.agent())
     setAuthGateState("closed")
     closeOverlay()

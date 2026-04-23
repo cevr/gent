@@ -10,7 +10,7 @@ import { Route, useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
-import { waitForRenderedFrame } from "./helpers"
+import { renderFrame, waitForRenderedFrame } from "./helpers"
 
 type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
 
@@ -537,6 +537,148 @@ describe("App auth gate", () => {
       (frame) => !frame.includes("Prompt Search"),
       "prompt search closed",
     )
+    setup.renderer.destroy()
+  })
+
+  test("stale auth checks cannot reopen the auth gate after key save", async () => {
+    let ctx: ClientContextValue | undefined
+    let hasOpenAiKey = false
+    let sessionAuthChecks = 0
+    let resolveStaleSessionCheck:
+      | ((
+          providers: Array<{
+            provider: string
+            hasKey: boolean
+            required: boolean
+            source: "none"
+            authType: undefined
+          }>,
+        ) => void)
+      | undefined
+    const staleSessionCheck = new Promise<
+      Array<{
+        provider: string
+        hasKey: boolean
+        required: boolean
+        source: "none"
+        authType: undefined
+      }>
+    >((resolve) => {
+      resolveStaleSessionCheck = resolve
+    })
+    const sentMessages: Array<{ content: string }> = []
+    const initialPrompt = "stale auth race prompt"
+
+    const client = createMockClient({
+      auth: {
+        listProviders: (input: { readonly sessionId?: SessionId; readonly agentName?: string }) => {
+          if (input.sessionId !== undefined) {
+            sessionAuthChecks++
+            if (sessionAuthChecks === 1) {
+              return Effect.succeed([
+                {
+                  provider: "openai",
+                  hasKey: false,
+                  required: true,
+                  source: "none" as const,
+                  authType: undefined,
+                },
+              ])
+            }
+            return Effect.promise(() => staleSessionCheck)
+          }
+          return Effect.succeed([
+            {
+              provider: "openai",
+              hasKey: hasOpenAiKey,
+              required: true,
+              source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
+              authType: undefined,
+            },
+          ])
+        },
+        listMethods: () =>
+          Effect.succeed({
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+        setKey: ({ key }: { readonly key: string }) =>
+          Effect.sync(() => {
+            hasOpenAiKey = key.length > 0
+          }),
+      },
+      message: {
+        send: (input: { readonly content: string }) =>
+          Effect.sync(() => {
+            sentMessages.push(input)
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <App missingAuthProviders={["openai"]} />
+          <ClientProbe onReady={(value) => (ctx = value)} />
+        </>
+      ),
+      {
+        client,
+        runtime,
+        initialAgent: "cowork",
+        initialSession: {
+          id: SessionId.make("session-a"),
+          branchId: BranchId.make("branch-a"),
+          name: "A",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+        initialRoute: Route.session(
+          SessionId.make("session-a"),
+          BranchId.make("branch-a"),
+          initialPrompt,
+        ),
+        width: 100,
+        height: 30,
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    await waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+    ctx.steer({ _tag: "SwitchAgent", agent: "deepwork" })
+    await waitForRenderedFrame(
+      setup,
+      () => sessionAuthChecks >= 2,
+      "stale session auth check started",
+    )
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Enter API key for openai"),
+      "openai key input",
+    )
+    await setup.mockInput.typeText("sk-test")
+    setup.mockInput.pressEnter()
+
+    await waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved")
+    await waitForMessage(setup, sentMessages, initialPrompt)
+
+    resolveStaleSessionCheck?.([
+      {
+        provider: "openai",
+        hasKey: false,
+        required: true,
+        source: "none",
+        authType: undefined,
+      },
+    ])
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await setup.renderOnce()
+    expect(renderFrame(setup)).not.toContain("API Keys")
+    expect(sentMessages.filter((message) => message.content === initialPrompt)).toHaveLength(1)
     setup.renderer.destroy()
   })
 })
