@@ -11,7 +11,7 @@ import {
   type AgentName as AgentNameType,
   type ReasoningEffort as ReasoningEffortType,
 } from "../../domain/agent.js"
-import { Message, TextPart, ToolCallPart, ToolResultPart } from "../../domain/message.js"
+import { Message, TextPart, ToolCallPart } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
 import { QueueEntryInfo, QueueSnapshot } from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
@@ -218,8 +218,6 @@ export const AgentLoopState = State({
   WaitingForInteraction: {
     ...RunningTurnFields,
     currentTurnAgent: AgentName,
-    draft: AssistantDraftSchema,
-    completedToolResults: Schema.Array(ToolResultPart),
     pendingRequestId: Schema.String,
     pendingToolCallId: Schema.String,
   },
@@ -230,11 +228,9 @@ export const AgentLoopEvent = Event({
   TurnDone: {},
   TurnFailed: {},
   InteractionRequested: {
-    completedToolResults: Schema.Array(ToolResultPart),
     pendingRequestId: Schema.String,
     pendingToolCallId: Schema.String,
     currentTurnAgent: AgentName,
-    draft: AssistantDraftSchema,
   },
   InteractionResponded: { requestId: Schema.String },
   SwitchAgent: { agent: AgentName },
@@ -294,15 +290,11 @@ export const buildRunningState = (
 export const toWaitingForInteractionState = (params: {
   state: RunningState
   currentTurnAgent: AgentNameType
-  draft: AssistantDraft
-  completedToolResults: ReadonlyArray<typeof ToolResultPart.Type>
   pendingRequestId: string
   pendingToolCallId: string
 }): WaitingForInteractionState =>
   AgentLoopState.WaitingForInteraction.with(params.state, {
     currentTurnAgent: params.currentTurnAgent,
-    draft: params.draft,
-    completedToolResults: [...params.completedToolResults],
     pendingRequestId: params.pendingRequestId,
     pendingToolCallId: params.pendingToolCallId,
   })

@@ -137,7 +137,7 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 
 // ── Provider Stream Parts ──
 
-type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
+export type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
 type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
 
 const toUsage = (usage: Response.FinishPart["usage"]) =>
