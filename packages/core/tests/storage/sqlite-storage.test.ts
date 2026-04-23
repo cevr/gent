@@ -589,6 +589,26 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.Test())),
     )
 
+    it.live("invalid stored metadata decodes to undefined instead of crashing", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        yield* storage.createSession(
+          new Session({ id: "bad-meta-s", createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "bad-meta-b", sessionId: "bad-meta-s", createdAt: new Date() }),
+        )
+
+        yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${"bad-meta-msg"}, ${"bad-meta-s"}, ${"bad-meta-b"}, ${null}, ${"assistant"}, ${JSON.stringify([{ type: "text", text: "hello" }])}, ${Date.now()}, ${null}, ${'{"customType":1}'})`
+
+        const messages = yield* storage.listMessages("bad-meta-b")
+        expect(messages).toHaveLength(1)
+        expect(messages[0]!.metadata).toBeUndefined()
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
     test("messageToInfo preserves metadata for transport", () => {
       const message = new Message({
         id: "info-msg",

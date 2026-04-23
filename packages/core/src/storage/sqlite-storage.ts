@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect"
-import { Clock, Context, Effect, Layer, Schema, FileSystem, Path } from "effect"
+import { Clock, Context, Effect, Layer, Option, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart, MessageMetadata } from "../domain/message.js"
 import { AgentEvent, EventEnvelope, EventId, getEventSessionId } from "../domain/event.js"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
@@ -24,21 +24,9 @@ const decodeMessageParts = Schema.decodeUnknownEffect(MessagePartsJson)
 const encodeMessageParts = Schema.encodeEffect(MessagePartsJson)
 const EventJson = Schema.fromJsonString(Schema.Unknown)
 const encodeEvent = Schema.encodeEffect(EventJson)
-const MetadataJson = Schema.fromJsonString(Schema.Unknown)
-const encodeMetadataJson = Schema.encodeSync(MetadataJson)
-
-const safeJsonParse = (s: string): unknown => {
-  try {
-    return JSON.parse(s) as unknown
-  } catch {
-    return undefined
-  }
-}
-
-const decodeMessageMetadata = (raw: string): MessageMetadata | undefined => {
-  const parsed = safeJsonParse(raw)
-  return isRecord(parsed) ? Schema.decodeUnknownSync(MessageMetadata)(parsed) : undefined
-}
+const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
+const decodeMessageMetadata = Schema.decodeUnknownOption(MessageMetadataJson)
+const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
 
 const LEGACY_EVENT_TAGS = {
   AgentRunSpawned: ["AgentRunSpawned", "SubagentSpawned"],
@@ -257,18 +245,31 @@ const branchFromRow = (row: BranchRow) =>
     createdAt: new Date(row.created_at),
   })
 
-const messageFromRow = (row: MessageRow, parts: ReadonlyArray<MessagePart>) =>
-  new Message({
-    id: row.id,
-    sessionId: row.session_id,
-    branchId: row.branch_id,
-    kind: row.kind ?? undefined,
-    role: row.role,
-    parts,
-    createdAt: new Date(row.created_at),
-    turnDurationMs: row.turn_duration_ms ?? undefined,
-    metadata: row.metadata !== null ? decodeMessageMetadata(row.metadata) : undefined,
-  })
+const decodeStoredMessage = (row: MessageRow) =>
+  Effect.map(
+    decodeMessageParts(row.parts),
+    (parts) =>
+      new Message({
+        id: row.id,
+        sessionId: row.session_id,
+        branchId: row.branch_id,
+        kind: row.kind ?? undefined,
+        role: row.role,
+        parts,
+        createdAt: new Date(row.created_at),
+        turnDurationMs: row.turn_duration_ms ?? undefined,
+        metadata:
+          row.metadata === null
+            ? undefined
+            : Option.getOrUndefined(decodeMessageMetadata(row.metadata)),
+      }),
+  )
+
+const encodeStoredMessage = (message: Message) =>
+  Effect.map(encodeMessageParts([...message.parts]), (partsJson) => ({
+    partsJson,
+    metadataJson: message.metadata !== undefined ? encodeMessageMetadata(message.metadata) : null,
+  }))
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -621,9 +622,7 @@ const makeStorage = Effect.gen(function* () {
     // Messages
     createMessage: Effect.fn("Storage.createMessage")(
       function* (message) {
-        const partsJson = yield* encodeMessageParts([...message.parts])
-        const metadataJson =
-          message.metadata !== undefined ? encodeMetadataJson(message.metadata) : null
+        const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
         yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
         return message
@@ -633,9 +632,7 @@ const makeStorage = Effect.gen(function* () {
 
     createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
       function* (message) {
-        const partsJson = yield* encodeMessageParts([...message.parts])
-        const metadataJson =
-          message.metadata !== undefined ? encodeMetadataJson(message.metadata) : null
+        const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
         yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
         return message
@@ -649,8 +646,7 @@ const makeStorage = Effect.gen(function* () {
           yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE id = ${id}`
         const row = rows[0]
         if (row === undefined) return undefined
-        const parts = yield* decodeMessageParts(row.parts)
-        return messageFromRow(row, parts)
+        return yield* decodeStoredMessage(row)
       },
       Effect.mapError(mapError("Failed to get message")),
     ),
@@ -659,9 +655,7 @@ const makeStorage = Effect.gen(function* () {
       function* (branchId) {
         const rows =
           yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branchId} ORDER BY created_at ASC, id ASC`
-        return yield* Effect.forEach(rows, (row) =>
-          Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
-        )
+        return yield* Effect.forEach(rows, decodeStoredMessage)
       },
       Effect.mapError(mapError("Failed to list messages")),
     ),
@@ -846,9 +840,7 @@ const makeStorage = Effect.gen(function* () {
           Effect.gen(function* () {
             const msgRows =
               yield* sql<MessageRow>`SELECT id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata FROM messages WHERE branch_id = ${branch.id} ORDER BY created_at ASC, id ASC`
-            const messages = yield* Effect.forEach(msgRows, (row) =>
-              Effect.map(decodeMessageParts(row.parts), (parts) => messageFromRow(row, parts)),
-            )
+            const messages = yield* Effect.forEach(msgRows, decodeStoredMessage)
             return { branch, messages }
           }),
         )
