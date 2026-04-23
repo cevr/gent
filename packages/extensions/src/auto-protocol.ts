@@ -27,15 +27,15 @@ export const AutoSnapshotReply = Schema.Struct({
 export type AutoSnapshotReply = typeof AutoSnapshotReply.Type
 
 export const AutoProtocol = {
-  StartAuto: ExtensionMessage(AUTO_EXTENSION_ID, "StartAuto", {
+  StartAuto: ExtensionMessage.command(AUTO_EXTENSION_ID, "StartAuto", {
     goal: Schema.String,
     maxIterations: Schema.optional(Schema.Number),
   }),
-  RequestHandoff: ExtensionMessage(AUTO_EXTENSION_ID, "RequestHandoff", {
+  RequestHandoff: ExtensionMessage.command(AUTO_EXTENSION_ID, "RequestHandoff", {
     content: Schema.String,
   }),
-  CancelAuto: ExtensionMessage(AUTO_EXTENSION_ID, "CancelAuto", {}),
-  ToggleAuto: ExtensionMessage(AUTO_EXTENSION_ID, "ToggleAuto", {
+  CancelAuto: ExtensionMessage.command(AUTO_EXTENSION_ID, "CancelAuto", {}),
+  ToggleAuto: ExtensionMessage.command(AUTO_EXTENSION_ID, "ToggleAuto", {
     goal: Schema.optional(Schema.String),
     maxIterations: Schema.optional(Schema.Number),
   }),

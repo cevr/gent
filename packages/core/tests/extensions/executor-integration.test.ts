@@ -131,7 +131,7 @@ const waitForExecutorStatus = (
 ) =>
   waitFor(
     runtime
-      .execute(sessionId, ExecutorProtocol.GetSnapshot(), branchId)
+      .execute(sessionId, ExecutorProtocol.GetSnapshot.make(), branchId)
       .pipe(Effect.catchEager(() => Effect.succeed(undefined as ExecutorUiModel | undefined))),
     (snap) => (snap as ExecutorUiModel | undefined)?.status === status,
     3_000,
@@ -284,7 +284,7 @@ describe("Executor actor lifecycle", () => {
 
         const model = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(model.status).toBe("ready")
@@ -311,7 +311,7 @@ describe("Executor actor lifecycle", () => {
 
         const model = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(model.status).toBe("idle")
@@ -341,7 +341,7 @@ describe("Executor actor lifecycle", () => {
 
         const model = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(model.status).toBe("error")
@@ -368,19 +368,19 @@ describe("Executor actor lifecycle", () => {
         // Verify idle
         const beforeModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(beforeModel.status).toBe("idle")
 
         // Send Connect command
-        yield* runtime.send(sessionId, ExecutorProtocol.Connect({ cwd: "/test" }), branchId)
+        yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
 
         yield* waitForExecutorStatus(runtime, "ready")
 
         const afterModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
@@ -406,19 +406,19 @@ describe("Executor actor lifecycle", () => {
         // Verify ready
         const beforeModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(beforeModel.status).toBe("ready")
 
         // Send disconnect
-        yield* runtime.send(sessionId, ExecutorProtocol.Disconnect(), branchId)
+        yield* runtime.send(sessionId, ExecutorProtocol.Disconnect.make(), branchId)
 
         yield* waitForExecutorStatus(runtime, "idle")
 
         const afterModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("idle")
@@ -455,19 +455,19 @@ describe("Executor actor lifecycle", () => {
 
         const midModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(midModel.status).toBe("error")
 
         // Retry via command — second call succeeds
-        yield* runtime.send(sessionId, ExecutorProtocol.Connect({ cwd: "/test" }), branchId)
+        yield* runtime.send(sessionId, ExecutorProtocol.Connect.make({ cwd: "/test" }), branchId)
 
         yield* waitForExecutorStatus(runtime, "ready")
 
         const afterModel = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(afterModel.status).toBe("ready")
@@ -494,7 +494,7 @@ describe("Executor actor lifecycle", () => {
         // Actor should be Ready (onInit → Connect → .spawn → Connected)
         const model = (yield* runtime.execute(
           sessionId,
-          ExecutorProtocol.GetSnapshot(),
+          ExecutorProtocol.GetSnapshot.make(),
           branchId,
         )) as ExecutorUiModel
         expect(model.status).toBe("ready")

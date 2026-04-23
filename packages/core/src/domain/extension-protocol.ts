@@ -63,26 +63,28 @@ type MessageFactory<F extends ExtensionFields, M> = keyof F extends never
   ? () => M
   : (payload: PayloadType<F>) => M
 
-export type ExtensionCommandDefinition<
+export interface ExtensionCommandDefinition<
   Id extends string,
   Tag extends string,
   F extends ExtensionFields,
-> = MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>> & {
+> {
   readonly extensionId: Id
   readonly _tag: Tag
+  readonly make: MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly schema: Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
   readonly is: (message: AnyExtensionMessage) => message is ExtensionCommandMessage<Id, Tag, F>
 }
 
-export type ExtensionRequestDefinition<
+export interface ExtensionRequestDefinition<
   Id extends string,
   Tag extends string,
   F extends ExtensionFields,
   R,
-> = MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>> & {
+> {
   readonly extensionId: Id
   readonly _tag: Tag
+  readonly make: MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>>
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly replySchema: Schema.Codec<R, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<R>
@@ -128,17 +130,17 @@ interface ExtensionCommandMetadata {
   readonly schema: Schema.Decoder<unknown>
 }
 
-interface ExtensionRequestMetadata {
+interface ExtensionRequestMetadata<R = unknown> {
   readonly _tag: "request"
   readonly extensionId: string
   readonly tag: string
   readonly payloadSchema: Schema.Schema<unknown>
   readonly schema: Schema.Decoder<unknown>
-  readonly replySchema: Schema.Codec<unknown, unknown, never, never>
-  readonly replyDecoder: Schema.Decoder<unknown>
+  readonly replySchema: Schema.Codec<R, unknown, never, never>
+  readonly replyDecoder: Schema.Decoder<R>
 }
 
-export type ExtensionMessageMetadata = ExtensionCommandMetadata | ExtensionRequestMetadata
+export type ExtensionMessageMetadata = ExtensionCommandMetadata | ExtensionRequestMetadata<unknown>
 
 const ExtensionMessageMetadataSymbol = Symbol.for("@gent/core/extension-protocol/metadata")
 
@@ -190,34 +192,30 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
         ...(payload ?? {}),
       } as ExtensionCommandMessage<Id, Tag, F>,
       metadata,
-    )) as unknown as ExtensionCommandDefinition<Id, Tag, F>
+    )) as MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
 
   const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
     message.extensionId === extensionId && message._tag === tag
 
   return attachMetadata(
-    Object.assign(make, {
+    {
       extensionId,
       _tag: tag,
+      make,
       payloadSchema,
       schema,
       is,
-    }),
+    },
     metadata,
   )
 }
 
-const createRequest = <
-  Id extends string,
-  Tag extends string,
-  F extends ExtensionFields,
-  RS extends Schema.Codec<unknown, unknown, never, never>,
->(
+const createRequest = <Id extends string, Tag extends string, F extends ExtensionFields, R>(
   extensionId: Id,
   tag: Tag,
   fields: F,
-  replySchema: RS,
-): ExtensionRequestDefinition<Id, Tag, F, Schema.Schema.Type<RS>> => {
+  replySchema: Schema.Codec<R, unknown, never, never>,
+): ExtensionRequestDefinition<Id, Tag, F, R> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -225,17 +223,18 @@ const createRequest = <
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
     ...fields,
-  }) as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>>>
+  }) as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
 
-  const metadata: ExtensionRequestMetadata = {
+  const replyDecoder: Schema.Decoder<R> = replySchema
+
+  const metadata: ExtensionRequestMetadata<R> = {
     _tag: "request",
     extensionId,
     tag,
     payloadSchema,
     schema,
     replySchema,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    replyDecoder: replySchema as Schema.Decoder<Schema.Schema.Type<RS>>,
+    replyDecoder,
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -246,32 +245,32 @@ const createRequest = <
         extensionId,
         _tag: tag,
         ...(payload ?? {}),
-      } as ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>>,
+      } as ExtensionRequestMessage<Id, Tag, F, R>,
       metadata,
-    )) as unknown as ExtensionRequestDefinition<Id, Tag, F, Schema.Schema.Type<RS>>
+    )) as MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>>
 
-  const is = (
-    message: AnyExtensionMessage,
-  ): message is ExtensionRequestMessage<Id, Tag, F, Schema.Schema.Type<RS>> =>
+  const is = (message: AnyExtensionMessage): message is ExtensionRequestMessage<Id, Tag, F, R> =>
     message.extensionId === extensionId && message._tag === tag
 
   return attachMetadata(
-    Object.assign(make, {
+    {
       extensionId,
       _tag: tag,
+      make,
       payloadSchema,
       replySchema,
-      replyDecoder: metadata.replyDecoder,
+      replyDecoder,
       schema,
       is,
-    }),
+    },
     metadata,
   )
 }
 
-export const ExtensionMessage = Object.assign(createCommand, {
+export const ExtensionMessage = {
+  command: createCommand,
   reply: createRequest,
-})
+} as const
 
 export const getExtensionMessageMetadata = (
   message: unknown,
@@ -318,7 +317,7 @@ export const listExtensionProtocolDefinitions = (
 ): ReadonlyArray<AnyExtensionMessageDefinition> =>
   Object.entries(protocol).map(([key, value]) => {
     const metadata = getExtensionMessageMetadata(value)
-    if (typeof value !== "function" || metadata === undefined) {
+    if (typeof value !== "object" || value === null || metadata === undefined) {
       throw new ExtensionProtocolError({
         extensionId: metadata?.extensionId ?? "(unknown)",
         tag: key,

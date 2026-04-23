@@ -630,7 +630,7 @@ const EXTENSION_ID = AUTO_EXTENSION_ID
 
 const readSnapshot = (ctx: ExtensionHostContext) =>
   ctx.extension
-    .ask(AutoProtocol.GetSnapshot())
+    .ask(AutoProtocol.GetSnapshot.make())
     .pipe(Effect.catchEager(() => Effect.succeed(undefined as AutoSnapshotReply | undefined)))
 
 const journalInterceptorImpl = (
@@ -715,7 +715,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     // Queue follow-up telling model to call the handoff tool.
     // @gent/handoff owns presentation — auto just requests the handoff.
     yield* ctx.extension.send(
-      AutoProtocol.RequestHandoff({
+      AutoProtocol.RequestHandoff.make({
         content: [
           `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
           `Include this context:`,

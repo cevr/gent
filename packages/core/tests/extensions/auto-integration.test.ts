@@ -71,7 +71,11 @@ const runE2ETest = (
         sessionId,
         branchId,
       })
-      yield* stateRuntime.send(sessionId, AutoProtocol.StartAuto({ goal: "Fix the bug" }), branchId)
+      yield* stateRuntime.send(
+        sessionId,
+        AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
+        branchId,
+      )
       yield* test(controls)
     }).pipe(Effect.provide(e2eLayer))
   })
@@ -83,7 +87,7 @@ const waitForAutoActive = (
 ) =>
   waitFor(
     runtime
-      .execute(sessionId, AutoProtocol.GetSnapshot(), branchId)
+      .execute(sessionId, AutoProtocol.GetSnapshot.make(), branchId)
       .pipe(Effect.catchEager(() => Effect.succeed(undefined as { active: boolean } | undefined))),
     (snap) => (snap as { active: boolean } | undefined)?.active === active,
     timeoutMs,
@@ -111,7 +115,7 @@ describe("Auto extension E2E", () => {
 
           const model = (yield* stateRuntime.execute(
             sessionId,
-            AutoProtocol.GetSnapshot(),
+            AutoProtocol.GetSnapshot.make(),
             branchId,
           )) as { active: boolean }
           expect(model.active).toBe(false)
@@ -160,7 +164,7 @@ describe("Auto extension E2E", () => {
 
           const model = (yield* stateRuntime.execute(
             sessionId,
-            AutoProtocol.GetSnapshot(),
+            AutoProtocol.GetSnapshot.make(),
             branchId,
           )) as { active: boolean }
           expect(model.active).toBe(false)
@@ -249,7 +253,7 @@ describe("Auto extension E2E", () => {
         })
         yield* stateRuntime.send(
           sessionId,
-          AutoProtocol.StartAuto({ goal: "Fix the bug" }),
+          AutoProtocol.StartAuto.make({ goal: "Fix the bug" }),
           branchId,
         )
 
@@ -292,7 +296,7 @@ describe("Auto extension E2E", () => {
         })
         yield* stateRuntime.send(
           sessionId,
-          AutoProtocol.StartAuto({ goal: "Verify phases" }),
+          AutoProtocol.StartAuto.make({ goal: "Verify phases" }),
           branchId,
         )
 
@@ -305,7 +309,7 @@ describe("Auto extension E2E", () => {
         // At this point: turn 1 completed, auto is in Working state, turn 2 is blocked
         const midModel = (yield* stateRuntime.execute(
           sessionId,
-          AutoProtocol.GetSnapshot(),
+          AutoProtocol.GetSnapshot.make(),
           branchId,
         )) as { active: boolean; phase?: string }
         expect(midModel.active).toBe(true)
@@ -320,7 +324,7 @@ describe("Auto extension E2E", () => {
         // Final state: auto is inactive
         const finalModel = (yield* stateRuntime.execute(
           sessionId,
-          AutoProtocol.GetSnapshot(),
+          AutoProtocol.GetSnapshot.make(),
           branchId,
         )) as { active: boolean }
         expect(finalModel.active).toBe(false)
@@ -362,7 +366,7 @@ describe("Auto extension E2E", () => {
         })
         yield* stateRuntime.send(
           sessionId,
-          AutoProtocol.StartAuto({ goal: "Test handoff dedup" }),
+          AutoProtocol.StartAuto.make({ goal: "Test handoff dedup" }),
           branchId,
         )
 
@@ -415,7 +419,7 @@ describe("Auto extension E2E", () => {
         })
         yield* stateRuntime.send(
           sessionId,
-          AutoProtocol.StartAuto({ goal: "Verify no direct handoff" }),
+          AutoProtocol.StartAuto.make({ goal: "Verify no direct handoff" }),
           branchId,
         )
 
@@ -460,7 +464,7 @@ describe("Auto extension E2E", () => {
             })
             yield* stateRuntime.send(
               sessionId,
-              AutoProtocol.StartAuto({ goal: "Threshold handoff test" }),
+              AutoProtocol.StartAuto.make({ goal: "Threshold handoff test" }),
               branchId,
             )
 

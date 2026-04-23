@@ -220,7 +220,7 @@ export const PlanTool = tool({
       if (reviewResult.decision !== "no") {
         yield* ctx.extension
           .ask(
-            ArtifactProtocol.Save({
+            ArtifactProtocol.Save.make({
               label: `Plan: ${params.prompt.slice(0, 60)}`,
               sourceTool: "plan",
               content: finalPlan,
@@ -253,7 +253,7 @@ export const PlanTool = tool({
     // Persist plan artifact even in fix mode
     yield* ctx.extension
       .ask(
-        ArtifactProtocol.Save({
+        ArtifactProtocol.Save.make({
           label: `Plan: ${params.prompt.slice(0, 60)}`,
           sourceTool: "plan",
           content: synthesizedPlan,

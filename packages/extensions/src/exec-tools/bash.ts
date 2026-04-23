@@ -204,7 +204,7 @@ export const BashTool = tool({
         }
 
         yield* ctx.extension.send(
-          ExecToolsProtocol.BackgroundCompleted({
+          ExecToolsProtocol.BackgroundCompleted.make({
             content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
           }),
         )

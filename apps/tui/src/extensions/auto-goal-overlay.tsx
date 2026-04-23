@@ -31,7 +31,7 @@ export function AutoGoalOverlay(props: { open: boolean; onClose: () => void }) {
     clientCtx.runtime.cast(
       clientCtx.client.extension.send({
         sessionId: sid,
-        message: AutoProtocol.StartAuto({ goal: text }),
+        message: AutoProtocol.StartAuto.make({ goal: text }),
         branchId: bid,
       }),
     )

@@ -312,7 +312,7 @@ export const AuditTool = tool({
     // Persist as artifact for prompt projection
     yield* ctx.extension
       .ask(
-        ArtifactProtocol.Save({
+        ArtifactProtocol.Save.make({
           label: `Audit: ${report.findings.length} findings`,
           sourceTool: "audit",
           content: report.raw,

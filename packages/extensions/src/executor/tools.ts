@@ -19,7 +19,7 @@ import { ExecutorProtocol } from "./protocol.js"
 const requireReadyBaseUrl = (ctx: ToolContext, phase: "execute" | "resume") =>
   Effect.gen(function* () {
     const snapshot = yield* ctx.extension
-      .ask(ExecutorProtocol.GetSnapshot(), ctx.branchId)
+      .ask(ExecutorProtocol.GetSnapshot.make(), ctx.branchId)
       .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
     if (
       snapshot === undefined ||

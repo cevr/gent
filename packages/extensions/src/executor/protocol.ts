@@ -15,10 +15,10 @@ export const ExecutorSnapshotReply = Schema.Struct({
 export type ExecutorSnapshotReply = typeof ExecutorSnapshotReply.Type
 
 export const ExecutorProtocol = {
-  Connect: ExtensionMessage(EXECUTOR_EXTENSION_ID, "Connect", {
+  Connect: ExtensionMessage.command(EXECUTOR_EXTENSION_ID, "Connect", {
     cwd: Schema.optional(Schema.String),
   }),
-  Disconnect: ExtensionMessage(EXECUTOR_EXTENSION_ID, "Disconnect", {}),
+  Disconnect: ExtensionMessage.command(EXECUTOR_EXTENSION_ID, "Disconnect", {}),
   GetSnapshot: ExtensionMessage.reply(
     EXECUTOR_EXTENSION_ID,
     "GetSnapshot",

@@ -82,7 +82,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     // Auto owns its own handoff flow — skip generic threshold handoff when active
     const autoActive = yield* ctx.extension
-      .ask(AutoProtocol.IsActive())
+      .ask(AutoProtocol.IsActive.make())
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     if (autoActive) return
 
@@ -90,7 +90,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
     // `getUiSnapshot` self-read. Workflows do NOT carry UI snapshots; cross-
     // and self-reads of workflow state go through typed reply messages.
     const cooldown = yield* ctx.extension
-      .ask(HandoffProtocol.GetCooldown())
+      .ask(HandoffProtocol.GetCooldown.make())
       .pipe(Effect.catchEager(() => Effect.succeed(0)))
     if (cooldown > 0) return // Cooldown active — workflow handles decrement via TurnCompleted
 
@@ -118,7 +118,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     if (!decision.approved) {
       yield* ctx.extension
-        .send(HandoffProtocol.Suppress({ count: 5 }))
+        .send(HandoffProtocol.Suppress.make({ count: 5 }))
         .pipe(Effect.catchEager(() => Effect.void))
     }
   }).pipe(Effect.catchEager(() => Effect.void))

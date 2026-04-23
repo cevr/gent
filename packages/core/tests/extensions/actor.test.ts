@@ -107,7 +107,7 @@ describe("spawnMachineExtensionRef", () => {
       const effects = [
         actor.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId }),
         actor.send({ extensionId: "cold-start", _tag: "Message" }),
-        actor.execute(Ping()),
+        actor.execute(Ping.make()),
         actor.snapshot,
       ] as const
 
@@ -149,7 +149,7 @@ describe("spawnMachineExtensionRef", () => {
       ).pipe(Effect.provide(testLayer))
 
       yield* actor.start
-      const reply = yield* actor.execute(Increment({ delta: 2 }))
+      const reply = yield* actor.execute(Increment.make({ delta: 2 }))
       expect(reply).toEqual({ count: 2 })
     }),
   )
@@ -205,7 +205,7 @@ describe("MachineEngine", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const reply = yield* runtime.execute(sessionId, Ping({}), branchId)
+      const reply = yield* runtime.execute(sessionId, Ping.make({}), branchId)
       const statuses = yield* runtime.getActorStatuses(sessionId)
 
       expect(reply).toEqual({ count: 1 })
@@ -261,7 +261,7 @@ describe("MachineEngine", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const exit = yield* runtime.execute(sessionId, GetCount(), branchId).pipe(Effect.exit)
+      const exit = yield* runtime.execute(sessionId, GetCount.make(), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const error = Cause.findErrorOption(exit.cause)
@@ -330,8 +330,8 @@ describe("MachineEngine", () => {
       const runtime = yield* MachineEngine
       // Fire two requests concurrently — both must resolve correctly
       const [r1, r2] = yield* Effect.all([
-        runtime.execute(sessionId, IncrementAndGet({}), branchId),
-        runtime.execute(sessionId, GetCount({}), branchId),
+        runtime.execute(sessionId, IncrementAndGet.make({}), branchId),
+        runtime.execute(sessionId, GetCount.make({}), branchId),
       ])
       // Machine processes requests sequentially, so IncrementAndGet runs
       // first (count → 1), then GetCount sees count=1.
@@ -348,7 +348,7 @@ describe("MachineEngine", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const exit = yield* runtime.execute(sessionId, Ping({}), branchId).pipe(Effect.exit)
+      const exit = yield* runtime.execute(sessionId, Ping.make({}), branchId).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const error = Cause.findErrorOption(exit.cause)
@@ -419,10 +419,10 @@ describe("Resource.machine end-to-end", () => {
 
     return Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      const reply = yield* runtime.execute(sessionId, Increment({ delta: 3 }), branchId)
+      const reply = yield* runtime.execute(sessionId, Increment.make({ delta: 3 }), branchId)
       expect(reply).toEqual({ count: 3 })
 
-      const replyAgain = yield* runtime.execute(sessionId, Increment({ delta: 2 }), branchId)
+      const replyAgain = yield* runtime.execute(sessionId, Increment.make({ delta: 2 }), branchId)
       expect(replyAgain).toEqual({ count: 5 })
     }).pipe(Effect.provide(layer))
   })

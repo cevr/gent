@@ -60,7 +60,7 @@ export default defineClientExtension(EXT_ID, {
         const reply = await transport.runtime.run(
           transport.client.extension.ask({
             sessionId: captured.sessionId,
-            message: AutoProtocol.GetSnapshot(),
+            message: AutoProtocol.GetSnapshot.make(),
             branchId: captured.branchId,
           }),
         )
@@ -143,7 +143,7 @@ export default defineClientExtension(EXT_ID, {
         onSelect: () => {
           const model = liveModel()
           if (model?.active) {
-            shell.send(AutoProtocol.CancelAuto())
+            shell.send(AutoProtocol.CancelAuto.make())
           } else {
             shell.openOverlay("auto-goal")
           }

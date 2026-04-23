@@ -141,7 +141,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),
     counts: {
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 22,
     },
   },
   {

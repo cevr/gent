@@ -41,7 +41,7 @@ const getSnapshot = (runtime: MachineEngine) =>
   Effect.gen(function* () {
     const model = (yield* runtime.execute(
       sessionId,
-      AutoProtocol.GetSnapshot(),
+      AutoProtocol.GetSnapshot.make(),
       branchId,
     )) as AutoSnapshotReply
     return { model } as { readonly model: AutoSnapshotReply }
@@ -58,15 +58,15 @@ const sendAuto = (
     case "StartAuto":
       return runtime.send(
         sessionId,
-        AutoProtocol.StartAuto({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        AutoProtocol.StartAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
         branchId,
       )
     case "CancelAuto":
-      return runtime.send(sessionId, AutoProtocol.CancelAuto(), branchId)
+      return runtime.send(sessionId, AutoProtocol.CancelAuto.make(), branchId)
     case "ToggleAuto":
       return runtime.send(
         sessionId,
-        AutoProtocol.ToggleAuto({ goal: intent.goal, maxIterations: intent.maxIterations }),
+        AutoProtocol.ToggleAuto.make({ goal: intent.goal, maxIterations: intent.maxIterations }),
         branchId,
       )
   }
@@ -418,7 +418,7 @@ describe("Auto runtime integration", () => {
       yield* runtime.publish(reviewSignal(), { sessionId, branchId })
       const reply = (yield* runtime.execute(
         sessionId,
-        AutoProtocol.GetSnapshot(),
+        AutoProtocol.GetSnapshot.make(),
         branchId,
       )) as AutoSnapshotReply
       // The projection's prompt fn is a pure function of the reply.
@@ -466,7 +466,7 @@ describe("Auto JSONL replay via onInit", () => {
     Effect.gen(function* () {
       const model = (yield* runtime.execute(
         childId,
-        AutoProtocol.GetSnapshot(),
+        AutoProtocol.GetSnapshot.make(),
         childBranchId,
       )) as AutoSnapshotReply
       return { model } as { readonly model: AutoSnapshotReply }
@@ -536,7 +536,7 @@ describe("Auto JSONL replay via onInit", () => {
 
       const ui = (yield* runtime.execute(
         parentId,
-        AutoProtocol.GetSnapshot(),
+        AutoProtocol.GetSnapshot.make(),
         branchId,
       )) as AutoSnapshotReply
       expect(ui.active).toBe(false) // Not replayed — root session

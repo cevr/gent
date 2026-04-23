@@ -52,7 +52,7 @@ export default defineClientExtension(EXT_ID, {
         const reply = await transport.runtime.run(
           transport.client.extension.ask({
             sessionId: captured.sessionId,
-            message: ArtifactProtocol.List({}),
+            message: ArtifactProtocol.List.make({}),
             branchId: captured.branchId,
           }),
         )

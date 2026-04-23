@@ -16,7 +16,7 @@ export default defineClientExtension("@gent/skills-ui", {
       title: "Skills",
       items: (filter: string) =>
         Effect.gen(function* () {
-          const skills = yield* askExtension(SkillsProtocol.ListSkills())
+          const skills = yield* askExtension(SkillsProtocol.ListSkills.make())
           const lowerFilter = filter.toLowerCase()
           return skills
             .filter((s) => s.name.toLowerCase().includes(lowerFilter))

@@ -1,7 +1,7 @@
 /**
  * Artifacts extension — generic artifact store with typed protocol.
  *
- * Any tool/extension can store artifacts via ctx.extension.ask(ArtifactProtocol.Save(...)).
+ * Any tool/extension can store artifacts via ctx.extension.ask(ArtifactProtocol.Save.make(...)).
  * Artifacts are branch-aware, persist across turns, and project compact summaries
  * into the system prompt.
  *
@@ -174,7 +174,7 @@ const artifactsMachine = Machine.make({
 // ── Actor ──
 //
 // Snapshot/turn fields are gone — the artifacts widget reads via the typed
-// `ArtifactProtocol.List(...)` ask, and per-turn prompt would need either a
+// `ArtifactProtocol.List.make(...)` ask, and per-turn prompt would need either a
 // projection over machine state (not yet wired) or a typed workflow-state
 // reader. Per-turn prompt section temporarily dropped.
 
@@ -211,7 +211,7 @@ const ArtifactSaveTool = tool({
   }),
   execute: Effect.fn("ArtifactSaveTool.execute")(function* (params, ctx: ToolContext) {
     const artifact = yield* ctx.extension.ask(
-      ArtifactProtocol.Save({
+      ArtifactProtocol.Save.make({
         ...params,
         branchId: ctx.branchId,
       }),
@@ -235,7 +235,7 @@ const ArtifactReadTool = tool({
       params.id !== undefined
         ? { _tag: "ById" as const, id: ArtifactId.make(params.id) }
         : { _tag: "BySource" as const, sourceTool: params.sourceTool ?? "", branchId: ctx.branchId }
-    const artifact = yield* ctx.extension.ask(ArtifactProtocol.Read({ query }), ctx.branchId)
+    const artifact = yield* ctx.extension.ask(ArtifactProtocol.Read.make({ query }), ctx.branchId)
     if (artifact === null) return { found: false }
     return { found: true, ...artifact }
   }),
@@ -269,7 +269,7 @@ const ArtifactUpdateTool = tool({
         ? { find: params.find, replace: params.replace, replaceAll: params.replaceAll }
         : undefined
     const artifact = yield* ctx.extension.ask(
-      ArtifactProtocol.Update({
+      ArtifactProtocol.Update.make({
         id: ArtifactId.make(params.id),
         patch,
         status: params.status,
@@ -291,7 +291,7 @@ const ArtifactClearTool = tool({
   }),
   execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolContext) {
     yield* ctx.extension.ask(
-      ArtifactProtocol.Clear({ id: ArtifactId.make(params.id) }),
+      ArtifactProtocol.Clear.make({ id: ArtifactId.make(params.id) }),
       ctx.branchId,
     )
     return { cleared: true }

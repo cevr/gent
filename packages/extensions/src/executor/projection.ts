@@ -57,7 +57,7 @@ export const ExecutorProjection: ProjectionContribution<ExecutorSnapshotReply, M
     Effect.gen(function* () {
       const machine = yield* MachineExecute
       const snapshot = yield* machine
-        .execute(ctx.sessionId, ExecutorProtocol.GetSnapshot(), ctx.branchId)
+        .execute(ctx.sessionId, ExecutorProtocol.GetSnapshot.make(), ctx.branchId)
         .pipe(
           Effect.catchEager((error) =>
             Effect.fail(

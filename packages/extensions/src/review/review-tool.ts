@@ -329,7 +329,7 @@ export const ReviewTool = tool({
     // Persist as artifact for prompt projection
     yield* ctx.extension
       .ask(
-        ArtifactProtocol.Save({
+        ArtifactProtocol.Save.make({
           label: `Review: ${summary.critical + summary.high + summary.medium + summary.low} findings`,
           sourceTool: "review",
           content: report.raw,

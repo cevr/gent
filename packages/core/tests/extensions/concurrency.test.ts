@@ -501,7 +501,7 @@ describe("extension concurrency", () => {
       Effect.gen(function* () {
         const received = yield* Deferred.make<void>()
         let runtimeRef: MachineEngineService | undefined
-        const RecordNested = ExtensionMessage("nested-receiver", "RecordNested", {})
+        const RecordNested = ExtensionMessage.command("nested-receiver", "RecordNested", {})
 
         const extensions = [
           {
@@ -527,7 +527,7 @@ describe("extension concurrency", () => {
                           }
                           yield* runtimeRef.send(
                             envelope.sessionId,
-                            RecordNested(),
+                            RecordNested.make(),
                             envelope.branchId,
                           )
                         }),
@@ -625,7 +625,7 @@ describe("extension concurrency", () => {
                           }
                           const reply = yield* runtimeRef.execute(
                             envelope.sessionId,
-                            ReadNested(),
+                            ReadNested.make(),
                             envelope.branchId,
                           )
                           expect(reply).toEqual({ ok: true })
@@ -753,13 +753,17 @@ describe("extension concurrency", () => {
           Effect.gen(function* () {
             const runtime = yield* MachineEngine
             const first = yield* Effect.forkScoped(
-              runtime.execute(sessionId, ReadSerial(), branchId).pipe(Effect.timeout("1 second")),
+              runtime
+                .execute(sessionId, ReadSerial.make(), branchId)
+                .pipe(Effect.timeout("1 second")),
             )
 
             yield* Deferred.await(firstEntered).pipe(Effect.timeout("1 second"))
 
             const second = yield* Effect.forkScoped(
-              runtime.execute(sessionId, ReadSerial(), branchId).pipe(Effect.timeout("1 second")),
+              runtime
+                .execute(sessionId, ReadSerial.make(), branchId)
+                .pipe(Effect.timeout("1 second")),
             )
 
             yield* Effect.yieldNow

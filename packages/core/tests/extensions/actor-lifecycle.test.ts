@@ -100,7 +100,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           const r1 = yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.Increment({ delta: 1 }),
+            message: CounterProtocol.Increment.make({ delta: 1 }),
           })
           expect(r1).toEqual({ count: 1 })
 
@@ -109,7 +109,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           const r2 = yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.GetCount(),
+            message: CounterProtocol.GetCount.make(),
           })
           expect(r2).toEqual({ count: 1 })
         }),
@@ -132,19 +132,19 @@ describe("Actor lifecycle across RPC boundaries", () => {
           yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.Increment({ delta: 3 }),
+            message: CounterProtocol.Increment.make({ delta: 3 }),
           })
 
           yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.Increment({ delta: 7 }),
+            message: CounterProtocol.Increment.make({ delta: 7 }),
           })
 
           const r = yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.GetCount(),
+            message: CounterProtocol.GetCount.make(),
           })
           expect(r).toEqual({ count: 10 })
         }),
@@ -171,7 +171,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.Increment({ delta: 1 }),
+            message: CounterProtocol.Increment.make({ delta: 1 }),
           })
 
           // message.send triggers agent loop → events → actor.publish
@@ -184,7 +184,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
           const r = yield* client.extension.ask({
             sessionId,
             branchId,
-            message: CounterProtocol.GetCount(),
+            message: CounterProtocol.GetCount.make(),
           })
           // Count is at least 1 from the Increment; may be higher if TurnCompleted
           // published before this ask. The assertion proves liveness, not exact timing.

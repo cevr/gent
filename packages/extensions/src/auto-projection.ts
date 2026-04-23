@@ -85,7 +85,7 @@ export const AutoProjection: ProjectionContribution<AutoSnapshotReply, MachineEx
     Effect.gen(function* () {
       const machine = yield* MachineExecute
       const snapshot = yield* machine
-        .execute(ctx.sessionId, AutoProtocol.GetSnapshot(), ctx.branchId)
+        .execute(ctx.sessionId, AutoProtocol.GetSnapshot.make(), ctx.branchId)
         .pipe(
           Effect.catchEager((error) =>
             Effect.fail(

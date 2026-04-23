@@ -12,8 +12,8 @@ import {
 
 describe("extension protocol branding", () => {
   test("command builders attach hidden runtime metadata", () => {
-    const TogglePlan = ExtensionMessage("plan", "TogglePlan", {})
-    const message = TogglePlan()
+    const TogglePlan = ExtensionMessage.command("plan", "TogglePlan", {})
+    const message = TogglePlan.make()
 
     expect(message).toEqual({
       extensionId: "plan",
@@ -41,7 +41,7 @@ describe("extension protocol branding", () => {
       { taskId: Schema.String },
       Schema.Struct({ status: Schema.String }),
     )
-    const request = GetTask({ taskId: "task-1" })
+    const request = GetTask.make({ taskId: "task-1" })
     const _typedReply: ExtractExtensionReply<typeof request> = { status: "ok" }
     void _typedReply
 
@@ -55,7 +55,7 @@ describe("extension protocol branding", () => {
 
   test("reserved keys are rejected at definition time", () => {
     expect(() =>
-      ExtensionMessage("plan", "Bad", {
+      ExtensionMessage.command("plan", "Bad", {
         extensionId: Schema.String,
       }),
     ).toThrow("reserved keys")

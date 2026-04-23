@@ -79,7 +79,7 @@ describe("SkillsExtension via RPC", () => {
           const reply = (yield* client.extension.ask({
             sessionId,
             branchId,
-            message: SkillsProtocol.ListSkills(),
+            message: SkillsProtocol.ListSkills.make(),
           })) as ReadonlyArray<{ name: string; description: string; level: string }>
 
           expect(Array.isArray(reply)).toBe(true)
@@ -106,7 +106,7 @@ describe("SkillsExtension via RPC", () => {
           const reply = (yield* client.extension.ask({
             sessionId,
             branchId,
-            message: SkillsProtocol.GetSkillContent({ name: "effect-v4" }),
+            message: SkillsProtocol.GetSkillContent.make({ name: "effect-v4" }),
           })) as { name: string; content: string } | null
 
           expect(reply).not.toBeNull()
@@ -133,7 +133,7 @@ describe("SkillsExtension via RPC", () => {
           const reply = yield* client.extension.ask({
             sessionId,
             branchId,
-            message: SkillsProtocol.GetSkillContent({ name: "nonexistent" }),
+            message: SkillsProtocol.GetSkillContent.make({ name: "nonexistent" }),
           })
 
           expect(reply).toBeNull()

@@ -35,7 +35,9 @@ export const ExecutorExtension = defineExtension({
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
-        extCtx.extension.send(ExecutorProtocol.Connect({ cwd: extCtx.cwd })).pipe(Effect.orDie),
+        extCtx.extension
+          .send(ExecutorProtocol.Connect.make({ cwd: extCtx.cwd }))
+          .pipe(Effect.orDie),
     }),
     action({
       id: "executor-stop",
@@ -47,7 +49,7 @@ export const ExecutorExtension = defineExtension({
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
-        extCtx.extension.send(ExecutorProtocol.Disconnect()).pipe(Effect.orDie),
+        extCtx.extension.send(ExecutorProtocol.Disconnect.make()).pipe(Effect.orDie),
     }),
   ],
   // Single Resource carries the ExecutorSidecar/McpBridge layers AND the

@@ -32,7 +32,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const result = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Auth migration plan",
             sourceTool: "plan",
             content: "## Step 1\nDo the thing",
@@ -55,7 +55,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const first = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Plan v1",
             sourceTool: "plan",
             content: "original",
@@ -65,7 +65,7 @@ describe("Artifacts extension", () => {
         )
         const second = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Plan v2",
             sourceTool: "plan",
             content: "updated",
@@ -81,7 +81,7 @@ describe("Artifacts extension", () => {
         // List should have only 1 item
         const list = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.List({ branchId }),
+          ArtifactProtocol.List.make({ branchId }),
           branchId,
         )
         expect(list.length).toBe(1)
@@ -94,7 +94,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Plan",
             sourceTool: "plan",
             content: "plan content",
@@ -104,7 +104,7 @@ describe("Artifacts extension", () => {
         )
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Audit",
             sourceTool: "audit",
             content: "audit content",
@@ -114,7 +114,7 @@ describe("Artifacts extension", () => {
         )
         const list = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.List({ branchId }),
+          ArtifactProtocol.List.make({ branchId }),
           branchId,
         )
         expect(list.length).toBe(2)
@@ -127,12 +127,17 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const saved = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "Test", sourceTool: "test", content: "hello", branchId }),
+          ArtifactProtocol.Save.make({
+            label: "Test",
+            sourceTool: "test",
+            content: "hello",
+            branchId,
+          }),
           branchId,
         )
         const read = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Read({ query: { _tag: "ById" as const, id: saved.id } }),
+          ArtifactProtocol.Read.make({ query: { _tag: "ById" as const, id: saved.id } }),
           branchId,
         )
         expect(read).not.toBeNull()
@@ -146,7 +151,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Test",
             sourceTool: "review",
             content: "findings",
@@ -156,7 +161,7 @@ describe("Artifacts extension", () => {
         )
         const read = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Read({
+          ArtifactProtocol.Read.make({
             query: { _tag: "BySource" as const, sourceTool: "review", branchId },
           }),
           branchId,
@@ -173,13 +178,17 @@ describe("Artifacts extension", () => {
         // Save a session-wide artifact (no branchId)
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "Global plan", sourceTool: "plan", content: "global" }),
+          ArtifactProtocol.Save.make({
+            label: "Global plan",
+            sourceTool: "plan",
+            content: "global",
+          }),
           branchId,
         )
         // Read from a specific branch — should fall back to the session-wide one
         const read = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Read({
+          ArtifactProtocol.Read.make({
             query: { _tag: "BySource" as const, sourceTool: "plan", branchId },
           }),
           branchId,
@@ -195,7 +204,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const read = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Read({
+          ArtifactProtocol.Read.make({
             query: { _tag: "ById" as const, id: ArtifactId.make("nonexistent") },
           }),
           branchId,
@@ -210,7 +219,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const saved = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Plan",
             sourceTool: "plan",
             content: "- [ ] step 1\n- [ ] step 2",
@@ -220,7 +229,7 @@ describe("Artifacts extension", () => {
         )
         const updated = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Update({
+          ArtifactProtocol.Update.make({
             id: saved.id,
             patch: { find: "- [ ] step 1", replace: "- [x] step 1" },
           }),
@@ -237,7 +246,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const saved = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "Plan",
             sourceTool: "plan",
             content: "TODO: a\nTODO: b\nTODO: c",
@@ -247,7 +256,7 @@ describe("Artifacts extension", () => {
         )
         const updated = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Update({
+          ArtifactProtocol.Update.make({
             id: saved.id,
             patch: { find: "TODO", replace: "DONE", replaceAll: true },
           }),
@@ -264,12 +273,17 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const saved = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "Plan", sourceTool: "plan", content: "done", branchId }),
+          ArtifactProtocol.Save.make({
+            label: "Plan",
+            sourceTool: "plan",
+            content: "done",
+            branchId,
+          }),
           branchId,
         )
         const updated = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Update({ id: saved.id, status: "resolved" }),
+          ArtifactProtocol.Update.make({ id: saved.id, status: "resolved" }),
           branchId,
         )
         expect((updated as Artifact).status).toBe("resolved")
@@ -282,7 +296,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const result = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Update({ id: ArtifactId.make("nonexistent") }),
+          ArtifactProtocol.Update.make({ id: ArtifactId.make("nonexistent") }),
           branchId,
         )
         expect(result).toBeNull()
@@ -295,13 +309,13 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const saved = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "Temp", sourceTool: "test", content: "x", branchId }),
+          ArtifactProtocol.Save.make({ label: "Temp", sourceTool: "test", content: "x", branchId }),
           branchId,
         )
-        yield* runtime.execute(sessionId, ArtifactProtocol.Clear({ id: saved.id }), branchId)
+        yield* runtime.execute(sessionId, ArtifactProtocol.Clear.make({ id: saved.id }), branchId)
         const list = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.List({ branchId }),
+          ArtifactProtocol.List.make({ branchId }),
           branchId,
         )
         expect(list.length).toBe(0)
@@ -315,12 +329,12 @@ describe("Artifacts extension", () => {
         const otherBranch = BranchId.make("other-branch")
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "A", sourceTool: "plan", content: "a", branchId }),
+          ArtifactProtocol.Save.make({ label: "A", sourceTool: "plan", content: "a", branchId }),
           branchId,
         )
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({
+          ArtifactProtocol.Save.make({
             label: "B",
             sourceTool: "plan",
             content: "b",
@@ -331,13 +345,13 @@ describe("Artifacts extension", () => {
         // Session-wide artifact (no branchId)
         yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Save({ label: "C", sourceTool: "audit", content: "c" }),
+          ArtifactProtocol.Save.make({ label: "C", sourceTool: "audit", content: "c" }),
           branchId,
         )
 
         const filtered = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.List({ branchId }),
+          ArtifactProtocol.List.make({ branchId }),
           branchId,
         )
         // Should include A (matches branch) and C (session-wide), but not B (different branch)

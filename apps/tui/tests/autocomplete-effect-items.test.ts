@@ -120,7 +120,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
     const transport = makeFakeTransport({ currentSession: () => undefined })
     const runtime = makeTestRuntime(transport)
 
-    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
+    const exit = await runtime.runPromiseExit(askExtension(ListThings.make()))
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
       // The cause should carry the typed NoActiveSessionError.
@@ -142,7 +142,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
       title: "Test",
       items: (_filter: string) =>
         Effect.gen(function* () {
-          const reply = yield* askExtension(ListThings())
+          const reply = yield* askExtension(ListThings.make())
           return [{ id: "x", label: String(reply) }] as const
         }),
     })
@@ -164,7 +164,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
     transport.client.extension.ask = () => Effect.fail(new Error("transport boom"))
     const runtime = makeTestRuntime(transport)
 
-    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
+    const exit = await runtime.runPromiseExit(askExtension(ListThings.make()))
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
       const causeStr = JSON.stringify(exit.cause)
@@ -178,7 +178,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
     const transport = makeFakeTransport({ askReply: { nope: true } })
     const runtime = makeTestRuntime(transport)
 
-    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
+    const exit = await runtime.runPromiseExit(askExtension(ListThings.make()))
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
       const causeStr = JSON.stringify(exit.cause)
