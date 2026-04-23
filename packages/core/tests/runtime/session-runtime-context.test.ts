@@ -12,8 +12,9 @@ import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import {
-  resolveSessionRuntimeContext,
-  type SessionRuntimeContextDefaults,
+  AllowAllPermission,
+  resolveSessionEnvironment,
+  type SessionEnvironmentDefaults,
 } from "@gent/core/runtime/session-runtime-context"
 import { makeAmbientExtensionHostContextDeps } from "@gent/core/runtime/make-extension-host-context"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
@@ -25,8 +26,12 @@ import {
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
+const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
+  modelDrivers: new Map(),
+  externalDrivers: new Map(),
+})
 
-describe("resolveSessionRuntimeContext", () => {
+describe("resolveSessionEnvironment", () => {
   test("uses the stored session cwd to resolve profile-scoped permission and host context", async () => {
     const launch = mkdtempSync(join(tmpdir(), "gent-session-runtime-context-launch-"))
     const secondary = mkdtempSync(join(tmpdir(), "gent-session-runtime-context-secondary-"))
@@ -61,6 +66,7 @@ describe("resolveSessionRuntimeContext", () => {
       Storage.Test(),
       MachineEngine.Test(),
       emptyRegistryLayer,
+      emptyDriverRegistryLayer,
       runtimePlatformLive,
       sessionProfileCacheLive,
     )
@@ -84,7 +90,7 @@ describe("resolveSessionRuntimeContext", () => {
             }),
           )
 
-          const ctx = yield* resolveSessionRuntimeContext({
+          const resolved = yield* resolveSessionEnvironment({
             sessionId: SessionId.of("session-runtime-context-profile"),
             branchId: BranchId.of("branch-runtime-context-profile"),
             storage,
@@ -95,12 +101,19 @@ describe("resolveSessionRuntimeContext", () => {
               extensionStateRuntime,
               overrides: { platform },
             }),
+            defaults: {
+              driverRegistry: yield* DriverRegistry,
+              permission: AllowAllPermission,
+              baseSections: [],
+            },
           })
 
-          expect(ctx.sessionCwd).toBe(secondary)
-          expect(ctx.hostCtx.cwd).toBe(secondary)
-          expect(ctx.profile).toBeDefined()
-          expect(yield* ctx.permission?.check("bash", { command: "ls -la" })).toBe("allowed")
+          expect(resolved._tag).toBe("SessionFound")
+          expect(resolved.environment.cwd).toBe(secondary)
+          expect(resolved.environment.hostCtx.cwd).toBe(secondary)
+          expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
+            "allowed",
+          )
         }).pipe(Effect.provide(testLayer)),
       )
     } finally {
@@ -128,7 +141,18 @@ describe("resolveSessionRuntimeContext", () => {
           }),
         ]),
     }
-    const defaults: SessionRuntimeContextDefaults = {
+    const defaults: SessionEnvironmentDefaults = {
+      driverRegistry: Context.get(
+        Effect.runSync(
+          Layer.build(
+            DriverRegistry.fromResolved({
+              modelDrivers: new Map(),
+              externalDrivers: new Map(),
+            }),
+          ).pipe(Effect.scoped),
+        ),
+        DriverRegistry,
+      ),
       permission: defaultPermission,
       baseSections: [{ id: "default", content: "Default", priority: 1 }],
     }
@@ -146,7 +170,7 @@ describe("resolveSessionRuntimeContext", () => {
         const extensionStateRuntime = yield* MachineEngine
         const platform = yield* RuntimePlatform
 
-        const ctx = yield* resolveSessionRuntimeContext({
+        const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.of("missing-session"),
           branchId: BranchId.of("missing-branch"),
           storage,
@@ -159,11 +183,15 @@ describe("resolveSessionRuntimeContext", () => {
           defaults,
         })
 
-        expect(ctx.session).toBeUndefined()
-        expect(ctx.sessionCwd).toBeUndefined()
-        expect(ctx.hostCtx.cwd).toBe("/tmp/runtime-context-default")
-        expect(yield* ctx.permission?.check("bash", { command: "ls -la" })).toBe("denied")
-        expect(ctx.baseSections).toEqual([{ id: "default", content: "Default", priority: 1 }])
+        expect(resolved._tag).toBe("SessionMissing")
+        expect(resolved.environment.cwd).toBe("/tmp/runtime-context-default")
+        expect(resolved.environment.hostCtx.cwd).toBe("/tmp/runtime-context-default")
+        expect(yield* resolved.environment.permission.check("bash", { command: "ls -la" })).toBe(
+          "denied",
+        )
+        expect(resolved.environment.baseSections).toEqual([
+          { id: "default", content: "Default", priority: 1 },
+        ])
       }).pipe(Effect.provide(testLayer)),
     )
   })
@@ -244,7 +272,7 @@ describe("resolveSessionRuntimeContext", () => {
           resolve: () => Effect.succeed(fakeProfile),
         }
 
-        const ctx = yield* resolveSessionRuntimeContext({
+        const resolved = yield* resolveSessionEnvironment({
           sessionId: SessionId.of("session-runtime-context-driver"),
           branchId: BranchId.of("branch-runtime-context-driver"),
           storage,
@@ -257,13 +285,16 @@ describe("resolveSessionRuntimeContext", () => {
           }),
           defaults: {
             driverRegistry: defaultDriverRegistry,
+            permission: AllowAllPermission,
+            baseSections: [],
           },
         })
 
-        const fromProfile = yield* ctx.driverRegistry?.getExternal("profile-driver")
+        const fromProfile = yield* resolved.environment.driverRegistry.getExternal("profile-driver")
         const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
 
-        expect(ctx.profile?.cwd).toBe("/tmp/profile-driver-scope")
+        expect(resolved._tag).toBe("SessionFound")
+        expect(resolved.environment.cwd).toBe("/tmp/profile-driver-scope")
         expect(fromProfile?.id).toBe("profile-driver")
         expect(fromDefault).toBeUndefined()
       }).pipe(Effect.provide(testLayer)),

@@ -15,137 +15,120 @@ import {
 } from "./make-extension-host-context.js"
 import type { SessionProfile, SessionProfileCacheService } from "./session-profile.js"
 
-export interface SessionRuntimeContextDefaults {
-  readonly driverRegistry?: DriverRegistryService
-  readonly permission?: PermissionService
-  readonly baseSections?: ReadonlyArray<PromptSection>
+export interface SessionEnvironmentDefaults {
+  readonly driverRegistry: DriverRegistryService
+  readonly permission: PermissionService
+  readonly baseSections: ReadonlyArray<PromptSection>
 }
 
-export interface SessionRuntimeContext {
-  readonly session: Session | undefined
-  readonly sessionCwd?: string
-  readonly profile?: SessionProfile
+export interface SessionEnvironment {
+  readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
   readonly extensionStateRuntime: MachineEngineService
-  readonly driverRegistry?: DriverRegistryService
-  readonly permission?: PermissionService
-  readonly baseSections?: ReadonlyArray<PromptSection>
+  readonly driverRegistry: DriverRegistryService
+  readonly permission: PermissionService
+  readonly baseSections: ReadonlyArray<PromptSection>
   readonly hostCtx: ExtensionHostContext
 }
+
+export interface SessionFound {
+  readonly _tag: "SessionFound"
+  readonly session: Session
+  readonly environment: SessionEnvironment
+}
+
+export interface SessionMissing {
+  readonly _tag: "SessionMissing"
+  readonly environment: SessionEnvironment
+}
+
+export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
   readonly extensionStateRuntime: MachineEngineService
-  readonly driverRegistry?: DriverRegistryService
-  readonly permission?: PermissionService
-  readonly baseSections?: ReadonlyArray<PromptSection>
-}
-
-interface ActiveRuntimeBindingsDraft {
-  extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: MachineEngineService
-  driverRegistry?: DriverRegistryService
-  permission?: PermissionService
-  baseSections?: ReadonlyArray<PromptSection>
-}
-
-interface SessionRuntimeContextDraft {
-  session: Session | undefined
-  sessionCwd?: string
-  profile?: SessionProfile
-  extensionRegistry: ExtensionRegistryService
-  extensionStateRuntime: MachineEngineService
-  driverRegistry?: DriverRegistryService
-  permission?: PermissionService
-  baseSections?: ReadonlyArray<PromptSection>
-  hostCtx: ExtensionHostContext
+  readonly driverRegistry: DriverRegistryService
+  readonly permission: PermissionService
+  readonly baseSections: ReadonlyArray<PromptSection>
 }
 
 const resolveSessionProfile = (params: {
-  readonly sessionCwd?: string
+  readonly session: Session | undefined
   readonly profileCache?: SessionProfileCacheService
 }): Effect.Effect<SessionProfile | undefined> =>
-  params.profileCache !== undefined && params.sessionCwd !== undefined
-    ? params.profileCache.resolve(params.sessionCwd)
+  params.profileCache !== undefined && params.session?.cwd !== undefined
+    ? params.profileCache.resolve(params.session.cwd)
     : Effect.succeed(undefined)
 
 const resolveActiveRuntimeBindings = (params: {
   readonly profile?: SessionProfile
   readonly hostDeps: MakeExtensionHostContextDeps
-  readonly defaults?: SessionRuntimeContextDefaults
-}): ActiveRuntimeBindings => {
-  const bindings: ActiveRuntimeBindingsDraft = {
-    extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
-    extensionStateRuntime:
-      params.profile?.extensionStateRuntime ?? params.hostDeps.extensionStateRuntime,
-  }
-  const driverRegistry = params.profile?.driverRegistryService ?? params.defaults?.driverRegistry
-  const permission = params.profile?.permissionService ?? params.defaults?.permission
-  const baseSections = params.profile?.baseSections ?? params.defaults?.baseSections
+  readonly defaults: SessionEnvironmentDefaults
+}): ActiveRuntimeBindings => ({
+  extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
+  extensionStateRuntime:
+    params.profile?.extensionStateRuntime ?? params.hostDeps.extensionStateRuntime,
+  driverRegistry: params.profile?.driverRegistryService ?? params.defaults.driverRegistry,
+  permission: params.profile?.permissionService ?? params.defaults.permission,
+  baseSections: params.profile?.baseSections ?? params.defaults.baseSections,
+})
 
-  if (driverRegistry !== undefined) {
-    bindings.driverRegistry = driverRegistry
-  }
-  if (permission !== undefined) {
-    bindings.permission = permission
-  }
-  if (baseSections !== undefined) {
-    bindings.baseSections = baseSections
-  }
-
-  return bindings
-}
-
-const buildSessionRuntimeContext = (params: {
-  readonly session: Session | undefined
-  readonly sessionCwd?: string
-  readonly profile?: SessionProfile
+const buildSessionEnvironment = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName?: AgentName
+  readonly session?: Session
   readonly bindings: ActiveRuntimeBindings
-  readonly hostCtx: ExtensionHostContext
-}): SessionRuntimeContext => {
-  const runtimeContext: SessionRuntimeContextDraft = {
-    session: params.session,
+  readonly hostDeps: MakeExtensionHostContextDeps
+}): SessionEnvironment => {
+  const hostCtx = makeExtensionHostContext(
+    {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      agentName: params.agentName,
+      ...(params.session?.cwd !== undefined ? { sessionCwd: params.session.cwd } : {}),
+    },
+    {
+      ...params.hostDeps,
+      extensionRegistry: params.bindings.extensionRegistry,
+      extensionStateRuntime: params.bindings.extensionStateRuntime,
+    },
+  )
+
+  return {
+    cwd: hostCtx.cwd,
     extensionRegistry: params.bindings.extensionRegistry,
     extensionStateRuntime: params.bindings.extensionStateRuntime,
-    hostCtx: params.hostCtx,
+    driverRegistry: params.bindings.driverRegistry,
+    permission: params.bindings.permission,
+    baseSections: params.bindings.baseSections,
+    hostCtx,
   }
-
-  if (params.sessionCwd !== undefined) {
-    runtimeContext.sessionCwd = params.sessionCwd
-  }
-  if (params.profile !== undefined) {
-    runtimeContext.profile = params.profile
-  }
-  if (params.bindings.driverRegistry !== undefined) {
-    runtimeContext.driverRegistry = params.bindings.driverRegistry
-  }
-  if (params.bindings.permission !== undefined) {
-    runtimeContext.permission = params.bindings.permission
-  }
-  if (params.bindings.baseSections !== undefined) {
-    runtimeContext.baseSections = params.bindings.baseSections
-  }
-
-  return runtimeContext
 }
 
-export const resolveSessionRuntimeContext = (params: {
+export const AllowAllPermission: PermissionService = {
+  check: () => Effect.succeed("allowed"),
+  addRule: () => Effect.void,
+  removeRule: () => Effect.void,
+  getRules: () => Effect.succeed([]),
+}
+
+export const resolveSessionEnvironment = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly storage: StorageService
   readonly hostDeps: MakeExtensionHostContextDeps
   readonly profileCache?: SessionProfileCacheService
-  readonly defaults?: SessionRuntimeContextDefaults
+  readonly defaults: SessionEnvironmentDefaults
   readonly agentName?: AgentName
-}): Effect.Effect<SessionRuntimeContext> =>
+}): Effect.Effect<ResolvedSessionEnvironment> =>
   Effect.gen(function* () {
     const session = yield* params.storage
       .getSession(params.sessionId)
       .pipe(Effect.orElseSucceed(() => undefined))
-    const sessionCwd = session?.cwd
 
     const profile = yield* resolveSessionProfile({
-      sessionCwd,
+      session,
       profileCache: params.profileCache,
     })
     const bindings = resolveActiveRuntimeBindings({
@@ -153,26 +136,25 @@ export const resolveSessionRuntimeContext = (params: {
       hostDeps: params.hostDeps,
       defaults: params.defaults,
     })
-
-    const hostCtx = makeExtensionHostContext(
-      {
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        agentName: params.agentName,
-        sessionCwd,
-      },
-      {
-        ...params.hostDeps,
-        extensionRegistry: bindings.extensionRegistry,
-        extensionStateRuntime: bindings.extensionStateRuntime,
-      },
-    )
-
-    return buildSessionRuntimeContext({
+    const environment = buildSessionEnvironment({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      agentName: params.agentName,
       session,
-      sessionCwd,
-      profile,
       bindings,
-      hostCtx,
+      hostDeps: params.hostDeps,
     })
+
+    if (session === undefined) {
+      return {
+        _tag: "SessionMissing",
+        environment,
+      }
+    }
+
+    return {
+      _tag: "SessionFound",
+      session,
+      environment,
+    }
   })

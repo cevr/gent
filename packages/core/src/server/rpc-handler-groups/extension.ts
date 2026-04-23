@@ -16,13 +16,10 @@ import type { RpcHandlerDeps } from "./shared.js"
 export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
   "extension.listStatus": ({ sessionId }: ListExtensionStatusInput) =>
     Effect.gen(function* () {
-      const profile =
-        sessionId !== undefined ? yield* deps.resolveSessionProfile(sessionId) : undefined
-      const activeRegistry = profile?.registry ?? deps.extensionRegistry
-      const activeRuntime = profile?.stateRuntime ?? deps.extensionStateRuntime
-      const activationStatuses = yield* activeRegistry.listExtensionStatuses()
+      const { registry, stateRuntime } = yield* deps.resolveSessionServices(sessionId)
+      const activationStatuses = yield* registry.listExtensionStatuses()
       const actorStatuses =
-        sessionId === undefined ? [] : yield* activeRuntime.getActorStatuses(sessionId)
+        sessionId === undefined ? [] : yield* stateRuntime.getActorStatuses(sessionId)
       return buildExtensionHealthSnapshot(activationStatuses, actorStatuses)
     }),
 
@@ -36,7 +33,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           branchId,
         }),
       )
-      const { stateRuntime } = yield* deps.resolveSessionProfile(sessionId)
+      const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
       yield* stateRuntime.send(sessionId, message, branchId)
       if (deps.bus !== undefined) {
         yield* deps.bus
@@ -60,7 +57,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           branchId,
         }),
       )
-      const { stateRuntime } = yield* deps.resolveSessionProfile(sessionId)
+      const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
       const reply = yield* stateRuntime.execute(sessionId, message, branchId)
       yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
         Effect.annotateLogs({
@@ -81,7 +78,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     branchId,
   }: RequestCapabilityInput) =>
     Effect.gen(function* () {
-      const { registry } = yield* deps.resolveSessionProfile(sessionId)
+      const { registry } = yield* deps.resolveSessionServices(sessionId)
       const capabilities = registry.getResolved().capabilities
       return yield* capabilities
         .run(
@@ -112,7 +109,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
   "extension.listCommands": ({ sessionId }: ListExtensionCommandsInput) =>
     Effect.gen(function* () {
-      const { registry } = yield* deps.resolveSessionProfile(sessionId)
+      const { registry } = yield* deps.resolveSessionServices(sessionId)
       return listSlashCommands(registry.getResolved().extensions, { publicOnly: true }).map(
         (command) =>
           new CommandInfo({

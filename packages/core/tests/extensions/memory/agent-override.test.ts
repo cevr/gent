@@ -16,6 +16,7 @@ import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import type { SteerCommand } from "@gent/core/runtime/agent/agent-loop"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
@@ -66,6 +67,10 @@ const makeTestLayer = (logs: {
     EventStore.Memory,
     agentLoopLayer,
     ExtensionRegistry.fromResolved(testExtensions),
+    DriverRegistry.fromResolved({
+      modelDrivers: testExtensions.modelDrivers,
+      externalDrivers: testExtensions.externalDrivers,
+    }),
     MachineEngine.Live([]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
     ToolRunner.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),

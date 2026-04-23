@@ -1,6 +1,7 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { RunSpecSchema, AgentName } from "../domain/agent.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
+import { Permission } from "../domain/permission.js"
 import {
   AgentRestarted,
   ErrorOccurred,
@@ -16,12 +17,13 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
+import { DriverRegistry } from "./extensions/driver-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { ResourceManager } from "./resource-manager.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
-import { resolveSessionRuntimeContext } from "./session-runtime-context.js"
+import { AllowAllPermission, resolveSessionEnvironment } from "./session-runtime-context.js"
 import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
@@ -265,9 +267,13 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       const eventPublisher = yield* EventPublisher
       const toolRunner = yield* ToolRunner
       const extensionRegistry = yield* ExtensionRegistry
+      const driverRegistry = yield* DriverRegistry
       const resourceManager = yield* ResourceManager
+      const permissionOpt = yield* Effect.serviceOption(Permission)
       const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
       const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
+      const defaultPermission =
+        permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
       const extensionStateRuntime = yield* MachineEngine
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionStateRuntime,
@@ -284,20 +290,25 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
         switch (command._tag) {
           case "SendUserMessage": {
             const commandId = command.commandId ?? makeCommandId()
-            const runtimeCtx = yield* resolveSessionRuntimeContext({
+            const { environment } = yield* resolveSessionEnvironment({
               sessionId: command.sessionId,
               branchId: command.branchId,
               storage,
               hostDeps,
               profileCache,
+              defaults: {
+                driverRegistry,
+                permission: defaultPermission,
+                baseSections: [],
+              },
             })
-            const content = yield* runtimeCtx.extensionRegistry.runtimeSlots.normalizeMessageInput(
+            const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
               {
                 content: command.content,
                 sessionId: command.sessionId,
                 branchId: command.branchId,
               },
-              runtimeCtx.hostCtx,
+              environment.hostCtx,
             )
 
             const message = new Message({
@@ -390,12 +401,17 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
             const commandId = command.commandId ?? makeCommandId()
             const toolCallId = toolCallIdForCommand(commandId)
             const currentTurnAgent = (yield* agentLoop.getState(command)).agent
-            const runtimeCtx = yield* resolveSessionRuntimeContext({
+            const { environment } = yield* resolveSessionEnvironment({
               sessionId: command.sessionId,
               branchId: command.branchId,
               storage,
               hostDeps,
               profileCache,
+              defaults: {
+                driverRegistry,
+                permission: defaultPermission,
+                baseSections: [],
+              },
             })
 
             yield* invokeToolPhase({
@@ -410,9 +426,9 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
               branchId: command.branchId,
               currentTurnAgent,
               toolRunner,
-              extensionRegistry: runtimeCtx.extensionRegistry,
-              permission: runtimeCtx.permission,
-              hostCtx: runtimeCtx.hostCtx,
+              extensionRegistry: environment.extensionRegistry,
+              permission: environment.permission,
+              hostCtx: environment.hostCtx,
               resourceManager,
               storage,
             })

@@ -68,9 +68,9 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       return Effect.succeed(undefined)
     }
 
-    const resolveSessionProfile = (sessionId: string) =>
+    const resolveSessionServices = (sessionId: string | undefined) =>
       Effect.gen(function* () {
-        if (profileCache === undefined || storage === undefined) {
+        if (sessionId === undefined || profileCache === undefined || storage === undefined) {
           return { registry: extensionRegistry, stateRuntime: extensionStateRuntime }
         }
         const session = yield* loadSession(sessionId)
@@ -103,7 +103,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
       storage,
       connectionTracker,
       serverIdentity,
-      resolveSessionProfile,
+      resolveSessionServices,
       loadSession,
     } as const
 

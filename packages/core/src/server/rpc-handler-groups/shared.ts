@@ -20,7 +20,7 @@ import type { MachineEngineService } from "../../runtime/extensions/resource-hos
 import type { SubscriptionEngineService } from "../../runtime/extensions/resource-host/subscription-engine.js"
 import type { ModelRegistryService } from "../../runtime/model-registry.js"
 
-export interface ResolvedSessionProfile {
+export interface ResolvedSessionServices {
   readonly registry: ExtensionRegistryService
   readonly stateRuntime: MachineEngineService
 }
@@ -44,7 +44,9 @@ export interface RpcHandlerDeps {
   readonly storage: StorageService | undefined
   readonly connectionTracker: ConnectionTrackerService | undefined
   readonly serverIdentity: ServerIdentityShape | undefined
-  readonly resolveSessionProfile: (sessionId: string) => Effect.Effect<ResolvedSessionProfile>
+  readonly resolveSessionServices: (
+    sessionId: string | undefined,
+  ) => Effect.Effect<ResolvedSessionServices>
   readonly loadSession: (sessionId: string) => Effect.Effect<Session | undefined>
 }
 

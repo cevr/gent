@@ -154,7 +154,7 @@ describe("extension command RPCs", () => {
     }
 
     const handlers = buildExtensionRpcHandlers({
-      resolveSessionProfile: (sessionId) =>
+      resolveSessionServices: (sessionId) =>
         Effect.succeed({
           registry: {
             getResolved: () => ({
@@ -178,7 +178,7 @@ describe("extension command RPCs", () => {
 
   test("listCommands omits human-slash capabilities that are not transport-public", async () => {
     const handlers = buildExtensionRpcHandlers({
-      resolveSessionProfile: () =>
+      resolveSessionServices: () =>
         Effect.succeed({
           registry: {
             getResolved: () => ({

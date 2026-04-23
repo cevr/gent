@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -24,26 +25,24 @@ import {
 } from "@gent/core/runtime/session-runtime"
 
 const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
-  ExtensionRegistry.fromResolved(
-    resolveExtensions([
-      {
-        manifest: { id: "agents" },
-        scope: "builtin" as const,
-        sourcePath: "test",
-        contributions: { agents: Object.values(Agents) } satisfies ExtensionContributions,
-      },
-      ...(tools.length > 0
-        ? [
-            {
-              manifest: { id: "tools" },
-              scope: "builtin" as const,
-              sourcePath: "test",
-              contributions: { capabilities: tools } satisfies ExtensionContributions,
-            },
-          ]
-        : []),
-    ]),
-  )
+  resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      scope: "builtin" as const,
+      sourcePath: "test",
+      contributions: { agents: Object.values(Agents) } satisfies ExtensionContributions,
+    },
+    ...(tools.length > 0
+      ? [
+          {
+            manifest: { id: "tools" },
+            scope: "builtin" as const,
+            sourcePath: "test",
+            contributions: { capabilities: tools } satisfies ExtensionContributions,
+          },
+        ]
+      : []),
+  ])
 
 const idleLoopState = {
   _tag: "Idle" as const,
@@ -53,12 +52,17 @@ const idleLoopState = {
 
 describe("SessionRuntime", () => {
   const makeSessionRuntimeLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
+    const resolvedExtensions = makeTestExtRegistry()
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      makeTestExtRegistry(),
+      ExtensionRegistry.fromResolved(resolvedExtensions),
+      DriverRegistry.fromResolved({
+        modelDrivers: resolvedExtensions.modelDrivers,
+        externalDrivers: resolvedExtensions.externalDrivers,
+      }),
       MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
@@ -245,10 +249,15 @@ describe("SessionRuntime", () => {
         ),
     })
 
+    const resolvedExtensions = makeTestExtRegistry()
     const deps = Layer.mergeAll(
       Storage.Test(),
       agentLoopLayer,
-      makeTestExtRegistry(),
+      ExtensionRegistry.fromResolved(resolvedExtensions),
+      DriverRegistry.fromResolved({
+        modelDrivers: resolvedExtensions.modelDrivers,
+        externalDrivers: resolvedExtensions.externalDrivers,
+      }),
       MachineEngine.Test(),
       eventStoreLayer,
       recorderLayer,
