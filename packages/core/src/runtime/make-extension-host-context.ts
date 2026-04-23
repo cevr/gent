@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { DateTime, Effect, Stream } from "effect"
+import { Context, DateTime, Effect, Stream } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -54,59 +54,123 @@ export interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
-/** Keys of MakeExtensionHostContextDeps that callers may need fallback stubs for. */
-export type OptionalHostDeps = Pick<
+type AmbientHostContextDefaults = Pick<
   MakeExtensionHostContextDeps,
   | "platform"
   | "approvalService"
   | "promptPresenter"
+  | "turnControl"
   | "searchStorage"
   | "agentRunner"
-  | "turnControl"
-  | "storage"
   | "eventPublisher"
 >
 
-/** Typed die-on-call stubs for optional host deps that may be absent. */
-export const unavailableHostDeps = (label: string): OptionalHostDeps => {
-  const die = (service: string) => () => Effect.die(`${service} not available (${label})`)
-  return {
-    platform: { cwd: "", home: "", platform: "unknown" },
-    approvalService: {
-      present: die("ApprovalService"),
+const unavailable = (service: string) => () => Effect.die(`${service} not available`)
+
+export const HostPlatformRef = Context.Reference<RuntimePlatformShape>(
+  "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
+  {
+    defaultValue: () => ({ cwd: "", home: "", platform: "unknown" }),
+  },
+)
+
+export const HostApprovalServiceRef = Context.Reference<ApprovalServiceShape>(
+  "@gent/core/src/runtime/make-extension-host-context/HostApprovalServiceRef",
+  {
+    defaultValue: () => ({
+      present: unavailable("ApprovalService"),
       storeResolution: () => {},
-      respond: die("ApprovalService"),
-      rehydrate: die("ApprovalService"),
-    },
-    promptPresenter: {
-      present: die("PromptPresenter"),
-      confirm: die("PromptPresenter"),
-      review: die("PromptPresenter"),
-    },
-    turnControl: {
-      queueFollowUp: die("TurnControl"),
-      interject: die("TurnControl"),
-      commands: Stream.empty,
-    },
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    storage: new Proxy({} as StorageService, {
-      get: (_target, prop) => {
-        if (typeof prop === "string") return die(`Storage.${prop}`)
-        return undefined
-      },
+      respond: unavailable("ApprovalService"),
+      rehydrate: unavailable("ApprovalService"),
     }),
-    searchStorage: {
+  },
+)
+
+export const HostPromptPresenterRef = Context.Reference<PromptPresenterService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostPromptPresenterRef",
+  {
+    defaultValue: () => ({
+      present: unavailable("PromptPresenter"),
+      confirm: unavailable("PromptPresenter"),
+      review: unavailable("PromptPresenter"),
+    }),
+  },
+)
+
+export const HostTurnControlRef = Context.Reference<ExtensionTurnControlService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostTurnControlRef",
+  {
+    defaultValue: () => ({
+      queueFollowUp: unavailable("TurnControl"),
+      interject: unavailable("TurnControl"),
+      commands: Stream.empty,
+    }),
+  },
+)
+
+export const HostSearchStorageRef = Context.Reference<SearchStorageService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostSearchStorageRef",
+  {
+    defaultValue: () => ({
       searchMessages: () => Effect.succeed([]),
-    },
-    agentRunner: {
-      run: die("AgentRunnerService"),
-    },
-    eventPublisher: {
+    }),
+  },
+)
+
+export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
+  "@gent/core/src/runtime/make-extension-host-context/HostAgentRunnerRef",
+  {
+    defaultValue: () => ({
+      run: unavailable("AgentRunnerService"),
+    }),
+  },
+)
+
+export const HostEventPublisherRef = Context.Reference<EventPublisherService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostEventPublisherRef",
+  {
+    defaultValue: () => ({
       publish: () => Effect.void,
-      terminateSession: die("EventPublisher"),
-    },
-  }
+      terminateSession: unavailable("EventPublisher"),
+    }),
+  },
+)
+
+const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> = Effect.all({
+  platform: Effect.service(HostPlatformRef),
+  approvalService: Effect.service(HostApprovalServiceRef),
+  promptPresenter: Effect.service(HostPromptPresenterRef),
+  turnControl: Effect.service(HostTurnControlRef),
+  searchStorage: Effect.service(HostSearchStorageRef),
+  agentRunner: Effect.service(HostAgentRunnerRef),
+  eventPublisher: Effect.service(HostEventPublisherRef),
+})
+
+export interface MakeAmbientExtensionHostContextDepsInput {
+  readonly extensionStateRuntime: MachineEngineService
+  readonly extensionRegistry: ExtensionRegistryService
+  readonly storage: StorageService
+  readonly overrides?: Partial<AmbientHostContextDefaults>
 }
+
+export const makeAmbientExtensionHostContextDeps = (
+  input: MakeAmbientExtensionHostContextDepsInput,
+): Effect.Effect<MakeExtensionHostContextDeps> =>
+  Effect.gen(function* () {
+    const defaults = yield* loadAmbientHostContextDefaults
+    return {
+      platform: input.overrides?.platform ?? defaults.platform,
+      extensionStateRuntime: input.extensionStateRuntime,
+      approvalService: input.overrides?.approvalService ?? defaults.approvalService,
+      promptPresenter: input.overrides?.promptPresenter ?? defaults.promptPresenter,
+      extensionRegistry: input.extensionRegistry,
+      turnControl: input.overrides?.turnControl ?? defaults.turnControl,
+      storage: input.storage,
+      searchStorage: input.overrides?.searchStorage ?? defaults.searchStorage,
+      agentRunner: input.overrides?.agentRunner ?? defaults.agentRunner,
+      eventPublisher: input.overrides?.eventPublisher ?? defaults.eventPublisher,
+    }
+  })
 
 export const makeExtensionHostContext = (
   runInfo: MakeExtensionHostContextRunInfo,

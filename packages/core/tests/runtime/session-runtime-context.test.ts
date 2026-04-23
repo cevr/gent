@@ -15,7 +15,7 @@ import {
   resolveSessionRuntimeContext,
   type SessionRuntimeContextDefaults,
 } from "@gent/core/runtime/session-runtime-context"
-import { unavailableHostDeps } from "@gent/core/runtime/make-extension-host-context"
+import { makeAmbientExtensionHostContextDeps } from "@gent/core/runtime/make-extension-host-context"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import {
   SessionProfileCache,
@@ -89,13 +89,12 @@ describe("resolveSessionRuntimeContext", () => {
             branchId: BranchId.of("branch-runtime-context-profile"),
             storage,
             profileCache,
-            hostDeps: {
-              ...unavailableHostDeps("runtime-context-test"),
-              platform,
+            hostDeps: yield* makeAmbientExtensionHostContextDeps({
               storage,
               extensionRegistry,
               extensionStateRuntime,
-            },
+              overrides: { platform },
+            }),
           })
 
           expect(ctx.sessionCwd).toBe(secondary)
@@ -151,13 +150,12 @@ describe("resolveSessionRuntimeContext", () => {
           sessionId: SessionId.of("missing-session"),
           branchId: BranchId.of("missing-branch"),
           storage,
-          hostDeps: {
-            ...unavailableHostDeps("runtime-context-default-test"),
-            platform,
+          hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
             extensionRegistry,
             extensionStateRuntime,
-          },
+            overrides: { platform },
+          }),
           defaults,
         })
 
@@ -252,13 +250,12 @@ describe("resolveSessionRuntimeContext", () => {
           branchId: BranchId.of("branch-runtime-context-driver"),
           storage,
           profileCache: fakeProfileCache,
-          hostDeps: {
-            ...unavailableHostDeps("runtime-context-driver-test"),
-            platform,
+          hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
             extensionRegistry,
             extensionStateRuntime,
-          },
+            overrides: { platform },
+          }),
           defaults: {
             driverRegistry: defaultDriverRegistry,
           },

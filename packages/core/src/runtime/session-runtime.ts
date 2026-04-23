@@ -16,7 +16,7 @@ import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase, type AgentLoopService } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
-import { type MakeExtensionHostContextDeps } from "./make-extension-host-context.js"
+import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
@@ -274,50 +274,41 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       const resourceManager = yield* ResourceManager
       const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
       const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-
-      const die = (label: string) => () => Effect.die(`${label} not available`)
-      const opt = <T>(
-        svc: { _tag: "Some"; value: T } | { _tag: "None" },
-        fallback: Record<string, unknown>,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      ) => (svc._tag === "Some" ? svc.value : (fallback as unknown as T))
-
-      const hostDeps: MakeExtensionHostContextDeps = {
-        platform: opt(yield* Effect.serviceOption(RuntimePlatform), {
-          cwd: "",
-          home: "",
-          platform: "unknown",
-        }),
-        extensionStateRuntime: opt(yield* Effect.serviceOption(MachineEngine), {
-          send: die("MachineEngine"),
-          execute: die("MachineEngine"),
-        }),
-        approvalService: opt(yield* Effect.serviceOption(ApprovalService), {
-          present: die("ApprovalService"),
-          storeResolution: die("ApprovalService"),
-          respond: die("ApprovalService"),
-          rehydrate: die("ApprovalService"),
-        }),
-        promptPresenter: opt(yield* Effect.serviceOption(PromptPresenter), {
-          present: die("PromptPresenter"),
-          confirm: die("PromptPresenter"),
-          review: die("PromptPresenter"),
-        }),
+      const extensionStateRuntime = yield* MachineEngine
+      const optionalHostServices = yield* Effect.all({
+        platform: Effect.serviceOption(RuntimePlatform),
+        approvalService: Effect.serviceOption(ApprovalService),
+        promptPresenter: Effect.serviceOption(PromptPresenter),
+        turnControl: Effect.serviceOption(ExtensionTurnControl),
+        searchStorage: Effect.serviceOption(SearchStorage),
+        agentRunner: Effect.serviceOption(AgentRunnerService),
+      })
+      const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+        extensionStateRuntime,
         extensionRegistry,
-        turnControl: opt(yield* Effect.serviceOption(ExtensionTurnControl), {
-          queueFollowUp: die("TurnControl"),
-          interject: die("TurnControl"),
-          bind: die("TurnControl"),
-        }),
         storage,
-        searchStorage: opt(yield* Effect.serviceOption(SearchStorage), {
-          searchMessages: () => Effect.succeed([]),
-        }),
-        agentRunner: opt(yield* Effect.serviceOption(AgentRunnerService), {
-          run: die("AgentRunnerService"),
-        }),
-        eventPublisher,
-      }
+        overrides: {
+          ...(optionalHostServices.platform._tag === "Some"
+            ? { platform: optionalHostServices.platform.value }
+            : {}),
+          ...(optionalHostServices.approvalService._tag === "Some"
+            ? { approvalService: optionalHostServices.approvalService.value }
+            : {}),
+          ...(optionalHostServices.promptPresenter._tag === "Some"
+            ? { promptPresenter: optionalHostServices.promptPresenter.value }
+            : {}),
+          ...(optionalHostServices.turnControl._tag === "Some"
+            ? { turnControl: optionalHostServices.turnControl.value }
+            : {}),
+          ...(optionalHostServices.searchStorage._tag === "Some"
+            ? { searchStorage: optionalHostServices.searchStorage.value }
+            : {}),
+          ...(optionalHostServices.agentRunner._tag === "Some"
+            ? { agentRunner: optionalHostServices.agentRunner.value }
+            : {}),
+          eventPublisher,
+        },
+      })
 
       const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
         command: RuntimeCommand,

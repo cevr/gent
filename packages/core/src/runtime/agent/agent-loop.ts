@@ -59,10 +59,7 @@ import { Message, TextPart, ReasoningPart, ToolCallPart } from "../../domain/mes
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
-import {
-  unavailableHostDeps,
-  type MakeExtensionHostContextDeps,
-} from "../make-extension-host-context.js"
+import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { PromptPresenter } from "../../domain/prompt-presenter.js"
 import { SearchStorage } from "../../storage/search-storage.js"
 import { RuntimePlatform } from "../runtime-platform.js"
@@ -1610,7 +1607,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             // Resolve services lazily — by the time makeLoop runs, all services
             // exist in the ambient scope (including AgentRunnerService, which
             // depends on AgentLoop and would create a circular Layer dep)
-            const fallback = unavailableHostDeps("agent-loop")
             const lazyDeps = yield* Effect.all({
               platform: Effect.serviceOption(RuntimePlatform),
               approvalService: Effect.serviceOption(ApprovalService),
@@ -1620,31 +1616,28 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               sessionProfileCache: Effect.serviceOption(SessionProfileCache),
             })
 
-            const hostDeps: MakeExtensionHostContextDeps = {
-              platform:
-                lazyDeps.platform._tag === "Some" ? lazyDeps.platform.value : fallback.platform,
+            const hostDeps = yield* makeAmbientExtensionHostContextDeps({
               extensionStateRuntime,
-              approvalService:
-                lazyDeps.approvalService._tag === "Some"
-                  ? lazyDeps.approvalService.value
-                  : fallback.approvalService,
-              promptPresenter:
-                lazyDeps.promptPresenter._tag === "Some"
-                  ? lazyDeps.promptPresenter.value
-                  : fallback.promptPresenter,
               extensionRegistry,
-              turnControl: extensionTurnControl,
               storage,
-              searchStorage:
-                lazyDeps.searchStorage._tag === "Some"
-                  ? lazyDeps.searchStorage.value
-                  : fallback.searchStorage,
-              agentRunner:
-                lazyDeps.agentRunner._tag === "Some"
-                  ? lazyDeps.agentRunner.value
-                  : fallback.agentRunner,
-              eventPublisher,
-            }
+              overrides: {
+                ...(lazyDeps.platform._tag === "Some" ? { platform: lazyDeps.platform.value } : {}),
+                ...(lazyDeps.approvalService._tag === "Some"
+                  ? { approvalService: lazyDeps.approvalService.value }
+                  : {}),
+                ...(lazyDeps.promptPresenter._tag === "Some"
+                  ? { promptPresenter: lazyDeps.promptPresenter.value }
+                  : {}),
+                ...(lazyDeps.searchStorage._tag === "Some"
+                  ? { searchStorage: lazyDeps.searchStorage.value }
+                  : {}),
+                ...(lazyDeps.agentRunner._tag === "Some"
+                  ? { agentRunner: lazyDeps.agentRunner.value }
+                  : {}),
+                turnControl: extensionTurnControl,
+                eventPublisher,
+              },
+            })
 
             const profileCache =
               lazyDeps.sessionProfileCache._tag === "Some"
