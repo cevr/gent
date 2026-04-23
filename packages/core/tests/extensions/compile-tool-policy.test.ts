@@ -63,6 +63,17 @@ describe("compileToolPolicy", () => {
     expect(names(tools)).not.toContain("write")
   })
 
+  test("extension projection include adds tools when they are allowed", () => {
+    const agent = new AgentDefinition({
+      name: "cowork",
+      allowedTools: ["read", "grep", "glob", "search_skills"],
+    })
+    const projections = [{ toolPolicy: { include: ["bash"] } }]
+    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
+    expect(names(tools)).toContain("bash")
+    expect(names(tools)).toContain("read")
+  })
+
   test("extension projection overrideSet replaces tool list", () => {
     const agent = new AgentDefinition({ name: "cowork" })
     const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
@@ -108,5 +119,21 @@ describe("compileToolPolicy", () => {
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
     expect(names(tools)).toEqual(["read"])
     expect(names(tools)).not.toContain("ask_user")
+  })
+
+  test("interactive tools remain available when the run is interactive", () => {
+    const interactiveTool: AnyCapabilityContribution = {
+      id: "ask_user",
+      interactive: true,
+      description: "ask_user",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({}),
+      output: Schema.Unknown,
+      effect: () => Effect.succeed(null),
+    }
+    const agent = new AgentDefinition({ name: "cowork" })
+    const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
+    expect(names(tools)).toContain("ask_user")
   })
 })
