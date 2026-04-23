@@ -196,6 +196,15 @@ describe("session mutation primitives", () => {
     const testStorage = createTestStorage()
     seedSession(testStorage)
     const msgs = seedMessages(testStorage, 4)
+    msgs[1] = new Message.interjection({
+      id: msgs[1]!.id,
+      sessionId: SESSION_ID,
+      branchId: BRANCH_ID,
+      role: "user",
+      parts: [new TextPart({ type: "text", text: "steer" })],
+      createdAt: msgs[1]!.createdAt,
+    })
+    testStorage.messages.set(BRANCH_ID, msgs)
     const { deps, published } = makeTestDeps(testStorage)
     const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
 
@@ -206,6 +215,7 @@ describe("session mutation primitives", () => {
 
     const forkedMessages = testStorage.messages.get(result.branchId) ?? []
     expect(forkedMessages).toHaveLength(2) // msg-0 and msg-1
+    expect(forkedMessages[1]?._tag).toBe("interjection")
     expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
   })
 

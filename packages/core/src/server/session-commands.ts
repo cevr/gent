@@ -3,7 +3,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
-import { Branch, Message, Session, TextPart } from "../domain/message.js"
+import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../domain/steer.js"
 import {
@@ -302,16 +302,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         for (const message of messages.slice(0, targetIndex + 1)) {
           yield* messageStorage.createMessage(
-            new Message.regular({
+            copyMessageToBranch(message, {
               id: MessageId.of(Bun.randomUUIDv7()),
-              sessionId: message.sessionId,
               branchId: branch.id,
-              role: message.role,
-              parts: message.parts,
-              createdAt: message.createdAt,
-              ...(message.turnDurationMs !== undefined
-                ? { turnDurationMs: message.turnDurationMs }
-                : {}),
             }),
           )
         }

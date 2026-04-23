@@ -21,7 +21,7 @@ import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-p
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
-import { Message, Session, Branch } from "../domain/message.js"
+import { Session, Branch, copyMessageToBranch, type Message } from "../domain/message.js"
 import type { EventPublisherService } from "../domain/event-publisher.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
 import { estimateContextPercent } from "./context-estimation.js"
@@ -341,14 +341,9 @@ export const makeExtensionHostContext = (
 
         for (const msg of messages.slice(0, targetIndex + 1)) {
           yield* deps.storage.createMessage(
-            new Message.regular({
+            copyMessageToBranch(msg, {
               id: MessageId.of(Bun.randomUUIDv7()),
-              sessionId: msg.sessionId,
               branchId: branch.id,
-              role: msg.role,
-              parts: msg.parts,
-              createdAt: msg.createdAt,
-              ...(msg.turnDurationMs !== undefined ? { turnDurationMs: msg.turnDurationMs } : {}),
             }),
           )
         }

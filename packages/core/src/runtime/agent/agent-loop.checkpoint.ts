@@ -11,6 +11,7 @@ export const AgentLoopCheckpointState = Schema.Struct({
 export type AgentLoopCheckpointState = typeof AgentLoopCheckpointState.Type
 
 export const AgentLoopCheckpointJson = Schema.fromJsonString(AgentLoopCheckpointState)
+const UnknownJson = Schema.fromJsonString(Schema.Unknown)
 
 export const AgentLoopCheckpointRecord = Schema.Struct({
   sessionId: SessionId,
@@ -25,8 +26,41 @@ export type AgentLoopCheckpointRecord = typeof AgentLoopCheckpointRecord.Type
 export const encodeLoopCheckpointState = (state: AgentLoopCheckpointState) =>
   Schema.encodeEffect(AgentLoopCheckpointJson)(state)
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const isLegacyMessageRecord = (value: Record<string, unknown>): boolean =>
+  value["_tag"] === undefined &&
+  typeof value["id"] === "string" &&
+  typeof value["sessionId"] === "string" &&
+  typeof value["branchId"] === "string" &&
+  typeof value["role"] === "string" &&
+  Array.isArray(value["parts"]) &&
+  typeof value["createdAt"] === "number"
+
+const migrateLegacyMessageRecord = (value: Record<string, unknown>): Record<string, unknown> => {
+  const { kind, ...fields } = value
+  return {
+    _tag: kind === "interjection" ? "interjection" : "regular",
+    ...fields,
+  }
+}
+
+const migrateLegacyCheckpointJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map((item) => migrateLegacyCheckpointJson(item))
+  if (!isRecord(value)) return value
+  if (isLegacyMessageRecord(value)) return migrateLegacyMessageRecord(value)
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, migrateLegacyCheckpointJson(entry)]),
+  )
+}
+
 export const decodeLoopCheckpointState = (stateJson: string) =>
-  Schema.decodeUnknownEffect(AgentLoopCheckpointJson)(stateJson)
+  Schema.decodeUnknownEffect(UnknownJson)(stateJson).pipe(
+    Effect.map(migrateLegacyCheckpointJson),
+    Effect.flatMap(Schema.decodeUnknownEffect(AgentLoopCheckpointState)),
+  )
 
 export const shouldRetainLoopCheckpoint = (state: AgentLoopCheckpointState): boolean =>
   state.state._tag !== "Idle" || state.queue.steering.length > 0 || state.queue.followUp.length > 0

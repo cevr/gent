@@ -100,6 +100,29 @@ export type Message = typeof Message.Type
 export type RegularMessage = Extract<Message, { _tag: "regular" }>
 export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
+export const copyMessageToBranch = (
+  message: Message,
+  params: {
+    id: MessageId
+    sessionId?: SessionId
+    branchId: BranchId
+  },
+): Message => {
+  const fields = {
+    id: params.id,
+    sessionId: params.sessionId ?? message.sessionId,
+    branchId: params.branchId,
+    role: message.role,
+    parts: message.parts,
+    createdAt: message.createdAt,
+    ...(message.turnDurationMs !== undefined ? { turnDurationMs: message.turnDurationMs } : {}),
+    ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
+  }
+  return message._tag === "interjection"
+    ? new Message.interjection({ ...fields, role: "user" })
+    : new Message.regular(fields)
+}
+
 // Session
 
 export class Session extends Schema.Class<Session>("Session")({
