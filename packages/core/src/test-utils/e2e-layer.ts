@@ -22,6 +22,7 @@ import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
 import { type ExtensionContributions, defineResource } from "../domain/contribution.js"
+import type { EventPublisher } from "../domain/event-publisher.js"
 import { SessionId } from "../domain/ids.js"
 import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
@@ -61,6 +62,8 @@ export interface E2ELayerConfig {
   readonly extensions?: ReadonlyArray<LoadedExtension>
   /** AgentRunner mock. Default: returns success with empty text */
   readonly subagentRunner?: AgentRunner
+  /** Approval service override. Default auto-approves for legacy E2E tests. */
+  readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** Per-extension layer overrides (e.g., memory vault test layer) */
@@ -212,7 +215,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRuntimeLive,
         machineExecuteLive,
         Permission.Test(),
-        ApprovalService.Test(),
         ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -236,18 +238,23 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         EventPublisherLive,
         Layer.merge(baseDeps, baseEventStoreLive),
       )
-      const toolRunnerLive = Layer.provide(ToolRunner.Live, baseDeps)
+      const approvalLayer =
+        config.approvalLayer === undefined
+          ? ApprovalService.Test()
+          : Layer.provide(config.approvalLayer, eventPublisherLive)
+      const depsWithApproval = Layer.merge(baseDeps, approvalLayer)
+      const toolRunnerLive = Layer.provide(ToolRunner.Live, depsWithApproval)
       const sessionRuntimeLive = Layer.provide(
         SessionRuntime.Live({
           baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
         }),
-        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
+        Layer.mergeAll(depsWithApproval, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
       )
 
       return Layer.provideMerge(
         AppServicesLive,
         Layer.mergeAll(
-          baseDeps,
+          depsWithApproval,
           baseEventStoreLive,
           eventPublisherLive,
           toolRunnerLive,

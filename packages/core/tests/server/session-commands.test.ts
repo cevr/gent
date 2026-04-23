@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Stream } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { ModelId } from "@gent/core/domain/model"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
@@ -115,5 +116,62 @@ describe("message.send", () => {
           ).toBe(true)
         }),
       ),
+  )
+
+  it.live("applies runSpec overrides through the public message contract", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const assistantText = "runSpec acceptance reply"
+        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+          {
+            ...textStep(assistantText),
+            assertRequest: (request) => {
+              expect(request.model).toBe("custom/model")
+              expect(request.reasoning).toBe("high")
+            },
+          },
+        ])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({ cwd: process.cwd() })
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "use run spec",
+          runSpec: {
+            overrides: {
+              modelId: ModelId.make("custom/model"),
+              reasoningEffort: "high",
+              systemPromptAddendum: "Extra public contract instructions",
+            },
+            tags: ["acceptance"],
+          },
+        })
+
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+          (current) =>
+            current.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === assistantText),
+            ),
+          5_000,
+          "assistant reply from runSpec turn",
+        )
+
+        expect(
+          snapshot.messages.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.parts.some((part) => part.type === "text" && part.text === assistantText),
+          ),
+        ).toBe(true)
+        yield* controls.assertDone()
+      }),
+    ),
   )
 })

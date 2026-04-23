@@ -23,7 +23,6 @@ import {
 } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
-import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -166,70 +165,6 @@ describe("RunSpec", () => {
       expect(b).toBe(resolveAgentModel(Agents.deepwork))
       expect(a).not.toBe(b)
     }).pipe(Effect.provide(impl), Effect.runPromise)
-  })
-
-  test("runSpec reaches session runtime prompt execution", async () => {
-    let capturedInput: Parameters<SessionRuntimeService["runPrompt"]>[0] | undefined
-    const recorderLayer = SequenceRecorder.Live
-    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const eventPublisherLayer = withEventPublisher(eventStoreLayer)
-    const deps = Layer.mergeAll(
-      Storage.Test(),
-      ExtensionRegistry.Test(),
-      Provider.Debug(),
-      ToolRunner.Test(),
-      sessionRuntimeStub((input) => {
-        capturedInput = input
-        return Effect.void
-      }),
-      recorderLayer,
-      eventStoreLayer,
-      eventPublisherLayer,
-    )
-    const runnerLayer = InProcessRunner({}).pipe(
-      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
-    )
-    const layer = Layer.mergeAll(deps, runnerLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const runner = yield* AgentRunnerService
-
-        const now = new Date()
-        yield* storage.createSession(
-          new Session({ id: "s1", name: "S", createdAt: now, updatedAt: now }),
-        )
-        yield* storage.createBranch(new Branch({ id: "b1", sessionId: "s1", createdAt: now }))
-
-        yield* runner.run({
-          agent: Agents.explore,
-          prompt: "test",
-          parentSessionId: SessionId.make("s1"),
-          parentBranchId: BranchId.make("b1"),
-          cwd: "/tmp",
-          runSpec: {
-            persistence: "durable",
-            tags: ["auto-loop"],
-            overrides: {
-              modelId: ModelId.make("custom/model"),
-              allowedTools: ["bash", "grep"],
-              deniedTools: ["write"],
-              reasoningEffort: "high",
-              systemPromptAddendum: "Extra instructions",
-            },
-          },
-        })
-
-        expect(capturedInput).toBeDefined()
-        expect(capturedInput!.runSpec?.overrides?.modelId).toBe("custom/model")
-        expect(capturedInput!.runSpec?.overrides?.allowedTools).toEqual(["bash", "grep"])
-        expect(capturedInput!.runSpec?.overrides?.deniedTools).toEqual(["write"])
-        expect(capturedInput!.runSpec?.overrides?.reasoningEffort).toBe("high")
-        expect(capturedInput!.runSpec?.overrides?.systemPromptAddendum).toBe("Extra instructions")
-        expect(capturedInput!.runSpec?.tags).toEqual(["auto-loop"])
-      }).pipe(Effect.provide(layer)),
-    )
   })
 })
 

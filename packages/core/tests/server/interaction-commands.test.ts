@@ -1,77 +1,116 @@
-import { describe, expect, it } from "effect-bun-test"
-import { Effect, Layer } from "effect"
-import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { InteractionCommands } from "@gent/core/server/interaction-commands"
-import {
-  SessionRuntime,
-  respondInteractionCommand,
-  type RuntimeCommand,
-} from "@gent/core/runtime/session-runtime"
+import { describe, it, expect } from "effect-bun-test"
+import { Effect, Fiber, Schema, Stream } from "effect"
+import type { LoadedExtension } from "../../src/domain/extension.js"
+import { tool } from "@gent/core/extensions/api"
+import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { waitFor } from "@gent/core/test-utils/fixtures"
+import { Gent } from "@gent/sdk"
+import { e2ePreset } from "../extensions/helpers/test-preset"
 
-describe("InteractionCommands", () => {
-  it.effect("respond stores resolution, dispatches runtime wake-up, then resolves storage", () =>
-    Effect.gen(function* () {
-      const callLog: string[] = []
-      const deps = Layer.mergeAll(
-        Layer.succeed(ApprovalService, {
-          present: () => Effect.die("unused"),
-          storeResolution: () => {
-            callLog.push("approval.storeResolution")
-          },
-          respond: () =>
-            Effect.sync(() => {
-              callLog.push("approval.respond")
-            }),
-          rehydrate: () => Effect.void,
+const InteractionProbeExtension: LoadedExtension = {
+  manifest: { id: "@test/interaction-probe" },
+  scope: "builtin",
+  sourcePath: "test",
+  contributions: {
+    capabilities: [
+      tool({
+        id: "approval_probe",
+        description: "Request approval and report the result",
+        resources: ["approval_probe"],
+        params: Schema.Struct({ text: Schema.String }),
+        execute: Effect.fn("approval_probe")(function* (params, ctx) {
+          const decision = yield* ctx.interaction.approve({ text: params.text })
+          return {
+            approved: decision.approved,
+            notes: decision.notes ?? "",
+          }
         }),
-        Layer.succeed(SessionRuntime, {
-          dispatch: (command: RuntimeCommand) =>
-            Effect.sync(() => {
-              callLog.push("sessionRuntime.dispatch")
-              expect(command).toEqual(
-                respondInteractionCommand({
-                  sessionId: "session-1" as never,
-                  branchId: "branch-1" as never,
-                  requestId: "req-1",
-                }),
-              )
+      }),
+    ],
+  },
+}
+
+describe("interaction.respondInteraction", () => {
+  it.live(
+    "resumes a parked tool turn through the public RPC contract",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finalReply = "approval resumed"
+          const { layer: providerLayer } = yield* createSequenceProvider([
+            toolCallStep("approval_probe", { text: "approve deploy?" }),
+            textStep(finalReply),
+          ])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
             }),
-          runPrompt: () => Effect.die("unused"),
-          drainQueuedMessages: () => Effect.die("unused"),
-          getQueuedMessages: () => Effect.die("unused"),
-          getState: () => Effect.die("unused"),
-          getMetrics: () => Effect.die("unused"),
-          watchState: () => Effect.die("unused"),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const interactionFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "run approval probe",
+          })
+
+          const interactions = Array.from(yield* Fiber.join(interactionFiber))
+          const presented = interactions[0]?.event
+          expect(presented?._tag).toBe("InteractionPresented")
+          if (presented?._tag !== "InteractionPresented") return
+          expect(presented.text).toBe("approve deploy?")
+
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "waiting interaction runtime state",
+          )
+
+          yield* client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: presented.requestId,
+            approved: true,
+            notes: "ship it",
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === finalReply),
+              ),
+            5_000,
+            "assistant reply after interaction response",
+          )
+
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "tool" &&
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    JSON.stringify(part.output.value).includes("ship it"),
+                ),
+            ),
+          ).toBe(true)
         }),
-        Layer.succeed(EventPublisher, {
-          publish: () =>
-            Effect.sync(() => {
-              callLog.push("eventPublisher.publish")
-            }),
-          terminateSession: () => Effect.void,
-        }),
-      )
-      const layer = Layer.provide(InteractionCommands.Live, deps)
-
-      yield* Effect.gen(function* () {
-        const commands = yield* InteractionCommands
-
-        yield* commands.respond({
-          requestId: "req-1",
-          sessionId: "session-1" as never,
-          branchId: "branch-1" as never,
-          approved: true,
-          notes: "ship it",
-        })
-      }).pipe(Effect.provide(layer))
-
-      expect(callLog).toEqual([
-        "approval.storeResolution",
-        "sessionRuntime.dispatch",
-        "approval.respond",
-        "eventPublisher.publish",
-      ])
-    }),
+      ),
+    { timeout: 10_000 },
   )
 })
