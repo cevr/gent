@@ -88,4 +88,15 @@ describe("architecture policy", () => {
     expect(body).not.toMatch(/\breadonly\s+(queue|state|ref|set|offer|take|enqueue)\b/)
     expect(source).not.toMatch(/\bexport const\s+(Queue|MutableQueue|QueueRef|TurnControlRef)\b/)
   })
+
+  test("SessionRuntime public surface does not expose direct turn execution", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/session-runtime.ts")
+    const source = readFileSync(file, "utf8")
+    const serviceMatch = source.match(/export interface SessionRuntimeService \{([\s\S]*?)\n\}/)
+
+    expect(serviceMatch).not.toBeNull()
+
+    const body = serviceMatch?.[1] ?? ""
+    expect(body).not.toMatch(/\brunOnce\b/)
+  })
 })
