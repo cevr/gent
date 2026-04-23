@@ -156,13 +156,16 @@ const program = Effect.scoped(
 
     const baseUrl = `http://localhost:${config.port}`
     if (config.isWorker && config.isDebug) {
-      const seeded = yield* seedDebugSession(config.cwd).pipe(Effect.provide(coreServices))
+      const seeded = yield* Effect.provideContext(seedDebugSession(config.cwd), coreServices)
       yield* Effect.forkScoped(
-        startDebugScenario({
-          sessionId: seeded.sessionId,
-          branchId: seeded.branchId,
-          cwd: config.cwd,
-        }).pipe(Effect.provide(coreServices)),
+        Effect.provideContext(
+          startDebugScenario({
+            sessionId: seeded.sessionId,
+            branchId: seeded.branchId,
+            cwd: config.cwd,
+          }),
+          coreServices,
+        ),
       )
     }
     yield* Layer.buildWithScope(HttpServerLive, scope)

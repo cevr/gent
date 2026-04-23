@@ -207,9 +207,9 @@ describe("resolveRuntimeProfile", () => {
         )
         const serverCtx = yield* Layer.build(serverLayer)
         const serverRegistry = Context.get(serverCtx, ExtensionRegistry)
-        const serverSections = yield* compileBaseSections(profileServer).pipe(
-          // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(Layer.succeedContext(serverCtx)),
+        const serverSections = yield* Effect.provideContext(
+          compileBaseSections(profileServer),
+          serverCtx,
         )
 
         // "Per-cwd-style" assembly — same shape, different scope owner. The
@@ -221,9 +221,9 @@ describe("resolveRuntimeProfile", () => {
         )
         const cacheCtx = yield* Layer.build(cacheLayer)
         const cacheRegistry = Context.get(cacheCtx, ExtensionRegistry)
-        const cacheSections = yield* compileBaseSections(profileCache).pipe(
-          // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(Layer.succeedContext(cacheCtx)),
+        const cacheSections = yield* Effect.provideContext(
+          compileBaseSections(profileCache),
+          cacheCtx,
         )
 
         // Same registered extension ids (in same scope-precedence order)

@@ -55,6 +55,7 @@ import { ConfigService } from "../config-service.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
 import { RuntimeComposer } from "../composer.js"
+import { runWithBuiltLayer } from "../run-with-built-layer.js"
 import { SessionRuntime } from "../session-runtime.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
@@ -709,12 +710,7 @@ const runEphemeralAgent = (params: {
     // parent context, so child-local layers are constructed against the
     // ephemeral dependencies instead of being reused from the parent's
     // memo map.
-    const result = yield* childRun.pipe(
-      // @effect-diagnostics-next-line strictEffectProvide:off — ephemeral runtime composition root
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-      Effect.provide(ephemeralLayer as Layer.Layer<any>),
-      Effect.scoped,
-    )
+    const result = yield* runWithBuiltLayer(ephemeralLayer)(childRun).pipe(Effect.scoped)
 
     // Save full output to disk (runs in parent context where FileSystem is available)
     const savedPath = yield* saveAgentRunOutput({

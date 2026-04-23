@@ -7,7 +7,7 @@
  * `bun run typecheck` would fail — so the file doubles as a guardrail.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, type Scope } from "effect"
 import {
   type CwdProfile,
   type EphemeralProfile,
@@ -15,6 +15,7 @@ import {
   ServerProfileService,
 } from "@gent/core/runtime/scope-brands"
 import { RuntimeComposer, ownService } from "@gent/core/runtime/composer"
+import { runWithBuiltLayer } from "@gent/core/runtime/run-with-built-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -95,6 +96,22 @@ describe("scope brand type fences", () => {
     const _typed: Layer.Layer<FakeService, never, never> = composed.layer
     void _typed
     expect(composed.profile.cwd).toBe("/tmp")
+  })
+
+  test("runWithBuiltLayer satisfies the built layer's services and leaves only scope", () => {
+    const fakeLayer = Layer.succeed(FakeService, { value: 42 })
+    const consumer = Effect.gen(function* () {
+      const service = yield* FakeService
+      return service.value
+    })
+
+    const provided = runWithBuiltLayer(fakeLayer)(consumer)
+    const _typed: Effect.Effect<number, never, Scope.Scope> = provided
+    void _typed
+
+    return Effect.runPromise(Effect.scoped(provided)).then((value) => {
+      expect(value).toBe(42)
+    })
   })
 
   test("withOverrides omits Storage sub-Tags from parent context", () => {

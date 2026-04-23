@@ -46,6 +46,7 @@ import { ExtensionTurnControl } from "./extensions/turn-control.js"
 import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
 import { buildExtensionLayers, compileBaseSections, resolveRuntimeProfile } from "./profile.js"
+import { runWithBuiltLayer } from "./run-with-built-layer.js"
 
 const allowAllPermission: PermissionService = {
   check: () => Effect.succeed("allowed"),
@@ -214,13 +215,9 @@ export class SessionProfileCache extends Context.Service<
             // Compile base sections inside the built layer's runtime so any
             // dynamic prompt section (e.g. `Skills`) can read its required
             // services from extension `setup.layer`s now in scope.
-            // strictEffectProvide:off is intentional — `combinedCtx` is the
-            // resolved ServiceMap from `Layer.build` above, not a freshly
-            // constructed sub-layer. This is the documented pattern for
-            // running an Effect inside an already-built scope.
-            const baseSections = yield* compileBaseSections(profileData).pipe(
-              // @effect-diagnostics-next-line strictEffectProvide:off
-              Effect.provide(Layer.succeedContext(combinedCtx)),
+            const baseSections = yield* Effect.provideContext(
+              compileBaseSections(profileData),
+              combinedCtx,
             )
 
             const profile: SessionProfile = {
@@ -246,8 +243,8 @@ export class SessionProfileCache extends Context.Service<
 
             return profile
           }).pipe(
-            // @effect-diagnostics-next-line strictEffectProvide:off
-            Effect.provide(platformLayer),
+            runWithBuiltLayer(platformLayer),
+            Effect.provideService(Scope.Scope, serverScope),
             Effect.orDie,
           )
 
