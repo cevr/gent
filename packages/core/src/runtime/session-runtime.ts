@@ -275,294 +275,297 @@ interface RunPromptInput {
   readonly runSpec?: RunSpec
 }
 
+const makeLiveSessionRuntime: Effect.Effect<
+  SessionRuntimeService,
+  never,
+  | AgentLoop
+  | Storage
+  | EventPublisher
+  | ToolRunner
+  | ExtensionRegistry
+  | DriverRegistry
+  | ResourceManager
+  | MachineEngine
+  | Permission
+  | SessionProfileCache
+> = Effect.gen(function* () {
+  const agentLoop = yield* AgentLoop
+  const storage = yield* Storage
+  const eventPublisher = yield* EventPublisher
+  const toolRunner = yield* ToolRunner
+  const extensionRegistry = yield* ExtensionRegistry
+  const driverRegistry = yield* DriverRegistry
+  const resourceManager = yield* ResourceManager
+  const permissionOpt = yield* Effect.serviceOption(Permission)
+  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+  const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
+  const defaultPermission = permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
+  const extensionStateRuntime = yield* MachineEngine
+  const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+    extensionStateRuntime,
+    extensionRegistry,
+    storage,
+    overrides: {
+      eventPublisher,
+    },
+  })
+
+  const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
+    command: RuntimeCommand,
+  ) {
+    switch (command._tag) {
+      case "SendUserMessage": {
+        const commandId = command.commandId ?? makeCommandId()
+        const { environment } = yield* resolveSessionEnvironment({
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          storage,
+          hostDeps,
+          profileCache,
+          defaults: {
+            driverRegistry,
+            permission: defaultPermission,
+            baseSections: [],
+          },
+        })
+        const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
+          {
+            content: command.content,
+            sessionId: command.sessionId,
+            branchId: command.branchId,
+          },
+          environment.hostCtx,
+        )
+
+        const message = new Message({
+          id: userMessageIdForCommand(commandId),
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          kind: "regular",
+          role: "user",
+          parts: [new TextPart({ type: "text", text: content })],
+          createdAt: yield* DateTime.nowAsDate,
+        })
+
+        yield* agentLoop
+          .submit(message, {
+            ...(command.agentOverride !== undefined
+              ? { agentOverride: command.agentOverride }
+              : {}),
+            ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
+            ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
+          })
+          .pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+              return Effect.gen(function* () {
+                if (Cause.hasDies(cause)) {
+                  yield* eventPublisher.publish(
+                    new AgentRestarted({
+                      sessionId: command.sessionId,
+                      branchId: command.branchId,
+                      attempt: 0,
+                      error: Cause.pretty(cause),
+                    }),
+                  )
+                }
+                yield* eventPublisher.publish(
+                  new ErrorOccurred({
+                    sessionId: command.sessionId,
+                    branchId: command.branchId,
+                    error: Cause.pretty(cause),
+                  }),
+                )
+                yield* Effect.logWarning("agent loop submission failed").pipe(
+                  Effect.annotateLogs({ error: Cause.pretty(cause) }),
+                )
+              }).pipe(Effect.catchEager(() => Effect.void))
+            }),
+          )
+        yield* Effect.logInfo("session-runtime.message.submitted").pipe(
+          Effect.annotateLogs({
+            sessionId: command.sessionId,
+            branchId: command.branchId,
+          }),
+        )
+        return
+      }
+      case "RecordToolResult": {
+        const commandId = command.commandId ?? makeCommandId()
+        const outputType = command.isError === true ? "error-json" : "json"
+        const part = new ToolResultPart({
+          type: "tool-result",
+          toolCallId: command.toolCallId,
+          toolName: command.toolName,
+          output: { type: outputType, value: command.output },
+        })
+
+        const message = new Message({
+          id: toolResultMessageIdForCommand(commandId),
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          role: "tool",
+          parts: [part],
+          createdAt: yield* DateTime.nowAsDate,
+        })
+
+        yield* storage.createMessageIfAbsent(message)
+        const isError = command.isError ?? false
+        const toolCallFields = {
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          toolCallId: command.toolCallId,
+          toolName: command.toolName,
+          summary: summarizeToolOutput(part),
+          output: stringifyOutput(part.output.value),
+        }
+        yield* eventPublisher.publish(
+          isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
+        )
+        return
+      }
+      case "InvokeTool": {
+        const commandId = command.commandId ?? makeCommandId()
+        const toolCallId = toolCallIdForCommand(commandId)
+        const currentTurnAgent = (yield* agentLoop.getState(command)).agent
+        const { environment } = yield* resolveSessionEnvironment({
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          storage,
+          hostDeps,
+          profileCache,
+          defaults: {
+            driverRegistry,
+            permission: defaultPermission,
+            baseSections: [],
+          },
+        })
+
+        yield* invokeToolPhase({
+          assistantMessageId: assistantMessageIdForCommand(commandId),
+          toolResultMessageId: toolResultMessageIdForCommand(commandId),
+          toolCallId,
+          toolName: command.toolName,
+          input: command.input,
+          publishEvent: (event) =>
+            eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          currentTurnAgent,
+          toolRunner,
+          extensionRegistry: environment.extensionRegistry,
+          permission: environment.permission,
+          hostCtx: environment.hostCtx,
+          resourceManager,
+          storage,
+        })
+        return
+      }
+      case "ApplySteer":
+        yield* agentLoop.steer(command.command)
+        return
+      case "RespondInteraction":
+        yield* agentLoop.respondInteraction(command)
+        return
+    }
+  })
+
+  return {
+    dispatch: (command) =>
+      dispatchCommand(command).pipe(
+        Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
+      ),
+
+    runPrompt: (input: RunPromptInput) =>
+      agentLoop.runOnce(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentRunError({
+              message: cause.message,
+              cause,
+            }),
+        ),
+      ),
+
+    drainQueuedMessages: (input) =>
+      agentLoop
+        .drainQueue(input)
+        .pipe(
+          Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
+        ),
+
+    getQueuedMessages: (input) =>
+      agentLoop
+        .getQueue(input)
+        .pipe(
+          Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
+        ),
+
+    getState: (input) =>
+      Effect.gen(function* () {
+        const loopState = yield* agentLoop.getState(input)
+        return loopState satisfies SessionRuntimeState
+      }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
+
+    getMetrics: (input) =>
+      storage.listEvents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
+        Effect.map((envelopes) => {
+          let turns = 0
+          let tokens = 0
+          let toolCalls = 0
+          let retries = 0
+          let durationMs = 0
+          for (const { event } of envelopes) {
+            switch (event._tag) {
+              case "TurnCompleted":
+                turns++
+                durationMs += event.durationMs
+                break
+              case "StreamEnded":
+                if (event.usage !== undefined) {
+                  tokens += event.usage.inputTokens + event.usage.outputTokens
+                }
+                break
+              case "ToolCallStarted":
+                toolCalls++
+                break
+              case "ProviderRetrying":
+                retries++
+                break
+            }
+          }
+          return {
+            turns,
+            tokens,
+            toolCalls,
+            retries,
+            durationMs,
+          } satisfies SessionRuntimeMetrics
+        }),
+        Effect.catchEager(() =>
+          Effect.succeed({
+            turns: 0,
+            tokens: 0,
+            toolCalls: 0,
+            retries: 0,
+            durationMs: 0,
+          } satisfies SessionRuntimeMetrics),
+        ),
+        Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
+      ),
+
+    watchState: (input) =>
+      agentLoop
+        .watchState(input)
+        .pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
+  } satisfies SessionRuntimeService
+})
+
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
-  static FromLoop = Layer.effect(
-    SessionRuntime,
-    Effect.gen(function* () {
-      const agentLoop = yield* AgentLoop
-      const storage = yield* Storage
-      const eventPublisher = yield* EventPublisher
-      const toolRunner = yield* ToolRunner
-      const extensionRegistry = yield* ExtensionRegistry
-      const driverRegistry = yield* DriverRegistry
-      const resourceManager = yield* ResourceManager
-      const permissionOpt = yield* Effect.serviceOption(Permission)
-      const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
-      const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-      const defaultPermission =
-        permissionOpt._tag === "Some" ? permissionOpt.value : AllowAllPermission
-      const extensionStateRuntime = yield* MachineEngine
-      const hostDeps = yield* makeAmbientExtensionHostContextDeps({
-        extensionStateRuntime,
-        extensionRegistry,
-        storage,
-        overrides: {
-          eventPublisher,
-        },
-      })
-
-      const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
-        command: RuntimeCommand,
-      ) {
-        switch (command._tag) {
-          case "SendUserMessage": {
-            const commandId = command.commandId ?? makeCommandId()
-            const { environment } = yield* resolveSessionEnvironment({
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              storage,
-              hostDeps,
-              profileCache,
-              defaults: {
-                driverRegistry,
-                permission: defaultPermission,
-                baseSections: [],
-              },
-            })
-            const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
-              {
-                content: command.content,
-                sessionId: command.sessionId,
-                branchId: command.branchId,
-              },
-              environment.hostCtx,
-            )
-
-            const message = new Message({
-              id: userMessageIdForCommand(commandId),
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              kind: "regular",
-              role: "user",
-              parts: [new TextPart({ type: "text", text: content })],
-              createdAt: yield* DateTime.nowAsDate,
-            })
-
-            yield* agentLoop
-              .submit(message, {
-                ...(command.agentOverride !== undefined
-                  ? { agentOverride: command.agentOverride }
-                  : {}),
-                ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
-                ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
-              })
-              .pipe(
-                Effect.catchCause((cause) => {
-                  if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-                  return Effect.gen(function* () {
-                    if (Cause.hasDies(cause)) {
-                      yield* eventPublisher.publish(
-                        new AgentRestarted({
-                          sessionId: command.sessionId,
-                          branchId: command.branchId,
-                          attempt: 0,
-                          error: Cause.pretty(cause),
-                        }),
-                      )
-                    }
-                    yield* eventPublisher.publish(
-                      new ErrorOccurred({
-                        sessionId: command.sessionId,
-                        branchId: command.branchId,
-                        error: Cause.pretty(cause),
-                      }),
-                    )
-                    yield* Effect.logWarning("agent loop submission failed").pipe(
-                      Effect.annotateLogs({ error: Cause.pretty(cause) }),
-                    )
-                  }).pipe(Effect.catchEager(() => Effect.void))
-                }),
-              )
-            yield* Effect.logInfo("session-runtime.message.submitted").pipe(
-              Effect.annotateLogs({
-                sessionId: command.sessionId,
-                branchId: command.branchId,
-              }),
-            )
-            return
-          }
-          case "RecordToolResult": {
-            const commandId = command.commandId ?? makeCommandId()
-            const outputType = command.isError === true ? "error-json" : "json"
-            const part = new ToolResultPart({
-              type: "tool-result",
-              toolCallId: command.toolCallId,
-              toolName: command.toolName,
-              output: { type: outputType, value: command.output },
-            })
-
-            const message = new Message({
-              id: toolResultMessageIdForCommand(commandId),
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              role: "tool",
-              parts: [part],
-              createdAt: yield* DateTime.nowAsDate,
-            })
-
-            yield* storage.createMessageIfAbsent(message)
-            const isError = command.isError ?? false
-            const toolCallFields = {
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              toolCallId: command.toolCallId,
-              toolName: command.toolName,
-              summary: summarizeToolOutput(part),
-              output: stringifyOutput(part.output.value),
-            }
-            yield* eventPublisher.publish(
-              isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
-            )
-            return
-          }
-          case "InvokeTool": {
-            const commandId = command.commandId ?? makeCommandId()
-            const toolCallId = toolCallIdForCommand(commandId)
-            const currentTurnAgent = (yield* agentLoop.getState(command)).agent
-            const { environment } = yield* resolveSessionEnvironment({
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              storage,
-              hostDeps,
-              profileCache,
-              defaults: {
-                driverRegistry,
-                permission: defaultPermission,
-                baseSections: [],
-              },
-            })
-
-            yield* invokeToolPhase({
-              assistantMessageId: assistantMessageIdForCommand(commandId),
-              toolResultMessageId: toolResultMessageIdForCommand(commandId),
-              toolCallId,
-              toolName: command.toolName,
-              input: command.input,
-              publishEvent: (event) =>
-                eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
-              sessionId: command.sessionId,
-              branchId: command.branchId,
-              currentTurnAgent,
-              toolRunner,
-              extensionRegistry: environment.extensionRegistry,
-              permission: environment.permission,
-              hostCtx: environment.hostCtx,
-              resourceManager,
-              storage,
-            })
-            return
-          }
-          case "ApplySteer":
-            yield* agentLoop.steer(command.command)
-            return
-          case "RespondInteraction":
-            yield* agentLoop.respondInteraction(command)
-            return
-        }
-      })
-
-      return {
-        dispatch: (command) =>
-          dispatchCommand(command).pipe(
-            Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
-          ),
-
-        runPrompt: (input: RunPromptInput) =>
-          agentLoop.runOnce(input).pipe(
-            Effect.mapError(
-              (cause) =>
-                new AgentRunError({
-                  message: cause.message,
-                  cause,
-                }),
-            ),
-          ),
-
-        drainQueuedMessages: (input) =>
-          agentLoop
-            .drainQueue(input)
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.fail(wrapError("drainQueuedMessages failed", cause)),
-              ),
-            ),
-
-        getQueuedMessages: (input) =>
-          agentLoop
-            .getQueue(input)
-            .pipe(
-              Effect.catchCause((cause) =>
-                Effect.fail(wrapError("getQueuedMessages failed", cause)),
-              ),
-            ),
-
-        getState: (input) =>
-          Effect.gen(function* () {
-            const loopState = yield* agentLoop.getState(input)
-            return loopState satisfies SessionRuntimeState
-          }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
-
-        getMetrics: (input) =>
-          storage.listEvents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
-            Effect.map((envelopes) => {
-              let turns = 0
-              let tokens = 0
-              let toolCalls = 0
-              let retries = 0
-              let durationMs = 0
-              for (const { event } of envelopes) {
-                switch (event._tag) {
-                  case "TurnCompleted":
-                    turns++
-                    durationMs += event.durationMs
-                    break
-                  case "StreamEnded":
-                    if (event.usage !== undefined) {
-                      tokens += event.usage.inputTokens + event.usage.outputTokens
-                    }
-                    break
-                  case "ToolCallStarted":
-                    toolCalls++
-                    break
-                  case "ProviderRetrying":
-                    retries++
-                    break
-                }
-              }
-              return {
-                turns,
-                tokens,
-                toolCalls,
-                retries,
-                durationMs,
-              } satisfies SessionRuntimeMetrics
-            }),
-            Effect.catchEager(() =>
-              Effect.succeed({
-                turns: 0,
-                tokens: 0,
-                toolCalls: 0,
-                retries: 0,
-                durationMs: 0,
-              } satisfies SessionRuntimeMetrics),
-            ),
-            Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
-          ),
-
-        watchState: (input) =>
-          agentLoop
-            .watchState(input)
-            .pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
-      } satisfies SessionRuntimeService
-    }),
-  )
-
-  static Live = (config: { readonly baseSections: ReadonlyArray<PromptSection> }) => {
-    const loopLive = AgentLoop.Live(config)
-    return SessionRuntime.FromLoop.pipe(Layer.provideMerge(loopLive))
-  }
+  static Live = (_config: { readonly baseSections: ReadonlyArray<PromptSection> }) =>
+    Layer.effect(SessionRuntime, makeLiveSessionRuntime)
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {

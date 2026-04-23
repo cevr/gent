@@ -43,6 +43,7 @@ import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
 import { SessionRuntime } from "../session-runtime.js"
+import { AgentLoop } from "./agent-loop.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
 import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
@@ -508,6 +509,21 @@ const buildEphemeralLayer = (params: {
     ToolRunner.Live,
     Layer.mergeAll(approvalLayer, extensionLayers, parentRuntimePlatformLayer),
   )
+  const agentLoopLayer = AgentLoop.Live({
+    baseSections: params.config.baseSections ?? [],
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        storageLayer,
+        eventPublisherLayer,
+        toolRunnerLayer,
+        ResourceManagerLive,
+        extensionLayers,
+        parentProviderLayer,
+        parentConfigLayer,
+      ),
+    ),
+  )
   const sessionRuntimeLayer = SessionRuntime.Live({
     baseSections: params.config.baseSections ?? [],
   }).pipe(
@@ -520,6 +536,7 @@ const buildEphemeralLayer = (params: {
         extensionLayers,
         parentProviderLayer,
         parentConfigLayer,
+        agentLoopLayer,
       ),
     ),
   )

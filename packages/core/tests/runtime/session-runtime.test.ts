@@ -71,7 +71,10 @@ describe("SessionRuntime", () => {
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return Layer.provideMerge(SessionRuntime.FromLoop, Layer.merge(deps, eventPublisherLayer))
+    return Layer.provideMerge(
+      SessionRuntime.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
   }
 
   test("dispatch ApplySteer hands control to the internal loop", async () => {
@@ -313,7 +316,7 @@ describe("SessionRuntime", () => {
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
-      SessionRuntime.FromLoop,
+      SessionRuntime.Live({ baseSections: [] }),
       Layer.merge(deps, eventPublisherLayer),
     )
 

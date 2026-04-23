@@ -110,11 +110,14 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bSteerCommand\b/)
   })
 
-  test("agent runner does not depend on AgentLoop directly", () => {
+  test("agent runner does not use AgentLoop as a direct runtime seam", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/agent/agent-runner.ts")
     const source = readFileSync(file, "utf8")
 
-    expect(source).not.toMatch(/\bAgentLoop\b/)
+    expect(source).not.toMatch(/yield\*\s+AgentLoop\b/)
+    expect(source).not.toMatch(
+      /\bagentLoop\.(runOnce|submit|run|steer|drainQueue|getQueue|getState|watchState)\b/,
+    )
     expect(source).not.toMatch(/\bmakeRunPrompt\b/)
     expect(source).toMatch(/\bSessionRuntime\b/)
   })
@@ -141,6 +144,7 @@ describe("architecture policy", () => {
     const source = readFileSync(file, "utf8")
 
     expect(source).not.toMatch(/\bexport\s+(const|interface)\s+(makeRunPrompt|RunPromptInput)\b/)
+    expect(source).not.toMatch(/\bstatic FromLoop\b/)
   })
 
   test("package exports do not expose agent-loop as a public subpath", () => {
