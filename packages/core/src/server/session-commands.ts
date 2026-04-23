@@ -121,9 +121,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
 
         const parts: string[] = []
-        yield* Stream.runForEach(streamEffect, (chunk) =>
+        yield* Stream.runForEach(streamEffect, (part) =>
           Effect.sync(() => {
-            if (chunk._tag === "TextChunk") parts.push(chunk.text)
+            if (part.type === "text-delta") parts.push(part.delta)
           }),
         )
         return parts.join("").trim()

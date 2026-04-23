@@ -2,12 +2,13 @@ import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "ef
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import type { ExtensionSetupContext } from "../domain/extension.js"
+import type { ToolCallId } from "../domain/ids.js"
 import {
   Provider,
-  FinishChunk,
-  TextChunk,
-  ToolCallChunk,
-  type StreamChunk,
+  finishPart,
+  textDeltaPart,
+  toolCallPart,
+  type ProviderStreamPart,
 } from "../providers/provider.js"
 import {
   EventStore,
@@ -60,7 +61,7 @@ export class SequenceRecorder extends Context.Service<SequenceRecorder, Sequence
 // Recording Provider
 
 export const RecordingProvider = (
-  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
+  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
 ): Layer.Layer<Provider, never, SequenceRecorder> =>
   Layer.effect(
     Provider,
@@ -76,8 +77,8 @@ export const RecordingProvider = (
             method: "stream",
             args: { model: request.model, messageCount: request.messages.length },
           })
-          const chunks = responses[idx] ?? [new FinishChunk({ finishReason: "stop" })]
-          return Stream.fromIterable(chunks)
+          const parts = responses[idx] ?? [finishPart({ finishReason: "stop" })]
+          return Stream.fromIterable(parts)
         }),
         generate: Effect.fn("RecordingProvider.generate")(function* (request) {
           yield* recorder.record({
@@ -198,21 +199,19 @@ export const testSetupCtx = (
 
 // Mock Helpers
 
-export const mockTextResponse = (text: string): StreamChunk[] => [
-  new TextChunk({ text }),
-  new FinishChunk({ finishReason: "stop" }),
+export const mockTextResponse = (text: string): ProviderStreamPart[] => [
+  textDeltaPart(text),
+  finishPart({ finishReason: "stop" }),
 ]
 
 export const mockToolCallResponse = (
   toolCallId: ToolCallId,
   toolName: string,
   input: unknown,
-): StreamChunk[] => [
-  new ToolCallChunk({ toolCallId, toolName, input }),
-  new FinishChunk({ finishReason: "tool_calls" }),
+): ProviderStreamPart[] => [
+  toolCallPart(toolName, input, { toolCallId }),
+  finishPart({ finishReason: "tool-calls" }),
 ]
-
-import type { ToolCallId } from "../domain/ids.js"
 
 // E2E test layer
 export {

@@ -14,7 +14,7 @@ import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machi
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { Provider, FinishChunk } from "@gent/core/providers/provider"
+import { Provider, finishPart } from "@gent/core/providers/provider"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
@@ -105,7 +105,7 @@ const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
 const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEvent[]>) => {
   // Dummy provider — external turns don't use it but AgentLoop requires it
   const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
     generate: () => Effect.succeed("unused"),
   })
 
@@ -278,8 +278,7 @@ describe("external turn execution", () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     // Use the default agent (model-backed) with a simple provider
     const providerLayer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       generate: () => Effect.succeed("test"),
     })
 
@@ -430,8 +429,7 @@ describe("ExternalDriverContribution end-to-end", () => {
     ])
 
     const providerLayer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       generate: () => Effect.succeed("unused"),
     })
 

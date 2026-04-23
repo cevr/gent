@@ -2,10 +2,10 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema, Stream } from "effect"
 import {
   Provider,
-  FinishChunk,
-  TextChunk,
-  ToolCallChunk,
-  type StreamChunk,
+  finishPart,
+  textDeltaPart,
+  toolCallPart,
+  type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
@@ -40,15 +40,15 @@ import { ServerProfileService } from "@gent/core/runtime/scope-brands"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 
-/** Scripted provider: returns chunks from an array, one response per stream() call. */
+/** Scripted provider: returns stream parts from an array, one response per stream() call. */
 const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
+  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
 ): Layer.Layer<Provider> => {
   let index = 0
   return Layer.succeed(Provider, {
     stream: () =>
       Effect.succeed(
-        Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
+        Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
       ),
     generate: () => Effect.succeed("test response"),
   })
@@ -399,7 +399,7 @@ describe("AgentRunner", () => {
       eventPublisherLayer,
       testRegistryLayer,
       scriptedProvider([
-        [new TextChunk({ text: "ephemeral response" }), new FinishChunk({ finishReason: "stop" })],
+        [textDeltaPart("ephemeral response"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
       sessionRuntimeStub(),
@@ -463,14 +463,10 @@ describe("AgentRunner", () => {
       testRegistryLayer,
       scriptedProvider([
         [
-          new ToolCallChunk({
-            toolCallId: "tc-ephemeral",
-            toolName: "bash",
-            input: { command: "pwd" },
-          }),
-          new FinishChunk({ finishReason: "tool_calls" }),
+          toolCallPart("bash", { command: "pwd" }, { toolCallId: "tc-ephemeral" }),
+          finishPart({ finishReason: "tool-calls" }),
         ],
-        [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
+        [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
       sessionRuntimeStub(),
@@ -558,14 +554,10 @@ describe("AgentRunner", () => {
       testRegistryLayer,
       scriptedProvider([
         [
-          new ToolCallChunk({
-            toolCallId: "tc-ephemeral-reduce",
-            toolName: "bash",
-            input: { command: "pwd" },
-          }),
-          new FinishChunk({ finishReason: "tool_calls" }),
+          toolCallPart("bash", { command: "pwd" }, { toolCallId: "tc-ephemeral-reduce" }),
+          finishPart({ finishReason: "tool-calls" }),
         ],
-        [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
+        [textDeltaPart("tool finished"), finishPart({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
       sessionRuntimeStub(),

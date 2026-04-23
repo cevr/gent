@@ -17,11 +17,11 @@ import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import {
   Provider,
   ProviderError,
-  FinishChunk,
-  ReasoningChunk,
-  TextChunk,
-  ToolCallChunk,
-  type StreamChunk,
+  finishPart,
+  reasoningDeltaPart,
+  textDeltaPart,
+  toolCallPart,
+  type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
@@ -138,15 +138,15 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   )
 }
 
-/** Scripted provider: returns chunks from an array, one response per stream() call. */
+/** Scripted provider: returns stream parts from an array, one response per stream() call. */
 const scriptedProvider = (
-  responses: ReadonlyArray<ReadonlyArray<StreamChunk>>,
+  responses: ReadonlyArray<ReadonlyArray<ProviderStreamPart>>,
 ): Layer.Layer<Provider> => {
   let index = 0
   return Layer.succeed(Provider, {
     stream: () =>
       Effect.succeed(
-        Stream.fromIterable(responses[index++] ?? [new FinishChunk({ finishReason: "stop" })]),
+        Stream.fromIterable(responses[index++] ?? [finishPart({ finishReason: "stop" })]),
       ),
     generate: () => Effect.succeed("test response"),
   })
@@ -259,7 +259,7 @@ const makeExternalLayerWithEvents = (
     }),
   )
   const providerLayer = Layer.succeed(Provider, {
-    stream: () => Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
     generate: () => Effect.succeed("unused"),
   })
   const deps = Layer.mergeAll(
@@ -317,12 +317,12 @@ describe("streaming", () => {
               Effect.gen(function* () {
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return new FinishChunk({ finishReason: "stop" })
+                return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
           )
         }
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -368,12 +368,12 @@ describe("streaming", () => {
               Effect.gen(function* () {
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return new FinishChunk({ finishReason: "stop" })
+                return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
           )
         }
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -450,9 +450,9 @@ describe("streaming", () => {
             Effect.gen(function* () {
               yield* Deferred.succeed(started, undefined)
               yield* Deferred.await(gate)
-              return new FinishChunk({ finishReason: "stop" })
+              return finishPart({ finishReason: "stop" })
             }),
-          ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+          ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
         )
       },
       generate: () => Effect.succeed("test response"),
@@ -503,12 +503,12 @@ describe("streaming", () => {
               Effect.gen(function* () {
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return new FinishChunk({ finishReason: "stop" })
+                return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
           )
         }
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -563,15 +563,17 @@ describe("streaming", () => {
 
     const providerLayer = scriptedProvider([
       [
-        new ToolCallChunk({
-          toolCallId: ToolCallId.of("tc-queue"),
-          toolName: "queue-tool",
-          input: { content: "queued from tool" },
-        }),
-        new FinishChunk({ finishReason: "tool_calls" }),
+        toolCallPart(
+          "queue-tool",
+          { content: "queued from tool" },
+          {
+            toolCallId: ToolCallId.of("tc-queue"),
+          },
+        ),
+        finishPart({ finishReason: "tool-calls" }),
       ],
-      [new FinishChunk({ finishReason: "stop" })],
-      [new FinishChunk({ finishReason: "stop" })],
+      [finishPart({ finishReason: "stop" })],
+      [finishPart({ finishReason: "stop" })],
     ])
 
     const layer = makeLiveToolLayer(providerLayer, [QueueTool])
@@ -602,8 +604,7 @@ describe("streaming", () => {
 
   test("publishes StreamStarted and TurnCompleted events", async () => {
     const providerLayer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })])),
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       generate: () => Effect.succeed("test response"),
     })
 
@@ -657,13 +658,13 @@ describe("streaming", () => {
               Effect.gen(function* () {
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return new FinishChunk({ finishReason: "stop" })
+                return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
           )
         }
 
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -717,12 +718,12 @@ describe("streaming", () => {
               Effect.gen(function* () {
                 yield* Deferred.succeed(firstStarted, undefined)
                 yield* Deferred.await(gate)
-                return new FinishChunk({ finishReason: "stop" })
+                return finishPart({ finishReason: "stop" })
               }),
-            ).pipe(Stream.map(() => new FinishChunk({ finishReason: "stop" }))),
+            ).pipe(Stream.map(() => finishPart({ finishReason: "stop" }))),
           )
         }
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -801,7 +802,7 @@ describe("streaming", () => {
           )
         }
 
-        return Effect.succeed(Stream.fromIterable([new FinishChunk({ finishReason: "stop" })]))
+        return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
       },
       generate: () => Effect.succeed("test response"),
     })
@@ -967,11 +968,11 @@ describe("concurrency", () => {
     const layer = makeLiveToolLayer(
       scriptedProvider([
         [
-          new ToolCallChunk({ toolCallId: "tc-1", toolName: "serial-a", input: {} }),
-          new ToolCallChunk({ toolCallId: "tc-2", toolName: "serial-b", input: {} }),
-          new FinishChunk({ finishReason: "tool_calls" }),
+          toolCallPart("serial-a", {}, { toolCallId: "tc-1" }),
+          toolCallPart("serial-b", {}, { toolCallId: "tc-2" }),
+          finishPart({ finishReason: "tool-calls" }),
         ],
-        [new FinishChunk({ finishReason: "stop" })],
+        [finishPart({ finishReason: "stop" })],
       ]),
       [toolA, toolB],
     )
@@ -1303,9 +1304,9 @@ describe("turn stream parity", () => {
           makeLayerWithEvents(
             scriptedProvider([
               [
-                new ReasoningChunk({ text: "thinking" }),
-                new TextChunk({ text: "hello from parity" }),
-                new FinishChunk({
+                reasoningDeltaPart("thinking"),
+                textDeltaPart("hello from parity"),
+                finishPart({
                   finishReason: "stop",
                   usage: { inputTokens: 3, outputTokens: 5 },
                 }),
@@ -1407,20 +1408,22 @@ describe("interaction", () => {
         if (call === 0) {
           return Effect.succeed(
             Stream.fromIterable([
-              new ToolCallChunk({
-                toolCallId: ToolCallId.of("tc-1"),
-                toolName: "interaction-tool",
-                input: { value: "test" },
-              }),
-              new FinishChunk({ finishReason: "tool_calls" }),
-            ] satisfies StreamChunk[]),
+              toolCallPart(
+                "interaction-tool",
+                { value: "test" },
+                {
+                  toolCallId: ToolCallId.of("tc-1"),
+                },
+              ),
+              finishPart({ finishReason: "tool-calls" }),
+            ] satisfies ProviderStreamPart[]),
           )
         }
         return Effect.succeed(
           Stream.fromIterable([
-            new TextChunk({ text: "done" }),
-            new FinishChunk({ finishReason: "stop" }),
-          ] satisfies StreamChunk[]),
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[]),
         )
       },
       generate: () => Effect.succeed("test"),
@@ -1547,10 +1550,7 @@ describe("interaction", () => {
       Layer.succeed(Provider, {
         stream: () =>
           Effect.succeed(
-            Stream.fromIterable([
-              new TextChunk({ text: "hello" }),
-              new FinishChunk({ finishReason: "stop" }),
-            ]),
+            Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
           ),
         generate: () => Effect.succeed("test"),
       }),
@@ -1607,18 +1607,20 @@ describe("interaction", () => {
           const idx = streamCallIndex++
           if (idx === 0) {
             return Stream.fromIterable([
-              new ToolCallChunk({
-                toolCallId: ToolCallId.of("tc-guard"),
-                toolName: tool.id,
-                input: { value: "guard-test" },
-              }),
-              new FinishChunk({ finishReason: "tool_calls" }),
-            ] satisfies StreamChunk[])
+              toolCallPart(
+                tool.id,
+                { value: "guard-test" },
+                {
+                  toolCallId: ToolCallId.of("tc-guard"),
+                },
+              ),
+              finishPart({ finishReason: "tool-calls" }),
+            ] satisfies ProviderStreamPart[])
           }
           return Stream.fromIterable([
-            new TextChunk({ text: "interaction resolved" }),
-            new FinishChunk({ finishReason: "stop" }),
-          ] satisfies StreamChunk[])
+            textDeltaPart("interaction resolved"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
         }),
       generate: () => Effect.succeed("test"),
     })
@@ -1702,7 +1704,7 @@ describe("recovery", () => {
 
   const makeRecoveryLayer = (params: {
     dbPath: string
-    providerChunks?: ReadonlyArray<StreamChunk>
+    providerParts?: ReadonlyArray<ProviderStreamPart>
     providerCalls?: Ref.Ref<number>
   }) => {
     const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
@@ -1733,9 +1735,9 @@ describe("recovery", () => {
         Ref.update(params.providerCalls ?? Ref.makeUnsafe(0), (count) => count + 1).pipe(
           Effect.as(
             Stream.fromIterable(
-              params.providerChunks ?? [
-                new TextChunk({ text: "recovered assistant" }),
-                new FinishChunk({ finishReason: "stop" }),
+              params.providerParts ?? [
+                textDeltaPart("recovered assistant"),
+                finishPart({ finishReason: "stop" }),
               ],
             ),
           ),

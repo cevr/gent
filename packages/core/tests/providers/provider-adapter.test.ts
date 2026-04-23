@@ -1,17 +1,14 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
+import { Finished, ReasoningDelta, TextDelta, ToolCall } from "@gent/core/domain/driver"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import {
   convertMessages,
   convertTools,
-  toStreamChunk,
-  TextChunk,
-  ToolCallChunk,
-  ReasoningChunk,
-  FinishChunk,
-  type AnyStreamPart,
+  toTurnEvent,
+  type ProviderStreamPart,
 } from "@gent/core/providers/provider"
 import {
   Message,
@@ -189,47 +186,51 @@ describe("convertTools", () => {
   })
 })
 
-// ── toStreamChunk ──
+// ── toTurnEvent ──
 
-describe("toStreamChunk", () => {
-  const map = toStreamChunk("test/model")
+describe("toTurnEvent", () => {
+  const map = toTurnEvent("test/model")
 
-  test("maps text-delta to TextChunk", async () => {
+  test("maps text-delta to TextDelta", async () => {
     const part = Response.makePart("text-delta", {
       id: "1",
       delta: "Hello",
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect(chunk).toBeInstanceOf(TextChunk)
-    expect((chunk as TextChunk).text).toBe("Hello")
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeInstanceOf(TextDelta)
+    expect(event).toEqual(expect.objectContaining({ _tag: "text-delta", text: "Hello" }))
   })
 
-  test("maps tool-call to ToolCallChunk", async () => {
+  test("maps tool-call to ToolCall", async () => {
     const part = Response.makePart("tool-call", {
       id: "tc-1",
       name: "echo",
       params: { text: "hi" },
       providerExecuted: false,
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect(chunk).toBeInstanceOf(ToolCallChunk)
-    const tc = chunk as ToolCallChunk
-    expect(tc.toolCallId).toBe("tc-1")
-    expect(tc.toolName).toBe("echo")
-    expect(tc.input).toEqual({ text: "hi" })
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeInstanceOf(ToolCall)
+    expect(event).toEqual(
+      expect.objectContaining({
+        _tag: "tool-call",
+        toolCallId: "tc-1",
+        toolName: "echo",
+        input: { text: "hi" },
+      }),
+    )
   })
 
-  test("maps reasoning-delta to ReasoningChunk", async () => {
+  test("maps reasoning-delta to ReasoningDelta", async () => {
     const part = Response.makePart("reasoning-delta", {
       id: "1",
       delta: "thinking...",
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect(chunk).toBeInstanceOf(ReasoningChunk)
-    expect((chunk as ReasoningChunk).text).toBe("thinking...")
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeInstanceOf(ReasoningDelta)
+    expect(event).toEqual(expect.objectContaining({ _tag: "reasoning-delta", text: "thinking..." }))
   })
 
-  test("maps finish to FinishChunk with usage", async () => {
+  test("maps finish to Finished with usage", async () => {
     const part = Response.makePart("finish", {
       reason: "stop",
       usage: {
@@ -237,27 +238,30 @@ describe("toStreamChunk", () => {
         outputTokens: { total: 50 },
       },
       response: undefined,
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect(chunk).toBeInstanceOf(FinishChunk)
-    const fc = chunk as FinishChunk
-    expect(fc.finishReason).toBe("stop")
-    expect(fc.usage?.inputTokens).toBe(100)
-    expect(fc.usage?.outputTokens).toBe(50)
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeInstanceOf(Finished)
+    expect(event).toEqual(
+      expect.objectContaining({
+        _tag: "finished",
+        stopReason: "stop",
+        usage: { inputTokens: 100, outputTokens: 50 },
+      }),
+    )
   })
 
   test("maps error to ProviderError failure", async () => {
     const part = Response.makePart("error", {
       message: "rate limited",
-    }) as AnyStreamPart
+    }) satisfies ProviderStreamPart
     const result = await Effect.runPromiseExit(map(part))
     expect(result._tag).toBe("Failure")
   })
 
-  test("returns null for unknown part types", async () => {
-    const part = Response.makePart("text-start", { id: "1" }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect(chunk).toBeNull()
+  test("returns undefined for non-turn stream parts", async () => {
+    const part = Response.makePart("text-start", { id: "1" }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeUndefined()
   })
 
   test("passes through tool names as-is (no mcp_ stripping)", async () => {
@@ -266,8 +270,8 @@ describe("toStreamChunk", () => {
       name: "mcp_echo",
       params: {},
       providerExecuted: false,
-    }) as AnyStreamPart
-    const chunk = await Effect.runPromise(map(part))
-    expect((chunk as ToolCallChunk).toolName).toBe("mcp_echo")
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toEqual(expect.objectContaining({ _tag: "tool-call", toolName: "mcp_echo" }))
   })
 })

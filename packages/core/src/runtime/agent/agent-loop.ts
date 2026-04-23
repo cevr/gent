@@ -850,7 +850,7 @@ const resolveTurnEventStream = (params: {
     return {
       driverKind: "model" as const,
       toolEventMode: "capture-tool-calls" as const,
-      stream: toTurnEventStream(streamEffect),
+      stream: toTurnEventStream(resolved.modelId, streamEffect),
       formatStreamError: formatStreamErrorMessage,
       collect: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.gen(function* () {

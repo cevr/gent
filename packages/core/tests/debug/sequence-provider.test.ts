@@ -7,12 +7,7 @@ import {
   multiToolCallStep,
   type SequenceStep,
 } from "@gent/core/debug/provider"
-import {
-  Provider,
-  type FinishChunk,
-  type TextChunk,
-  type ProviderRequest,
-} from "@gent/core/providers/provider"
+import { Provider, type ProviderRequest } from "@gent/core/providers/provider"
 
 const dummyRequest: ProviderRequest = {
   model: "test/model",
@@ -29,19 +24,19 @@ describe("createSequenceProvider", () => {
   it.scoped("single text step emits correctly", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* Provider.Sequence([textStep("hello")])
-      const chunks = yield* Effect.provide(callProvider, layer)
+      const parts = yield* Effect.provide(callProvider, layer)
 
-      expect(chunks.length).toBe(2)
-      expect(chunks[0]!._tag).toBe("TextChunk")
-      expect((chunks[0] as TextChunk).text).toBe("hello")
-      expect(chunks[1]!._tag).toBe("FinishChunk")
-      expect((chunks[1] as FinishChunk).finishReason).toBe("stop")
+      expect(parts.length).toBe(2)
+      expect(parts[0]?.type).toBe("text-delta")
+      expect(parts[0]?.type === "text-delta" ? parts[0].delta : undefined).toBe("hello")
+      expect(parts[1]?.type).toBe("finish")
+      expect(parts[1]?.type === "finish" ? parts[1].reason : undefined).toBe("stop")
 
       yield* controls.assertDone()
     }),
   )
 
-  it.scoped("multi-step returns correct chunks per call", () =>
+  it.scoped("multi-step returns correct parts per call", () =>
     Effect.gen(function* () {
       const { layer, controls } = yield* Provider.Sequence([
         textStep("first"),
@@ -50,13 +45,13 @@ describe("createSequenceProvider", () => {
       ])
 
       const c1 = yield* Effect.provide(callProvider, layer)
-      expect((c1[0] as TextChunk).text).toBe("first")
+      expect(c1[0]?.type === "text-delta" ? c1[0].delta : undefined).toBe("first")
 
       const c2 = yield* Effect.provide(callProvider, layer)
-      expect((c2[0] as TextChunk).text).toBe("second")
+      expect(c2[0]?.type === "text-delta" ? c2[0].delta : undefined).toBe("second")
 
       const c3 = yield* Effect.provide(callProvider, layer)
-      expect(c3[0]!._tag).toBe("ToolCallChunk")
+      expect(c3[0]?.type).toBe("tool-call")
 
       yield* controls.assertDone()
     }),
@@ -94,9 +89,9 @@ describe("createSequenceProvider", () => {
       // Release the gate
       yield* controls.emitAll(0)
 
-      const chunks = yield* Fiber.join(collectFiber)
-      expect(chunks.length).toBe(2)
-      expect((chunks[0] as TextChunk).text).toBe("gated")
+      const parts = yield* Fiber.join(collectFiber)
+      expect(parts.length).toBe(2)
+      expect(parts[0]?.type === "text-delta" ? parts[0].delta : undefined).toBe("gated")
     }),
   )
 
@@ -157,15 +152,15 @@ describe("createSequenceProvider", () => {
     }),
   )
 
-  it.scoped("toolCallStep emits ToolCallChunk + FinishChunk", () =>
+  it.scoped("toolCallStep emits tool-call + finish parts", () =>
     Effect.gen(function* () {
       const { layer } = yield* Provider.Sequence([toolCallStep("my_tool", { status: "continue" })])
-      const chunks = yield* Effect.provide(callProvider, layer)
+      const parts = yield* Effect.provide(callProvider, layer)
 
-      expect(chunks.length).toBe(2)
-      expect(chunks[0]!._tag).toBe("ToolCallChunk")
-      expect(chunks[1]!._tag).toBe("FinishChunk")
-      expect((chunks[1] as FinishChunk).finishReason).toBe("tool_calls")
+      expect(parts.length).toBe(2)
+      expect(parts[0]?.type).toBe("tool-call")
+      expect(parts[1]?.type).toBe("finish")
+      expect(parts[1]?.type === "finish" ? parts[1].reason : undefined).toBe("tool-calls")
     }),
   )
 
@@ -174,12 +169,12 @@ describe("createSequenceProvider", () => {
       const { layer } = yield* Provider.Sequence([
         textThenToolCallStep("thinking...", "my_tool", { ok: true }),
       ])
-      const chunks = yield* Effect.provide(callProvider, layer)
+      const parts = yield* Effect.provide(callProvider, layer)
 
-      expect(chunks.length).toBe(3)
-      expect(chunks[0]!._tag).toBe("TextChunk")
-      expect(chunks[1]!._tag).toBe("ToolCallChunk")
-      expect(chunks[2]!._tag).toBe("FinishChunk")
+      expect(parts.length).toBe(3)
+      expect(parts[0]?.type).toBe("text-delta")
+      expect(parts[1]?.type).toBe("tool-call")
+      expect(parts[2]?.type).toBe("finish")
     }),
   )
 
@@ -191,12 +186,12 @@ describe("createSequenceProvider", () => {
           { toolName: "tool_b", input: { x: 1 } },
         ),
       ])
-      const chunks = yield* Effect.provide(callProvider, layer)
+      const parts = yield* Effect.provide(callProvider, layer)
 
-      expect(chunks.length).toBe(3)
-      expect(chunks[0]!._tag).toBe("ToolCallChunk")
-      expect(chunks[1]!._tag).toBe("ToolCallChunk")
-      expect(chunks[2]!._tag).toBe("FinishChunk")
+      expect(parts.length).toBe(3)
+      expect(parts[0]?.type).toBe("tool-call")
+      expect(parts[1]?.type).toBe("tool-call")
+      expect(parts[2]?.type).toBe("finish")
     }),
   )
 })

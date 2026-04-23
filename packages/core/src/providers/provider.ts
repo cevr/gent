@@ -2,7 +2,6 @@ import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream 
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
-import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
 import {
   Finished,
@@ -19,7 +18,7 @@ import {
 } from "../runtime/extensions/driver-registry.js"
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/unstable/ai/Response"
 import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -135,63 +134,104 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
   cause: Schema.optional(Schema.Defect),
 }) {}
 
-// ── Stream Chunk Types ──
+// ── Provider Stream Parts ──
 
-export const StreamChunk = TaggedEnumClass("StreamChunk", {
-  TextChunk: {
-    text: Schema.String,
-  },
-  ToolCallChunk: {
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    input: Schema.Unknown,
-  },
-  ReasoningChunk: {
-    text: Schema.String,
-  },
-  FinishChunk: {
-    finishReason: Schema.String,
-    usage: Schema.optional(
-      Schema.Struct({
-        inputTokens: Schema.Number,
-        outputTokens: Schema.Number,
-      }),
-    ),
-  },
-})
-export type StreamChunk = Schema.Schema.Type<typeof StreamChunk>
+export type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
+export type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
 
-export const TextChunk = StreamChunk.TextChunk
-export type TextChunk = (typeof StreamChunk)["TextChunk"]["Type"]
-export const ToolCallChunk = StreamChunk.ToolCallChunk
-export type ToolCallChunk = (typeof StreamChunk)["ToolCallChunk"]["Type"]
-export const ReasoningChunk = StreamChunk.ReasoningChunk
-export type ReasoningChunk = (typeof StreamChunk)["ReasoningChunk"]["Type"]
-export const FinishChunk = StreamChunk.FinishChunk
-export type FinishChunk = (typeof StreamChunk)["FinishChunk"]["Type"]
+const toUsage = (usage: Response.FinishPart["usage"]) =>
+  usage !== undefined
+    ? {
+        inputTokens: usage.inputTokens.total ?? 0,
+        outputTokens: usage.outputTokens.total ?? 0,
+      }
+    : undefined
 
-export const toTurnEvent = (chunk: StreamChunk): TurnEvent => {
-  switch (chunk._tag) {
-    case "TextChunk":
-      return new TextDelta({ text: chunk.text })
-    case "ReasoningChunk":
-      return new ReasoningDelta({ text: chunk.text })
-    case "ToolCallChunk":
-      return new ToolCall({
-        toolCallId: chunk.toolCallId,
-        toolName: chunk.toolName,
-        input: chunk.input,
-      })
-    case "FinishChunk":
-      return new Finished({
-        stopReason: chunk.finishReason,
-        ...(chunk.usage !== undefined ? { usage: chunk.usage } : {}),
-      })
+let _streamPartIdCounter = 0
+const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
+
+export const textDeltaPart = (text: string, id = makeStreamPartId("text")): ProviderStreamPart =>
+  Response.makePart("text-delta", { id, delta: text })
+
+export const toolCallPart = (
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): ProviderStreamPart =>
+  Response.makePart("tool-call", {
+    id: options?.toolCallId ?? ToolCallId.of(makeStreamPartId("tool")),
+    name: toolName,
+    params: input,
+    providerExecuted: false,
+  })
+
+export const reasoningDeltaPart = (
+  text: string,
+  id = makeStreamPartId("reasoning"),
+): ProviderStreamPart => Response.makePart("reasoning-delta", { id, delta: text })
+
+export const finishPart = (params: {
+  finishReason: Response.FinishReason
+  usage?: { inputTokens: number; outputTokens: number }
+}): ProviderStreamPart =>
+  Response.makePart("finish", {
+    reason: params.finishReason,
+    usage: new Response.Usage({
+      inputTokens: {
+        uncached: undefined,
+        total: params.usage?.inputTokens,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      },
+      outputTokens: {
+        total: params.usage?.outputTokens,
+        text: undefined,
+        reasoning: undefined,
+      },
+    }),
+    response: undefined,
+  })
+
+export const toTurnEvent =
+  (model: string) =>
+  (part: ProviderStreamPart): Effect.Effect<TurnEvent | undefined, ProviderError> => {
+    switch (part.type) {
+      case "text-delta":
+        return Effect.succeed(new TextDelta({ text: part.delta }))
+      case "reasoning-delta":
+        return Effect.succeed(new ReasoningDelta({ text: part.delta }))
+      case "tool-call":
+        return Effect.succeed(
+          new ToolCall({
+            toolCallId: ToolCallId.of(part.id),
+            toolName: part.name,
+            input: part.params,
+          }),
+        )
+      case "finish":
+        return Effect.succeed(
+          new Finished({
+            stopReason: part.reason,
+            ...(toUsage(part.usage) !== undefined ? { usage: toUsage(part.usage) } : {}),
+          }),
+        )
+      case "error":
+        return Effect.fail(
+          new ProviderError({
+            message: `API error: ${String(part.error)}`,
+            model,
+          }),
+        )
+      default:
+        return Effect.succeed(undefined)
+    }
   }
-}
 
-export const toTurnEventStream = (stream: Stream.Stream<StreamChunk, ProviderError>) =>
-  stream.pipe(Stream.map(toTurnEvent))
+export const toTurnEventStream = (model: string, stream: ProviderStream) =>
+  stream.pipe(
+    Stream.mapEffect(toTurnEvent(model)),
+    Stream.filter((event): event is TurnEvent => event !== undefined),
+  )
 
 // ── Provider Request ──
 
@@ -227,9 +267,7 @@ export interface GenerateRequest {
 // ── Provider Service ──
 
 export interface ProviderService {
-  readonly stream: (
-    request: ProviderRequest,
-  ) => Effect.Effect<Stream.Stream<StreamChunk, ProviderError>, ProviderError>
+  readonly stream: (request: ProviderRequest) => Effect.Effect<ProviderStream, ProviderError>
 
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
@@ -342,53 +380,6 @@ export function convertTools(
   }
 }
 
-// ── StreamPart → StreamChunk mapping ──
-
-/** @internal — exported for testing */
-export type AnyStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
-
-/** @internal — exported for testing */
-export const toStreamChunk =
-  (model: string) =>
-  (part: AnyStreamPart): Effect.Effect<StreamChunk | null, ProviderError> => {
-    switch (part.type) {
-      case "text-delta":
-        return Effect.succeed<StreamChunk>(new TextChunk({ text: part.delta }))
-      case "tool-call":
-        return Effect.succeed<StreamChunk>(
-          new ToolCallChunk({
-            toolCallId: ToolCallId.of(part.id),
-            toolName: part.name,
-            input: part.params,
-          }),
-        )
-      case "reasoning-delta":
-        return Effect.succeed<StreamChunk>(new ReasoningChunk({ text: part.delta }))
-      case "finish":
-        return Effect.succeed<StreamChunk>(
-          new FinishChunk({
-            finishReason: part.reason,
-            usage:
-              part.usage !== undefined
-                ? {
-                    inputTokens: part.usage.inputTokens.total ?? 0,
-                    outputTokens: part.usage.outputTokens.total ?? 0,
-                  }
-                : undefined,
-          }),
-        )
-      case "error":
-        return Effect.fail(
-          new ProviderError({
-            message: `API error: ${String(part)}`,
-            model,
-          }),
-        )
-      default:
-        return Effect.succeed(null)
-    }
-  }
-
 // ── Debug / test providers ──
 //
 // Formerly in `debug/provider.ts`. Inlined here so the static methods
@@ -432,10 +423,10 @@ const _buildReply = (request: ProviderRequest, latestUserText: string): string =
 }
 
 const _makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
-  const chunks = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
+  const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
   const stream = Stream.fromIterable([
-    ...chunks.map((text) => new TextChunk({ text: `${text} ` })),
-    new FinishChunk({
+    ...parts.map((text) => textDeltaPart(`${text} `)),
+    finishPart({
       finishReason: "stop",
       usage: {
         inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
@@ -527,27 +518,28 @@ const _createSignalProvider = (
     const gate = yield* Queue.unbounded<null>()
     const streamStarted = yield* Deferred.make<void>()
 
-    const chunks = reply
+    const parts = reply
       .split(/(?<=[.!?])\s+/)
       .filter((chunk) => chunk.length > 0)
-      .map((text) => new TextChunk({ text: `${text} ` }))
+      .map((text) => textDeltaPart(`${text} `))
 
-    const finishChunk = new FinishChunk({
-      finishReason: "stop",
-      usage: {
-        inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
-        outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
-      },
-    })
-
-    const allChunks = [...chunks, finishChunk]
+    const allParts = [
+      ...parts,
+      finishPart({
+        finishReason: "stop",
+        usage: {
+          inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+          outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+        },
+      }),
+    ]
 
     const layer = Layer.succeed(Provider, {
       stream: () =>
         Effect.gen(function* () {
           yield* Deferred.succeed(streamStarted, void 0)
-          return Stream.fromIterable(allChunks).pipe(
-            Stream.mapEffect((chunk) => Queue.take(gate).pipe(Effect.as(chunk))),
+          return Stream.fromIterable(allParts).pipe(
+            Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part))),
           )
         }),
       generate: () => Effect.succeed(reply),
@@ -555,7 +547,7 @@ const _createSignalProvider = (
 
     const controls: SignalProviderControls = {
       emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
-      emitAll: () => Effect.forEach(allChunks, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
+      emitAll: () => Effect.forEach(allParts, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
       waitForStreamStart: Deferred.await(streamStarted),
     }
 
@@ -563,7 +555,7 @@ const _createSignalProvider = (
   })
 
 export interface SequenceStep {
-  readonly chunks: ReadonlyArray<StreamChunk>
+  readonly parts: ReadonlyArray<ProviderStreamPart>
   readonly assertRequest?: (request: ProviderRequest) => void
   readonly gated?: boolean
 }
@@ -619,10 +611,10 @@ const _createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
 
           if (gate) {
             return Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.flatMap(() => Stream.fromIterable(step?.chunks ?? [])),
+              Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
             )
           }
-          return Stream.fromIterable(step?.chunks ?? [])
+          return Stream.fromIterable(step?.parts ?? [])
         }),
       generate: () => Effect.succeed("sequence provider"),
     })
@@ -672,29 +664,25 @@ const _makeStepToolCallId = () => ToolCallId.of(`step-tc-${++_stepCallIdCounter}
 
 /** A turn that emits a single text response and finishes with "stop". */
 export const textStep = (text: string): SequenceStep => ({
-  chunks: [
-    new TextChunk({ text }),
-    new FinishChunk({
+  parts: [
+    textDeltaPart(text),
+    finishPart({
       finishReason: "stop",
       usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
     }),
   ],
 })
 
-/** A turn that emits a single tool call and finishes with "tool_calls". */
+/** A turn that emits a single tool call and finishes with "tool-calls". */
 export const toolCallStep = (
   toolName: string,
   input: unknown,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
-  chunks: [
-    new ToolCallChunk({
-      toolCallId: options?.toolCallId ?? _makeStepToolCallId(),
-      toolName,
-      input,
-    }),
-    new FinishChunk({
-      finishReason: "tool_calls",
+  parts: [
+    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? _makeStepToolCallId() }),
+    finishPart({
+      finishReason: "tool-calls",
       usage: { inputTokens: 10, outputTokens: 20 },
     }),
   ],
@@ -707,35 +695,26 @@ export const textThenToolCallStep = (
   input: unknown,
   options?: { toolCallId?: ToolCallId },
 ): SequenceStep => ({
-  chunks: [
-    new TextChunk({ text }),
-    new ToolCallChunk({
-      toolCallId: options?.toolCallId ?? _makeStepToolCallId(),
-      toolName,
-      input,
-    }),
-    new FinishChunk({
-      finishReason: "tool_calls",
+  parts: [
+    textDeltaPart(text),
+    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? _makeStepToolCallId() }),
+    finishPart({
+      finishReason: "tool-calls",
       usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
     }),
   ],
 })
 
-/** A turn that emits multiple tool calls and finishes with "tool_calls". */
+/** A turn that emits multiple tool calls and finishes with "tool-calls". */
 export const multiToolCallStep = (
   ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
 ): SequenceStep => ({
-  chunks: [
-    ...calls.map(
-      (c) =>
-        new ToolCallChunk({
-          toolCallId: c.toolCallId ?? _makeStepToolCallId(),
-          toolName: c.toolName,
-          input: c.input,
-        }),
+  parts: [
+    ...calls.map((c) =>
+      toolCallPart(c.toolName, c.input, { toolCallId: c.toolCallId ?? _makeStepToolCallId() }),
     ),
-    new FinishChunk({
-      finishReason: "tool_calls",
+    finishPart({
+      finishReason: "tool-calls",
       usage: { inputTokens: 10, outputTokens: 20 * calls.length },
     }),
   ],
@@ -792,8 +771,6 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
 
           return rawStream.pipe(
             Stream.provide(modelLayer),
-            Stream.mapEffect(toStreamChunk(request.model)),
-            Stream.filter((chunk): chunk is StreamChunk => chunk !== null),
             Stream.catch((error: unknown) =>
               Stream.fail(
                 new ProviderError({
