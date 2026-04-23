@@ -7,6 +7,7 @@ import {
   getExtensionReplySchema,
   isExtensionRequestDefinition,
   isExtensionRequestMessage,
+  listExtensionProtocolDefinitions,
   type ExtractExtensionReply,
 } from "@gent/core/domain/extension-protocol"
 
@@ -47,6 +48,7 @@ describe("extension protocol branding", () => {
 
     expect(isExtensionRequestMessage(request)).toBe(true)
     expect(isExtensionRequestDefinition(GetTask)).toBe(true)
+    expect(getExtensionMessageMetadata(GetTask)).toBeUndefined()
     expect(getExtensionMessageMetadata(request)?._tag).toBe("request")
     expect(getExtensionReplySchema(request)).toBe(GetTask.replySchema)
     expect(getExtensionReplyDecoder(request)).toBe(GetTask.replyDecoder)
@@ -59,5 +61,15 @@ describe("extension protocol branding", () => {
         extensionId: Schema.String,
       }),
     ).toThrow("reserved keys")
+  })
+
+  test("protocol registration rejects message instances", () => {
+    const Ping = ExtensionMessage.command("plan", "Ping", {})
+
+    expect(() =>
+      listExtensionProtocolDefinitions({
+        Ping: Ping.make(),
+      }),
+    ).toThrow('protocol entry "Ping" is not a message definition')
   })
 })

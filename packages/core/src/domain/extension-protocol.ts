@@ -140,9 +140,14 @@ interface ExtensionRequestMetadata<R = unknown> {
   readonly replyDecoder: Schema.Decoder<R>
 }
 
-export type ExtensionMessageMetadata = ExtensionCommandMetadata | ExtensionRequestMetadata<unknown>
+type ExtensionProtocolMetadata = ExtensionCommandMetadata | ExtensionRequestMetadata<unknown>
+export type ExtensionMessageMetadata = ExtensionProtocolMetadata
+type ExtensionDefinitionMetadata = ExtensionProtocolMetadata
 
-const ExtensionMessageMetadataSymbol = Symbol.for("@gent/core/extension-protocol/metadata")
+const ExtensionMessageMetadataSymbol = Symbol.for("@gent/core/extension-protocol/message-metadata")
+const ExtensionDefinitionMetadataSymbol = Symbol.for(
+  "@gent/core/extension-protocol/definition-metadata",
+)
 
 const assertFields = (fields: ExtensionFields) => {
   if ("extensionId" in fields || "_tag" in fields) {
@@ -150,7 +155,10 @@ const assertFields = (fields: ExtensionFields) => {
   }
 }
 
-const attachMetadata = <M extends object>(message: M, metadata: ExtensionMessageMetadata): M => {
+const attachMessageMetadata = <M extends object>(
+  message: M,
+  metadata: ExtensionMessageMetadata,
+): M => {
   Object.defineProperty(message, ExtensionMessageMetadataSymbol, {
     value: metadata,
     enumerable: false,
@@ -158,6 +166,30 @@ const attachMetadata = <M extends object>(message: M, metadata: ExtensionMessage
     writable: false,
   })
   return message
+}
+
+const attachDefinitionMetadata = <D extends object>(
+  definition: D,
+  metadata: ExtensionDefinitionMetadata,
+): D => {
+  Object.defineProperty(definition, ExtensionDefinitionMetadataSymbol, {
+    value: metadata,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  return definition
+}
+
+const readHiddenMetadata = (
+  value: unknown,
+  symbol: symbol,
+): ExtensionProtocolMetadata | undefined => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return undefined
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  return (value as Record<PropertyKey, unknown>)[symbol] as ExtensionProtocolMetadata | undefined
 }
 
 const createCommand = <Id extends string, Tag extends string, F extends ExtensionFields>(
@@ -184,7 +216,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const make = ((payload?: PayloadType<F>) =>
-    attachMetadata(
+    attachMessageMetadata(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       {
         extensionId,
@@ -197,7 +229,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
   const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
     message.extensionId === extensionId && message._tag === tag
 
-  return attachMetadata(
+  return attachDefinitionMetadata(
     {
       extensionId,
       _tag: tag,
@@ -239,7 +271,7 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const make = ((payload?: PayloadType<F>) =>
-    attachMetadata(
+    attachMessageMetadata(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       {
         extensionId,
@@ -252,7 +284,7 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
   const is = (message: AnyExtensionMessage): message is ExtensionRequestMessage<Id, Tag, F, R> =>
     message.extensionId === extensionId && message._tag === tag
 
-  return attachMetadata(
+  return attachDefinitionMetadata(
     {
       extensionId,
       _tag: tag,
@@ -275,13 +307,13 @@ export const ExtensionMessage = {
 export const getExtensionMessageMetadata = (
   message: unknown,
 ): ExtensionMessageMetadata | undefined => {
-  if ((typeof message !== "object" && typeof message !== "function") || message === null) {
-    return undefined
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  return (message as Record<PropertyKey, unknown>)[ExtensionMessageMetadataSymbol] as
-    | ExtensionMessageMetadata
-    | undefined
+  return readHiddenMetadata(message, ExtensionMessageMetadataSymbol)
+}
+
+const getExtensionDefinitionMetadata = (
+  definition: unknown,
+): ExtensionDefinitionMetadata | undefined => {
+  return readHiddenMetadata(definition, ExtensionDefinitionMetadataSymbol)
 }
 
 export const getExtensionReplySchema = <M>(
@@ -310,13 +342,13 @@ export const isExtensionRequestMessage = (
 export const isExtensionRequestDefinition = (
   definition: unknown,
 ): definition is AnyExtensionRequestDefinition =>
-  getExtensionMessageMetadata(definition)?._tag === "request"
+  getExtensionDefinitionMetadata(definition)?._tag === "request"
 
 export const listExtensionProtocolDefinitions = (
   protocol: ExtensionProtocol,
 ): ReadonlyArray<AnyExtensionMessageDefinition> =>
   Object.entries(protocol).map(([key, value]) => {
-    const metadata = getExtensionMessageMetadata(value)
+    const metadata = getExtensionDefinitionMetadata(value)
     if (typeof value !== "object" || value === null || metadata === undefined) {
       throw new ExtensionProtocolError({
         extensionId: metadata?.extensionId ?? "(unknown)",
