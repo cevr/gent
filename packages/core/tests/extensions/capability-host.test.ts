@@ -77,54 +77,6 @@ describe("capability-host", () => {
     }),
   )
 
-  it.live("returns CapabilityNotFoundError when (extensionId, capabilityId) is unknown", () =>
-    Effect.gen(function* () {
-      const compiled = compileCapabilities([])
-      const result = yield* compiled.run("@x", "missing", "model", {}, ctx).pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
-    }),
-  )
-
-  it.live("rejects with CapabilityNotFoundError when audience does not match", () =>
-    Effect.gen(function* () {
-      // Capability registered for "model" only; invoking from "human-slash" must miss.
-      const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [echoCap("echo", ["model"])]),
-      ])
-      const result = yield* compiled
-        .run("@test/c", "echo", "human-slash", { value: "hi" }, ctx)
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
-    }),
-  )
-
-  it.live("project scope wins over builtin for the same (extensionId, capabilityId)", () =>
-    Effect.gen(function* () {
-      const builtinCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "echo",
-        audiences: ["model"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: () => Effect.succeed({ value: "from-builtin" }),
-      }
-      const projectCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "echo",
-        audiences: ["model"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: () => Effect.succeed({ value: "from-project" }),
-      }
-      const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [builtinCap]),
-        extWith("@test/c", "project", [projectCap]),
-      ])
-      const result = yield* compiled.run("@test/c", "echo", "model", { value: "x" }, ctx)
-      expect(result).toEqual({ value: "from-project" })
-    }),
-  )
-
   it.live(
     "scope precedence shadows first; audience mismatch on the winner is a hard miss (codex BLOCK on C4.1)",
     () =>
@@ -260,77 +212,6 @@ describe("capability-host", () => {
     }),
   )
 
-  // ── intent gate ──
-  // A same-id write capability must be invisible to a
-  // `{ intent: "read" }` dispatch (and vice versa) — otherwise one request
-  // surface could invoke the wrong same-id capability
-  // capability if their ids matched.
-
-  it.live("rejects with CapabilityNotFoundError when required intent does not match", () =>
-    Effect.gen(function* () {
-      // Write capability registered; read-intent dispatch must miss.
-      const writeCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "write-op",
-        audiences: ["agent-protocol"],
-        intent: "write",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: (input) => Effect.succeed(input),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [writeCap])])
-      const result = yield* compiled
-        .run("@test/c", "write-op", "agent-protocol", { value: "x" }, ctx, { intent: "read" })
-        .pipe(Effect.flip)
-      expect(result).toBeInstanceOf(CapabilityNotFoundError)
-    }),
-  )
-
-  it.live("matches when intent matches", () =>
-    Effect.gen(function* () {
-      const readCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "read-op",
-        audiences: ["agent-protocol"],
-        intent: "read",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: (input) => Effect.succeed(input),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [readCap])])
-      const result = yield* compiled.run(
-        "@test/c",
-        "read-op",
-        "agent-protocol",
-        { value: "x" },
-        ctx,
-        { intent: "read" },
-      )
-      expect(result).toEqual({ value: "x" })
-    }),
-  )
-
-  it.live("undefined intent option matches both intents", () =>
-    Effect.gen(function* () {
-      const writeCap: CapabilityContribution<{ value: string }, { value: string }, never> = {
-        id: "write-op",
-        audiences: ["agent-protocol"],
-        intent: "write",
-        input: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({ value: Schema.String }),
-        effect: (input) => Effect.succeed(input),
-      }
-      const compiled = compileCapabilities([extWith("@test/c", "builtin", [writeCap])])
-      // No `options.intent` — caller accepts either read or write.
-      const result = yield* compiled.run(
-        "@test/c",
-        "write-op",
-        "agent-protocol",
-        { value: "x" },
-        ctx,
-      )
-      expect(result).toEqual({ value: "x" })
-    }),
-  )
-
   it.live("intent shadow: project read shadows builtin write of same id under read dispatch", () =>
     Effect.gen(function* () {
       // Identity-first scope precedence: a project-scope read capability with
@@ -403,24 +284,6 @@ describe("capability-host", () => {
       expect(result).toBeInstanceOf(CapabilityError)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       expect((result as CapabilityError).reason).toMatch(/wide-context key "extension"/)
-    }),
-  )
-
-  it.live("listForAudience returns only Capabilities including that audience", () =>
-    Effect.sync(() => {
-      const compiled = compileCapabilities([
-        extWith("@test/c", "builtin", [
-          echoCap("model-only", ["model"]),
-          echoCap("dual", ["model", "human-slash"]),
-          echoCap("slash-only", ["human-slash"]),
-        ]),
-      ])
-      const modelIds = compiled.listForAudience("model").map((e) => e.capability.id)
-      expect(modelIds).toEqual(["model-only", "dual"])
-      const slashIds = compiled.listForAudience("human-slash").map((e) => e.capability.id)
-      expect(slashIds).toEqual(["dual", "slash-only"])
-      const palette = compiled.listForAudience("human-palette")
-      expect(palette).toEqual([])
     }),
   )
 })

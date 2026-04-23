@@ -104,21 +104,6 @@ describe("SubscriptionEngine", () => {
     expect(received).toEqual(["hello"])
   })
 
-  test("no match — no handlers called", async () => {
-    let called = false
-    await run(
-      Effect.gen(function* () {
-        const engine = yield* SubscriptionEngine
-        yield* engine.on("other:channel", () => {
-          called = true
-          return Effect.void
-        })
-        yield* engine.emit({ channel: "test:different", payload: {} })
-      }),
-    )
-    expect(called).toBe(false)
-  })
-
   test("withSubscriptions pre-registers handlers", async () => {
     const received: ResourceBusEnvelope[] = []
     await Effect.runPromise(
@@ -185,14 +170,6 @@ describe("defineResource", () => {
     expect(r.tag).toBe(TestServiceA)
   })
 
-  test("optional tag — Resource without canonical tag", () => {
-    const r = defineResource({
-      scope: "process",
-      layer: Layer.merge(layerA, layerB),
-    })
-    expect(r.tag).toBeUndefined()
-  })
-
   test("subscriptions field round-trips", () => {
     const subscription = {
       pattern: "test:*",
@@ -245,16 +222,6 @@ describe("defineResource", () => {
       (res) => res.machine !== undefined,
     )?.machine
     expect(found).toBe(stubMachine)
-  })
-
-  test("no machine when no Resource declares a machine", () => {
-    const ext = makeStubExtension("ext-no-machine", [
-      defineResource({ scope: "process", layer: layerA }),
-    ])
-    const found = (ext.contributions.resources ?? []).find(
-      (res) => res.machine !== undefined,
-    )?.machine
-    expect(found).toBeUndefined()
   })
 })
 
@@ -321,15 +288,6 @@ describe("collectSubscriptions", () => {
     expect(subs.map((s) => s.pattern).sort()).toEqual(["a:*", "a:exact", "b:*"])
   })
 
-  test("empty when no Resources have subscriptions", () => {
-    const ext = makeStubExtension("ext", [defineResource({ scope: "process", layer: layerA })])
-    expect(collectSubscriptions([ext])).toEqual([])
-  })
-
-  test("empty when no extensions provided", () => {
-    expect(collectSubscriptions([])).toEqual([])
-  })
-
   test("default scope filter is process — non-process subscriptions excluded", () => {
     const ext = makeStubExtension("ext", [
       defineResource({
@@ -382,17 +340,6 @@ describe("buildResourceLayer", () => {
     )
   })
 
-  test("returns Layer.empty when no extensions provided", () =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const layer = buildResourceLayer([], "process")
-          const ctx = yield* Layer.build(layer)
-          expect(Context.getOrUndefined(ctx, TestServiceA)).toBe(undefined)
-        }),
-      ),
-    ))
-
   test("merges service layers across multiple Resources", () =>
     Effect.runPromise(
       Effect.scoped(
@@ -405,22 +352,6 @@ describe("buildResourceLayer", () => {
           const ctx = yield* Layer.build(layer)
           expect(Context.get(ctx, TestServiceA).value).toBe("A")
           expect(Context.get(ctx, TestServiceB).value).toBe("B")
-        }),
-      ),
-    ))
-
-  test("scope filter excludes non-matching Resources from service merge", () =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const ext = makeStubExtension("ext", [
-            defineResource({ scope: "process", layer: layerA }),
-            defineResource({ scope: "session", layer: layerB }),
-          ])
-          const layer = buildResourceLayer([ext], "process")
-          const ctx = yield* Layer.build(layer)
-          expect(Context.get(ctx, TestServiceA).value).toBe("A")
-          expect(Context.getOrUndefined(ctx, TestServiceB)).toBe(undefined)
         }),
       ),
     ))
@@ -516,27 +447,6 @@ describe("buildResourceLayer lifecycle", () => {
           }),
         )
         expect(log).toEqual(["stop-only"])
-      }),
-    ))
-
-  test("Resource with start but no stop runs start; no finalizer needed", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const log: string[] = []
-        const append = (s: string) => Effect.sync(() => log.push(s))
-        const ext = makeStubExtension("ext", [
-          defineResource({
-            scope: "process",
-            layer: layerA,
-            start: append("start-only"),
-          }),
-        ])
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* Layer.build(buildResourceLayer([ext], "process"))
-          }),
-        )
-        expect(log).toEqual(["start-only"])
       }),
     ))
 

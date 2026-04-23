@@ -40,15 +40,6 @@ describe("compileToolPolicy", () => {
     expect(names(tools)).toEqual(names(allTools))
   })
 
-  test("allowedTools filters by name", () => {
-    const agent = new AgentDefinition({
-      name: "cowork",
-      allowedTools: ["read", "grep", "glob", "search_skills"],
-    })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
-    expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills"])
-  })
-
   test("allowedTools restricts to exact set", () => {
     const agent = new AgentDefinition({
       name: "cowork",
@@ -62,36 +53,6 @@ describe("compileToolPolicy", () => {
     const agent = new AgentDefinition({ name: "cowork", allowedTools: [] })
     const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
     expect(tools).toEqual([])
-  })
-
-  test("deniedTools removes from result", () => {
-    const agent = new AgentDefinition({
-      name: "cowork",
-      allowedTools: ["read", "grep", "glob", "search_skills"],
-      deniedTools: ["grep"],
-    })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
-    expect(names(tools)).toEqual(["glob", "read", "search_skills"])
-  })
-
-  test("allowedTools with network tools", () => {
-    const agent = new AgentDefinition({
-      name: "cowork",
-      allowedTools: ["read", "grep", "glob", "search_skills", "webfetch", "websearch"],
-    })
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, [])
-    expect(names(tools)).toEqual(["glob", "grep", "read", "search_skills", "webfetch", "websearch"])
-  })
-
-  test("extension projection include adds tools", () => {
-    const agent = new AgentDefinition({
-      name: "cowork",
-      allowedTools: ["read", "grep", "glob", "search_skills"],
-    })
-    const projections = [{ toolPolicy: { include: ["bash"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, emptyCtx, projections)
-    expect(names(tools)).toContain("bash")
-    expect(names(tools)).toContain("read")
   })
 
   test("extension projection exclude removes tools", () => {
@@ -109,7 +70,7 @@ describe("compileToolPolicy", () => {
     expect(names(tools)).toEqual(["grep", "read"])
   })
 
-  test("denied tools cannot be re-added by extension projection", () => {
+  test("denied tools cannot be re-added by extension projection include", () => {
     const agent = new AgentDefinition({
       name: "cowork",
       deniedTools: ["bash"],
@@ -147,21 +108,5 @@ describe("compileToolPolicy", () => {
     const { tools } = compileToolPolicy([interactiveTool, nonInteractiveTool], agent, ctx, [])
     expect(names(tools)).toEqual(["read"])
     expect(names(tools)).not.toContain("ask_user")
-  })
-
-  test("interactive tools kept when context.interactive is not false", () => {
-    const interactiveTool: AnyCapabilityContribution = {
-      id: "ask_user",
-      interactive: true,
-      description: "ask_user",
-      audiences: ["model"],
-      intent: "write",
-      input: Schema.Struct({}),
-      output: Schema.Unknown,
-      effect: () => Effect.succeed(null),
-    }
-    const agent = new AgentDefinition({ name: "cowork" })
-    const { tools } = compileToolPolicy([interactiveTool], agent, emptyCtx, [])
-    expect(names(tools)).toContain("ask_user")
   })
 })

@@ -20,7 +20,6 @@ import {
   ProjectionError,
 } from "@gent/core/domain/projection"
 import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/domain/read-only"
-import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileProjections } from "@gent/core/runtime/extensions/projection-registry"
 
 const ext = (
@@ -53,34 +52,22 @@ const turnEvalCtx: ProjectionTurnContext = {
 }
 
 describe("projection registry", () => {
-  it.live("evaluateTurn runs prompt/policy projections only", () =>
+  it.live("evaluateTurn queries once and runs only prompt/policy projectors", () =>
     Effect.gen(function* () {
+      const counter = yield* Ref.make(0)
       const turnOnly: ProjectionContribution<{ greeting: string }> = {
         id: "greeter",
-        query: () => Effect.succeed({ greeting: "hi" }),
+        query: () =>
+          Ref.updateAndGet(counter, (n) => n + 1).pipe(Effect.map(() => ({ greeting: "hi" }))),
         prompt: (v) => [{ id: "g", content: v.greeting, priority: 50 }],
         policy: (v) => ({ include: [v.greeting] }),
       }
       const compiled = compileProjections([ext("a", "builtin", [turnOnly])])
       const result = yield* compiled.evaluateTurn(turnEvalCtx)
+      expect(yield* Ref.get(counter)).toBe(1)
       expect(result.promptSections).toHaveLength(1)
       expect(result.promptSections[0]?.content).toBe("hi")
       expect(result.policyFragments).toEqual([{ include: ["hi"] }])
-    }),
-  )
-
-  it.live("query runs exactly once per evaluator pass", () =>
-    Effect.gen(function* () {
-      const counter = yield* Ref.make(0)
-      const projection: ProjectionContribution<number> = {
-        id: "counter",
-        query: () => Ref.updateAndGet(counter, (n) => n + 1),
-        prompt: (n) => [{ id: "p", content: String(n), priority: 50 }],
-        policy: (n) => ({ include: [String(n)] }),
-      }
-      const compiled = compileProjections([ext("a", "builtin", [projection])])
-      yield* compiled.evaluateTurn(turnEvalCtx)
-      expect(yield* Ref.get(counter)).toBe(1)
     }),
   )
 
@@ -130,77 +117,47 @@ describe("projection registry", () => {
     }),
   )
 
-  it.live("scope precedence: builtin first, user next, project last in eval order", () =>
-    Effect.gen(function* () {
-      const make = (id: string): AnyProjectionContribution => ({
-        id,
-        query: () => Effect.succeed(id),
-        prompt: (v) => [{ id, content: String(v), priority: 50 }],
-      })
-      const compiled = compileProjections([
-        ext("c-proj", "project", [make("project-section")]),
-        ext("a-built", "builtin", [make("builtin-section")]),
-        ext("b-user", "user", [make("user-section")]),
-      ])
-      const result = yield* compiled.evaluateTurn(turnEvalCtx)
-      expect(result.promptSections.map((s) => s.content)).toEqual([
-        "builtin-section",
-        "user-section",
-        "project-section",
-      ])
-    }),
+  it.live(
+    "scope precedence preserves builtin → user → project order for distinct prompt sections",
+    () =>
+      Effect.gen(function* () {
+        const make = (id: string): AnyProjectionContribution => ({
+          id,
+          query: () => Effect.succeed(id),
+          prompt: (v) => [{ id, content: String(v), priority: 50 }],
+        })
+        const compiled = compileProjections([
+          ext("c-proj", "project", [make("project-section")]),
+          ext("a-built", "builtin", [make("builtin-section")]),
+          ext("b-user", "user", [make("user-section")]),
+        ])
+        const result = yield* compiled.evaluateTurn(turnEvalCtx)
+        expect(result.promptSections.map((s) => s.content)).toEqual([
+          "builtin-section",
+          "user-section",
+          "project-section",
+        ])
+      }),
   )
 
-  it.live("query() targeted lookup returns the raw value", () =>
+  it.live("query() returns highest-precedence value and undefined for missing ids", () =>
     Effect.gen(function* () {
-      const projection: ProjectionContribution<string> = {
+      const builtin: ProjectionContribution<string> = {
         id: "raw",
-        query: () => Effect.succeed("hello"),
+        query: () => Effect.succeed("builtin"),
       }
-      const compiled = compileProjections([ext("a", "builtin", [projection])])
-      const value = yield* compiled.query("a", "raw", turnEvalCtx)
-      expect(value).toBe("hello")
-    }),
-  )
-
-  it.live("query() returns undefined for unknown projection id", () =>
-    Effect.gen(function* () {
-      const compiled = compileProjections([])
-      const value = yield* compiled.query("a", "missing", turnEvalCtx)
-      expect(value).toBeUndefined()
-    }),
-  )
-
-  it.live("compiled projections appear in ResolvedExtensions.projections", () =>
-    Effect.gen(function* () {
-      const projection: ProjectionContribution<number> = {
-        id: "p",
-        query: () => Effect.succeed(42),
-      }
-      const resolved = resolveExtensions([ext("a", "builtin", [projection])])
-      expect(resolved.projections.entries).toHaveLength(1)
-      expect(resolved.projections.entries[0]?.projection.id).toBe("p")
-      const value = yield* resolved.projections.query("a", "p", turnEvalCtx)
-      expect(value).toBe(42)
-    }),
-  )
-
-  it.live("query() returns highest-precedence registration when ids collide across scopes", () =>
-    Effect.gen(function* () {
-      const builtinP: ProjectionContribution<string> = {
-        id: "p",
-        query: () => Effect.succeed("builtin-value"),
-      }
-      const projectP: ProjectionContribution<string> = {
-        id: "p",
-        query: () => Effect.succeed("project-value"),
+      const project: ProjectionContribution<string> = {
+        id: "raw",
+        query: () => Effect.succeed("project"),
       }
       const compiled = compileProjections([
-        ext("shared", "builtin", [builtinP]),
-        ext("shared", "project", [projectP]),
+        ext("shared", "builtin", [builtin]),
+        ext("shared", "project", [project]),
       ])
-      const value = yield* compiled.query("shared", "p", turnEvalCtx)
-      expect(value).toBe("project-value")
+      const hit = yield* compiled.query("shared", "raw", turnEvalCtx)
+      const miss = yield* compiled.query("shared", "missing", turnEvalCtx)
+      expect(hit).toBe("project")
+      expect(miss).toBeUndefined()
     }),
   )
 
@@ -233,37 +190,46 @@ describe("projection registry", () => {
     }),
   )
 
-  it.live("projection with service requirement runs when layer is composed", () =>
-    Effect.gen(function* () {
-      // ReadOnly-branded service Tag — required by `ProjectionContribution<A, R extends ReadOnlyTag>`.
-      interface GreeterShape {
-        readonly say: () => Effect.Effect<string>
-      }
-      class Greeter extends Context.Service<Greeter, ReadOnly<GreeterShape>>()("test/Greeter") {
-        declare readonly [ReadOnlyBrand]: true
-      }
+  it.live(
+    "projection query reads context and service dependencies when the layer is composed",
+    () =>
+      Effect.gen(function* () {
+        // ReadOnly-branded service Tag — required by `ProjectionContribution<A, R extends ReadOnlyTag>`.
+        interface GreeterShape {
+          readonly say: () => Effect.Effect<string>
+        }
+        class Greeter extends Context.Service<Greeter, ReadOnly<GreeterShape>>()("test/Greeter") {
+          declare readonly [ReadOnlyBrand]: true
+        }
 
-      const projection: ProjectionContribution<string, Greeter> = {
-        id: "greeter",
-        query: () =>
-          Effect.gen(function* () {
-            const g = yield* Greeter
-            return yield* g.say()
-          }),
-        prompt: (v) => [{ id: "g", content: v, priority: 50 }],
-      }
-      const compiled = compileProjections([ext("a", "builtin", [projection])])
-      const result = yield* compiled
-        .evaluateTurn(turnEvalCtx)
-        .pipe(
-          Effect.provide(
-            Layer.succeed(
-              Greeter,
-              withReadOnly({ say: () => Effect.succeed("hi from service") } satisfies GreeterShape),
+        const projection: ProjectionContribution<string, Greeter> = {
+          id: "greeter",
+          query: (ctx) =>
+            Effect.gen(function* () {
+              const g = yield* Greeter
+              return `${ctx.sessionCwd}:${yield* g.say()}`
+            }),
+          prompt: (v) => [{ id: "g", content: v, priority: 50 }],
+        }
+        const compiled = compileProjections([ext("a", "builtin", [projection])])
+        const result = yield* compiled
+          .evaluateTurn({
+            ...turnEvalCtx,
+            cwd: "/proj",
+            home: "/home/test",
+            sessionCwd: "/proj/feature",
+          })
+          .pipe(
+            Effect.provide(
+              Layer.succeed(
+                Greeter,
+                withReadOnly({
+                  say: () => Effect.succeed("hi from service"),
+                } satisfies GreeterShape),
+              ),
             ),
-          ),
-        )
-      expect(result.promptSections[0]?.content).toBe("hi from service")
-    }),
+          )
+        expect(result.promptSections[0]?.content).toBe("/proj/feature:hi from service")
+      }),
   )
 })
