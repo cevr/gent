@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Layer, Queue } from "effect"
 import * as path from "node:path"
 import { Gent } from "../src/index"
 import { startLocalSupervisor } from "../src/local-supervisor"
 import { GentConnectionError } from "@gent/core/server/transport-contract.js"
+import { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { RpcHandlersLive } from "@gent/core/server/rpc-handlers.js"
 import { GentRpcs } from "@gent/core/server/rpcs.js"
 import { baseLocalLayer as _baseLocalLayer } from "@gent/core/test-utils/in-process-layer.js"
@@ -95,6 +96,48 @@ describe("local supervisor", () => {
             _tag: "connected",
             generation: 1,
           })
+        }),
+      ),
+    )
+  })
+
+  test("disconnected stream queue overload fails through the returned queue", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const supervisor = yield* startLocalSupervisor(
+            () => Effect.fail(new Error("boot boom")),
+            (error) =>
+              new GentConnectionError({
+                message:
+                  typeof error === "object" && error !== null && "message" in error
+                    ? String((error as { readonly message: unknown }).message)
+                    : String(error),
+              }),
+          )
+
+          yield* supervisor.lifecycle.waitForReady
+
+          const queue = yield* supervisor.client.session.events(
+            { sessionId: SessionId.make("session-test") },
+            { asQueue: true },
+          )
+          const error = yield* Effect.flip(Queue.take(queue))
+
+          expect(error).toBeInstanceOf(GentConnectionError)
+          expect(error.message).toBe("boot boom")
+
+          const runtimeQueue = yield* supervisor.client.session.watchRuntime(
+            {
+              sessionId: SessionId.make("session-test"),
+              branchId: BranchId.make("branch-test"),
+            },
+            { asQueue: true },
+          )
+          const runtimeError = yield* Effect.flip(Queue.take(runtimeQueue))
+
+          expect(runtimeError).toBeInstanceOf(GentConnectionError)
+          expect(runtimeError.message).toBe("boot boom")
         }),
       ),
     )

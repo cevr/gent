@@ -1,4 +1,16 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Queue,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect"
 import type { GentRpcClient } from "@gent/core/server/rpcs.js"
 import {
   GentConnectionError,
@@ -13,6 +25,10 @@ import {
 import { runSupervisorRestart } from "./supervisor-boundary.js"
 
 type BuildLocalRpcClient<E, R> = (scope: Scope.Closeable) => Effect.Effect<GentRpcClient, E, R>
+type StreamOptions = {
+  readonly asQueue?: boolean | undefined
+  readonly streamBufferSize?: number | undefined
+}
 
 interface LocalSupervisor {
   readonly client: GentNamespacedClient
@@ -21,6 +37,20 @@ interface LocalSupervisor {
 
 interface LocalSupervisorResource extends LocalSupervisor {
   readonly stop: Effect.Effect<void>
+}
+
+const isStreamQueueRequest = (value: unknown): value is StreamOptions =>
+  value !== null && typeof value === "object" && "asQueue" in value && value.asQueue === true
+
+const disconnectedStreamResult = (args: ReadonlyArray<unknown>, error: GentConnectionError) => {
+  if (isStreamQueueRequest(args[1])) {
+    return Effect.gen(function* () {
+      const queue = yield* Queue.make<never, GentConnectionError | Cause.Done>()
+      yield* Queue.fail(queue, error)
+      return Queue.asDequeue(queue)
+    })
+  }
+  return Stream.fail(error)
 }
 
 const makeSwappableClient = (
@@ -39,7 +69,7 @@ const makeSwappableClient = (
             : `local runtime unavailable (state: ${state._tag})`
         const error = new GentConnectionError({ message: reason })
         return key === "session.events" || key === "session.watchRuntime"
-          ? Stream.fail(error)
+          ? disconnectedStreamResult(args, error)
           : Effect.fail(error)
       }
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
