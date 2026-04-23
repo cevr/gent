@@ -17,7 +17,7 @@
  *
  * @module
  */
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
@@ -25,7 +25,9 @@ import type {
   TurnExecutor,
 } from "../../domain/driver.js"
 import { DriverError } from "../../domain/driver.js"
-import type { Model } from "../../domain/model.js"
+import { Model } from "../../domain/model.js"
+
+const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
 
 // ── Resolved driver state (one map per kind, lookup by id) ──
 
@@ -51,7 +53,7 @@ export interface DriverRegistryService {
   readonly filterModelCatalog: (
     baseCatalog: ReadonlyArray<Model>,
     resolveAuth?: (driverId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
-  ) => Effect.Effect<ReadonlyArray<Model>>
+  ) => Effect.Effect<ReadonlyArray<Model>, DriverError>
   /** Require a model driver — fail with `DriverError` when missing. */
   readonly requireModel: (id: string) => Effect.Effect<ModelDriverContribution, DriverError>
   /** Require an external driver — fail with `DriverError` when missing. */
@@ -75,7 +77,16 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           for (const driver of resolved.modelDrivers.values()) {
             if (driver.listModels === undefined) continue
             const auth = resolveAuth !== undefined ? yield* resolveAuth(driver.id) : undefined
-            catalog = driver.listModels(catalog, auth)
+            const nextCatalog = driver.listModels(catalog, auth)
+            const decoded = decodeModelCatalog(nextCatalog)
+            if (decoded._tag === "None") {
+              return yield* new DriverError({
+                kind: "model",
+                id: driver.id,
+                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+              })
+            }
+            catalog = decoded.value
           }
           return catalog
         }),

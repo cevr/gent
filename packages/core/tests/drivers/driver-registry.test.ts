@@ -237,4 +237,28 @@ describe("DriverRegistry", () => {
     expect(authA?.key).toBe("secret-a")
     expect(authB).toBeUndefined()
   })
+
+  test("filterModelCatalog rejects malformed runtime filter output", async () => {
+    const malformed = makeCatalogModel("broken/invalid")
+    Reflect.set(malformed, "name", 42)
+    const broken: ModelDriverContribution = {
+      id: "broken",
+      name: "Broken",
+      resolveModel: stubResolution,
+      listModels: () => [malformed],
+    }
+    const layer = buildRegistry([makeExt("broken-ext", "builtin", { modelDrivers: [broken] })])
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reg = yield* DriverRegistry
+        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")])
+      }).pipe(
+        Effect.provide(layer),
+        Effect.catchEager((error) => Effect.succeed(error.reason)),
+      ),
+    )
+
+    expect(result).toContain("invalid model catalog")
+  })
 })

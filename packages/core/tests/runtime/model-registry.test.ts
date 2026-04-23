@@ -321,6 +321,42 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
+  it.live(
+    "falls back to the base catalog when a model-driver filter returns malformed output",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+          const malformed = new Model({
+            id: ModelId.of("openai/broken"),
+            name: "Broken",
+            provider: "openai",
+          })
+          Reflect.set(malformed, "name", 42)
+          const registry = yield* Effect.gen(function* () {
+            const context = yield* Layer.build(
+              makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
+                {
+                  id: "malformed-filter",
+                  name: "Malformed filter",
+                  resolveModel: unusedResolution,
+                  listModels: () => [malformed],
+                },
+              ]),
+            )
+            return Context.get(context, ModelRegistry)
+          })
+
+          yield* registry.refresh()
+          const models = yield* registry.list()
+
+          expect(models).toHaveLength(1)
+          expect(models[0]?.id).toBe("openai/gpt-5.4")
+          expect(models[0]?.name).toBe("GPT-5.4")
+        }),
+      ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
   it.live("ignores malformed cache payloads instead of leaking raw shapes", () =>
     Effect.scoped(
       Effect.gen(function* () {
