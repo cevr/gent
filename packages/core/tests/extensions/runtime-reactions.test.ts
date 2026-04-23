@@ -4,7 +4,7 @@ import type {
   ExtensionContributions,
   LoadedExtension,
   TurnAfterInput,
-} from "@gent/core/domain/extension"
+} from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { defineResource } from "@gent/core/domain/contribution"

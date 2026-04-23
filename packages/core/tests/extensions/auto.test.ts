@@ -7,7 +7,7 @@ import {
   ToolCallSucceeded,
 } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AUTO_EXTENSION_ID, AutoExtension, type AutoState } from "@gent/extensions/auto"
 import { AutoProjection } from "@gent/extensions/auto-projection"
 import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"

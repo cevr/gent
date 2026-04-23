@@ -4,7 +4,7 @@ import { Effect, Layer, Path } from "effect"
 import * as Fs from "node:fs"
 import * as NodePath from "node:path"
 import * as Os from "node:os"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   reconcileScheduledJobs,
   collectSchedules,

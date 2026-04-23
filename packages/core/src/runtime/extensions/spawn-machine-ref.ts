@@ -1,10 +1,6 @@
 import { Effect, Exit, Option, Ref, Scope } from "effect"
 import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
-import type {
-  ExtensionActorDefinition,
-  RuntimeExtensionEffect,
-  ExtensionRef,
-} from "../../domain/extension.js"
+import type { ExtensionActorDefinition, ExtensionRef } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
@@ -18,6 +14,7 @@ import {
   interpretEffects,
   makePersistCodec,
 } from "./extension-actor-shared.js"
+import type { RuntimeExtensionEffect } from "./runtime-effect.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { SubscriptionEngine } from "./resource-host/subscription-engine.js"
 

@@ -1,7 +1,7 @@
 /** Shared logic for extension actors. */
 
 import { Effect, Schema, Context } from "effect"
-import type { RuntimeExtensionEffect } from "../../domain/extension.js"
+import type { RuntimeExtensionEffect } from "./runtime-effect.js"
 import type { AnyExtensionCommandMessage } from "../../domain/extension-protocol.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"

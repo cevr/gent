@@ -8,7 +8,7 @@ import type {
   ExtensionLoadError,
   GentExtension,
   LoadedExtension,
-} from "@gent/core/domain/extension"
+} from "../../src/domain/extension.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,

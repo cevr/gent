@@ -26,7 +26,7 @@ import type { AnyResourceContribution, ResourceBusEnvelope } from "@gent/core/do
 import { defineResource } from "@gent/core/domain/contribution"
 import { defineExtension } from "@gent/core/extensions/api"
 import { testSetupCtx } from "@gent/core/test-utils"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── SubscriptionEngine ──
 

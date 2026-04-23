@@ -6,8 +6,6 @@ import {
   resource,
   type ResourceMachine,
 } from "@gent/core/extensions/api"
-// oxlint-disable-next-line gent/no-extension-internal-imports -- runtime-only effect union is intentionally withheld from the public authoring api
-import type { RuntimeExtensionEffect } from "@gent/core/domain/extension"
 import { BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID, ExecToolsProtocol } from "./protocol.js"
 
@@ -38,7 +36,7 @@ const notificationMachine = Machine.make({
 const afterTransition = (
   before: typeof NotificationState.Type,
   after: typeof NotificationState.Type,
-): ReadonlyArray<RuntimeExtensionEffect> =>
+): ReadonlyArray<{ readonly _tag: "QueueFollowUp"; readonly content: string }> =>
   after.notificationSeq !== before.notificationSeq && after.notificationContent !== undefined
     ? [{ _tag: "QueueFollowUp", content: after.notificationContent }]
     : []

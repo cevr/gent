@@ -17,7 +17,7 @@ import { Effect } from "effect"
 import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host"
 import { interpretEffects } from "@gent/core/runtime/extensions/extension-actor-shared"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
-import type { ExtensionEffect } from "@gent/core/domain/extension"
+import type { ExtensionEffect } from "../../src/domain/extension.js"
 import type { ResourceBusEnvelope } from "@gent/core/domain/resource"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 

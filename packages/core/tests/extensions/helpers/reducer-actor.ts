@@ -9,7 +9,7 @@ import type {
   ReduceResult,
   RequestResult,
   TurnProjection,
-} from "@gent/core/domain/extension"
+} from "../../../src/domain/extension.js"
 
 type DerivedProjection = TurnProjection & {
   readonly uiModel?: unknown

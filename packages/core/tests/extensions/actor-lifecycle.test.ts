@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
-import type { LoadedExtension, ReduceResult, RequestResult } from "@gent/core/domain/extension"
+import type { LoadedExtension, ReduceResult, RequestResult } from "../../src/domain/extension.js"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { defineResource } from "@gent/core/domain/contribution"

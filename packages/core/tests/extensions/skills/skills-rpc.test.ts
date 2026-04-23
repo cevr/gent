@@ -8,7 +8,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../../src/domain/extension.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"

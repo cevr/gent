@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"

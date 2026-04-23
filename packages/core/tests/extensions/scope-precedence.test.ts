@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/extension"
+import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"

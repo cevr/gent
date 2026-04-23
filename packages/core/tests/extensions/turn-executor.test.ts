@@ -8,7 +8,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Stream } from "effect"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import type { ExtensionContributions, LoadedExtension } from "@gent/core/domain/extension"
+import type { ExtensionContributions, LoadedExtension } from "../../src/domain/extension.js"
 import type { TurnError, TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 
 const noopExecutor: TurnExecutor = {

@@ -11,7 +11,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,

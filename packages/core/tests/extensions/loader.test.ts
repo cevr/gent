@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { Effect, Layer, Path } from "effect"
-import type { GentExtension } from "@gent/core/domain/extension"
+import type { GentExtension } from "../../src/domain/extension.js"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 
 const fsLayer = Layer.mergeAll(

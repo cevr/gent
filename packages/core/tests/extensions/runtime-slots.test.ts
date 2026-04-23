@@ -9,7 +9,7 @@ import type {
   SystemPromptInput,
   TurnBeforeInput,
   TurnAfterInput,
-} from "@gent/core/domain/extension"
+} from "../../src/domain/extension.js"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"

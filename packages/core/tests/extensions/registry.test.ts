@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
-import type { LoadedExtension, RunContext } from "@gent/core/domain/extension"
+import type { LoadedExtension, RunContext } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { SessionId, BranchId } from "@gent/core/domain/ids"

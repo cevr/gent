@@ -20,7 +20,7 @@ import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
 import { tool } from "@gent/core/extensions/api"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── Session constants ──────────────────────────────────────────────────────
 

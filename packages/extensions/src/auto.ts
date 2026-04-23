@@ -25,8 +25,6 @@ import {
   type AgentEvent,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-// oxlint-disable-next-line gent/no-extension-internal-imports -- runtime-only effect union is intentionally withheld from the public authoring api
-import type { RuntimeExtensionEffect } from "@gent/core/domain/extension"
 import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
@@ -372,11 +370,12 @@ const projectSnapshot = (state: MachineState): AutoSnapshotReply => {
 
 // ── afterTransition ──
 
-const afterTransition = (
-  before: MachineState,
-  after: MachineState,
-): ReadonlyArray<RuntimeExtensionEffect> => {
-  const effects: RuntimeExtensionEffect[] = []
+const afterTransition = (before: MachineState, after: MachineState) => {
+  const effects: Array<{
+    readonly _tag: "QueueFollowUp"
+    readonly content: string
+    readonly metadata?: { readonly extensionId: string; readonly hidden: boolean }
+  }> = []
 
   // Emit queued follow-ups only after the turn boundary. That prevents
   // transient mid-turn states (continue → review → complete) from leaving

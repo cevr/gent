@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Schema } from "effect"
-import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   type CapabilityContribution,
   type CapabilityContext,

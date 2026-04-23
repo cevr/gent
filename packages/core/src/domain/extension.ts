@@ -6,7 +6,7 @@ import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { AnyCapabilityContribution } from "./capability"
 import type { AgentEvent } from "./event"
 import type { BranchId, SessionId, ToolCallId } from "./ids"
-import type { Message, MessageMetadata, MessagePart } from "./message"
+import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
@@ -250,16 +250,6 @@ export interface TurnProjection {
 export type ExtensionEffect =
   | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
   | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
-
-/** Internal runtime-only effects interpreted by the framework after transitions. */
-export type RuntimeExtensionEffect =
-  | {
-      readonly _tag: "QueueFollowUp"
-      readonly content: string
-      readonly metadata?: MessageMetadata
-    }
-  | { readonly _tag: "Interject"; readonly content: string }
-  | ExtensionEffect
 
 /** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {

@@ -12,7 +12,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, Layer, Ref } from "effect"
 import { Agents } from "@gent/extensions/all-agents"
-import type { ExtensionTurnContext, LoadedExtension } from "@gent/core/domain/extension"
+import type { ExtensionTurnContext, LoadedExtension } from "../../src/domain/extension.js"
 import {
   type AnyProjectionContribution,
   type ProjectionContribution,

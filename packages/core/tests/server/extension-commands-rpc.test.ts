@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import type { GentExtension, LoadedExtension } from "@gent/core/domain/extension"
+import type { GentExtension, LoadedExtension } from "../../src/domain/extension.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExtensionRegistry, listSlashCommands } from "@gent/core/runtime/extensions/registry"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
