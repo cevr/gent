@@ -1,11 +1,13 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, Stream } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { TaskCreateTool } from "@gent/extensions/task-tools/task-create"
 import { TaskListTool } from "@gent/extensions/task-tools/task-list"
 import { TaskGetTool } from "@gent/extensions/task-tools/task-get"
 import { TaskUpdateTool } from "@gent/extensions/task-tools/task-update"
 import { DelegateTool } from "@gent/extensions/delegate/delegate-tool"
 import { Agents } from "@gent/extensions/all-agents"
+import { Task, TaskId } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
 import type { ToolContext } from "@gent/core/domain/tool"
@@ -15,6 +17,7 @@ import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/exte
 import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
+import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type {
@@ -270,6 +273,115 @@ describe("TaskService.remove", () => {
 
       yield* taskService.remove(blocker.id)
       expect(yield* taskService.getDeps(blocked.id)).toEqual([])
+    }).pipe(Effect.provide(layer)),
+  )
+})
+
+describe("TaskStorage metadata boundary", () => {
+  it.live("decodes invalid stored metadata to undefined instead of crashing", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskService = yield* TaskService
+      const taskStorage = yield* TaskStorage
+      const sql = yield* SqlClient.SqlClient
+      const created = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Metadata decode",
+        metadata: { ok: true },
+      })
+
+      yield* sql`UPDATE tasks SET metadata = ${"{not-json"} WHERE id = ${created.id}`
+
+      const loaded = yield* taskStorage.getTask(created.id)
+      const listed = yield* taskStorage.listTasks(SessionId.of("s1"))
+
+      expect(loaded?.metadata).toBeUndefined()
+      expect(listed[0]?.metadata).toBeUndefined()
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("clears metadata when updated to null", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskService = yield* TaskService
+      const created = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Metadata clear",
+        metadata: { keep: false },
+      })
+
+      const updated = yield* taskService.update(created.id, { metadata: null })
+      const reloaded = yield* taskService.get(created.id)
+
+      expect(updated?.metadata).toBeUndefined()
+      expect(reloaded?.metadata).toBeUndefined()
+    }).pipe(Effect.provide(layer)),
+  )
+
+  it.live("rejects non-serializable metadata", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskStorage = yield* TaskStorage
+      const badMetadata: Record<string, unknown> = {}
+      badMetadata["self"] = badMetadata
+      const now = new Date()
+      const result = yield* taskStorage
+        .createTask(
+          new Task({
+            id: TaskId.of("task-bad-metadata"),
+            sessionId: SessionId.of("s1"),
+            branchId: "b1",
+            subject: "Bad metadata",
+            status: "pending",
+            metadata: badMetadata,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        .pipe(Effect.flip)
+
+      expect(result._tag).toBe("TaskStorageError")
+      expect(result.message).toBe("Failed to create task")
+      expect(String(result.cause)).toContain("JSON-serializable")
+    }).pipe(Effect.provide(layer)),
+  )
+})
+
+describe("TaskStorage.deleteTask", () => {
+  it.live("rolls back dependency deletion when task delete fails", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskService = yield* TaskService
+      const taskStorage = yield* TaskStorage
+      const sql = yield* SqlClient.SqlClient
+      const blocker = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Delete blocker",
+      })
+      const blocked = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Delete blocked",
+      })
+
+      yield* taskService.addDep(blocked.id, blocker.id)
+      yield* sql.unsafe(`
+        CREATE TRIGGER fail_task_delete_before
+        BEFORE DELETE ON tasks
+        WHEN OLD.id = '${blocker.id}'
+        BEGIN
+          SELECT RAISE(ABORT, 'boom');
+        END;
+      `)
+
+      const result = yield* taskStorage.deleteTask(blocker.id).pipe(Effect.flip)
+
+      expect(result._tag).toBe("TaskStorageError")
+      expect(yield* taskService.getDeps(blocked.id)).toEqual([blocker.id])
+      expect((yield* taskService.get(blocker.id))?.id).toBe(blocker.id)
     }).pipe(Effect.provide(layer)),
   )
 })
