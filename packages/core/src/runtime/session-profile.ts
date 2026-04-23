@@ -20,12 +20,7 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentExtension, LoadedExtension } from "../domain/extension.js"
-import {
-  type PermissionRule,
-  type PermissionService,
-  compilePermissionRules,
-  evaluatePermissionRules,
-} from "../domain/permission.js"
+import { type PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import {
   type ExtensionRegistryService,
@@ -38,14 +33,11 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "./extensions/resource-host/machine-engine.js"
-import {
-  SubscriptionEngine,
-  type SubscriptionEngineService,
-} from "./extensions/resource-host/subscription-engine.js"
+import { type SubscriptionEngineService } from "./extensions/resource-host/subscription-engine.js"
 import { ExtensionTurnControl } from "./extensions/turn-control.js"
-import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
+import { ConfigService } from "./config-service.js"
 import type { ScheduledJobCommand } from "./extensions/resource-host/schedule-engine.js"
-import { buildExtensionLayers, compileBaseSections, resolveRuntimeProfile } from "./profile.js"
+import { resolveProfileRuntime } from "./profile.js"
 import { runWithBuiltLayer } from "./run-with-built-layer.js"
 
 const allowAllPermission: PermissionService = {
@@ -53,35 +45,6 @@ const allowAllPermission: PermissionService = {
   addRule: () => Effect.void,
   removeRule: () => Effect.void,
   getRules: () => Effect.succeed([]),
-}
-
-const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
-
-const makeSessionPermissionService = (params: {
-  cwd: string
-  configService: ConfigServiceService
-  extensionRules: ReadonlyArray<PermissionRule>
-}): PermissionService => {
-  const compiledExtensionRules = compilePermissionRules(params.extensionRules)
-
-  return {
-    check: Effect.fn("SessionProfile.permission.check")(function* (tool, args) {
-      const config = yield* params.configService.get(params.cwd)
-      const compiledConfigRules = compilePermissionRules(permissionRulesFromConfig(config))
-      return evaluatePermissionRules(
-        [...compiledExtensionRules, ...compiledConfigRules],
-        tool,
-        args,
-        "allow",
-      )
-    }),
-    addRule: (rule) => params.configService.addPermissionRule(rule),
-    removeRule: (tool, pattern) => params.configService.removePermissionRule(tool, pattern),
-    getRules: Effect.fn("SessionProfile.permission.getRules")(function* () {
-      const config = yield* params.configService.get(params.cwd)
-      return [...params.extensionRules, ...permissionRulesFromConfig(config)]
-    }),
-  }
 }
 
 // ── SessionProfile ──
@@ -116,8 +79,6 @@ export interface SessionProfileCacheConfig {
 export interface SessionProfileCacheService {
   /** Get or lazily create a profile for the given cwd. */
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile>
-  /** Get the profile for a cwd if already initialized, without triggering init. */
-  readonly peek: (cwd: string) => Effect.Effect<SessionProfile | undefined>
 }
 
 export class SessionProfileCache extends Context.Service<
@@ -145,7 +106,7 @@ export class SessionProfileCache extends Context.Service<
 
         // Capture platform services as a layer so initProfile can use functions
         // that require FileSystem | Path | ChildProcessSpawner | ConfigService from
-        // the Effect context (resolveRuntimeProfile loads instructions via ConfigService).
+        // the Effect context (profile resolution loads instructions via ConfigService).
         const platformLayer = Layer.mergeAll(
           Layer.succeed(FileSystem.FileSystem, fs),
           Layer.succeed(Path.Path, pathSvc),
@@ -155,9 +116,9 @@ export class SessionProfileCache extends Context.Service<
 
         const initProfile = (cwd: string) =>
           Effect.gen(function* () {
-            // 1. Resolve runtime profile (discover, setup, reconcile, build sections)
-            //    Provided server scope so extension onShutdown + scheduled jobs survive.
-            const profileData = yield* resolveRuntimeProfile({
+            // Resolve and build the profile runtime in one place. Server startup
+            // uses the same helper; this cache only chooses the cwd and scope.
+            const runtime = yield* resolveProfileRuntime({
               cwd,
               home: config.home,
               platform: config.platform,
@@ -175,69 +136,26 @@ export class SessionProfileCache extends Context.Service<
                 : {}),
             }).pipe(Effect.provideService(Scope.Scope, serverScope))
 
-            const { cwd: canonicalCwd, resolved, instructions } = profileData
-
-            for (const failed of resolved.failedExtensions) {
-              yield* Effect.logWarning("session-profile.extension.failed").pipe(
-                Effect.annotateLogs({
-                  extensionId: failed.manifest.id,
-                  phase: failed.phase,
-                  error: failed.error,
-                  cwd: canonicalCwd,
-                }),
-              )
-            }
-
-            // 2. Build extension layers via the shared helper — same shape as
-            //    server startup. Includes registry, state runtime, subscription
-            //    engine (with extension subscriptions), and extension `setup.layer`s.
-            //    `buildExtensionLayers` requires `ExtensionTurnControl`; provide
-            //    it locally then build inside the captured server scope.
-            const combinedLayer = buildExtensionLayers(resolved).pipe(
-              Layer.provide(ExtensionTurnControl.Live),
-            )
-
-            const combinedCtx = yield* Layer.build(combinedLayer).pipe(
-              Effect.provideService(Scope.Scope, serverScope),
-            )
-            const registryService = Context.get(combinedCtx, ExtensionRegistry)
-            const driverRegistryService = Context.get(combinedCtx, DriverRegistry)
-            const stateRuntime = Context.get(combinedCtx, MachineEngine)
-            const subscriptionEngineOpt = Context.getOption(combinedCtx, SubscriptionEngine)
-            const subscriptionEngine =
-              subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
-            const permissionService = makeSessionPermissionService({
-              cwd: canonicalCwd,
-              configService,
-              extensionRules: resolved.permissionRules,
-            })
-
-            // Compile base sections inside the built layer's runtime so any
-            // dynamic prompt section (e.g. `Skills`) can read its required
-            // services from extension `setup.layer`s now in scope.
-            const baseSections = yield* Effect.provideContext(
-              compileBaseSections(profileData),
-              combinedCtx,
-            )
+            const { profile: profileData } = runtime
 
             const profile: SessionProfile = {
-              cwd: canonicalCwd,
-              extensions: resolved.extensions,
-              resolved,
-              permissionService,
-              registryService,
-              driverRegistryService,
-              extensionStateRuntime: stateRuntime,
-              subscriptionEngine,
-              baseSections,
-              instructions,
+              cwd: profileData.cwd,
+              extensions: profileData.resolved.extensions,
+              resolved: profileData.resolved,
+              permissionService: runtime.permissionService,
+              registryService: runtime.registryService,
+              driverRegistryService: runtime.driverRegistryService,
+              extensionStateRuntime: runtime.extensionStateRuntime,
+              subscriptionEngine: runtime.subscriptionEngine,
+              baseSections: runtime.baseSections,
+              instructions: profileData.instructions,
             }
 
             yield* Effect.logInfo("session-profile.initialized").pipe(
               Effect.annotateLogs({
-                cwd: canonicalCwd,
-                extensionCount: resolved.extensions.length,
-                sectionCount: baseSections.length,
+                cwd: profileData.cwd,
+                extensionCount: profileData.resolved.extensions.length,
+                sectionCount: runtime.baseSections.length,
               }),
             )
 
@@ -279,10 +197,7 @@ export class SessionProfileCache extends Context.Service<
             )
           })
 
-        const peek: SessionProfileCacheService["peek"] = (cwd) =>
-          Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(pathSvc.resolve(cwd))))
-
-        return { resolve, peek }
+        return { resolve }
       }),
     )
 
@@ -332,7 +247,6 @@ export class SessionProfileCache extends Context.Service<
           cache.set(cwd, profile)
           return profile
         }),
-      peek: (cwd) => Effect.succeed(cache.get(cwd)),
     })
   }
 }

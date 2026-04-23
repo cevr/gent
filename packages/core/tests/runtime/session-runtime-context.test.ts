@@ -242,7 +242,6 @@ describe("resolveSessionRuntimeContext", () => {
         }
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),
-          peek: () => Effect.succeed(fakeProfile),
         }
 
         const ctx = yield* resolveSessionRuntimeContext({

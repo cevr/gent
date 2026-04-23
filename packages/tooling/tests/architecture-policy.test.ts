@@ -99,4 +99,32 @@ describe("architecture policy", () => {
     const body = serviceMatch?.[1] ?? ""
     expect(body).not.toMatch(/\brunOnce\b/)
   })
+
+  test("SessionProfileCache public surface does not expose speculative cache reads", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/session-profile.ts")
+    const source = readFileSync(file, "utf8")
+    const serviceMatch = source.match(
+      /export interface SessionProfileCacheService \{([\s\S]*?)\n\}/,
+    )
+
+    expect(serviceMatch).not.toBeNull()
+
+    const body = serviceMatch?.[1] ?? ""
+    expect(body).not.toMatch(/\bpeek\b/)
+  })
+
+  test("composition roots share the profile runtime helper", () => {
+    const files = [
+      pathResolve(ROOT, "packages/core/src/server/dependencies.ts"),
+      pathResolve(ROOT, "packages/core/src/runtime/session-profile.ts"),
+    ]
+
+    for (const file of files) {
+      const source = readFileSync(file, "utf8")
+      expect(source).toMatch(/\bresolveProfileRuntime\b/)
+      expect(source).not.toMatch(/\bresolveRuntimeProfile\b/)
+      expect(source).not.toMatch(/\bbuildExtensionLayers\b/)
+      expect(source).not.toMatch(/\bcompileBaseSections\b/)
+    }
+  })
 })

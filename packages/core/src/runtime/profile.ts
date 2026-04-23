@@ -23,9 +23,15 @@
  * @module
  */
 
-import { Effect, FileSystem, Layer, Path, type Scope } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, type Scope } from "effect"
 import type { GentExtension } from "../domain/extension.js"
 import { type PromptSection } from "../domain/prompt.js"
+import {
+  type PermissionRule,
+  type PermissionService,
+  compilePermissionRules,
+  evaluatePermissionRules,
+} from "../domain/permission.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ExtensionRegistry, type ResolvedExtensions } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -49,7 +55,7 @@ import type {
   SchedulerFailure,
 } from "./extensions/resource-host/schedule-engine.js"
 import { buildBasePromptSections } from "../server/system-prompt.js"
-import { ConfigService } from "./config-service.js"
+import { ConfigService, type ConfigServiceService, type UserConfig } from "./config-service.js"
 
 /**
  * Inputs that fully describe a runtime profile.
@@ -91,6 +97,66 @@ export interface RuntimeProfile {
   readonly instructions: string
   readonly scheduledJobFailures: ReadonlyArray<SchedulerFailure>
 }
+
+const permissionRulesFromConfig = (config: UserConfig) => config.permissions ?? []
+
+export const makeProfilePermissionService = (params: {
+  readonly cwd: string
+  readonly configService: ConfigServiceService
+  readonly extensionRules: ReadonlyArray<PermissionRule>
+}): PermissionService => {
+  const compiledExtensionRules = compilePermissionRules(params.extensionRules)
+
+  return {
+    check: Effect.fn("RuntimeProfile.permission.check")(function* (tool, args) {
+      const config = yield* params.configService.get(params.cwd)
+      const compiledConfigRules = compilePermissionRules(permissionRulesFromConfig(config))
+      return evaluatePermissionRules(
+        [...compiledExtensionRules, ...compiledConfigRules],
+        tool,
+        args,
+        "allow",
+      )
+    }),
+    addRule: (rule) => params.configService.addPermissionRule(rule),
+    removeRule: (tool, pattern) => params.configService.removePermissionRule(tool, pattern),
+    getRules: Effect.fn("RuntimeProfile.permission.getRules")(function* () {
+      const config = yield* params.configService.get(params.cwd)
+      return [...params.extensionRules, ...permissionRulesFromConfig(config)]
+    }),
+  }
+}
+
+const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") => {
+  if (phase === "setup") return "extension.setup.failed"
+  if (phase === "validation") return "extension.validation.failed"
+  return "extension.startup.failed"
+}
+
+export const logRuntimeProfileFailures = (profile: RuntimeProfile) =>
+  Effect.gen(function* () {
+    for (const failed of profile.resolved.failedExtensions) {
+      const message = extensionFailureLogMessage(failed.phase)
+      yield* Effect.logWarning(message).pipe(
+        Effect.annotateLogs({
+          extensionId: failed.manifest.id,
+          phase: failed.phase,
+          error: failed.error,
+          cwd: profile.cwd,
+        }),
+      )
+    }
+    for (const failure of profile.scheduledJobFailures) {
+      yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
+        Effect.annotateLogs({
+          extensionId: failure.extensionId,
+          jobId: failure.jobId,
+          error: failure.error,
+          cwd: profile.cwd,
+        }),
+      )
+    }
+  })
 
 /**
  * Run the discover → setup → reconcile → sections pipeline once.
@@ -265,3 +331,48 @@ export const buildExtensionLayers = (resolved: ResolvedExtensions) => {
 
   return Layer.mergeAll(baseLayers, resourceLayer)
 }
+
+export const buildProfileRuntime = (params: {
+  readonly profile: RuntimeProfile
+  readonly configService: ConfigServiceService
+}) =>
+  Effect.gen(function* () {
+    const combinedLayer = buildExtensionLayers(params.profile.resolved).pipe(
+      Layer.provide(ExtensionTurnControl.Live),
+    )
+    const layerContext = yield* Layer.build(combinedLayer)
+    const registryService = Context.get(layerContext, ExtensionRegistry)
+    const driverRegistryService = Context.get(layerContext, DriverRegistry)
+    const extensionStateRuntime = Context.get(layerContext, MachineEngine)
+    const subscriptionEngineOpt = Context.getOption(layerContext, SubscriptionEngine)
+    const subscriptionEngine =
+      subscriptionEngineOpt._tag === "Some" ? subscriptionEngineOpt.value : undefined
+    const permissionService = makeProfilePermissionService({
+      cwd: params.profile.cwd,
+      configService: params.configService,
+      extensionRules: params.profile.resolved.permissionRules,
+    })
+    const baseSections = yield* Effect.provideContext(
+      compileBaseSections(params.profile),
+      layerContext,
+    )
+
+    return {
+      profile: params.profile,
+      layerContext,
+      permissionService,
+      registryService,
+      driverRegistryService,
+      extensionStateRuntime,
+      subscriptionEngine,
+      baseSections,
+    }
+  })
+
+export const resolveProfileRuntime = (inputs: RuntimeProfileInputs) =>
+  Effect.gen(function* () {
+    const configService = yield* ConfigService
+    const profile = yield* resolveRuntimeProfile(inputs)
+    yield* logRuntimeProfileFailures(profile)
+    return yield* buildProfileRuntime({ profile, configService })
+  })

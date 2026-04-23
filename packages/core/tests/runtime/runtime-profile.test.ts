@@ -36,6 +36,7 @@ import { ConfigService } from "@gent/core/runtime/config-service"
 import {
   buildExtensionLayers,
   compileBaseSections,
+  resolveProfileRuntime,
   resolveRuntimeProfile,
 } from "@gent/core/runtime/profile"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
@@ -190,7 +191,7 @@ describe("resolveRuntimeProfile", () => {
     ).pipe(Effect.provide(sharedLayer)),
   )
 
-  it.live("server-style + per-cwd-style assemblies produce equivalent registry + sections", () =>
+  it.live("profile runtime helper gives server and per-cwd paths the same runtime shape", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const inputs = {
@@ -200,41 +201,23 @@ describe("resolveRuntimeProfile", () => {
           extensions: [sectionExtension, dynamicExtension],
         }
 
-        // "Server-style" assembly — resolve once, build layer, compile sections.
-        const profileServer = yield* resolveRuntimeProfile(inputs)
-        const serverLayer = buildExtensionLayers(profileServer.resolved).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-        )
-        const serverCtx = yield* Layer.build(serverLayer)
-        const serverRegistry = Context.get(serverCtx, ExtensionRegistry)
-        const serverSections = yield* Effect.provideContext(
-          compileBaseSections(profileServer),
-          serverCtx,
-        )
-
-        // "Per-cwd-style" assembly — same shape, different scope owner. The
-        // contract under test is that the produced registry + section set are
-        // observably equivalent (same extension ids, same section content).
-        const profileCache = yield* resolveRuntimeProfile(inputs)
-        const cacheLayer = buildExtensionLayers(profileCache.resolved).pipe(
-          Layer.provide(ExtensionTurnControl.Live),
-        )
-        const cacheCtx = yield* Layer.build(cacheLayer)
-        const cacheRegistry = Context.get(cacheCtx, ExtensionRegistry)
-        const cacheSections = yield* Effect.provideContext(
-          compileBaseSections(profileCache),
-          cacheCtx,
-        )
+        // Server startup and SessionProfileCache call this same helper now.
+        const serverRuntime = yield* resolveProfileRuntime(inputs)
+        const cacheRuntime = yield* resolveProfileRuntime(inputs)
 
         // Same registered extension ids (in same scope-precedence order)
-        const serverIds = serverRegistry.getResolved().extensions.map((e) => e.manifest.id)
-        const cacheIds = cacheRegistry.getResolved().extensions.map((e) => e.manifest.id)
+        const serverIds = serverRuntime.registryService
+          .getResolved()
+          .extensions.map((e) => e.manifest.id)
+        const cacheIds = cacheRuntime.registryService
+          .getResolved()
+          .extensions.map((e) => e.manifest.id)
         expect(cacheIds).toEqual(serverIds)
 
         // Same merged sections (ids and content)
         const toMap = (sections: ReadonlyArray<{ id: string; content: string }>) =>
           new Map(sections.map((s) => [s.id, s.content]))
-        expect(toMap(cacheSections)).toEqual(toMap(serverSections))
+        expect(toMap(cacheRuntime.baseSections)).toEqual(toMap(serverRuntime.baseSections))
       }),
     ).pipe(Effect.provide(sharedLayer)),
   )

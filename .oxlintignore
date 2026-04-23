@@ -6,3 +6,4 @@
 **/*.d.ts
 **/scripts/
 packages/tooling/fixtures/
+apps/tui/tests/.tmp-*/

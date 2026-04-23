@@ -5,6 +5,7 @@ import { AuthStorage } from "../domain/auth-storage.js"
 import { AuthStore } from "../domain/auth-store.js"
 import { EventStore } from "../domain/event.js"
 import { FileLockService } from "../domain/file-lock.js"
+import type { PromptSection } from "../domain/prompt.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { GentExtension } from "../domain/extension.js"
 import { Provider } from "../providers/provider.js"
@@ -15,18 +16,9 @@ import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
-import {
-  buildExtensionLayers,
-  compileBaseSections,
-  resolveRuntimeProfile,
-  type RuntimeProfile,
-} from "../runtime/profile.js"
-import { type ResolvedExtensions } from "../runtime/extensions/registry.js"
+import { resolveProfileRuntime } from "../runtime/profile.js"
 import { brandServerScope, ServerProfileService } from "../runtime/scope-brands.js"
-import {
-  type ScheduledJobCommand,
-  type SchedulerFailure,
-} from "../runtime/extensions/resource-host/schedule-engine.js"
+import { type ScheduledJobCommand } from "../runtime/extensions/resource-host/schedule-engine.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
@@ -44,13 +36,10 @@ class InteractionRecoveryTag extends Context.Service<
   { readonly recovered: number }
 >()("@gent/core/src/server/dependencies/InteractionRecoveryTag") {}
 
-/**
- * Profile data published as a service so downstream layers (e.g. `agentRuntimeLive`)
- * can reuse the resolver's prompt sections instead of recomputing them.
- */
-class RuntimeProfileTag extends Context.Service<RuntimeProfileTag, RuntimeProfile>()(
-  "@gent/core/src/server/dependencies/RuntimeProfileTag",
-) {}
+class BasePromptSectionsTag extends Context.Service<
+  BasePromptSectionsTag,
+  ReadonlyArray<PromptSection>
+>()("@gent/core/src/server/dependencies/BasePromptSectionsTag") {}
 
 export interface DependenciesConfig {
   cwd: string
@@ -87,37 +76,6 @@ const scheduledJobEnv = (config: DependenciesConfig): Readonly<Record<string, st
   ...(config.providerMode !== undefined ? { GENT_PROVIDER_MODE: config.providerMode } : {}),
 })
 
-const extensionFailureLogMessage = (phase: "setup" | "validation" | "startup") => {
-  if (phase === "setup") return "extension.setup.failed"
-  if (phase === "validation") return "extension.validation.failed"
-  return "extension.startup.failed"
-}
-
-const logProfileFailures = (
-  resolved: ResolvedExtensions,
-  scheduledJobFailures: ReadonlyArray<SchedulerFailure>,
-) =>
-  Effect.gen(function* () {
-    for (const failed of resolved.failedExtensions) {
-      const message = extensionFailureLogMessage(failed.phase)
-      yield* Effect.logWarning(message).pipe(
-        Effect.annotateLogs({
-          extensionId: failed.manifest.id,
-          error: failed.error,
-        }),
-      )
-    }
-    for (const failure of scheduledJobFailures) {
-      yield* Effect.logWarning("extension.scheduled-job.failed").pipe(
-        Effect.annotateLogs({
-          extensionId: failure.extensionId,
-          jobId: failure.jobId,
-          error: failure.error,
-        }),
-      )
-    }
-  })
-
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimePlatformLive = RuntimePlatform.Live({
     cwd: config.cwd,
@@ -145,12 +103,11 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const configServiceLive = Layer.provide(ConfigService.Live, runtimePlatformLive)
 
-  // Resolve runtime profile once: discovery + setup + reconcile + base sections.
-  // Publishes the profile via `RuntimeProfileTag` so downstream layers (agent runtime)
-  // reuse the same prompt sections without recomputation.
+  // Resolve and build the profile runtime once. Server startup and per-cwd
+  // profile cache now share the same profile runtime helper.
   const profileLayers = Layer.unwrap(
     Effect.gen(function* () {
-      const profile = yield* resolveRuntimeProfile({
+      const runtime = yield* resolveProfileRuntime({
         cwd: config.cwd,
         home: config.home,
         platform: config.platform,
@@ -165,22 +122,24 @@ export const createDependencies = (config: DependenciesConfig) => {
           : {}),
         scheduledJobEnv: scheduledJobEnv(config),
       })
-      yield* logProfileFailures(profile.resolved, profile.scheduledJobFailures)
-      const extensionLayer = buildExtensionLayers(profile.resolved)
-      const profileTagLayer = Layer.succeed(RuntimeProfileTag, profile)
+      const baseSectionsLayer = Layer.succeed(BasePromptSectionsTag, runtime.baseSections)
       // Publish a typed ServerProfile so downstream consumers (e.g. agent-runner)
       // can construct an EphemeralProfile via RuntimeComposer without forging
       // the brand themselves. Only this composition root may call
       // brandServerScope (lint-fenced).
       const serverProfileLayer = Layer.succeed(
         ServerProfileService,
-        brandServerScope({ cwd: profile.cwd, resolved: profile.resolved }),
+        brandServerScope({ cwd: runtime.profile.cwd, resolved: runtime.profile.resolved }),
       )
-      return Layer.mergeAll(extensionLayer, profileTagLayer, serverProfileLayer)
+      return Layer.mergeAll(
+        Layer.succeedContext(runtime.layerContext),
+        baseSectionsLayer,
+        serverProfileLayer,
+      )
     }),
   )
   // Extension registry needs storageLive for SqlClient (extension task layers use it)
-  // and ConfigService + RuntimePlatform + platform services for resolveRuntimeProfile.
+  // and ConfigService + RuntimePlatform + platform services for profile resolution.
   const extensionRegistryLive = Layer.provide(
     profileLayers,
     Layer.mergeAll(storageLive, configServiceLive, runtimePlatformLive),
@@ -346,8 +305,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       Effect.gen(function* () {
         // Compile prompt sections once at the runtime boundary, then let
         // SessionRuntime own the underlying AgentLoop layer internally.
-        const profile = yield* RuntimeProfileTag
-        const baseSections = yield* compileBaseSections(profile)
+        const baseSections = yield* BasePromptSectionsTag
         return SessionRuntime.Live({ baseSections })
       }),
     ),
@@ -359,8 +317,7 @@ export const createDependencies = (config: DependenciesConfig) => {
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
-        const profile = yield* RuntimeProfileTag
-        const baseSections = yield* compileBaseSections(profile)
+        const baseSections = yield* BasePromptSectionsTag
         const runnerConfig = {
           ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
             ? { subprocessBinaryPath: config.subprocessBinaryPath }
