@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
@@ -9,42 +9,41 @@ import { RuntimePlatform } from "./runtime-platform.js"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
-const JsonSchema = Schema.fromJsonString(Schema.Unknown)
-const decodeJson = Schema.decodeUnknownEffect(JsonSchema)
+const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
+const decodeCachedModels = Schema.decodeUnknownOption(CachedModelsJson)
+const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
+const ModelsDevCost = Schema.Struct({
+  input: Schema.Number,
+  output: Schema.Number,
+})
+const ModelsDevLimit = Schema.Struct({
+  context: Schema.Number,
+})
+const ModelsDevModel = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  cost: Schema.optional(ModelsDevCost),
+  limit: Schema.optional(ModelsDevLimit),
+})
+const ModelsDevProvider = Schema.Struct({
+  models: Schema.Record(Schema.String, ModelsDevModel),
+})
+const ModelsDevCatalog = Schema.Record(Schema.String, ModelsDevProvider)
+type ModelsDevCatalog = typeof ModelsDevCatalog.Type
+type ModelsDevModel = typeof ModelsDevModel.Type
+const decodeModelsDevCatalog = Schema.decodeUnknownOption(Schema.fromJsonString(ModelsDevCatalog))
 
-type JsonRecord = Record<string, unknown>
+const parsePricing = (value: ModelsDevModel["cost"]): ModelPricing | undefined =>
+  value === undefined ? undefined : { input: value.input, output: value.output }
 
-const isRecord = (value: unknown): value is JsonRecord =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
+const parseContextLength = (value: ModelsDevModel["limit"]): number | undefined => value?.context
 
-const parsePricing = (value: unknown): ModelPricing | undefined => {
-  if (!isRecord(value)) return undefined
-  const input = value["input"]
-  const output = value["output"]
-  if (typeof input !== "number" || typeof output !== "number") return undefined
-  return { input, output }
-}
-
-const parseContextLength = (value: unknown): number | undefined => {
-  if (!isRecord(value)) return undefined
-  const context = value["context"]
-  return typeof context === "number" ? context : undefined
-}
-
-const parseModelsDev = (data: unknown): readonly Model[] => {
-  if (!isRecord(data)) return []
-
+const parseModelsDev = (data: ModelsDevCatalog): readonly Model[] => {
   const models: Model[] = []
   for (const [providerId, providerValue] of Object.entries(data)) {
-    if (!isRecord(providerValue)) continue
-    const modelsValue = providerValue["models"]
-    if (!isRecord(modelsValue)) continue
-
-    for (const [modelKey, modelValue] of Object.entries(modelsValue)) {
-      if (!isRecord(modelValue)) continue
-      const name = typeof modelValue["name"] === "string" ? modelValue["name"] : modelKey
-      const pricing = parsePricing(modelValue["cost"])
-      const contextLength = parseContextLength(modelValue["limit"])
+    for (const [modelKey, modelValue] of Object.entries(providerValue.models)) {
+      const name = modelValue.name ?? modelKey
+      const pricing = parsePricing(modelValue.cost)
+      const contextLength = parseContextLength(modelValue.limit)
       const id = ModelId.of(`${providerId}/${modelKey}`)
 
       models.push(
@@ -61,6 +60,43 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
 
   return models
 }
+
+const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
+  function* (fs: FileSystem.FileSystem, cachePath: string) {
+    const exists = yield* fs.exists(cachePath)
+    if (!exists) return [] as readonly Model[]
+    const content = yield* fs
+      .readFileString(cachePath)
+      .pipe(Effect.catchEager(() => Effect.succeed("")))
+    if (content.trim().length === 0) return [] as readonly Model[]
+    return Option.getOrElse(decodeCachedModels(content), () => [] as readonly Model[])
+  },
+  Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
+)
+
+const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
+  function* (
+    fs: FileSystem.FileSystem,
+    path: Path.Path,
+    cachePath: string,
+    models: readonly Model[],
+  ) {
+    const text = yield* Effect.try({
+      try: () => encodeCachedModels(models),
+      catch: () => "",
+    })
+    if (text.length === 0) return
+
+    const dir = path.dirname(cachePath)
+    yield* fs.makeDirectory(dir, { recursive: true })
+    yield* fs.writeFileString(cachePath, text)
+  },
+  Effect.catchEager((e) =>
+    Effect.logWarning("failed to write model cache").pipe(
+      Effect.annotateLogs({ error: String(e) }),
+    ),
+  ),
+)
 
 export interface ModelRegistryService {
   readonly list: () => Effect.Effect<readonly Model[]>
@@ -89,28 +125,10 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const runtimePlatform = yield* RuntimePlatform
       const driverRegistry = yield* DriverRegistry
       const authStore = yield* AuthStore
-      const homeOption = yield* Effect.gen(function* () {
-        return yield* Config.option(Config.string("HOME"))
-      }).pipe(Effect.catchEager(() => Effect.succeed(Option.none())))
-      const home = Option.getOrElse(homeOption, () => runtimePlatform.home)
-      const cachePath = path.join(home, CACHE_RELATIVE)
+      const cachePath = path.join(runtimePlatform.home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
-      const loadFromDisk = Effect.gen(function* () {
-        const exists = yield* fs.exists(cachePath)
-        if (!exists) return [] as readonly Model[]
-        const content = yield* fs
-          .readFileString(cachePath)
-          .pipe(Effect.catchEager(() => Effect.succeed("")))
-        if (content.trim().length === 0) return [] as readonly Model[]
-        const decoded = yield* decodeJson(content).pipe(
-          Effect.catchEager(() => Effect.succeed(null)),
-        )
-        return parseModelsDev(decoded)
-      }).pipe(
-        Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
-        Effect.withSpan("ModelRegistry.loadFromDisk"),
-      )
+      const loadFromDisk = readCachedModels(fs, cachePath)
 
       const fetchRemote = Effect.gen(function* () {
         const res = yield* http
@@ -119,20 +137,11 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         if (res._tag === "None" || res.value.status >= 400) return [] as readonly Model[]
         const text = yield* res.value.text.pipe(Effect.catchEager(() => Effect.succeed("")))
         if (text.length === 0) return [] as readonly Model[]
-        const decoded = yield* decodeJson(text).pipe(Effect.catchEager(() => Effect.succeed(null)))
-        const parsed = parseModelsDev(decoded)
+        const decoded = decodeModelsDevCatalog(text)
+        if (decoded._tag === "None") return [] as readonly Model[]
+        const parsed = parseModelsDev(decoded.value)
         if (parsed.length > 0) {
-          const dir = path.dirname(cachePath)
-          yield* fs.makeDirectory(dir, { recursive: true })
-          yield* fs
-            .writeFileString(cachePath, text)
-            .pipe(
-              Effect.catchEager((e) =>
-                Effect.logWarning("failed to write model cache").pipe(
-                  Effect.annotateLogs({ error: String(e) }),
-                ),
-              ),
-            )
+          yield* writeCachedModels(fs, path, cachePath, parsed)
         }
         return parsed
       }).pipe(
