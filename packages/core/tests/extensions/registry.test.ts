@@ -27,7 +27,7 @@ const makeTool = (name: string): AnyCapabilityContribution => ({
 })
 
 const makeAgent = (name: string, options?: ConstructorParameters<typeof AgentDefinition>[0]) =>
-  new AgentDefinition({ name: name as never, ...options })
+  AgentDefinition.make({ name: name as never, ...options })
 
 const makeProvider = (providerId: string, name?: string): ModelDriverContribution => ({
   id: providerId,
@@ -110,7 +110,7 @@ describe("resolveExtensions", () => {
 
   test("later scope wins for same-name agent", () => {
     const builtinExplore = makeAgent("explore")
-    const projectExplore = new AgentDefinition({
+    const projectExplore = AgentDefinition.make({
       name: "explore" as never,
       description: "project explore",
     })
@@ -380,12 +380,12 @@ describe("ExtensionRegistry", () => {
   })
 
   test("lists all agents including override winners", async () => {
-    const cowork = new AgentDefinition({
+    const cowork = AgentDefinition.make({
       name: "cowork" as never,
       model: "anthropic/claude-opus-4-6" as never,
     })
     const explore = makeAgent("explore")
-    const deepwork = new AgentDefinition({
+    const deepwork = AgentDefinition.make({
       name: "deepwork" as never,
       model: "openai/gpt-5.4" as never,
     })
@@ -404,7 +404,7 @@ describe("ExtensionRegistry", () => {
   test("resolveToolPolicy filters by allowedTools", async () => {
     const readTool = makeTool("read")
     const bashTool = makeTool("bash")
-    const agent = new AgentDefinition({
+    const agent = AgentDefinition.make({
       name: "explore" as never,
       allowedTools: ["read"],
     })
@@ -422,7 +422,7 @@ describe("ExtensionRegistry", () => {
     const readTool = makeTool("read")
     const bashTool = makeTool("bash")
     const editTool = makeTool("edit")
-    const agent = new AgentDefinition({
+    const agent = AgentDefinition.make({
       name: "explore" as never,
       allowedTools: ["read", "bash"],
     })
@@ -441,7 +441,7 @@ describe("ExtensionRegistry", () => {
   test("resolveToolPolicy applies deniedTools", async () => {
     const readTool = makeTool("read")
     const writeTool = makeTool("write")
-    const agent = new AgentDefinition({
+    const agent = AgentDefinition.make({
       name: "cowork" as never,
       deniedTools: ["write"],
     })
@@ -459,7 +459,7 @@ describe("ExtensionRegistry", () => {
   test("denied tools cannot be injected via projection", async () => {
     const readTool = makeTool("read")
     const secretTool = makeTool("secret")
-    const agent = new AgentDefinition({
+    const agent = AgentDefinition.make({
       name: "cowork" as never,
       deniedTools: ["secret"],
     })

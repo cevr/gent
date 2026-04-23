@@ -60,7 +60,7 @@ describe("Extension state persistence", () => {
       const storage = yield* Storage
 
       // Trigger state change + Persist effect
-      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 100 }), {
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 100 }), {
         sessionId,
         branchId,
       })
@@ -92,11 +92,11 @@ describe("Extension state persistence", () => {
       const storage = yield* Storage
 
       // Two turns → two Persist effects
-      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
-      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
@@ -135,7 +135,7 @@ describe("Extension state persistence", () => {
       const runtime = yield* MachineEngine
       const storage = yield* Storage
 
-      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })
@@ -246,7 +246,7 @@ describe("Persistence edge cases", () => {
       const runtime = yield* MachineEngine
 
       // Actor should init with fallback to initial state, not crash
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -297,13 +297,13 @@ describe("Persistence edge cases", () => {
       const runtime = yield* MachineEngine
 
       // Init should survive
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
 
       // Actor should work normally after failed hydration
-      yield* runtime.publish(new TurnCompleted({ sessionId, branchId, durationMs: 50 }), {
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 50 }), {
         sessionId,
         branchId,
       })

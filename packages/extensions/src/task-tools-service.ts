@@ -110,7 +110,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 const eventPublisher = yield* EventPublisher
                 const id = TaskId.make(Bun.randomUUIDv7())
                 const now = yield* DateTime.nowAsDate
-                const task = new Task({
+                const task = Task.make({
                   id,
                   sessionId: params.sessionId,
                   branchId: params.branchId,
@@ -126,7 +126,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 })
                 yield* storage.createTask(task)
                 yield* eventPublisher.publish(
-                  new TaskCreated({
+                  TaskCreated.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     taskId: id,
@@ -186,7 +186,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 if (updated !== undefined && fields.status !== undefined) {
                   if (fields.status === "completed") {
                     yield* eventPublisher.publish(
-                      new TaskCompleted({
+                      TaskCompleted.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
                         taskId: id,
@@ -203,7 +203,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                         ? updated.metadata.error
                         : undefined
                     yield* eventPublisher.publish(
-                      new TaskFailed({
+                      TaskFailed.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
                         taskId: id,
@@ -212,7 +212,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                     )
                   } else if (fields.status === "stopped") {
                     yield* eventPublisher.publish(
-                      new TaskStopped({
+                      TaskStopped.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
                         taskId: id,
@@ -220,7 +220,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                     )
                   } else {
                     yield* eventPublisher.publish(
-                      new TaskUpdated({
+                      TaskUpdated.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
                         taskId: id,
@@ -251,7 +251,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 yield* storage.deleteTask(id).pipe(Effect.orDie)
                 yield* eventPublisher
                   .publish(
-                    new TaskDeleted({
+                    TaskDeleted.make({
                       sessionId: existing.sessionId,
                       branchId: existing.branchId,
                       taskId: id,

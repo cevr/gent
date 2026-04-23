@@ -196,7 +196,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
 
     yield* messageStorage.createMessage(user)
     yield* eventStore.publish(
-      new MessageReceived({
+      MessageReceived.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         messageId: user.id,
@@ -247,7 +247,7 @@ const runDelegateScenario = (
     const childGrepToolCallId = asToolCallId(`dbg-child-grep-${iteration}`)
 
     yield* eventStore.publish(
-      new AgentRunSpawned({
+      AgentRunSpawned.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
         agentName: "explore",
@@ -259,7 +259,7 @@ const runDelegateScenario = (
     yield* Effect.sleep("400 millis")
 
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: child.sessionId,
         branchId: child.branchId,
         toolCallId: childReadToolCallId,
@@ -269,7 +269,7 @@ const runDelegateScenario = (
     )
     yield* Effect.sleep("350 millis")
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: child.sessionId,
         branchId: child.branchId,
         toolCallId: childReadToolCallId,
@@ -285,7 +285,7 @@ const runDelegateScenario = (
 
     yield* Effect.sleep("250 millis")
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: child.sessionId,
         branchId: child.branchId,
         toolCallId: childGrepToolCallId,
@@ -295,7 +295,7 @@ const runDelegateScenario = (
     )
     yield* Effect.sleep("350 millis")
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: child.sessionId,
         branchId: child.branchId,
         toolCallId: childGrepToolCallId,
@@ -316,7 +316,7 @@ const runDelegateScenario = (
 
     yield* Effect.sleep("300 millis")
     yield* eventStore.publish(
-      new AgentRunSucceeded({
+      AgentRunSucceeded.make({
         parentSessionId: params.sessionId,
         childSessionId: child.sessionId,
         agentName: "explore",
@@ -348,7 +348,7 @@ const persistDebugTurn = (
 
     yield* messageStorage.createMessage(assistant)
     yield* eventStore.publish(
-      new MessageReceived({
+      MessageReceived.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         messageId: assistant.id,
@@ -357,7 +357,7 @@ const persistDebugTurn = (
     )
     yield* messageStorage.createMessage(tool)
     yield* eventStore.publish(
-      new MessageReceived({
+      MessageReceived.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         messageId: tool.id,
@@ -378,7 +378,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     const startedAt = yield* Clock.currentTimeMillis
 
     yield* eventStore.publish(
-      new AgentSwitched({
+      AgentSwitched.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         fromAgent: previousAgent,
@@ -387,7 +387,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* persistDebugUserMessage(params, iteration)
     yield* eventStore.publish(
-      new ProviderRetrying({
+      ProviderRetrying.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         attempt: 1,
@@ -398,13 +398,13 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* Effect.sleep("3100 millis")
     yield* eventStore.publish(
-      new StreamStarted({
+      StreamStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
       }),
     )
     yield* eventStore.publish(
-      new StreamChunk({
+      StreamChunk.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         chunk: `Running debug inspection cycle ${iteration}. `,
@@ -413,7 +413,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     yield* Effect.sleep("250 millis")
 
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: delegateToolCallId,
@@ -423,7 +423,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* runDelegateScenario(params, iteration, delegateToolCallId)
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: delegateToolCallId,
@@ -448,7 +448,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
     yield* Effect.sleep("250 millis")
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: reviewToolCallId,
@@ -458,7 +458,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* Effect.sleep("450 millis")
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: reviewToolCallId,
@@ -481,7 +481,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
     yield* Effect.sleep("250 millis")
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: searchSessionsToolCallId,
@@ -491,7 +491,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* Effect.sleep("350 millis")
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: searchSessionsToolCallId,
@@ -512,7 +512,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
 
     yield* Effect.sleep("250 millis")
     yield* eventStore.publish(
-      new ToolCallStarted({
+      ToolCallStarted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: readSessionToolCallId,
@@ -525,7 +525,7 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
     yield* Effect.sleep("350 millis")
     yield* eventStore.publish(
-      new ToolCallSucceeded({
+      ToolCallSucceeded.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         toolCallId: readSessionToolCallId,
@@ -542,21 +542,21 @@ const runScriptedTurn = (params: DebugScenarioParams, iteration: number) =>
     )
 
     yield* eventStore.publish(
-      new StreamChunk({
+      StreamChunk.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         chunk: "Inspection pass complete. Check the live tool timeline and task widget.",
       }),
     )
     yield* eventStore.publish(
-      new StreamEnded({
+      StreamEnded.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         usage: { inputTokens: 212, outputTokens: 109 },
       }),
     )
     yield* eventStore.publish(
-      new TurnCompleted({
+      TurnCompleted.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         durationMs: (yield* Clock.currentTimeMillis) - startedAt,

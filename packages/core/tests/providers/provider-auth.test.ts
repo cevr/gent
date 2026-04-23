@@ -17,7 +17,7 @@ const oauthProvider: ModelDriverContribution = {
   name: "OpenAI",
   resolveModel: () => ({}),
   auth: {
-    methods: [new AuthMethod({ type: "oauth", label: "OAuth" })],
+    methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
     authorize: (ctx) =>
       Effect.tryPromise({
         try: async () => {
@@ -45,7 +45,7 @@ const noopProvider: ModelDriverContribution = {
   name: "Anthropic",
   resolveModel: () => ({}),
   auth: {
-    methods: [new AuthMethod({ type: "api", label: "API" })],
+    methods: [AuthMethod.make({ type: "api", label: "API" })],
   },
 }
 

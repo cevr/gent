@@ -43,7 +43,7 @@ describe("DriverRpcs", () => {
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
           agentName: "cowork",
-          driver: new ModelDriverRef({ id: someModel.id }),
+          driver: ModelDriverRef.make({ id: someModel.id }),
         })
         const after = yield* client.driver.list()
         expect(after.overrides["cowork"]?._tag).toBe("model")
@@ -59,7 +59,7 @@ describe("DriverRpcs", () => {
         const result = yield* client.driver
           .set({
             agentName: "cowork",
-            driver: new ExternalDriverRef({ id: "definitely-not-registered" }),
+            driver: ExternalDriverRef.make({ id: "definitely-not-registered" }),
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
@@ -77,7 +77,7 @@ describe("DriverRpcs", () => {
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
           agentName: "cowork",
-          driver: new ModelDriverRef({ id: someModel.id }),
+          driver: ModelDriverRef.make({ id: someModel.id }),
         })
         yield* client.driver.clear({ agentName: "cowork" })
         const after = yield* client.driver.list()

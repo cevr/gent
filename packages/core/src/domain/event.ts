@@ -57,7 +57,7 @@ export type Question = typeof QuestionSchema.Type
 // call replaces 34 hand-written `Schema.TaggedClass` declarations + a
 // hand-assembled `Schema.Union(...)`. Per-variant classes are exposed as own
 // properties (`AgentEvent.SessionStarted`) so construction reads
-// `new SessionStarted({...})`. Pattern-match via `Match.tag` or
+// `SessionStarted.make({...})`. Pattern-match via `Match.tag` or
 // `_tag === "X"` works unchanged — the wire shape is identical.
 // ============================================================================
 
@@ -312,8 +312,8 @@ export type AgentEvent = Schema.Schema.Type<typeof AgentEvent>
 // ============================================================================
 // Per-variant re-exports — same class identity as `AgentEvent.X`, exposed at
 // module scope so consumers may import variants directly without going
-// through the enum object. A `new SessionStarted(...)` and a
-// `new SessionStarted(...)` produce instances of the SAME class;
+// through the enum object. `SessionStarted.make(...)` and
+// `AgentEvent.SessionStarted.make(...)` produce instances of the SAME class;
 // these are aliases, not parallel implementations. Use whichever reads better
 // at the call site — both communicate "variant of AgentEvent."
 // ============================================================================
@@ -486,7 +486,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
       const currentSpan = yield* Effect.currentParentSpan.pipe(
         Effect.orElseSucceed(() => undefined),
       )
-      const envelope = new EventEnvelope({
+      const envelope = EventEnvelope.make({
         id: EventId.make(id),
         event,
         createdAt: yield* Clock.currentTimeMillis,

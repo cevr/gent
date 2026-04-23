@@ -63,7 +63,7 @@ describe("auth.listProviders", () => {
             // → AuthGuard sees the external routing → skips model auth.
             yield* client.driver.set({
               agentName: "cowork",
-              driver: new ExternalDriverRef({ id: externalDriver.id }),
+              driver: ExternalDriverRef.make({ id: externalDriver.id }),
             })
             const overridden = yield* client.auth.listProviders({
               agentName: "cowork",

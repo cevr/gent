@@ -15,15 +15,15 @@ const makeAgent = (
   overrides: Partial<ConstructorParameters<typeof AgentDefinition>[0]> = {},
 ): AgentDefinition =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  new AgentDefinition({ name: name as never, ...overrides })
+  AgentDefinition.make({ name: name as never, ...overrides })
 
 describe("resolveAgentDriver", () => {
   test("agent.driver wins — config override is ignored when the agent hardcodes a driver", () => {
     const agent = makeAgent("special", {
-      driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+      driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
     })
     const overrides: Record<string, DriverRef> = {
-      special: new ExternalDriverRef({ id: "acp-opencode" }),
+      special: ExternalDriverRef.make({ id: "acp-opencode" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("external")
@@ -36,7 +36,7 @@ describe("resolveAgentDriver", () => {
   test("config override applies when the agent has no hardcoded driver", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<string, DriverRef> = {
-      cowork: new ExternalDriverRef({ id: "acp-claude-code" }),
+      cowork: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("external")
@@ -63,7 +63,7 @@ describe("resolveAgentDriver", () => {
   test("override for a different agent does not match", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<string, DriverRef> = {
-      deepwork: new ExternalDriverRef({ id: "acp-claude-code" }),
+      deepwork: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver).toBeUndefined()
@@ -73,7 +73,7 @@ describe("resolveAgentDriver", () => {
   test("model-driver override is honoured the same way as external", () => {
     const agent = makeAgent("cowork")
     const overrides: Record<string, DriverRef> = {
-      cowork: new ModelDriverRef({ id: "anthropic" }),
+      cowork: ModelDriverRef.make({ id: "anthropic" }),
     }
     const result = resolveAgentDriver(agent, overrides)
     expect(result.driver?._tag).toBe("model")

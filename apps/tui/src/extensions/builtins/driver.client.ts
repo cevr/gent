@@ -69,8 +69,8 @@ export default defineClientExtension("@gent/driver-ui", {
           // anything else is treated as a model-driver id. Server validates
           // existence in either registry and rejects with NotFoundError.
           const driver = driverArg.includes("-")
-            ? new ExternalDriverRef({ id: driverArg })
-            : new ModelDriverRef({ id: driverArg })
+            ? ExternalDriverRef.make({ id: driverArg })
+            : ModelDriverRef.make({ id: driverArg })
           void runtime
             .run(client.driver.set({ agentName, driver }))
             .then(() => {

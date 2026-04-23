@@ -275,7 +275,7 @@ describe("Executor actor lifecycle", () => {
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -301,7 +301,7 @@ describe("Executor actor lifecycle", () => {
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -332,7 +332,7 @@ describe("Executor actor lifecycle", () => {
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -358,7 +358,7 @@ describe("Executor actor lifecycle", () => {
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -396,7 +396,7 @@ describe("Executor actor lifecycle", () => {
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -446,7 +446,7 @@ describe("Executor actor lifecycle", () => {
         const runtime = yield* MachineEngine
 
         // First init → autoStart → failure → Error
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -484,7 +484,7 @@ describe("Executor actor lifecycle", () => {
         const runtime = yield* MachineEngine
         const storage = yield* Storage
 
-        yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })

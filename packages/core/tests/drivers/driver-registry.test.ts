@@ -35,7 +35,7 @@ const makeModel = (id: string, name?: string): ModelDriverContribution => ({
 })
 
 const makeCatalogModel = (id: string, keep = true): Model =>
-  new Model({
+  Model.make({
     id: ModelId.make(id),
     name: id,
     provider: id.split("/", 1)[0] ?? id,

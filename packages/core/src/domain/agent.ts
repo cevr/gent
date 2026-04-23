@@ -53,9 +53,6 @@ export type ExternalDriverRef = (typeof DriverRef)["external"]["Type"]
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName
 
-/** Brand symbol identifying values produced by `defineAgent`. */
-export const AgentDefinitionBrand: unique symbol = Symbol.for("@gent/AgentDefinition")
-
 /**
  * AgentSpec — agent identity + defaults.
  *
@@ -85,15 +82,8 @@ export type AgentSpec = AgentDefinition
 
 export type AgentDefinitionInput = ConstructorParameters<typeof AgentDefinition>[0]
 
-export const defineAgent = (input: AgentDefinitionInput): AgentDefinition => {
-  const def = new AgentDefinition(input)
-  Object.defineProperty(def, AgentDefinitionBrand, {
-    value: true,
-    enumerable: false,
-    writable: false,
-  })
-  return def
-}
+export const defineAgent = (input: AgentDefinitionInput): AgentDefinition =>
+  AgentDefinition.make(input)
 
 // Built-in agents and their prompts live in their owning extensions:
 // - @gent/agents (extensions/agents.ts): cowork, deepwork, explore, summarizer, title

@@ -176,7 +176,7 @@ describe("Storage", () => {
         yield* storage.createBranch(branch)
 
         yield* storage.appendEvent(
-          new AgentSwitched({
+          AgentSwitched.make({
             sessionId: session.id,
             branchId: branch.id,
             fromAgent: "cowork",
@@ -185,7 +185,7 @@ describe("Storage", () => {
         )
 
         yield* storage.appendEvent(
-          new AgentSwitched({
+          AgentSwitched.make({
             sessionId: session.id,
             branchId: branch.id,
             fromAgent: "deepwork",
@@ -1128,12 +1128,12 @@ describe("Storage", () => {
           }),
         )
 
-        yield* storage.appendEvent(new SessionStarted({ sessionId, branchId }))
+        yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
 
         // Simulate old DB row with a deleted event type
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'ToolCallCompleted', ${JSON.stringify({ _tag: "ToolCallCompleted", sessionId, branchId, toolCallId: "tc-1", toolName: "bash" })}, ${Date.now()})`
 
-        yield* storage.appendEvent(new SessionStarted({ sessionId, branchId }))
+        yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
 
         const events = yield* storage.listEvents({ sessionId, branchId })
         expect(events.length).toBe(2)

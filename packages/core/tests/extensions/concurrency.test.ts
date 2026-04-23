@@ -80,7 +80,7 @@ describe("extension concurrency", () => {
 
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
-        const event = new SessionStarted({ sessionId, branchId })
+        const event = SessionStarted.make({ sessionId, branchId })
         const ctx = { sessionId, branchId }
 
         const [r1, r2] = yield* Effect.all(
@@ -151,10 +151,10 @@ describe("extension concurrency", () => {
 
           yield* Effect.all(
             [
-              publisher.publish(new SessionStarted({ sessionId, branchId })),
+              publisher.publish(SessionStarted.make({ sessionId, branchId })),
               Deferred.await(firstDeliveryEntered).pipe(
                 Effect.andThen(
-                  publisher.publish(new TurnCompleted({ sessionId, branchId, durationMs: 25 })),
+                  publisher.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 25 })),
                 ),
               ),
             ],
@@ -206,7 +206,7 @@ describe("extension concurrency", () => {
                             return yield* Effect.die("nested publish test runtime missing")
                           }
                           yield* runtimeRef.publish(
-                            new TurnCompleted({
+                            TurnCompleted.make({
                               sessionId: envelope.sessionId,
                               branchId: envelope.branchId,
                               durationMs: 1,
@@ -247,7 +247,7 @@ describe("extension concurrency", () => {
           runtimeRef = runtime
 
           yield* runtime
-            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
@@ -283,7 +283,7 @@ describe("extension concurrency", () => {
                             return yield* Effect.die("nested publish ordering test runtime missing")
                           }
                           const transitioned = yield* runtimeRef.publish(
-                            new TurnCompleted({
+                            TurnCompleted.make({
                               sessionId: envelope.sessionId,
                               branchId: envelope.branchId,
                               durationMs: 1,
@@ -350,7 +350,7 @@ describe("extension concurrency", () => {
           runtimeRef = runtime
 
           const transitioned = yield* runtime
-            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
             .pipe(Effect.timeout("1 second"))
           expect(transitioned).toContain("ordering-publisher")
           expect(transitioned).toContain("ordering-observer")
@@ -394,7 +394,7 @@ describe("extension concurrency", () => {
                           yield* Deferred.succeed(firstEntered, void 0)
                           yield* Deferred.await(releaseFirst)
                           yield* runtimeRef.publish(
-                            new TurnCompleted({
+                            TurnCompleted.make({
                               sessionId: envelope.sessionId,
                               branchId: envelope.branchId,
                               durationMs: 1,
@@ -473,7 +473,7 @@ describe("extension concurrency", () => {
 
             const first = yield* Effect.forkScoped(
               runtime
-                .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+                .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
                 .pipe(Effect.timeout("1 second")),
             )
 
@@ -481,7 +481,7 @@ describe("extension concurrency", () => {
 
             const second = yield* Effect.forkScoped(
               runtime
-                .publish(new StreamStarted({ sessionId, branchId }), { sessionId, branchId })
+                .publish(StreamStarted.make({ sessionId, branchId }), { sessionId, branchId })
                 .pipe(Effect.timeout("1 second")),
             )
 
@@ -583,7 +583,7 @@ describe("extension concurrency", () => {
           runtimeRef = runtime
 
           yield* runtime
-            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(received).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
@@ -684,7 +684,7 @@ describe("extension concurrency", () => {
           runtimeRef = runtime
 
           yield* runtime
-            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))

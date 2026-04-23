@@ -328,7 +328,7 @@ describe("TaskStorage metadata boundary", () => {
       const now = new Date()
       const result = yield* taskStorage
         .createTask(
-          new Task({
+          Task.make({
             id: TaskId.make("task-bad-metadata"),
             sessionId: SessionId.make("s1"),
             branchId: "b1",

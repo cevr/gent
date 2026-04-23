@@ -46,7 +46,7 @@ export const MistralExtension = defineExtension({
         return { layer: modelLayer }
       },
       auth: {
-        methods: [new AuthMethod({ type: "api", label: "Manually enter API key" })],
+        methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
       },
     }
 

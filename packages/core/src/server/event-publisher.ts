@@ -76,7 +76,7 @@ const publishInner = (
           for (const id of subscribers) pulseTargets.add(id)
         }
         for (const extensionId of pulseTargets) {
-          const pulse = new ExtensionStateChanged({
+          const pulse = ExtensionStateChanged.make({
             sessionId,
             branchId,
             extensionId,

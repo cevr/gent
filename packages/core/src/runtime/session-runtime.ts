@@ -360,7 +360,7 @@ const makeLiveSessionRuntime: Effect.Effect<
               return Effect.gen(function* () {
                 if (Cause.hasDies(cause)) {
                   yield* eventPublisher.publish(
-                    new AgentRestarted({
+                    AgentRestarted.make({
                       sessionId: command.sessionId,
                       branchId: command.branchId,
                       attempt: 0,
@@ -369,7 +369,7 @@ const makeLiveSessionRuntime: Effect.Effect<
                   )
                 }
                 yield* eventPublisher.publish(
-                  new ErrorOccurred({
+                  ErrorOccurred.make({
                     sessionId: command.sessionId,
                     branchId: command.branchId,
                     error: Cause.pretty(cause),
@@ -419,7 +419,7 @@ const makeLiveSessionRuntime: Effect.Effect<
           output: stringifyOutput(part.output.value),
         }
         yield* eventPublisher.publish(
-          isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
+          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
         )
         return
       }

@@ -126,18 +126,18 @@ describe("Handoff cooldown workflow", () => {
       expect(afterSuppress).toBe(5)
 
       // Each TurnCompleted decrements the counter.
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })
       const afterOne = yield* actor.execute(HandoffProtocol.GetCooldown())
       expect(afterOne).toBe(4)
 
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })
@@ -150,15 +150,15 @@ describe("Handoff cooldown workflow", () => {
       expect(reArmed).toBe(2)
 
       // Decrement clamps at zero.
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })
-      yield* actor.publish(new TurnCompleted({ sessionId, branchId, durationMs: 0 }), {
+      yield* actor.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 0 }), {
         sessionId,
         branchId,
       })

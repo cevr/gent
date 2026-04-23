@@ -238,9 +238,9 @@ const makeLayerWithEvents = (
   )
 }
 
-const parityExternalAgent = new AgentDefinition({
+const parityExternalAgent = AgentDefinition.make({
   name: "test-external-parity" as never,
-  driver: new ExternalDriverRef({ id: "test-parity-driver" }),
+  driver: ExternalDriverRef.make({ id: "test-parity-driver" }),
 })
 
 const makeExternalLayerWithEvents = (

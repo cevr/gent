@@ -62,7 +62,7 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
       const id = ModelId.make(`${providerId}/${modelKey}`)
 
       models.push(
-        new Model({
+        Model.make({
           id,
           name,
           provider: providerId,

@@ -37,7 +37,7 @@ const setup = Effect.gen(function* () {
 
 const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof Task>[0]>) => {
   const now = new Date()
-  return new Task({
+  return Task.make({
     id: TaskId.make(id),
     sessionId: SessionId.make("s1"),
     branchId: BranchId.make("b1"),

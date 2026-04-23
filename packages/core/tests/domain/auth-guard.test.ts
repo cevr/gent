@@ -23,11 +23,11 @@ const testProviders: ModelDriverContribution[] = [
 ]
 
 const testAgents = [
-  new AgentDefinition({
+  AgentDefinition.make({
     name: "cowork" as never,
     model: "anthropic/claude-opus-4-6" as never,
   }),
-  new AgentDefinition({
+  AgentDefinition.make({
     name: "deepwork" as never,
     model: "openai/gpt-5.4" as never,
   }),
@@ -61,7 +61,7 @@ const helperResolved = resolveExtensions([
       modelDrivers: testProviders,
       agents: [
         ...testAgents,
-        new AgentDefinition({
+        AgentDefinition.make({
           name: "helper:google" as never,
           model: "google/gemini-2.5-flash" as never,
         }),
@@ -193,7 +193,7 @@ describe("AuthGuard", () => {
       const result = yield* guard.requiredProviders({
         agentName: "cowork",
         driverOverrides: {
-          cowork: new ExternalDriverRef({ id: "acp-claude-code" }),
+          cowork: ExternalDriverRef.make({ id: "acp-claude-code" }),
         },
       })
       expect(result).toEqual([])

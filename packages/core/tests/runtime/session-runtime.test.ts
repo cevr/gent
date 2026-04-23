@@ -42,11 +42,11 @@ import {
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 
 const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
-  const cowork = new AgentDefinition({
+  const cowork = AgentDefinition.make({
     name: "cowork" as never,
     model: "test/default" as never,
   })
-  const reflect = new AgentDefinition({
+  const reflect = AgentDefinition.make({
     name: "memory:reflect" as never,
     model: "test/override" as never,
   })

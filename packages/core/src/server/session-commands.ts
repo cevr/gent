@@ -175,7 +175,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         if (input.cwd !== undefined) {
           yield* sessionCwdRegistry.record(sessionId, input.cwd)
         }
-        yield* eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+        yield* eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({
             sessionId,
@@ -210,7 +210,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
         yield* branchStorage.createBranch(branch)
         yield* eventPublisher.publish(
-          new BranchCreated({
+          BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
             ...(branch.parentBranchId !== undefined
@@ -243,7 +243,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           if (summary !== "") {
             yield* branchStorage.updateBranchSummary(input.fromBranchId, summary)
             yield* eventPublisher.publish(
-              new BranchSummarized({
+              BranchSummarized.make({
                 sessionId: input.sessionId,
                 branchId: input.fromBranchId,
                 summary,
@@ -265,7 +265,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         yield* eventPublisher.publish(
-          new BranchSwitched({
+          BranchSwitched.make({
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
             toBranchId: input.toBranchId,
@@ -310,7 +310,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         yield* eventPublisher.publish(
-          new BranchCreated({
+          BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
             ...(branch.parentBranchId !== undefined
@@ -384,7 +384,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               }),
             )
             yield* eventPublisher.publish(
-              new SessionSettingsUpdated({
+              SessionSettingsUpdated.make({
                 sessionId: input.sessionId,
                 reasoningLevel: input.reasoningLevel,
               }),

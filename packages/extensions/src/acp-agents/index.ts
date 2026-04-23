@@ -59,14 +59,14 @@ const getClaudeCodeManager = () => {
 const claudeCodeAgent = defineAgent({
   name: CLAUDE_CODE_AGENT_NAME,
   description: "Claude Code via Claude Agent SDK",
-  driver: new ExternalDriverRef({ id: `acp-${CLAUDE_CODE_AGENT_NAME}` }),
+  driver: ExternalDriverRef.make({ id: `acp-${CLAUDE_CODE_AGENT_NAME}` }),
 })
 
 const protocolAgents = Object.entries(ACP_PROTOCOL_AGENTS).map(([name, config]) =>
   defineAgent({
     name,
     description: `${config.command} via ACP`,
-    driver: new ExternalDriverRef({ id: `acp-${name}` }),
+    driver: ExternalDriverRef.make({ id: `acp-${name}` }),
   }),
 )
 

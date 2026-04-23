@@ -207,7 +207,7 @@ describe("ModelRegistry", () => {
         yield* fs.writeFileString(
           cachePath,
           encodeCachedModels([
-            new Model({
+            Model.make({
               id: ModelId.make("openai/gpt-5.4"),
               name: "GPT-5.4",
               provider: "openai",
@@ -303,7 +303,7 @@ describe("ModelRegistry", () => {
                 listModels: (models) =>
                   models.map((model) =>
                     model.provider === "openai"
-                      ? new Model({ ...model, name: `${model.name} filtered` })
+                      ? Model.make({ ...model, name: `${model.name} filtered` })
                       : model,
                   ),
               },
@@ -327,7 +327,7 @@ describe("ModelRegistry", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-          const malformed = new Model({
+          const malformed = Model.make({
             id: ModelId.make("openai/broken"),
             name: "Broken",
             provider: "openai",

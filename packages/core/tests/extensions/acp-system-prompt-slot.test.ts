@@ -15,7 +15,7 @@ import { withSectionMarkers } from "@gent/core/server/system-prompt"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
-const baseAgent = new AgentDefinition({
+const baseAgent = AgentDefinition.make({
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   name: "cowork" as never,
 })
@@ -77,9 +77,9 @@ describe("ACP systemPrompt slot", () => {
   test("appends codemode section when driverToolSurface is codemode", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",
@@ -103,9 +103,9 @@ describe("ACP systemPrompt slot", () => {
   test("no-op when driverToolSurface is native", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ModelDriverRef({ id: "anthropic" }),
+        driver: ModelDriverRef.make({ id: "anthropic" }),
       }),
       driverSource: "config",
       driverToolSurface: "native",
@@ -117,9 +117,9 @@ describe("ACP systemPrompt slot", () => {
   test("no-op when external driver opts out of codemode (toolSurface: native)", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "custom-driver" }),
+        driver: ExternalDriverRef.make({ id: "custom-driver" }),
       }),
       driverSource: "config",
       driverToolSurface: "native",
@@ -131,9 +131,9 @@ describe("ACP systemPrompt slot", () => {
   test("no-op when tools list is empty", async () => {
     const result = await runHandler({
       basePrompt: "BASE",
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",
@@ -151,9 +151,9 @@ describe("ACP systemPrompt slot", () => {
     ].join("\n\n")
     const result = await runHandler({
       basePrompt: compiled,
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",
@@ -177,9 +177,9 @@ describe("ACP systemPrompt slot", () => {
     ].join("\n\n")
     const result = await runHandler({
       basePrompt: compiled,
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",
@@ -202,9 +202,9 @@ describe("ACP systemPrompt slot", () => {
     ].join("\n\n")
     const result = await runHandler({
       basePrompt: compiled,
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",
@@ -224,9 +224,9 @@ describe("ACP systemPrompt slot", () => {
     ].join("\n\n")
     const result = await runHandler({
       basePrompt: compiled,
-      agent: new AgentDefinition({
+      agent: AgentDefinition.make({
         ...baseAgent,
-        driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+        driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
       }),
       driverSource: "config",
       driverToolSurface: "codemode",

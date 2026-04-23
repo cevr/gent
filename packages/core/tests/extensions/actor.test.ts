@@ -52,7 +52,7 @@ describe("spawnMachineExtensionRef", () => {
       expect(before.state).toEqual({ _tag: "Active", value: { count: 0 } })
       expect(before.epoch).toBe(0)
 
-      const changed = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
+      const changed = yield* actor.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -79,7 +79,7 @@ describe("spawnMachineExtensionRef", () => {
       ).pipe(Effect.provide(testLayer))
 
       yield* actor.start
-      const changed = yield* actor.publish(new SessionStarted({ sessionId, branchId }), {
+      const changed = yield* actor.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -105,7 +105,7 @@ describe("spawnMachineExtensionRef", () => {
       ).pipe(Effect.provide(testLayer))
 
       const effects = [
-        actor.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId }),
+        actor.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId }),
         actor.send({ extensionId: "cold-start", _tag: "Message" }),
         actor.execute(Ping()),
         actor.snapshot,
@@ -457,7 +457,7 @@ describe("Resource.machine end-to-end", () => {
 
       return Effect.gen(function* () {
         const runtime = yield* MachineEngine
-        const changed = yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+        const changed = yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })

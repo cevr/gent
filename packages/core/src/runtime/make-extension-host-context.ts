@@ -289,7 +289,7 @@ export const makeExtensionHostContext = (
         })
         yield* deps.storage.updateSession(updated)
         yield* deps.eventPublisher.publish(
-          new SessionNameUpdated({ sessionId: runInfo.sessionId, name: trimmed }),
+          SessionNameUpdated.make({ sessionId: runInfo.sessionId, name: trimmed }),
         )
         return { renamed: true as const, name: trimmed }
       }),
@@ -314,7 +314,7 @@ export const makeExtensionHostContext = (
         })
         yield* deps.storage.createBranch(branch)
         yield* deps.eventPublisher.publish(
-          new BranchCreated({
+          BranchCreated.make({
             sessionId: runInfo.sessionId,
             branchId: branch.id,
             parentBranchId: runInfo.branchId,
@@ -349,7 +349,7 @@ export const makeExtensionHostContext = (
         }
 
         yield* deps.eventPublisher.publish(
-          new BranchCreated({
+          BranchCreated.make({
             sessionId: runInfo.sessionId,
             branchId: branch.id,
             parentBranchId: runInfo.branchId,
@@ -376,7 +376,7 @@ export const makeExtensionHostContext = (
         })
         yield* deps.storage.updateSession(updated)
         yield* deps.eventPublisher.publish(
-          new BranchSwitched({
+          BranchSwitched.make({
             sessionId: runInfo.sessionId,
             fromBranchId: runInfo.branchId,
             toBranchId: params.toBranchId,
@@ -406,7 +406,7 @@ export const makeExtensionHostContext = (
           createdAt: now,
         })
         yield* deps.storage.createBranch(branch)
-        yield* deps.eventPublisher.publish(new SessionStarted({ sessionId, branchId }))
+        yield* deps.eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
         return { sessionId, branchId }
       }),
 

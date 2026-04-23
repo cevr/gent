@@ -21,7 +21,7 @@ const withRuntime = (
 
     yield* Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* fn(runtime)
     }).pipe(Effect.provide(e2eLayer))
   })

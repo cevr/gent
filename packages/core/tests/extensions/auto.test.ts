@@ -73,7 +73,7 @@ const sendAuto = (
 }
 
 const checkpointSignal = (output: Record<string, unknown>) =>
-  new ToolCallSucceeded({
+  ToolCallSucceeded.make({
     sessionId,
     branchId,
     toolCallId: ToolCallId.make("tc-checkpoint"),
@@ -82,20 +82,20 @@ const checkpointSignal = (output: Record<string, unknown>) =>
   })
 
 const reviewSignal = () =>
-  new ToolCallSucceeded({
+  ToolCallSucceeded.make({
     sessionId,
     branchId,
     toolCallId: ToolCallId.make("tc-review"),
     toolName: "review",
   })
 
-const turnCompleted = () => new TurnCompleted({ sessionId, branchId, durationMs: 100 })
+const turnCompleted = () => TurnCompleted.make({ sessionId, branchId, durationMs: 100 })
 
 describe("Auto runtime integration", () => {
   it.live("full lifecycle: start → checkpoint → review → iterate → complete", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -146,7 +146,7 @@ describe("Auto runtime integration", () => {
   it.live("TurnCompleted does not advance the loop, only increments watchdog", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -165,7 +165,7 @@ describe("Auto runtime integration", () => {
   it.live("cancel mid-working returns to Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -181,7 +181,7 @@ describe("Auto runtime integration", () => {
   it.live("cancel from AwaitingReview returns to Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -203,7 +203,7 @@ describe("Auto runtime integration", () => {
   it.live("wedge prevention: 5 turns without checkpoint → auto-cancel", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -231,7 +231,7 @@ describe("Auto runtime integration", () => {
   it.live("Inactive ignores all events", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -253,7 +253,7 @@ describe("Auto runtime integration", () => {
   it.live("unrelated tool does not advance the loop", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -262,7 +262,7 @@ describe("Auto runtime integration", () => {
 
       // An unrelated tool call must not transition the machine
       yield* runtime.publish(
-        new ToolCallSucceeded({
+        ToolCallSucceeded.make({
           sessionId,
           branchId,
           toolCallId: ToolCallId.make("tc-unrelated"),
@@ -282,7 +282,7 @@ describe("Auto runtime integration", () => {
   it.live("review while Working is ignored (must checkpoint first)", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -302,7 +302,7 @@ describe("Auto runtime integration", () => {
   it.live("checkpoint while AwaitingReview is ignored (must review first)", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -331,7 +331,7 @@ describe("Auto runtime integration", () => {
   it.live("maxIterations reached after review → Inactive", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -379,7 +379,7 @@ describe("Auto runtime integration", () => {
       })
 
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -400,7 +400,7 @@ describe("Auto runtime integration", () => {
   it.live("AutoProjection injects learnings + nextIdea into prompt sections", () =>
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+      yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* sendAuto(runtime, { _tag: "StartAuto", goal: "research caching strategies" })
       yield* runtime.publish(
         checkpointSignal({
@@ -484,7 +484,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })
@@ -529,7 +529,7 @@ describe("Auto JSONL replay via onInit", () => {
       yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
 
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId: parentId, branchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId: parentId, branchId }), {
         sessionId: parentId,
         branchId,
       })
@@ -569,7 +569,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })
@@ -598,7 +598,7 @@ describe("Auto JSONL replay via onInit", () => {
       )
 
       const runtime = yield* MachineEngine
-      yield* runtime.publish(new SessionStarted({ sessionId: childId, branchId: childBranchId }), {
+      yield* runtime.publish(SessionStarted.make({ sessionId: childId, branchId: childBranchId }), {
         sessionId: childId,
         branchId: childBranchId,
       })

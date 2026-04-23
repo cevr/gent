@@ -109,7 +109,7 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         nextId += 1
         const createdAt = yield* Clock.currentTimeMillis
         events.push(
-          new EventEnvelope({
+          EventEnvelope.make({
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
             id: nextId as EventEnvelope["id"],
             event,

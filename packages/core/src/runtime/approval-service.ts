@@ -109,7 +109,7 @@ const makeApprovalInteractionService = (
   makeInteractionService({
     onPresent: (requestId, params, ctx) =>
       eventPublisher.publish(
-        new InteractionPresented({
+        InteractionPresented.make({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
           requestId,

@@ -53,7 +53,7 @@ export class InteractionCommands extends Context.Service<
           // 4. Publish resolution event
           yield* eventPublisher
             .publish(
-              new InteractionResolved({
+              InteractionResolved.make({
                 sessionId: input.sessionId,
                 branchId: input.branchId,
                 requestId: input.requestId,

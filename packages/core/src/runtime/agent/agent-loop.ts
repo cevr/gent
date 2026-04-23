@@ -237,7 +237,7 @@ const persistMessageParts = (params: {
     yield* params.storage.createMessageIfAbsent(message)
     yield* params
       .publishEvent(
-        new MessageReceived({
+        MessageReceived.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
           messageId: message.id,
@@ -352,7 +352,7 @@ const resolveTurnContext = (params: {
     if (agent === undefined) {
       yield* params
         .publishEvent(
-          new ErrorOccurred({
+          ErrorOccurred.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
             error: `Unknown agent: ${currentAgent}`,
@@ -380,7 +380,7 @@ const resolveTurnContext = (params: {
     // override replaces it — `effectiveAgent` is otherwise unchanged.
     const dispatchAgent =
       driverResolution.source === "config"
-        ? new AgentDefinition({ ...effectiveAgent, driver: driverResolution.driver })
+        ? AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
         : effectiveAgent
 
     // Derive extension projections from state machines and explicit prompt/message slots.
@@ -599,12 +599,12 @@ const collectModelTurnResponse = (params: {
           )
           yield* params
             .publishEvent(
-              new StreamEnded({ sessionId: params.sessionId, branchId: params.branchId }),
+              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
             )
             .pipe(Effect.orDie)
           yield* params
             .publishEvent(
-              new ErrorOccurred({
+              ErrorOccurred.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 error: params.formatStreamError(streamError),
@@ -666,7 +666,7 @@ const collectExternalTurnResponse = (params: {
             case "tool-started":
               yield* params
                 .publishEvent(
-                  new ToolCallStarted({
+                  ToolCallStarted.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     toolCallId: ToolCallId.make(event.toolCallId),
@@ -678,7 +678,7 @@ const collectExternalTurnResponse = (params: {
             case "tool-completed":
               yield* params
                 .publishEvent(
-                  new ToolCallSucceeded({
+                  ToolCallSucceeded.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     toolCallId: ToolCallId.make(event.toolCallId),
@@ -690,7 +690,7 @@ const collectExternalTurnResponse = (params: {
             case "tool-failed":
               yield* params
                 .publishEvent(
-                  new ToolCallFailed({
+                  ToolCallFailed.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     toolCallId: ToolCallId.make(event.toolCallId),
@@ -734,12 +734,12 @@ const collectExternalTurnResponse = (params: {
           )
           yield* params
             .publishEvent(
-              new StreamEnded({ sessionId: params.sessionId, branchId: params.branchId }),
+              StreamEnded.make({ sessionId: params.sessionId, branchId: params.branchId }),
             )
             .pipe(Effect.orDie)
           yield* params
             .publishEvent(
-              new ErrorOccurred({
+              ErrorOccurred.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 error: params.formatStreamError(streamError),
@@ -781,7 +781,7 @@ const executeToolCalls = (params: {
     (toolCall) =>
       Effect.gen(function* () {
         yield* params.publishEvent(
-          new ToolCallStarted({
+          ToolCallStarted.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
             toolCallId: toolCall.toolCallId,
@@ -817,7 +817,7 @@ const executeToolCalls = (params: {
           output: stringifyOutput(result.output.value),
         }
         yield* params.publishEvent(
-          isError ? new ToolCallFailed(toolCallFields) : new ToolCallSucceeded(toolCallFields),
+          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
         )
         yield* Effect.logInfo("tool.completed").pipe(
           Effect.annotateLogs({
@@ -854,7 +854,7 @@ const resolveTurnPhase = (params: {
       yield* params.storage.createMessageIfAbsent(params.message)
       yield* params
         .publishEvent(
-          new MessageReceived({
+          MessageReceived.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
             messageId: params.message.id,
@@ -932,7 +932,7 @@ const resolveTurnEventStream = (params: {
       if (executor === undefined) {
         yield* params
           .publishEvent(
-            new ErrorOccurred({
+            ErrorOccurred.make({
               sessionId: params.sessionId,
               branchId: params.branchId,
               error: `External driver "${resolved.driver.id}" not found`,
@@ -983,7 +983,7 @@ const resolveTurnEventStream = (params: {
         onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
           params
             .publishEvent(
-              new ProviderRetrying({
+              ProviderRetrying.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 attempt,
@@ -1082,7 +1082,7 @@ const runTurnStreamPhase = (params: {
     }
 
     yield* params
-      .publishEvent(new StreamStarted({ sessionId: params.sessionId, branchId: params.branchId }))
+      .publishEvent(StreamStarted.make({ sessionId: params.sessionId, branchId: params.branchId }))
       .pipe(Effect.orDie)
 
     yield* Effect.logInfo("turn-stream.start").pipe(
@@ -1119,7 +1119,7 @@ const runTurnStreamPhase = (params: {
     if (collected.interrupted) {
       yield* params
         .publishEvent(
-          new StreamEnded({
+          StreamEnded.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
             interrupted: true,
@@ -1138,7 +1138,7 @@ const runTurnStreamPhase = (params: {
 
     yield* params
       .publishEvent(
-        new StreamEnded({
+        StreamEnded.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
           ...(collected.messages.usage !== undefined ? { usage: collected.messages.usage } : {}),
@@ -1293,7 +1293,7 @@ const finalizeTurnPhase = (params: {
     yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
     yield* params
       .publishEvent(
-        new TurnCompleted({
+        TurnCompleted.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
           durationMs: Number(turnDurationMs),
@@ -1453,7 +1453,7 @@ const applyAgentOverrides = (
     overrides?.systemPromptAddendum,
   )
 
-  return new AgentDefinition({
+  return AgentDefinition.make({
     ...agent,
     ...(overrides?.allowedTools !== undefined ? { allowedTools: overrides.allowedTools } : {}),
     ...(overrides?.deniedTools !== undefined ? { deniedTools: overrides.deniedTools } : {}),
@@ -1493,7 +1493,7 @@ const publishPhaseFailure = (params: {
 }) =>
   params
     .publishEvent(
-      new ErrorOccurred({
+      ErrorOccurred.make({
         sessionId: params.sessionId,
         branchId: params.branchId,
         error: Cause.pretty(params.cause),
@@ -1524,7 +1524,7 @@ const makePublishingInspector = (params: {
       (event: AnyInspectionEvent) =>
         params
           .publishEvent(
-            new MachineInspected({
+            MachineInspected.make({
               sessionId: params.sessionId,
               branchId: params.branchId,
               actorId: event.actorId,
@@ -1575,7 +1575,7 @@ const makeRecoveryDecision = (params: {
         ? Effect.void
         : params
             .publishEvent(
-              new TurnRecoveryApplied({
+              TurnRecoveryApplied.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 phase: recovery.phase,
@@ -1853,7 +1853,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 if (resolved === undefined) return state
 
                 yield* publishEvent(
-                  new AgentSwitched({
+                  AgentSwitched.make({
                     sessionId,
                     branchId,
                     fromAgent: previous,
@@ -2488,7 +2488,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             )
             yield* eventPublisher
               .publish(
-                new MessageReceived({
+                MessageReceived.make({
                   sessionId: input.sessionId,
                   branchId: input.branchId,
                   messageId: userMessage.id,

@@ -19,11 +19,11 @@ import {
 import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- AgentName is branded; tests build raw definitions.
-const cowork = new AgentDefinition({ name: "cowork" as never })
+const cowork = AgentDefinition.make({ name: "cowork" as never })
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-const hardcoded = new AgentDefinition({
+const hardcoded = AgentDefinition.make({
   name: "hardcoded" as never,
-  driver: new ExternalDriverRef({ id: "acp-claude-code" }),
+  driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
 })
 
 describe("driver override routing through ConfigService", () => {
@@ -39,7 +39,7 @@ describe("driver override routing through ConfigService", () => {
       Effect.provide(
         ConfigService.Test(
           new UserConfig({
-            driverOverrides: { cowork: new ExternalDriverRef({ id: "acp-claude-code" }) },
+            driverOverrides: { cowork: ExternalDriverRef.make({ id: "acp-claude-code" }) },
           }),
         ),
       ),
@@ -57,7 +57,7 @@ describe("driver override routing through ConfigService", () => {
       Effect.provide(
         ConfigService.Test(
           new UserConfig({
-            driverOverrides: { hardcoded: new ModelDriverRef({ id: "anthropic" }) },
+            driverOverrides: { hardcoded: ModelDriverRef.make({ id: "anthropic" }) },
           }),
         ),
       ),
@@ -77,7 +77,7 @@ describe("driver override routing through ConfigService", () => {
   it.live("clearing the override falls back to default on the next read", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService
-      yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
+      yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
       const before = (yield* cfg.get()).driverOverrides
       expect(resolveAgentDriver(cowork, before).source).toBe("config")
       yield* cfg.clearDriverOverride("cowork")

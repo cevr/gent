@@ -12,9 +12,9 @@ describe("runHeadless", () => {
     const branchId = BranchId.make("branch-test")
     let sent = false
 
-    const completed = new EventEnvelope({
+    const completed = EventEnvelope.make({
       id: 1 as EventEnvelope["id"],
-      event: new TurnCompleted({
+      event: TurnCompleted.make({
         sessionId,
         branchId,
         durationMs: 42,

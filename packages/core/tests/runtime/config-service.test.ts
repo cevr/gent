@@ -176,7 +176,7 @@ describe("ConfigService", () => {
     it.live("setDriverOverride writes a single agent override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        const driver = new ExternalDriverRef({ id: "acp-claude-code" })
+        const driver = ExternalDriverRef.make({ id: "acp-claude-code" })
         yield* cfg.setDriverOverride("cowork", driver)
         const result = yield* cfg.get()
         const cowork = result.driverOverrides?.["cowork"]
@@ -189,8 +189,8 @@ describe("ConfigService", () => {
     it.live("setDriverOverride replaces an existing override for the same agent", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("cowork", new ModelDriverRef({ id: "anthropic" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("cowork", ModelDriverRef.make({ id: "anthropic" }))
         const result = yield* cfg.get()
         expect(result.driverOverrides?.["cowork"]?._tag).toBe("model")
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -199,8 +199,8 @@ describe("ConfigService", () => {
     it.live("setDriverOverride preserves other agents' overrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("deepwork", new ExternalDriverRef({ id: "acp-opencode" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("deepwork", ExternalDriverRef.make({ id: "acp-opencode" }))
         const result = yield* cfg.get()
         expect(Object.keys(result.driverOverrides ?? {})).toHaveLength(2)
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -209,8 +209,8 @@ describe("ConfigService", () => {
     it.live("clearDriverOverride removes one entry without touching others", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
-        yield* cfg.setDriverOverride("deepwork", new ExternalDriverRef({ id: "acp-opencode" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("deepwork", ExternalDriverRef.make({ id: "acp-opencode" }))
         yield* cfg.clearDriverOverride("cowork")
         const result = yield* cfg.get()
         expect(result.driverOverrides?.["cowork"]).toBeUndefined()
@@ -221,7 +221,7 @@ describe("ConfigService", () => {
     it.live("clearDriverOverride drops the entire record when last entry is removed", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
         yield* cfg.clearDriverOverride("cowork")
         const result = yield* cfg.get()
         expect(result.driverOverrides).toBeUndefined()
@@ -240,7 +240,7 @@ describe("ConfigService", () => {
     it.live("addPermissionRule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
         const result = yield* cfg.get()
         expect(result.driverOverrides?.["cowork"]).toBeDefined()
@@ -250,7 +250,7 @@ describe("ConfigService", () => {
     it.live("removePermissionRule preserves driverOverrides", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        yield* cfg.setDriverOverride("cowork", new ExternalDriverRef({ id: "acp-claude-code" }))
+        yield* cfg.setDriverOverride("cowork", ExternalDriverRef.make({ id: "acp-claude-code" }))
         yield* cfg.addPermissionRule(new PermissionRule({ tool: "Bash", action: "deny" }))
         yield* cfg.removePermissionRule("Bash", undefined)
         const result = yield* cfg.get()

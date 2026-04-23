@@ -163,8 +163,8 @@ export const buildAnthropicModelDriver = (
   },
   auth: {
     methods: [
-      new AuthMethod({ type: "oauth", label: "Claude Code" }),
-      new AuthMethod({ type: "api", label: "Manually enter API key" }),
+      AuthMethod.make({ type: "oauth", label: "Claude Code" }),
+      AuthMethod.make({ type: "api", label: "Manually enter API key" }),
     ],
     authorize: (ctx) =>
       Effect.gen(function* () {

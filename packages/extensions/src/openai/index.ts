@@ -155,13 +155,13 @@ export const buildOpenAIModelDriver = (
       })
       .map((model) => {
         if (model.provider !== "openai") return model
-        return new Model({ ...model, pricing: { input: 0, output: 0 } })
+        return Model.make({ ...model, pricing: { input: 0, output: 0 } })
       })
   },
   auth: {
     methods: [
-      new AuthMethod({ type: "oauth", label: "ChatGPT Pro/Plus" }),
-      new AuthMethod({ type: "api", label: "Manually enter API key" }),
+      AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus" }),
+      AuthMethod.make({ type: "api", label: "Manually enter API key" }),
     ],
     authorize: (ctx) =>
       Effect.tryPromise({

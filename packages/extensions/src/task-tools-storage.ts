@@ -69,7 +69,7 @@ const selectTaskById = (sql: SqlClient.SqlClient, id: TaskId) =>
   )
 
 const taskFromRow = (row: TaskRow) =>
-  new Task({
+  Task.make({
     id: row.id,
     sessionId: row.session_id,
     branchId: row.branch_id,

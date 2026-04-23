@@ -65,9 +65,9 @@ const makeFailingExecutor = (message: string): TurnExecutor => ({
   executeTurn: () => Stream.fail(new TurnError({ message })),
 })
 
-const externalAgent = new AgentDefinition({
+const externalAgent = AgentDefinition.make({
   name: "test-external" as never,
-  driver: new ExternalDriverRef({ id: "test-runner" }),
+  driver: ExternalDriverRef.make({ id: "test-runner" }),
 })
 
 const makeResolved = (executor: TurnExecutor) =>
@@ -409,9 +409,9 @@ describe("ExternalDriverContribution end-to-end", () => {
     }
 
     // Agent referencing the external driver by id.
-    const e2eAgent = new AgentDefinition({
+    const e2eAgent = AgentDefinition.make({
       name: "my-test-agent" as never,
-      driver: new ExternalDriverRef({ id: "my-test-driver" }),
+      driver: ExternalDriverRef.make({ id: "my-test-driver" }),
     })
 
     // Register the contribution through resolveExtensions — the real path.

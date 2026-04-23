@@ -66,7 +66,6 @@ export { makeToolContext, type ToolContext } from "../domain/tool.js"
 export {
   defineAgent,
   AgentDefinition,
-  AgentDefinitionBrand,
   AgentName,
   DEFAULT_AGENT_NAME,
   DriverRef,

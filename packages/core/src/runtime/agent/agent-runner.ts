@@ -379,7 +379,7 @@ const makeSharedRunnerHelpers = (
     prompt: string
   }) =>
     eventPublisher.publish(
-      new AgentRunSpawned({
+      AgentRunSpawned.make({
         parentSessionId: params.parentSessionId,
         childSessionId: params.sessionId,
         agentName: params.agentName,
@@ -401,7 +401,7 @@ const makeSharedRunnerHelpers = (
     savedPath?: string
   }) =>
     eventPublisher.publish(
-      new AgentRunSucceeded({
+      AgentRunSucceeded.make({
         parentSessionId: params.parentSessionId,
         childSessionId: params.sessionId,
         agentName: params.agentName,
@@ -422,7 +422,7 @@ const makeSharedRunnerHelpers = (
   }) =>
     eventPublisher
       .publish(
-        new AgentRunFailed({
+        AgentRunFailed.make({
           parentSessionId: params.parentSessionId,
           childSessionId: params.sessionId,
           agentName: params.agentName,
@@ -653,7 +653,7 @@ const runEphemeralAgent = (params: {
       ),
     )
     yield* localEventPublisher.publish(
-      new AgentSwitched({
+      AgentSwitched.make({
         sessionId,
         branchId,
         fromAgent: DEFAULT_AGENT_NAME,
@@ -809,7 +809,7 @@ export const InProcessRunner = (
         agentName: string
       }) =>
         eventPublisher.publish(
-          new AgentSwitched({
+          AgentSwitched.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
             fromAgent: DEFAULT_AGENT_NAME,

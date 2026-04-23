@@ -43,7 +43,7 @@ const setup = Effect.gen(function* () {
 
 const makeTask = (id: string, branch: BranchId, status: Task["status"] = "pending") => {
   const now = new Date()
-  return new Task({
+  return Task.make({
     id: TaskId.make(id),
     sessionId,
     branchId: branch,

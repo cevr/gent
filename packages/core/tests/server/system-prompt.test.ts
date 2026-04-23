@@ -165,7 +165,7 @@ describe("buildTurnPrompt", () => {
     ...overrides,
   })
 
-  const agent = new AgentDefinition({
+  const agent = AgentDefinition.make({
     name: "test-agent",
     systemPromptAddendum: "Be helpful.",
   })
@@ -248,9 +248,9 @@ describe("buildTurnPrompt", () => {
   test("synthesizes delegation targets when delegate is in tool set", () => {
     const tools = [makeTool("delegate", { description: "Delegate work" })]
     const targets = [
-      new AgentDefinition({ name: "explore", description: "Fast codebase search" }),
-      new AgentDefinition({ name: "explore-2", description: "Code review" }),
-      new AgentDefinition({ name: "no-desc" }), // no description — should be excluded
+      AgentDefinition.make({ name: "explore", description: "Fast codebase search" }),
+      AgentDefinition.make({ name: "explore-2", description: "Code review" }),
+      AgentDefinition.make({ name: "no-desc" }), // no description — should be excluded
     ]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("## Delegation Targets")
@@ -260,9 +260,9 @@ describe("buildTurnPrompt", () => {
   })
 
   test("excludes current agent from delegation targets", () => {
-    const self = new AgentDefinition({ name: "test-agent", description: "Self" })
+    const self = AgentDefinition.make({ name: "test-agent", description: "Self" })
     const tools = [makeTool("delegate", { description: "Delegate" })]
-    const targets = [self, new AgentDefinition({ name: "other", description: "Other agent" })]
+    const targets = [self, AgentDefinition.make({ name: "other", description: "Other agent" })]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).toContain("**other**: Other agent")
     expect(result).not.toContain("**test-agent**")
@@ -270,7 +270,7 @@ describe("buildTurnPrompt", () => {
 
   test("omits delegation targets when delegate not in tool set", () => {
     const tools = [makeTool("read", { description: "Read" })]
-    const targets = [new AgentDefinition({ name: "explore", description: "Search" })]
+    const targets = [AgentDefinition.make({ name: "explore", description: "Search" })]
     const result = buildTurnPrompt(baseSections, agent, tools, undefined, targets)
     expect(result).not.toContain("## Delegation Targets")
   })

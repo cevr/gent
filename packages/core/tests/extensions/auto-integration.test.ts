@@ -67,7 +67,7 @@ const runE2ETest = (
 
     yield* Effect.gen(function* () {
       const stateRuntime = yield* MachineEngine
-      yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+      yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
       })
@@ -243,7 +243,7 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
-        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -286,7 +286,7 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
-        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -356,7 +356,7 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
-        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -409,7 +409,7 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
-        yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+        yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
         })
@@ -454,7 +454,7 @@ describe("Auto extension E2E", () => {
             const agentLoop = yield* AgentLoop
             const stateRuntime = yield* MachineEngine
 
-            yield* stateRuntime.publish(new SessionStarted({ sessionId, branchId }), {
+            yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
               sessionId,
               branchId,
             })

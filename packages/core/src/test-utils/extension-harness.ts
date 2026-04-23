@@ -64,10 +64,10 @@ export interface EventFactoryContext {
 
 export const createEventFactories = (ctx: EventFactoryContext) => ({
   streamStarted: (overrides?: Partial<ConstructorParameters<typeof StreamStarted>[0]>) =>
-    new StreamStarted({ sessionId: ctx.sessionId, branchId: ctx.branchId, ...overrides }),
+    StreamStarted.make({ sessionId: ctx.sessionId, branchId: ctx.branchId, ...overrides }),
 
   turnCompleted: (overrides?: Partial<ConstructorParameters<typeof TurnCompleted>[0]>) =>
-    new TurnCompleted({
+    TurnCompleted.make({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
       durationMs: 0,
@@ -75,7 +75,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     }),
 
   toolCallSucceeded: (overrides?: Partial<ConstructorParameters<typeof ToolCallSucceeded>[0]>) =>
-    new ToolCallSucceeded({
+    ToolCallSucceeded.make({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
       toolCallId: ToolCallId.make("tc-test"),
@@ -84,7 +84,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     }),
 
   toolCallFailed: (overrides?: Partial<ConstructorParameters<typeof ToolCallFailed>[0]>) =>
-    new ToolCallFailed({
+    ToolCallFailed.make({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
       toolCallId: ToolCallId.make("tc-test"),
@@ -156,7 +156,7 @@ export function createActorHarness<State, Message = void>(
     sessionId: ctx.sessionId,
     branchId: BranchId.make(ctx.branchId ?? "test-branch"),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
+    agent: options?.agent ?? AgentDefinition.make({ name: "test" as never }),
     allTools: options?.allTools ?? [],
     interactive: true,
   }

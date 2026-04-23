@@ -938,7 +938,7 @@ const makeStorage = Effect.gen(function* () {
             return rows[0]?.id ?? 0
           }),
         )
-        return new EventEnvelope({
+        return EventEnvelope.make({
           id: EventId.make(id),
           event,
           createdAt,
@@ -959,7 +959,7 @@ const makeStorage = Effect.gen(function* () {
           const decoded = yield* decodeEvent(row.event_json).pipe(Effect.option)
           if (decoded._tag === "Some") {
             envelopes.push(
-              new EventEnvelope({
+              EventEnvelope.make({
                 id: EventId.make(row.id),
                 event: decoded.value,
                 createdAt: row.created_at,
