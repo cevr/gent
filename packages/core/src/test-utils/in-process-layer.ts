@@ -15,7 +15,6 @@ import { Permission } from "../domain/permission.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { Provider } from "../providers/provider.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { MachineExecute } from "../runtime/extensions/machine-execute.js"
@@ -105,23 +104,17 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     EventPublisherLive,
     Layer.merge(baseDeps, eventStoreLive),
   )
-  const agentLoopLive = Layer.provide(
-    AgentLoop.Live({
-      baseSections: [{ id: "base", content: "test system prompt", priority: 0 }],
-    }),
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
-  )
 
   const sessionRuntimeLive = Layer.provide(
     SessionRuntime.Live({
       baseSections: [{ id: "base", content: "test system prompt", priority: 0 }],
     }),
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
   )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, agentLoopLive, sessionRuntimeLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionRuntimeLive),
   )
 }
 

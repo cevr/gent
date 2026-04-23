@@ -564,8 +564,19 @@ const makeLiveSessionRuntime: Effect.Effect<
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
-  static Live = (_config: { readonly baseSections: ReadonlyArray<PromptSection> }) =>
-    Layer.effect(SessionRuntime, makeLiveSessionRuntime)
+  static Live = (config: { readonly baseSections: ReadonlyArray<PromptSection> }) =>
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const agentLoopOpt = yield* Effect.serviceOption(AgentLoop)
+        const agentLoopLayer =
+          agentLoopOpt._tag === "Some"
+            ? Layer.succeed(AgentLoop, agentLoopOpt.value)
+            : AgentLoop.Live(config)
+        return Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
+          Layer.provideMerge(agentLoopLayer),
+        )
+      }),
+    )
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {

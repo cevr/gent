@@ -12,7 +12,6 @@ import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { ConfigService } from "../runtime/config-service.js"
@@ -308,19 +307,7 @@ export const createDependencies = (config: DependenciesConfig) => {
         return SessionRuntime.Live({ baseSections })
       }),
     ),
-    Layer.mergeAll(
-      allDeps,
-      sessionProfileCacheLive,
-      Layer.provide(
-        Layer.unwrap(
-          Effect.gen(function* () {
-            const baseSections = yield* BasePromptSectionsTag
-            return AgentLoop.Live({ baseSections })
-          }),
-        ),
-        Layer.mergeAll(allDeps, sessionProfileCacheLive),
-      ),
-    ),
+    Layer.mergeAll(allDeps, sessionProfileCacheLive),
   )
 
   const allWithRuntime = Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionRuntimeLive)

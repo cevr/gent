@@ -184,6 +184,20 @@ describe("architecture policy", () => {
     }
   })
 
+  test("composition roots do not assemble AgentLoop separately from SessionRuntime", () => {
+    const files = [
+      pathResolve(ROOT, "packages/core/src/server/dependencies.ts"),
+      pathResolve(ROOT, "packages/core/src/test-utils/in-process-layer.ts"),
+      pathResolve(ROOT, "packages/core/src/test-utils/e2e-layer.ts"),
+      pathResolve(ROOT, "packages/core/src/runtime/agent/agent-runner.ts"),
+    ]
+
+    for (const file of files) {
+      const source = readFileSync(file, "utf8")
+      expect(source).not.toMatch(/\bAgentLoop\.Live\(/)
+    }
+  })
+
   test("machine mailbox ownership is not exported as shared extension context", () => {
     const sharedSource = readFileSync(
       pathResolve(ROOT, "packages/core/src/runtime/extensions/extension-actor-shared.ts"),
