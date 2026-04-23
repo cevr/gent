@@ -6,16 +6,13 @@
  * pipe — and their composition keeps `instanceof` working through decode,
  * confirmed via runtime probe). The wrapper adds:
  *
- * - per-variant smart constructors as top-level properties (so callers
- *   write `MyEnum.Variant({...})` instead of
+ * - per-variant TaggedClass constructors under `cases` (so callers write
  *   `MyEnum.cases.Variant.make({...})`);
- * - per-variant TaggedClass identity (so `instanceof MyEnum.Variant`
+ * - per-variant TaggedClass identity (so `instanceof MyEnum.cases.Variant`
  *   works on decoded values — guaranteed because `toTaggedUnion`
  *   preserves the original member schemas inside `cases`);
  * - construction-time rejection of empty variant maps, `_tag` payload
- *   field collisions, and variant tag names that collide with the
- *   wrapper's own own properties (`cases`, `match`, `guards`,
- *   `isAnyOf`, plus the inherited Schema/Bottom keys).
+ *   field collisions, and the prototype-special `__proto__` variant tag.
  *
  * The wire format is identical to the existing per-variant
  * `Schema.TaggedClass` shape: `{ _tag: "Variant", ...fields }`. SQLite +
@@ -31,22 +28,20 @@
  * import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
  *
  * export const Shape = TaggedEnumClass("Shape", {
- *   Circle:    { radius: Schema.Number },
+ *   Circle: { radius: Schema.Number },
  *   Rectangle: { width: Schema.Number, height: Schema.Number },
  * })
  * export type Shape = Schema.Schema.Type<typeof Shape>
  *
  * // Construction
- * const c = new Shape.Circle({ radius: 5 })
- * // or via the schema's `.make`
- * const c2 = Shape.cases.Circle.make({ radius: 5 })
+ * const c = Shape.cases.Circle.make({ radius: 5 })
  *
  * // instanceof works
- * c instanceof Shape.Circle  // true
+ * c instanceof Shape.cases.Circle  // true
  *
  * // Decode + encode round-trip
  * const decoded = Schema.decodeUnknownSync(Shape)({ _tag: "Circle", radius: 5 })
- * decoded instanceof Shape.Circle  // true
+ * decoded instanceof Shape.cases.Circle  // true
  *
  * // Pattern matching (exhaustive at compile time)
  * const area = Shape.match({
@@ -83,117 +78,15 @@ export type AssertNoTagField<F extends VariantFields> = "_tag" extends keyof F
     }
   : F
 
-/**
- * Names that the merged shape (`Schema.Union(...).pipe(toTaggedUnion("_tag"))`)
- * exposes — own properties AND inherited methods from `Schema.Bottom`'s
- * prototype (`pipe`, `annotate`, `annotateKey`, `check`, etc.). Variant tag
- * names that match any of these would shadow the wrapper's surface because
- * `Object.assign(union, variantClasses)` installs the variant constructor as
- * an own property, masking any inherited method of the same name.
- *
- * Note: this is about VARIANT TAG NAMES, not payload field names. A payload
- * field named `cases` is fine (it lives on instances). A variant tag named
- * `cases` would collide with `Shape.cases`.
- *
- * The runtime list is derived from a probe at module load (see
- * `RESERVED_TAGS` below) so it stays correct as Effect evolves; this static
- * list is the type-level mirror, kept in sync with the probe and verified
- * by a test that asserts exact set equality.
- */
-export type ReservedVariantTag =
-  | "__proto__"
-  | "annotate"
-  | "annotateKey"
-  | "ast"
-  | "cases"
-  | "check"
-  | "guards"
-  | "isAnyOf"
-  | "make"
-  | "makeEffect"
-  | "makeOption"
-  | "mapMembers"
-  | "match"
-  | "members"
-  | "pipe"
-  | "rebuild"
+export type ReservedVariantTag = "__proto__"
 
 export type AssertNoReservedTags<V extends VariantsMap> = {
   readonly [K in keyof V]: K extends ReservedVariantTag
     ? {
-        readonly __error: "TaggedEnumClass: variant tag collides with a reserved key on the wrapper or Schema.toTaggedUnion augmentation."
+        readonly __error: "TaggedEnumClass: variant tag collides with JavaScript prototype semantics."
       }
     : V[K]
 }
-
-/**
- * The actual reserved-key set. Built dynamically from a probe union at
- * module load so we get the truth from Effect itself rather than a
- * hand-curated list that ages like milk. Walks the entire prototype chain
- * (stopping at `Object.prototype`) because `Object.assign` will shadow
- * inherited methods like `pipe`/`annotate`/`check`, not just own keys.
- */
-const probeReservedTags = (): ReadonlySet<string> => {
-  // Two-variant probe — the union must have at least two members for
-  // `toTaggedUnion` to behave as a union (vs degenerating to the single
-  // member). The variant tag names ("__probeA"/"__probeB") cannot collide
-  // with anything reasonable.
-  class __ProbeA extends Schema.TaggedClass<__ProbeA>("@gent/internal/__TaggedEnumClass/probe/A")(
-    "__probeA",
-    { __v: Schema.Number },
-  ) {}
-  class __ProbeB extends Schema.TaggedClass<__ProbeB>("@gent/internal/__TaggedEnumClass/probe/B")(
-    "__probeB",
-    { __v: Schema.Number },
-  ) {}
-  // The Union+toTaggedUnion type constraint demands an index signature on
-  // each member's `Type` shape; class instances don't satisfy that, so we
-  // erase the member types via `any[]` for the probe (the runtime path is
-  // identical).
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-  const members = [__ProbeA, __ProbeB] as ReadonlyArray<any>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-  const probe = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag" as any))
-
-  // Seed with names that aren't on the schema prototype but are still
-  // dangerous as variant tags:
-  //   - `__proto__`: a tag named `__proto__` mutates the prototype of the
-  //     internal variantClasses map instead of becoming an own property,
-  //     silently dropping the variant from `Object.values(...)`. The
-  //     `Object.create(null)` map blocks the mutation, but explicitly
-  //     rejecting the name gives a clear error to the author.
-  const reserved = new Set<string>(["__proto__"])
-  // Walk the entire prototype chain so inherited methods (`pipe`,
-  // `annotate`, `check`, etc.) are also rejected — `Object.assign` will
-  // happily shadow them with a variant class constructor.
-  let current: object | null = probe
-  while (current !== null && current !== Object.prototype) {
-    for (const key of Object.getOwnPropertyNames(current)) {
-      // Skip:
-      // - `constructor` — present on every prototype, never a meaningful
-      //   variant name
-      // - keys starting with `~` — Effect's internal type-marker keys
-      //   (e.g. `~effect/Schema/Schema`); they're not callable methods and
-      //   no realistic variant name would start with `~`
-      if (key === "constructor") continue
-      if (key.startsWith("~")) continue
-      reserved.add(key)
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    current = Object.getPrototypeOf(current) as object | null
-  }
-  return reserved
-}
-
-const RESERVED_TAGS: ReadonlySet<string> = probeReservedTags()
-
-/**
- * Test-only accessor — exposed so the substrate test can assert exact set
- * equality between the probe-derived runtime set and the static
- * `ReservedVariantTag` type union. Not part of the public substrate API;
- * importing this in production code should be considered a smell.
- */
-export const __getReservedTagsForTesting = (): ReadonlySet<string> => RESERVED_TAGS
 
 /**
  * Defect raised at construction time when the variant map violates the
@@ -222,28 +115,31 @@ export class TaggedEnumClassConfigError extends Schema.TaggedErrorClass<TaggedEn
  * passing the class type as `Self`) is deliberate: at the factory layer
  * we don't have a hand-named class to reference, so we let `TaggedClass`
  * synthesize the identity. Callers see the variant as
- * `MyEnum.Variant` — the enum-level access path provides the nominal
- * surface; the underlying class identity is an implementation detail.
+ * `MyEnum.cases.Variant` — the enum-level access path provides the
+ * nominal surface; the underlying class identity is an implementation detail.
  */
-const buildVariantClass = (
+const buildVariantClass = <Tag extends string, F extends VariantFields>(
   identifier: string,
-  tag: string,
-  fields: VariantFields,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): any => {
+  tag: Tag,
+  fields: F,
+): TaggedEnumClassVariant<Tag, F> => {
   const schemaId = `${identifier}/${tag}`
   // Empty class body — TaggedClass returns the class constructor, which
   // we keep as-is. No methods at v1; module-level functions only.
   // The `Self = {}` placeholder satisfies TaggedClass's generic signature
   // without forcing the caller to name the class type.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-  return Schema.TaggedClass<any>(schemaId)(tag, fields)
+  const variant = Schema.TaggedClass<Schema.Struct.Type<F> & { readonly _tag: Tag }>(schemaId)(
+    tag,
+    fields,
+  )
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  return variant as unknown as TaggedEnumClassVariant<Tag, F>
 }
 
 /**
  * Per-variant TaggedClass schema. Self-typed via a recursive interface so the
  * class instance properties match the field shape (`Schema.Schema.Type<F>`)
- * AND the constructor call shape (`new MyEnum.Variant({...fields})`). The
+ * AND the constructor call shape (`MyEnum.cases.Variant.make({...fields})`). The
  * `_tag` literal is added by `Schema.TaggedClass` and is not part of `F`.
  */
 // eslint-disable-next-line import/namespace
@@ -257,7 +153,7 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
   > {
   // Constructor input mirrors `Schema.TaggedClass`'s contract: a rest tuple
   // form so when every field is optional/defaulted the props arg may itself
-  // be omitted (`new MyEnum.Variant()`), and `MakeOptions` (validation
+  // be omitted (`MyEnum.cases.Variant.make()`), and `MakeOptions` (validation
   // toggles) is accepted as a second argument.
   new (
     ...args: Record<string, never> extends Schema.Struct.MakeIn<F>
@@ -275,7 +171,7 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
  *   variant whose field schemas require a service propagates that service
  *   to consumers' `R` channel rather than silently being erased to
  *   `never`;
- * - per-variant TaggedClasses as own properties (`MyEnum.Variant`);
+ * - per-variant TaggedClasses under `cases` (`MyEnum.cases.Variant`);
  * - the `cases` / `guards` / `isAnyOf` / `match` augmentation from
  *   Effect's `Schema.toTaggedUnion("_tag")` (typed loosely — the runtime
  *   surface is real but the precise generic shape is awkward to express
@@ -288,13 +184,10 @@ export type TaggedEnumClass<V extends VariantsMap> = Schema.Codec<
   { [K in keyof V]: Schema.Struct.DecodingServices<V[K]> }[keyof V],
   { [K in keyof V]: Schema.Struct.EncodingServices<V[K]> }[keyof V]
 > & {
-  readonly [K in keyof V & string]: TaggedEnumClassVariant<K, V[K]>
-} & {
   // The `Schema.toTaggedUnion("_tag")` augmentation. Typed loosely because the
   // exact shape requires Effect-internal types that aren't re-exported. The
   // runtime values are real and behave per Effect's docs.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly cases: { readonly [K in keyof V & string]: any }
+  readonly cases: { readonly [K in keyof V & string]: TaggedEnumClassVariant<K, V[K]> }
   readonly guards: {
     readonly [K in keyof V & string]: (
       u: unknown,
@@ -367,11 +260,9 @@ export const TaggedEnumClass = <V extends VariantsMap>(
     })
   }
   for (const [tag, fields] of variantEntries) {
-    if (RESERVED_TAGS.has(tag)) {
+    if (tag === "__proto__") {
       throw new TaggedEnumClassConfigError({
-        message: `TaggedEnumClass: "${identifier}" variant "${tag}" collides with a reserved key on the wrapper / Schema.toTaggedUnion augmentation. Reserved: ${[
-          ...RESERVED_TAGS,
-        ].join(", ")}.`,
+        message: `TaggedEnumClass: "${identifier}" variant "${tag}" collides with JavaScript prototype semantics.`,
       })
     }
     if (Object.prototype.hasOwnProperty.call(fields, "_tag")) {
@@ -385,28 +276,22 @@ export const TaggedEnumClass = <V extends VariantsMap>(
   // `Object.create(null)` (no prototype) avoids the `__proto__` footgun:
   // assigning to `obj.__proto__` on a plain `{}` mutates the prototype
   // instead of creating an own property, silently dropping the variant
-  // from `Object.values(...)`. RESERVED_TAGS already rejects `__proto__`
-  // explicitly (see below); this is belt + suspenders.
+  // from `Object.values(...)`. The runtime guard above rejects `__proto__`
+  // explicitly; this is belt + suspenders.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const variantClasses = Object.create(null) as Record<string, unknown>
+  const variantClasses = Object.create(null) as Record<
+    string,
+    Schema.Top & { readonly Type: { readonly _tag: string } }
+  >
   for (const [tag, fields] of variantEntries) {
     variantClasses[tag] = buildVariantClass(identifier, tag, fields)
   }
 
   // Build the union from the variant classes, then pipe through
   // `toTaggedUnion("_tag")` to attach `cases`/`guards`/`isAnyOf`/`match`.
-  // Effect's runtime adds those as own properties on the schema, so they
-  // survive the subsequent `Object.assign` (which only adds the per-variant
-  // class shorthand and never collides with the augmentation keys —
-  // RESERVED_TAGS guards exactly that).
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-  const members = Object.values(variantClasses) as ReadonlyArray<any>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-explicit-any
-  const union = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag" as any))
+  const members = Object.values(variantClasses)
+  const union = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag"))
 
-  // Attach the per-variant classes as own properties so `MyEnum.Variant`
-  // works as a top-level construction surface alongside the
-  // `MyEnum.cases.Variant` path that Effect already provides.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  return Object.assign(union, variantClasses) as unknown as TaggedEnumClass<V>
+  return union as unknown as TaggedEnumClass<V>
 }

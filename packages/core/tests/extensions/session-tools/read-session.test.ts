@@ -90,7 +90,7 @@ describe("renderSessionTree", () => {
     })
 
   const makeMessage = (branchId: BranchId, role: "user" | "assistant", text: string) =>
-    new Message.regular({
+    Message.cases.regular.make({
       id: MessageId.make(`msg-${Math.random().toString(36).slice(2, 8)}`),
       sessionId: sid,
       branchId,

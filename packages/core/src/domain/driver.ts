@@ -184,7 +184,7 @@ export type TurnEventUsage = typeof TurnEventUsage.Type
  *
  * Authored via `TaggedEnumClass` (S0 substrate). Validates the factory's
  * handling of non-identifier tag names (kebab-case): variants are accessed
- * as `TurnEvent["text-delta"]` rather than `TurnEvent.textDelta`. Pattern
+ * as `TurnEvent.cases["text-delta"]` rather than `TurnEvent.cases.textDelta`. Pattern
  * matching via `_tag === "text-delta"` or `Match.tag` works unchanged.
  */
 export const TurnEvent = TaggedEnumClass("TurnEvent", {
@@ -219,23 +219,23 @@ export const TurnEvent = TaggedEnumClass("TurnEvent", {
 })
 export type TurnEvent = Schema.Schema.Type<typeof TurnEvent>
 
-// Per-variant re-exports — same class identity as `TurnEvent["text-delta"]`,
+// Per-variant re-exports — same class identity as `TurnEvent.cases["text-delta"]`,
 // exposed at module scope for ergonomic imports. The kebab-case wire tags
 // stay; the JS-friendly names below are the natural identifier form.
-export const TextDelta = TurnEvent["text-delta"]
-export type TextDelta = (typeof TurnEvent)["text-delta"]["Type"]
-export const ReasoningDelta = TurnEvent["reasoning-delta"]
-export type ReasoningDelta = (typeof TurnEvent)["reasoning-delta"]["Type"]
-export const ToolCall = TurnEvent["tool-call"]
-export type ToolCall = (typeof TurnEvent)["tool-call"]["Type"]
-export const ToolStarted = TurnEvent["tool-started"]
-export type ToolStarted = (typeof TurnEvent)["tool-started"]["Type"]
-export const ToolCompleted = TurnEvent["tool-completed"]
-export type ToolCompleted = (typeof TurnEvent)["tool-completed"]["Type"]
-export const ToolFailed = TurnEvent["tool-failed"]
-export type ToolFailed = (typeof TurnEvent)["tool-failed"]["Type"]
-export const Finished = TurnEvent.finished
-export type Finished = (typeof TurnEvent)["finished"]["Type"]
+export const TextDelta = TurnEvent.cases["text-delta"]
+export type TextDelta = (typeof TurnEvent.cases)["text-delta"]["Type"]
+export const ReasoningDelta = TurnEvent.cases["reasoning-delta"]
+export type ReasoningDelta = (typeof TurnEvent.cases)["reasoning-delta"]["Type"]
+export const ToolCall = TurnEvent.cases["tool-call"]
+export type ToolCall = (typeof TurnEvent.cases)["tool-call"]["Type"]
+export const ToolStarted = TurnEvent.cases["tool-started"]
+export type ToolStarted = (typeof TurnEvent.cases)["tool-started"]["Type"]
+export const ToolCompleted = TurnEvent.cases["tool-completed"]
+export type ToolCompleted = (typeof TurnEvent.cases)["tool-completed"]["Type"]
+export const ToolFailed = TurnEvent.cases["tool-failed"]
+export type ToolFailed = (typeof TurnEvent.cases)["tool-failed"]["Type"]
+export const Finished = TurnEvent.cases.finished
+export type Finished = typeof TurnEvent.cases.finished.Type
 
 /** Failure raised by an external driver while streaming a turn. */
 export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {

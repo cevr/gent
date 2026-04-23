@@ -21,17 +21,17 @@ import {
 import * as Response from "effect/unstable/ai/Response"
 
 const baseMessage = (
-  message: Omit<ConstructorParameters<typeof Message.regular>[0], "createdAt">,
+  message: Omit<ConstructorParameters<typeof Message.cases.regular>[0], "createdAt">,
 ) =>
-  new Message.regular({
+  Message.cases.regular.make({
     ...message,
     createdAt: new Date(0),
   })
 
 const baseInterjectionMessage = (
-  message: Omit<ConstructorParameters<typeof Message.interjection>[0], "createdAt">,
+  message: Omit<ConstructorParameters<typeof Message.cases.interjection>[0], "createdAt">,
 ) =>
-  new Message.interjection({
+  Message.cases.interjection.make({
     ...message,
     createdAt: new Date(0),
   })

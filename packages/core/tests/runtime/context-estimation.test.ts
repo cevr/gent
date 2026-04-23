@@ -15,7 +15,7 @@ import {
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -38,7 +38,7 @@ describe("estimateContextPercent", () => {
   test("calculates percent against model context window", () => {
     // 800 chars = 200 tokens. + 4000 overhead = 4200 tokens. / 1000000 = 0.42% → 0
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -54,7 +54,7 @@ describe("estimateContextPercent", () => {
   test("larger messages increase percent", () => {
     // 40000 chars = 10000 tokens. + 4000 = 14000. / 1000000 = 1.4% → 1
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -70,7 +70,7 @@ describe("estimateContextPercent", () => {
   test("respects different model context windows", () => {
     // 40000 chars = 10000 tokens. + 4000 = 14000. / 1000000 (codex) = 1.4% → 1
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -85,7 +85,7 @@ describe("estimateContextPercent", () => {
 
   test("multiple message types contribute to estimate", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -93,7 +93,7 @@ describe("estimateContextPercent", () => {
         parts: [new TextPart({ type: "text", text: "x".repeat(4_000) })],
         createdAt: new Date(),
       }),
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m2",
         sessionId: "s",
         branchId: "b",
@@ -109,7 +109,7 @@ describe("estimateContextPercent", () => {
         ],
         createdAt: new Date(),
       }),
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m3",
         sessionId: "s",
         branchId: "b",
@@ -154,7 +154,7 @@ describe("getContextWindow", () => {
 describe("estimateTokens", () => {
   test("text parts", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -168,7 +168,7 @@ describe("estimateTokens", () => {
 
   test("tool-call parts use JSON.stringify of input", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -191,7 +191,7 @@ describe("estimateTokens", () => {
 
   test("tool-result parts use JSON.stringify of output", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -213,7 +213,7 @@ describe("estimateTokens", () => {
 
   test("image parts estimate ~250 tokens", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -227,7 +227,7 @@ describe("estimateTokens", () => {
 
   test("multiple messages sum correctly", () => {
     const messages = [
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m1",
         sessionId: "s",
         branchId: "b",
@@ -235,7 +235,7 @@ describe("estimateTokens", () => {
         parts: [new TextPart({ type: "text", text: "x".repeat(100) })],
         createdAt: new Date(),
       }),
-      new Message.regular({
+      Message.cases.regular.make({
         id: "m2",
         sessionId: "s",
         branchId: "b",

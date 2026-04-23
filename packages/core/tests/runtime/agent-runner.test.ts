@@ -109,7 +109,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
     SessionRuntime,
     Effect.gen(function* () {
       const runtimeState = yield* SubscriptionRef.make(
-        new SessionRuntimeStateSchema.Idle({
+        SessionRuntimeStateSchema.cases.Idle.make({
           agent: "cowork" as const,
           queue: emptyQueueSnapshot(),
         }),
@@ -121,7 +121,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
           Effect.gen(function* () {
             yield* SubscriptionRef.set(
               runtimeState,
-              new SessionRuntimeStateSchema.Running({
+              SessionRuntimeStateSchema.cases.Running.make({
                 agent: input.agentName,
                 queue: emptyQueueSnapshot(),
               }),
@@ -130,7 +130,7 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
               Effect.ensuring(
                 SubscriptionRef.set(
                   runtimeState,
-                  new SessionRuntimeStateSchema.Idle({
+                  SessionRuntimeStateSchema.cases.Idle.make({
                     agent: input.agentName,
                     queue: emptyQueueSnapshot(),
                   }),
@@ -701,7 +701,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message.regular({
+          Message.cases.regular.make({
             id: MessageId.make(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,
@@ -772,7 +772,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message.regular({
+          Message.cases.regular.make({
             id: MessageId.make(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,
@@ -841,7 +841,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message.regular({
+          Message.cases.regular.make({
             id: MessageId.make(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,

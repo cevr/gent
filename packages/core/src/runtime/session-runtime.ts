@@ -337,7 +337,7 @@ const makeLiveSessionRuntime: Effect.Effect<
           environment.hostCtx,
         )
 
-        const message = new Message.regular({
+        const message = Message.cases.regular.make({
           id: userMessageIdForCommand(commandId),
           sessionId: command.sessionId,
           branchId: command.branchId,
@@ -399,7 +399,7 @@ const makeLiveSessionRuntime: Effect.Effect<
           output: { type: outputType, value: command.output },
         })
 
-        const message = new Message.regular({
+        const message = Message.cases.regular.make({
           id: toolResultMessageIdForCommand(commandId),
           sessionId: command.sessionId,
           branchId: command.branchId,
@@ -576,7 +576,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>
         Effect.succeed(
-          new SessionRuntimeStateSchema.Idle({
+          SessionRuntimeStateSchema.cases.Idle.make({
             agent: "cowork" as const,
             queue: emptyQueueSnapshot(),
           }),

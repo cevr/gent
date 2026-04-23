@@ -222,7 +222,7 @@ const persistMessageParts = (params: {
   Effect.gen(function* () {
     if (params.parts.length === 0) return undefined
 
-    const message = new Message.regular({
+    const message = Message.cases.regular.make({
       id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -2398,7 +2398,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   }
                   return
                 case "Interject": {
-                  const interjectMessage = new Message.interjection({
+                  const interjectMessage = Message.cases.interjection.make({
                     id: MessageId.make(Bun.randomUUIDv7()),
                     sessionId: command.command.sessionId,
                     branchId: command.command.branchId,
@@ -2468,7 +2468,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         const service: AgentLoopService = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
-            const userMessage = new Message.regular({
+            const userMessage = Message.cases.regular.make({
               id: MessageId.make(Bun.randomUUIDv7()),
               sessionId: input.sessionId,
               branchId: input.branchId,
@@ -2623,7 +2623,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           Effect.gen(function* () {
             switch (command._tag) {
               case "QueueFollowUp": {
-                const message = new Message.regular({
+                const message = Message.cases.regular.make({
                   id: MessageId.make(Bun.randomUUIDv7()),
                   sessionId: command.sessionId,
                   branchId: command.branchId,
@@ -2675,7 +2675,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       respondInteraction: () => Effect.void,
       getState: () =>
         Effect.succeed(
-          new LoopRuntimeStateSchema.Idle({
+          LoopRuntimeStateSchema.cases.Idle.make({
             agent: DEFAULT_AGENT_NAME,
             queue: emptyQueueSnapshot(),
           }),

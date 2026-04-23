@@ -119,8 +119,8 @@ export const copyMessageToBranch = (
     ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
   return message._tag === "interjection"
-    ? new Message.interjection({ ...fields, role: "user" })
-    : new Message.regular(fields)
+    ? Message.cases.interjection.make({ ...fields, role: "user" })
+    : Message.cases.regular.make(fields)
 }
 
 // Session

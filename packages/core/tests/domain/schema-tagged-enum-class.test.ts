@@ -3,7 +3,7 @@
  *
  * Tests cover the behavioral contract codex's design review committed to:
  * - per-variant TaggedClass identity (`instanceof` survives decode)
- * - smart-constructor surface (`MyEnum.Variant({...})` and `new MyEnum.Variant({...})`)
+ * - constructor surface (`MyEnum.cases.Variant.make({...})`)
  * - `cases` / `guards` / `match` augmentation from Schema.toTaggedUnion
  * - decode + encode round-trip at the union level
  * - construction-time rejection of empty variants
@@ -17,11 +17,7 @@
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
-import {
-  __getReservedTagsForTesting,
-  TaggedEnumClass,
-  type ReservedVariantTag,
-} from "@gent/core/domain/schema-tagged-enum-class"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import { AgentEvent } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
@@ -32,30 +28,30 @@ describe("TaggedEnumClass — basic shape", () => {
   })
 
   test("variant access exposes a TaggedClass per variant", () => {
-    expect(typeof Shape.Circle).toBe("function")
-    expect(typeof Shape.Rectangle).toBe("function")
+    expect(typeof Shape.cases.Circle).toBe("function")
+    expect(typeof Shape.cases.Rectangle).toBe("function")
   })
 
-  test("`new Variant(...)` constructs an instance with the right `_tag`", () => {
-    const c = new Shape.Circle({ radius: 5 })
+  test("`cases.Variant.make(...)` constructs an instance with the right `_tag`", () => {
+    const c = Shape.cases.Circle.make({ radius: 5 })
     expect(c._tag).toBe("Circle")
     expect(c.radius).toBe(5)
   })
 
   test("`instanceof` works on directly-constructed variants", () => {
-    const c = new Shape.Circle({ radius: 5 })
-    const r = new Shape.Rectangle({ width: 3, height: 4 })
-    expect(c instanceof Shape.Circle).toBe(true)
-    expect(r instanceof Shape.Rectangle).toBe(true)
-    expect(c instanceof Shape.Rectangle).toBe(false)
+    const c = Shape.cases.Circle.make({ radius: 5 })
+    const r = Shape.cases.Rectangle.make({ width: 3, height: 4 })
+    expect(c instanceof Shape.cases.Circle).toBe(true)
+    expect(r instanceof Shape.cases.Rectangle).toBe(true)
+    expect(c instanceof Shape.cases.Rectangle).toBe(false)
   })
 
-  test("`cases.Variant.make(...)` constructs the same shape as `new Variant`", () => {
-    const c1 = new Shape.Circle({ radius: 5 })
+  test("`cases.Variant.make(...)` constructs stable variant instances", () => {
+    const c1 = Shape.cases.Circle.make({ radius: 5 })
     const c2 = Shape.cases.Circle.make({ radius: 5 })
     expect(c1._tag).toBe(c2._tag)
     expect(c1.radius).toBe(c2.radius)
-    expect(c2 instanceof Shape.Circle).toBe(true)
+    expect(c2 instanceof Shape.cases.Circle).toBe(true)
   })
 })
 
@@ -69,7 +65,7 @@ describe("TaggedEnumClass — decode/encode round-trip", () => {
     const decoded = Schema.decodeUnknownSync(Shape)({ _tag: "Circle", radius: 5 })
     // The contract codex committed to: decoded values pass `instanceof Variant`.
     // This is the load-bearing fact for consumer-side `instanceof` checks.
-    expect(decoded instanceof Shape.Circle).toBe(true)
+    expect(decoded instanceof Shape.cases.Circle).toBe(true)
     expect(decoded._tag).toBe("Circle")
     if (decoded._tag === "Circle") {
       expect(decoded.radius).toBe(5)
@@ -77,7 +73,7 @@ describe("TaggedEnumClass — decode/encode round-trip", () => {
   })
 
   test("encode round-trips back to wire format", () => {
-    const c = new Shape.Circle({ radius: 5 })
+    const c = Shape.cases.Circle.make({ radius: 5 })
     const encoded = Schema.encodeUnknownSync(Shape)(c)
     expect(encoded).toEqual({ _tag: "Circle", radius: 5 })
   })
@@ -109,14 +105,14 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
         Triangle: (t) => (t.base * t.height) / 2,
       })(s)
 
-    expect(area(new Shape.Circle({ radius: 1 }))).toBeCloseTo(Math.PI)
-    expect(area(new Shape.Rectangle({ width: 3, height: 4 }))).toBe(12)
-    expect(area(new Shape.Triangle({ base: 4, height: 6 }))).toBe(12)
+    expect(area(Shape.cases.Circle.make({ radius: 1 }))).toBeCloseTo(Math.PI)
+    expect(area(Shape.cases.Rectangle.make({ width: 3, height: 4 }))).toBe(12)
+    expect(area(Shape.cases.Triangle.make({ base: 4, height: 6 }))).toBe(12)
   })
 
   test("`guards` narrow per-variant", () => {
-    const c = new Shape.Circle({ radius: 5 })
-    const r = new Shape.Rectangle({ width: 1, height: 2 })
+    const c = Shape.cases.Circle.make({ radius: 5 })
+    const r = Shape.cases.Rectangle.make({ width: 1, height: 2 })
     expect(Shape.guards.Circle(c)).toBe(true)
     expect(Shape.guards.Circle(r)).toBe(false)
     expect(Shape.guards.Rectangle(r)).toBe(true)
@@ -124,9 +120,9 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
   })
 
   test("`isAnyOf` checks subset membership", () => {
-    const c = new Shape.Circle({ radius: 5 })
-    const r = new Shape.Rectangle({ width: 1, height: 2 })
-    const t = new Shape.Triangle({ base: 1, height: 1 })
+    const c = Shape.cases.Circle.make({ radius: 5 })
+    const r = Shape.cases.Rectangle.make({ width: 1, height: 2 })
+    const t = Shape.cases.Triangle.make({ base: 1, height: 1 })
     const round = Shape.isAnyOf(["Circle"])
     const angular = Shape.isAnyOf(["Rectangle", "Triangle"])
     expect(round(c)).toBe(true)
@@ -138,55 +134,6 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
 })
 
 describe("TaggedEnumClass — construction-time validation", () => {
-  // The static `ReservedVariantTag` type union and the runtime
-  // `RESERVED_TAGS` set must remain in lockstep. Codex's S0 review caught
-  // two independent bugs from the static list drifting:
-  //   - missed `makeEffect`/`makeOption`/`mapMembers`/`rebuild` (own-key
-  //     additions to the augmented Union)
-  //   - missed `pipe`/`annotate`/`annotateKey`/`check` (inherited methods
-  //     from `Schema.Bottom` that Object.assign happily shadows)
-  //
-  // This test asserts exact set equality between the runtime probe and the
-  // hand-mirrored static type union, so any future Effect change that adds
-  // or removes a reserved key fails this test rather than silently letting
-  // a variant tag shadow critical schema methods.
-  test("static `ReservedVariantTag` type union matches runtime probe set", () => {
-    const runtimeSet = __getReservedTagsForTesting()
-    const staticSet = new Set<ReservedVariantTag>([
-      "__proto__",
-      "annotate",
-      "annotateKey",
-      "ast",
-      "cases",
-      "check",
-      "guards",
-      "isAnyOf",
-      "make",
-      "makeEffect",
-      "makeOption",
-      "mapMembers",
-      "match",
-      "members",
-      "pipe",
-      "rebuild",
-    ])
-    // Set equality both ways — fails on additions or removals.
-    const runtimeOnly = [...runtimeSet].filter((k) => !staticSet.has(k as ReservedVariantTag))
-    const staticOnly = [...staticSet].filter((k) => !runtimeSet.has(k))
-    expect(runtimeOnly).toEqual([])
-    expect(staticOnly).toEqual([])
-  })
-
-  test("rejects every reserved key (parametrized over the runtime probe)", () => {
-    for (const key of __getReservedTagsForTesting()) {
-      expect(() =>
-        TaggedEnumClass("ReservedScan", {
-          [key]: { value: Schema.Number },
-        }),
-      ).toThrow(/reserved/)
-    }
-  })
-
   test("rejects empty variant map", () => {
     expect(() => TaggedEnumClass("Empty", {})).toThrow(/no variants/)
   })
@@ -199,56 +146,30 @@ describe("TaggedEnumClass — construction-time validation", () => {
     ).toThrow(/_tag/)
   })
 
-  test("rejects variant tag named `cases` (collides with augmentation key)", () => {
-    expect(() =>
-      TaggedEnumClass("Reserved", {
-        cases: { value: Schema.Number },
-      }),
-    ).toThrow(/reserved/)
-  })
-
-  test("rejects variant tag named `match` (collides with augmentation key)", () => {
-    expect(() =>
-      TaggedEnumClass("Reserved", {
-        match: { value: Schema.Number },
-      }),
-    ).toThrow(/reserved/)
-  })
-
-  test("rejects variant tag named `guards`", () => {
-    expect(() =>
-      TaggedEnumClass("Reserved", {
-        guards: { value: Schema.Number },
-      }),
-    ).toThrow(/reserved/)
+  test("allows schema utility names as variant tags inside `cases`", () => {
+    const Weird = TaggedEnumClass("Weird", {
+      cases: { value: Schema.Number },
+      match: { value: Schema.Number },
+      pipe: { value: Schema.Number },
+    })
+    expect(Weird.cases.cases.make({ value: 1 })._tag).toBe("cases")
+    expect(Weird.cases.match.make({ value: 2 })._tag).toBe("match")
+    expect(Weird.cases.pipe.make({ value: 3 })._tag).toBe("pipe")
   })
 
   test("rejects variant tag named `__proto__` (prototype-pollution footgun)", () => {
     // Codex S0 review found this: a variant named `__proto__` would
     // mutate the prototype of the internal variantClasses map instead of
     // becoming an own property, silently dropping the variant from
-    // `Object.values(variantClasses)`. The internal map now uses
-    // `Object.create(null)` AND the name is explicitly rejected so authors
+    // `Object.values(variantClasses)`. The internal map uses
+    // `Object.create(null)`, and the name is explicitly rejected so authors
     // see a clear error rather than a silently-missing variant.
     expect(() =>
       TaggedEnumClass("RejectsProto", {
         ["__proto__"]: { value: Schema.Number },
         Normal: { value: Schema.Number },
       }),
-    ).toThrow(/reserved/)
-  })
-
-  test("rejects variant tag named `pipe` (inherited Schema method)", () => {
-    // `Object.assign(union, variantClasses)` installs the variant
-    // constructor as an own property — that own property SHADOWS the
-    // inherited `pipe` method from `Schema.Bottom`'s prototype, breaking
-    // the schema API. Probe walks the entire prototype chain so this is
-    // detected.
-    expect(() =>
-      TaggedEnumClass("RejectsPipe", {
-        pipe: { value: Schema.Number },
-      }),
-    ).toThrow(/reserved/)
+    ).toThrow(/prototype/)
   })
 })
 
@@ -264,12 +185,12 @@ describe("TaggedEnumClass — non-identifier tag names", () => {
   })
 
   test("kebab-case tags accessible via bracket notation", () => {
-    expect(typeof TurnEvent["text-delta"]).toBe("function")
-    expect(typeof TurnEvent["tool-call"]).toBe("function")
+    expect(typeof TurnEvent.cases["text-delta"]).toBe("function")
+    expect(typeof TurnEvent.cases["tool-call"]).toBe("function")
   })
 
   test("kebab-case tag construction works", () => {
-    const e = new TurnEvent["text-delta"]({ text: "hello" })
+    const e = TurnEvent.cases["text-delta"].make({ text: "hello" })
     expect(e._tag).toBe("text-delta")
     expect(e.text).toBe("hello")
   })
@@ -279,11 +200,11 @@ describe("TaggedEnumClass — non-identifier tag names", () => {
       _tag: "text-delta",
       text: "hi",
     })
-    expect(decoded instanceof TurnEvent["text-delta"]).toBe(true)
+    expect(decoded instanceof TurnEvent.cases["text-delta"]).toBe(true)
   })
 
   test("kebab-case match", () => {
-    const e = new TurnEvent["tool-call"]({ name: "read", input: { path: "/x" } })
+    const e = TurnEvent.cases["tool-call"].make({ name: "read", input: { path: "/x" } })
     const out = TurnEvent.match({
       "text-delta": (e) => `text:${e.text}`,
       "tool-call": (e) => `tool:${e.name}`,
@@ -302,10 +223,10 @@ describe("TaggedEnumClass — single-variant edge case", () => {
   })
 
   test("single-variant decode + construct + match works", () => {
-    const o = new Singleton.Only({ value: 42 })
+    const o = Singleton.cases.Only.make({ value: 42 })
     expect(o._tag).toBe("Only")
     const decoded = Schema.decodeUnknownSync(Singleton)({ _tag: "Only", value: 42 })
-    expect(decoded instanceof Singleton.Only).toBe(true)
+    expect(decoded instanceof Singleton.cases.Only).toBe(true)
     const out = Singleton.match({ Only: (o) => o.value })(decoded)
     expect(out).toBe(42)
   })
@@ -320,13 +241,13 @@ describe("TaggedEnumClass — per-enum schema id namespacing", () => {
   const B = TaggedEnumClass("EnumB", { Shared: { value: Schema.Number } })
 
   test("classes from different enums are distinct constructors", () => {
-    expect(A.Shared).not.toBe(B.Shared)
+    expect(A.cases.Shared).not.toBe(B.cases.Shared)
   })
 
   test("instances from one enum do not pass instanceof of the other", () => {
-    const a = new A.Shared({ value: 1 })
-    expect(a instanceof A.Shared).toBe(true)
-    expect(a instanceof B.Shared).toBe(false)
+    const a = A.cases.Shared.make({ value: 1 })
+    expect(a instanceof A.cases.Shared).toBe(true)
+    expect(a instanceof B.cases.Shared).toBe(false)
   })
 })
 
@@ -337,14 +258,14 @@ describe("TaggedEnumClass — AgentEvent migration smoke", () => {
   // generic substrate tests above. The full SQLite path is covered by
   // `tests/storage/sqlite-storage.test.ts`; this is a tighter check that
   // the migration preserved the documented wire shape.
-  test("AgentEvent.SessionStarted JSON wire shape unchanged", () => {
+  test("AgentEvent.cases.SessionStarted JSON wire shape unchanged", () => {
     const sessionId = SessionId.make("01234567-89ab-7cde-8123-456789abcdef")
     const branchId = BranchId.make("01234567-89ab-7cde-8123-456789abcdee")
-    const evt = new AgentEvent.SessionStarted({ sessionId, branchId })
+    const evt = AgentEvent.cases.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
     const decoded = Schema.decodeUnknownSync(AgentEvent)(encoded)
-    expect(decoded instanceof AgentEvent.SessionStarted).toBe(true)
+    expect(decoded instanceof AgentEvent.cases.SessionStarted).toBe(true)
     if (decoded._tag === "SessionStarted") {
       expect(decoded.sessionId).toBe(sessionId)
       expect(decoded.branchId).toBe(branchId)
@@ -369,7 +290,7 @@ describe("TaggedEnumClass — Effect-friendly decode", () => {
         return decoded
       }),
     )
-    expect(result instanceof Shape.Rectangle).toBe(true)
+    expect(result instanceof Shape.cases.Rectangle).toBe(true)
     if (result._tag === "Rectangle") {
       expect(result.width).toBe(2)
       expect(result.height).toBe(3)

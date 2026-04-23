@@ -102,7 +102,7 @@ const makeExtRegistry = (
 }
 
 const makeMessage = (sessionId: string, branchId: string, text: string) =>
-  new Message.regular({
+  Message.cases.regular.make({
     id: `${sessionId}-${branchId}-${text}`,
     sessionId,
     branchId,
@@ -1070,7 +1070,7 @@ describe("continuation", () => {
   const contBranchId = BranchId.make("cont-test-branch")
 
   const makeContMessage = (text: string) =>
-    new Message.regular({
+    Message.cases.regular.make({
       id: MessageId.make(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
       sessionId: contSessionId,
       branchId: contBranchId,
@@ -1410,7 +1410,7 @@ describe("interaction", () => {
   const intBranchId = BranchId.make("b-interaction")
 
   const makeIntMessage = (text: string) =>
-    new Message.regular({
+    Message.cases.regular.make({
       id: `msg-${text}`,
       sessionId: intSessionId,
       branchId: intBranchId,
@@ -1717,7 +1717,7 @@ describe("recovery", () => {
   const createSessionState = () => {
     const sessionId = SessionId.make("session-loop-recovery")
     const branchId = BranchId.make("branch-loop-recovery")
-    const message = new Message.regular({
+    const message = Message.cases.regular.make({
       id: MessageId.make("message-loop-recovery"),
       sessionId,
       branchId,
@@ -1888,7 +1888,7 @@ describe("recovery", () => {
 
   test("decodes v1 checkpoints with legacy message kind markers", async () => {
     const { message } = createSessionState()
-    const interjection = new Message.interjection({
+    const interjection = Message.cases.interjection.make({
       id: MessageId.make("legacy-interjection"),
       sessionId: message.sessionId,
       branchId: message.branchId,
@@ -1952,7 +1952,7 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const queuedMessage = new Message.regular({
+      const queuedMessage = Message.cases.regular.make({
         id: MessageId.make("queued-msg"),
         sessionId: message.sessionId,
         branchId: message.branchId,

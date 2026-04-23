@@ -28,7 +28,7 @@ const sessionId = SessionId.make("perm-rules-e2e-session")
 const branchId = BranchId.make("perm-rules-e2e-branch")
 
 const makeMessage = (text: string) =>
-  new Message.regular({
+  Message.cases.regular.make({
     id: MessageId.make(`msg-perm-${Date.now()}`),
     sessionId,
     branchId,

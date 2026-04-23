@@ -43,8 +43,8 @@ export const messageToInfo = (message: Message): MessageInfoReadonly => {
     metadata: message.metadata,
   }
   return message._tag === "interjection"
-    ? new MessageInfo.interjection({ ...fields, role: "user" })
-    : new MessageInfo.regular(fields)
+    ? MessageInfo.cases.interjection.make({ ...fields, role: "user" })
+    : MessageInfo.cases.regular.make(fields)
 }
 
 export const buildBranchTree = (

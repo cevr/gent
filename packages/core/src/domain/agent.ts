@@ -45,10 +45,10 @@ export const DriverRef = TaggedEnumClass("DriverRef", {
 export type DriverRef = Schema.Schema.Type<typeof DriverRef>
 
 // Per-variant aliases — same class identity, convenience names.
-export const ModelDriverRef = DriverRef.model
-export type ModelDriverRef = (typeof DriverRef)["model"]["Type"]
-export const ExternalDriverRef = DriverRef.external
-export type ExternalDriverRef = (typeof DriverRef)["external"]["Type"]
+export const ModelDriverRef = DriverRef.cases.model
+export type ModelDriverRef = typeof DriverRef.cases.model.Type
+export const ExternalDriverRef = DriverRef.cases.external
+export type ExternalDriverRef = typeof DriverRef.cases.external.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName

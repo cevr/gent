@@ -21,10 +21,10 @@ export const AuthInfo = TaggedEnumClass("AuthInfo", {
 })
 export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
 
-export const AuthApi = AuthInfo.AuthApi
-export type AuthApi = (typeof AuthInfo)["AuthApi"]["Type"]
-export const AuthOauth = AuthInfo.AuthOauth
-export type AuthOauth = (typeof AuthInfo)["AuthOauth"]["Type"]
+export const AuthApi = AuthInfo.cases.AuthApi
+export type AuthApi = typeof AuthInfo.cases.AuthApi.Type
+export const AuthOauth = AuthInfo.cases.AuthOauth
+export type AuthOauth = typeof AuthInfo.cases.AuthOauth.Type
 
 export const AuthType = Schema.Literals(["api", "oauth"])
 export type AuthType = typeof AuthType.Type
