@@ -12,7 +12,7 @@ import {
   EditTool,
 } from "@gent/extensions/fs-tools/edit"
 import { FileLockService } from "@gent/core/domain/file-lock"
-import type { ToolContext } from "@gent/core/domain/tool"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 describe("detectRedaction", () => {
   test("clean replacement → undefined", () => {
@@ -126,7 +126,7 @@ const editLayer = Layer.mergeAll(
   Layer.provide(FileLockService.layer, BunServices.layer),
 )
 
-const stubCtx = {} as unknown as ToolContext
+const stubCtx = testToolContext()
 
 describe("EditTool execution", () => {
   test("applies edit to a real file and reads back the result", async () => {

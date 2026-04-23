@@ -8,7 +8,7 @@ import { Layer } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionTurnControl } from "../../../src/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 export const makeActorRuntimeLayer = (config: {

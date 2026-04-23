@@ -10,7 +10,6 @@ import { Agents } from "@gent/extensions/all-agents"
 import { Task, TaskId } from "@gent/core/extensions/api"
 import { EventStore } from "@gent/core/domain/event"
 import { Session, Branch } from "@gent/core/domain/message"
-import type { ToolContext } from "@gent/core/domain/tool"
 import { SessionId } from "@gent/core/domain/ids"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { createToolTestLayer, testToolContext } from "@gent/core/test-utils/extension-harness"
@@ -75,7 +74,7 @@ const makeCtx = Effect.gen(function* () {
       ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
       request,
     },
-  }) as ToolContext
+  })
 })
 
 const layer = createToolTestLayer({

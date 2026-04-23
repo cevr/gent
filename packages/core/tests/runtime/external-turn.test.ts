@@ -12,7 +12,7 @@ import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensi
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { Provider } from "@gent/core/providers/provider"
 import { finishPart } from "@gent/core/debug/provider"

@@ -15,7 +15,7 @@ import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-prot
 import { Session } from "@gent/core/domain/message"
 import { testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 // ── Runtime integration tests ──

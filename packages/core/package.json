@@ -7,6 +7,8 @@
     "./debug/*": "./src/debug/*",
     "./storage/*": "./src/storage/*",
     "./providers/*": "./src/providers/*",
+    "./runtime/extensions/turn-control": null,
+    "./runtime/extensions/turn-control.js": null,
     "./runtime/*": "./src/runtime/*",
     "./extensions/api": "./src/extensions/api.ts",
     "./server/*": "./src/server/*",

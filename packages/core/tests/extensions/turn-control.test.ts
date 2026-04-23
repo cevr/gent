@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Ref, Stream } from "effect"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const test = it.live.layer(ExtensionTurnControl.Test())

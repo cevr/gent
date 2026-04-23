@@ -9,7 +9,7 @@ import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/eve
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"

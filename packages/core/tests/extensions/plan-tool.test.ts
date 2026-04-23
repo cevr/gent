@@ -5,6 +5,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
@@ -24,16 +25,17 @@ const makeCtx = (overrides: {
         agentName: "test",
       }))
   return {
-    sessionId: "test-session",
-    branchId: "test-branch",
-    toolCallId: "test-call",
-    cwd: "/tmp",
-    home: "/tmp",
+    ...testToolContext({
+      sessionId: "test-session",
+      branchId: "test-branch",
+      toolCallId: "test-call",
+      cwd: "/tmp",
+      home: "/tmp",
+    }),
     extension: {
       send: dieStub("extension.send"),
       ask: dieStub("extension.ask"),
-      getUiSnapshots: dieStub("extension.getUiSnapshots"),
-      getUiSnapshot: dieStub("extension.getUiSnapshot"),
+      request: dieStub("extension.request"),
     },
     agent: {
       get: (name) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),
@@ -67,12 +69,7 @@ const makeCtx = (overrides: {
       queueFollowUp: dieStub("turn.queueFollowUp"),
       interject: dieStub("turn.interject"),
     },
-    extensions: {
-      send: dieStub("extensions.send"),
-      ask: dieStub("extensions.ask"),
-    },
-    approve: dieStub("approve"),
-  } as ToolContext
+  }
 }
 
 describe("Plan Tool", () => {
