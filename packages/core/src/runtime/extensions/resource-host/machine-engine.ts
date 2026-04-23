@@ -20,21 +20,8 @@
  * @module
  */
 
-import {
-  Cause,
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Layer,
-  Queue,
-  Ref,
-  Schema,
-  Scope,
-  Semaphore,
-} from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Semaphore } from "effect"
 import type { AgentEvent } from "../../../domain/event.js"
-import type { AnyResourceMachine } from "../../../domain/resource.js"
 import type {
   ExtensionActorStatusInfo,
   ExtensionReduceContext,
@@ -44,45 +31,26 @@ import type {
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
-  AnyExtensionMessageDefinition,
   AnyExtensionRequestMessage,
   ExtractExtensionReply,
-} from "../../../domain/extension-protocol.js"
-import {
   ExtensionProtocolError,
-  isExtensionRequestDefinition,
-  listExtensionProtocolDefinitions,
 } from "../../../domain/extension-protocol.js"
 import { CurrentExtensionSession } from "../extension-actor-shared.js"
 import { spawnMachineExtensionRef } from "../spawn-machine-ref.js"
 import { ExtensionTurnControl } from "../turn-control.js"
+import {
+  collectMachineProtocol,
+  extractMachine,
+  getProtocolFailure,
+  protocolError,
+  type ActorEntry,
+  type ActorSpawnSpec,
+} from "./machine-protocol.js"
 
 const CurrentMailboxSession = Context.Reference<SessionId | undefined>(
   "@gent/core/src/runtime/extensions/resource-host/machine-engine/CurrentMailboxSession",
   { defaultValue: () => undefined },
 )
-
-/** Extract the (at most one) `Resource.machine` declared by an extension. */
-const extractMachine = (ext: LoadedExtension): AnyResourceMachine | undefined => {
-  for (const r of ext.contributions.resources ?? []) {
-    if (r.machine !== undefined) return r.machine
-  }
-  return undefined
-}
-
-interface ExtensionProtocolRegistry {
-  readonly get: (extensionId: string, tag: string) => AnyExtensionMessageDefinition | undefined
-}
-
-interface ActorEntry {
-  readonly ref: ExtensionRef
-  readonly actor?: AnyResourceMachine
-}
-
-interface ActorSpawnSpec {
-  readonly extensionId: string
-  readonly actor: AnyResourceMachine
-}
 
 interface PublishMailboxItem {
   readonly _tag: "publish"
@@ -155,27 +123,7 @@ export const makeMachineEngine = (
   ExtensionTurnControl
 > =>
   Effect.gen(function* () {
-    const spawnSpecs: ActorSpawnSpec[] = []
-    const spawnByExtension = new Map<string, ActorSpawnSpec>()
-    const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
-    for (const ext of extensions) {
-      const actor = extractMachine(ext)
-      if (actor !== undefined) {
-        const spec = {
-          extensionId: ext.manifest.id,
-          actor,
-        }
-        spawnSpecs.push(spec)
-        spawnByExtension.set(ext.manifest.id, spec)
-      }
-      const allDefs =
-        actor?.protocols !== undefined ? listExtensionProtocolDefinitions(actor.protocols) : []
-      for (const definition of allDefs) {
-        const byTag = protocolMap.get(definition.extensionId) ?? new Map()
-        byTag.set(definition._tag, definition)
-        protocolMap.set(definition.extensionId, byTag)
-      }
-    }
+    const { spawnSpecs, spawnByExtension, protocols } = collectMachineProtocol(extensions)
 
     yield* Effect.logDebug("extension.state-runtime.init").pipe(
       Effect.annotateLogs({
@@ -213,14 +161,6 @@ export const makeMachineEngine = (
       })
 
     const formatCause = (cause: Cause.Cause<unknown>) => String(Cause.squash(cause))
-    const getProtocolFailure = (
-      cause: Cause.Cause<unknown>,
-    ): ExtensionProtocolError | undefined => {
-      const failure = cause.reasons.find(Cause.isFailReason)
-      return failure !== undefined && Schema.is(ExtensionProtocolError)(failure.error)
-        ? failure.error
-        : undefined
-    }
     const logIsolatedFailure = (message: string, fields: Record<string, unknown>) =>
       Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
     const stopActor = (entry: ActorEntry) => Effect.exit(entry.ref.stop).pipe(Effect.asVoid)
@@ -288,17 +228,19 @@ export const makeMachineEngine = (
           ...(restartCount > 0 ? { restartCount } : {}),
         })
 
+        /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration */
         const spawnExit = yield* Effect.exit(
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-          /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration */
-          (
-            spawnMachineExtensionRef(spec.extensionId, spec.actor, {
-              sessionId,
-              branchId,
-            }) as Effect.Effect<ExtensionRef, never, never>
-          ).pipe(Effect.provideService(ExtensionTurnControl, turnControl)),
-          /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
+          spawnMachineExtensionRef(spec.extensionId, spec.actor, {
+            sessionId,
+            branchId,
+          }).pipe(Effect.provideService(ExtensionTurnControl, turnControl)) as Effect.Effect<
+            ExtensionRef,
+            never,
+            never
+          >,
         )
+        /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
 
         if (spawnExit._tag === "Failure") {
           const error = formatCause(spawnExit.cause)
@@ -525,70 +467,6 @@ export const makeMachineEngine = (
     const findEntry = (entries: ReadonlyArray<ActorEntry>, extensionId: string) =>
       entries.find((entry) => entry.ref.id === extensionId)
 
-    const protocols: ExtensionProtocolRegistry = {
-      get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),
-    }
-
-    const protocolError = (
-      extensionId: string,
-      tag: string,
-      phase: "command" | "request" | "reply",
-      message: string,
-    ) =>
-      new ExtensionProtocolError({
-        extensionId,
-        tag,
-        phase,
-        message,
-      })
-
-    const decodeReply = <A>(
-      extensionId: string,
-      tag: string,
-      schema: Schema.Codec<A, unknown, never, never>,
-      value: unknown,
-    ): Effect.Effect<A, ExtensionProtocolError> =>
-      Schema.decodeUnknownEffect(schema)(value).pipe(
-        Effect.catchIf(Schema.isSchemaError, () =>
-          Schema.encodeUnknownEffect(schema)(value).pipe(
-            Effect.flatMap((encoded) => Schema.decodeUnknownEffect(schema)(encoded)),
-          ),
-        ),
-        Effect.mapError((error) => protocolError(extensionId, tag, "reply", error.message)),
-      )
-
-    const decodeMessage = <M extends AnyExtensionCommandMessage | AnyExtensionRequestMessage>(
-      message: M,
-      expectedKind: "command" | "request",
-    ): Effect.Effect<M, ExtensionProtocolError> =>
-      Effect.gen(function* () {
-        const definition = protocols.get(message.extensionId, message._tag)
-        if (definition === undefined) {
-          return yield* protocolError(
-            message.extensionId,
-            message._tag,
-            expectedKind,
-            `extension "${message.extensionId}" has no protocol definition for "${message._tag}"`,
-          )
-        }
-        const actualKind = isExtensionRequestDefinition(definition) ? "request" : "command"
-        if (actualKind !== expectedKind) {
-          return yield* protocolError(
-            message.extensionId,
-            message._tag,
-            expectedKind,
-            `extension "${message.extensionId}" message "${message._tag}" is registered as a ${actualKind}, not a ${expectedKind}`,
-          )
-        }
-        return yield* Schema.decodeUnknownEffect(definition.schema)(message).pipe(
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          Effect.map((value) => value as M),
-          Effect.mapError((error) =>
-            protocolError(message.extensionId, message._tag, expectedKind, error.message),
-          ),
-        )
-      })
-
     const publishImmediate = (event: AgentEvent, ctx: ExtensionReduceContext) =>
       Effect.gen(function* () {
         const transitioned: string[] = []
@@ -622,7 +500,7 @@ export const makeMachineEngine = (
     ): Effect.Effect<void, ExtensionProtocolError> =>
       Effect.gen(function* () {
         const entries = yield* getOrSpawnActors(sessionId, branchId)
-        const decoded = yield* decodeMessage(message, "command")
+        const decoded = yield* protocols.decodeCommand(message)
         const entry = findEntry(entries, decoded.extensionId)
         if (entry === undefined) {
           yield* Effect.logWarning("extension.send.not-loaded").pipe(
@@ -663,16 +541,11 @@ export const makeMachineEngine = (
     ): Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError> =>
       Effect.gen(function* () {
         const entries = yield* getOrSpawnActors(sessionId, branchId)
-        const decoded = yield* decodeMessage(message, "request")
-        const definition = protocols.get(decoded.extensionId, decoded._tag)
-        if (definition === undefined || !isExtensionRequestDefinition(definition)) {
-          return yield* protocolError(
-            decoded.extensionId,
-            decoded._tag,
-            "request",
-            `extension "${decoded.extensionId}" request "${decoded._tag}" is not registered`,
-          )
-        }
+        const decoded = yield* protocols.decodeRequest(message)
+        const definition = yield* protocols.requireRequestDefinition(
+          decoded.extensionId,
+          decoded._tag,
+        )
         const entry = findEntry(entries, decoded.extensionId)
         if (entry === undefined) {
           yield* Effect.logWarning("extension.execute.not-loaded").pipe(
@@ -700,13 +573,11 @@ export const makeMachineEngine = (
         if (replyResult._tag === "terminal") {
           return yield* protocolError(decoded.extensionId, decoded._tag, "reply", replyResult.error)
         }
-        return yield* decodeReply(
-          decoded.extensionId,
-          decoded._tag,
+        return yield* protocols.decodeRequestReply(
+          decoded,
           definition.replySchema,
           replyResult.value,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        ).pipe(Effect.map((value) => value as ExtractExtensionReply<M>))
+        )
       })
 
     const processMailboxItem = (item: MailboxItem) =>
@@ -905,11 +776,7 @@ export const makeMachineEngine = (
               done,
             })
             const result = yield* Deferred.await(done)
-            if (Schema.is(ExtensionProtocolError)(result)) {
-              return yield* result
-            }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            return result as ExtractExtensionReply<M>
+            return yield* protocols.decodeMailboxReply<M>(result)
           }),
         ),
 

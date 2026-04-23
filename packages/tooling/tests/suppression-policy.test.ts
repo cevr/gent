@@ -70,7 +70,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 23,
       "eslint:@typescript-eslint/no-explicit-any": 10,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 32,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 29,
     },
   },
   {
@@ -133,6 +133,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     matches: (file) =>
       [
         "packages/core/src/domain/extension-protocol.ts",
+        "packages/core/src/runtime/extensions/resource-host/machine-protocol.ts",
         "packages/sdk/src/client.ts",
         "packages/sdk/src/namespaced-client.ts",
         "packages/sdk/src/local-supervisor.ts",
@@ -141,7 +142,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       ].includes(file),
     counts: {
       "eslint:@typescript-eslint/no-explicit-any": 1,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 20,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
     },
   },
   {
