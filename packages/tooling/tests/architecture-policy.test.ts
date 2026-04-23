@@ -149,4 +149,15 @@ describe("architecture policy", () => {
 
     expect(violations).toEqual([])
   })
+
+  test("public extension api does not re-export runtime or server internals", () => {
+    const source = readFileSync(pathResolve(ROOT, "packages/core/src/extensions/api.ts"), "utf8")
+
+    expect(source).not.toMatch(/\bMachineEngine\b/)
+    expect(source).not.toMatch(/\bMachineExecute\b/)
+    expect(source).not.toMatch(/\bToolRunner\b/)
+    expect(source).not.toMatch(/\bInteractionPendingReader\b/)
+    expect(source).not.toMatch(/\bEventPublisher\b/)
+    expect(source).not.toMatch(/\.\.\/runtime\//)
+  })
 })

@@ -14,12 +14,12 @@
 
 import { Effect } from "effect"
 import {
-  MachineExecute,
   type ProjectionContribution,
   type ProjectionContext,
   ProjectionError,
   type PromptSection,
 } from "@gent/core/extensions/api"
+import { MachineExecute } from "@gent/core/extensions/internal"
 import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 
 const PROJECTION_ID = "auto-loop"

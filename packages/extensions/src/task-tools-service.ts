@@ -1,6 +1,5 @@
 import { Context, DateTime, Effect, Layer, Option } from "effect"
 import {
-  EventPublisher,
   Task,
   TaskTransitionError,
   isValidTaskTransition,
@@ -16,6 +15,7 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core/extensions/api"
+import { EventPublisher } from "@gent/core/extensions/internal"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.

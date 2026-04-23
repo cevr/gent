@@ -15,12 +15,12 @@
 
 import { Effect } from "effect"
 import {
-  MachineExecute,
   type ProjectionContribution,
   type ProjectionContext,
   ProjectionError,
   type PromptSection,
 } from "@gent/core/extensions/api"
+import { MachineExecute } from "@gent/core/extensions/internal"
 import { ExecutorProtocol, type ExecutorSnapshotReply } from "./protocol.js"
 
 const PROJECTION_ID = "executor-state"

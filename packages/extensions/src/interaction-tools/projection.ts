@@ -11,11 +11,8 @@
  */
 
 import { Effect, Schema } from "effect"
-import {
-  type ProjectionContribution,
-  ProjectionError,
-  InteractionPendingReader,
-} from "@gent/core/extensions/api"
+import { type ProjectionContribution, ProjectionError } from "@gent/core/extensions/api"
+import { InteractionPendingReader } from "@gent/core/extensions/internal"
 
 export const InteractionUiModel = Schema.Struct({
   requestId: Schema.optional(Schema.String),

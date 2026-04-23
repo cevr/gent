@@ -13,12 +13,8 @@
  */
 
 import { Context, Effect } from "effect"
-import {
-  ToolCallId,
-  ToolRunner,
-  makeToolContext,
-  type ToolContext,
-} from "@gent/core/extensions/api"
+import { ToolCallId, makeToolContext, type ToolContext } from "@gent/core/extensions/api"
+import { ToolRunner } from "@gent/core/extensions/internal"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**

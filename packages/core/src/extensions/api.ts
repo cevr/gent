@@ -164,7 +164,6 @@ export {
   TaskStopped,
   TaskDeleted,
 } from "../domain/event.js"
-export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
 export { SessionId, BranchId, TaskId, ArtifactId, MessageId, ToolCallId } from "../domain/ids.js"
 export { ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
@@ -180,7 +179,6 @@ export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
 export type { ExtensionHostContext } from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
-export { EventPublisher } from "../domain/event-publisher.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
 export {
@@ -238,14 +236,6 @@ export type {
   AnyProjectionContribution,
 } from "../domain/projection.js"
 export { ProjectionError } from "../domain/projection.js"
-// `MachineEngine` is the substrate's write surface for machine-bearing
-// extensions: `publish` / `send` / `ask` / `getActorStatuses` /
-// `terminateAll`. Producers (event-publisher, agent-loop, session-runtime,
-// rpc-handlers) yield this Tag. Read-only consumers (projections) yield
-// `MachineExecute` instead — the read-only fence carrying the `ReadOnly`
-// brand (B11.4).
-export { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
-export { MachineExecute } from "../runtime/extensions/machine-execute.js"
 
 // `ReadOnly` brand — type-level fence. Author services that should only
 // be reachable from projections / read-intent capabilities by branding
@@ -258,14 +248,8 @@ export {
   ReadOnlyBrand,
   withReadOnly,
 } from "../domain/read-only.js"
-export {
-  InteractionPendingReader,
-  type InteractionPendingReaderService,
-  type PendingInteraction,
-} from "../storage/interaction-pending-reader.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
 export { ProviderAuthError } from "../providers/provider-auth.js"
-export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
 
 // ── Public API ──
 
