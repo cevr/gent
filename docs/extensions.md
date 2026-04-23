@@ -267,7 +267,7 @@ import { defineExtension, defineAgent, ModelId } from "@gent/core/extensions/api
 const helper = defineAgent({
   name: "helper",
   description: "Helper for specific tasks",
-  model: ModelId.of("anthropic/claude-sonnet-4-6"),
+  model: ModelId.make("anthropic/claude-sonnet-4-6"),
   allowedTools: ["read", "write"],
 })
 
