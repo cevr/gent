@@ -34,12 +34,12 @@ export function SessionEventIndicator(props: SessionEventIndicatorProps) {
   }
 
   const isLineEvent = () =>
-    props.event.kind === "turn-ended" ||
-    props.event.kind === "error" ||
-    props.event.kind === "retrying"
+    props.event._tag === "turn-ended" ||
+    props.event._tag === "error" ||
+    props.event._tag === "retrying"
 
   const color = () => {
-    switch (props.event.kind) {
+    switch (props.event._tag) {
       case "error":
         return theme.error
       case "retrying":

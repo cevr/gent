@@ -292,7 +292,7 @@ export function MessageList(props: MessageListProps) {
     <box flexDirection="column">
       <For each={visibleItems()}>
         {(item, index) =>
-          item._tag === "event" ? (
+          item._tag !== "message" ? (
             <SessionEventIndicator event={item} />
           ) : (
             <Show

@@ -754,10 +754,10 @@ describe("streaming", () => {
 
           const snapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
           expect(snapshot.steering).toEqual([
-            expect.objectContaining({ kind: "steering", content: "steer now" }),
+            expect.objectContaining({ _tag: "steering", content: "steer now" }),
           ])
           expect(snapshot.followUp).toEqual([
-            expect.objectContaining({ kind: "follow-up", content: "queued a\nqueued b" }),
+            expect.objectContaining({ _tag: "follow-up", content: "queued a\nqueued b" }),
           ])
 
           const secondSnapshot = yield* agentLoop.getQueue({ sessionId: "s1", branchId: "b1" })
@@ -828,7 +828,7 @@ describe("streaming", () => {
             branchId: "b1",
           })
           expect(snapshotWhileRunning.followUp).toEqual([
-            expect.objectContaining({ kind: "follow-up", content: "queued after failure" }),
+            expect.objectContaining({ _tag: "follow-up", content: "queued after failure" }),
           ])
 
           yield* Deferred.succeed(gate, undefined)

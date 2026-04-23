@@ -2,28 +2,24 @@ import { formatThinkTime } from "./message-list-utils"
 
 export type SessionEvent =
   | {
-      _tag: "event"
-      kind: "turn-ended"
+      _tag: "turn-ended"
       durationSeconds: number
       createdAt: number
       seq: number
     }
   | {
-      _tag: "event"
-      kind: "interruption"
+      _tag: "interruption"
       createdAt: number
       seq: number
     }
   | {
-      _tag: "event"
-      kind: "error"
+      _tag: "error"
       error: string
       createdAt: number
       seq: number
     }
   | {
-      _tag: "event"
-      kind: "retrying"
+      _tag: "retrying"
       attempt: number
       maxAttempts: number
       delayMs: number
@@ -32,7 +28,7 @@ export type SessionEvent =
     }
 
 export const getSessionEventLabel = (event: SessionEvent, now = Date.now()): string => {
-  switch (event.kind) {
+  switch (event._tag) {
     case "turn-ended":
       return `Worked for ${formatThinkTime(event.durationSeconds)}`
     case "interruption":

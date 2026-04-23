@@ -125,7 +125,6 @@ export interface ResourceSchedule {
   /** Standard cron expression — consumed by `Bun.cron`. */
   readonly cron: string
   readonly target: {
-    readonly kind: "headless-agent"
     readonly agent: AgentName
     readonly prompt: string
     readonly cwd?: string

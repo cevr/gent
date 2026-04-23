@@ -16,7 +16,6 @@ export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
     id: "reflect",
     cron: "0 21 * * 1-5",
     target: {
-      kind: "headless-agent",
       agent: MEMORY_REFLECT_AGENT,
       prompt:
         "Review today's sessions and extract memories worth keeping. Focus on corrections, preferences, decisions, and gotchas.",
@@ -26,7 +25,6 @@ export const MemoryDreamJobs = (): ReadonlyArray<ResourceSchedule> => [
     id: "meditate",
     cron: "0 9 * * 0",
     target: {
-      kind: "headless-agent",
       agent: MEMORY_MEDITATE_AGENT,
       prompt:
         "Review all stored memories. Merge duplicates, prune noise, and promote recurring project patterns to global principles.",

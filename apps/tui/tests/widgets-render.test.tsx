@@ -143,16 +143,16 @@ describe("TUI renderer surfaces", () => {
   test("QueueWidget renders steer and queued summaries", async () => {
     const steerMessages: QueueEntryInfo[] = [
       {
+        _tag: "steering",
         id: "m1",
-        kind: "steering",
         content: "switch to deepwork",
         createdAt: Date.now(),
       },
     ]
     const queuedMessages: QueueEntryInfo[] = [
       {
+        _tag: "follow-up",
         id: "m2",
-        kind: "follow-up",
         content: "line one\nline two\nline three",
         createdAt: Date.now(),
       },

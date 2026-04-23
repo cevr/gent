@@ -377,7 +377,6 @@ describe("extension activation isolation", () => {
                     id: "reflect",
                     cron: "0 21 * * 1-5",
                     target: {
-                      kind: "headless-agent",
                       agent: "memory:reflect" as never,
                       prompt: "Reflect.",
                     },

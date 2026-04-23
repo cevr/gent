@@ -215,7 +215,7 @@ describe("defineResource", () => {
         {
           id: "tick",
           cron: "0 * * * *",
-          target: { kind: "headless-agent", agent: "memory:dream", prompt: "reflect" },
+          target: { agent: "memory:dream", prompt: "reflect" },
         },
       ],
     })

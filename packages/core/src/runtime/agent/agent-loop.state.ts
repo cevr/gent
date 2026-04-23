@@ -13,7 +13,12 @@ import {
 } from "../../domain/agent.js"
 import { Message, TextPart, ToolCallPart } from "../../domain/message.js"
 import type { ModelId as ModelIdType } from "../../domain/model.js"
-import { QueueEntryInfo, QueueSnapshot } from "../../domain/queue.js"
+import {
+  FollowUpQueueEntryInfo,
+  QueueSnapshot,
+  SteeringQueueEntryInfo,
+  type QueueEntryInfo,
+} from "../../domain/queue.js"
 import { UsageSchema } from "../../domain/event.js"
 import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import { messageText, getSingleText } from "./agent-loop.utils.js"
@@ -78,14 +83,14 @@ const appendFollowUpItem = (
 }
 
 const toQueueEntry = (
-  kind: "steering" | "follow-up",
+  tag: "steering" | "follow-up",
   item: QueuedTurnItem,
 ): QueueEntryInfo | undefined => {
   const content = messageText(item.message)
   if (content === "") return undefined
-  return new QueueEntryInfo({
+  const Entry = tag === "steering" ? SteeringQueueEntryInfo : FollowUpQueueEntryInfo
+  return new Entry({
     id: item.message.id,
-    kind,
     content,
     createdAt: item.message.createdAt.getTime(),
     ...(item.agentOverride !== undefined ? { agentOverride: item.agentOverride } : {}),

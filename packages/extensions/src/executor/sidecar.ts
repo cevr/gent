@@ -65,9 +65,9 @@ interface SidecarRegistryFile {
 }
 
 type PortProbe =
-  | { readonly port: number; readonly kind: "free" }
-  | { readonly port: number; readonly kind: "reusable"; readonly scope: ScopeInfo }
-  | { readonly port: number; readonly kind: "occupied" }
+  | { readonly _tag: "free"; readonly port: number }
+  | { readonly _tag: "reusable"; readonly port: number; readonly scope: ScopeInfo }
+  | { readonly _tag: "occupied"; readonly port: number }
 
 // ── Service interface ──
 
@@ -164,12 +164,12 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           return fetchScope(baseUrl).pipe(
             Effect.map(
               (scope): PortProbe =>
-                scope.dir === cwd ? { port, kind: "reusable", scope } : { port, kind: "occupied" },
+                scope.dir === cwd ? { _tag: "reusable", port, scope } : { _tag: "occupied", port },
             ),
             Effect.catchEager(() =>
               isPortFree(port).pipe(
                 Effect.map(
-                  (free): PortProbe => (free ? { port, kind: "free" } : { port, kind: "occupied" }),
+                  (free): PortProbe => (free ? { _tag: "free", port } : { _tag: "occupied", port }),
                 ),
               ),
             ),
@@ -183,10 +183,10 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
               probes.push(yield* probePort(cwd, DEFAULT_PORT_SEED + offset))
             }
             const reusable = probes.find(
-              (p): p is PortProbe & { kind: "reusable" } => p.kind === "reusable",
+              (p): p is PortProbe & { _tag: "reusable" } => p._tag === "reusable",
             )
             if (reusable) return { reusable, freePort: undefined } as const
-            const free = probes.find((p) => p.kind === "free")
+            const free = probes.find((p) => p._tag === "free")
             return { reusable: undefined, freePort: free?.port } as const
           })
 

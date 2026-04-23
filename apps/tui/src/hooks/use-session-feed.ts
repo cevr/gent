@@ -137,15 +137,13 @@ const createAssistantMessage = (content: string): Message => ({
 })
 
 const createInterruptionEvent = (seq: number): SessionEvent => ({
-  _tag: "event",
-  kind: "interruption",
+  _tag: "interruption",
   createdAt: Date.now(),
   seq,
 })
 
 const createTurnEndedEvent = (durationSeconds: number, seq: number): SessionEvent => ({
-  _tag: "event",
-  kind: "turn-ended",
+  _tag: "turn-ended",
   durationSeconds,
   createdAt: Date.now(),
   seq,
@@ -157,8 +155,7 @@ const createRetryingEvent = (
   delayMs: number,
   seq: number,
 ): SessionEvent => ({
-  _tag: "event",
-  kind: "retrying",
+  _tag: "retrying",
   attempt,
   maxAttempts,
   delayMs,
@@ -167,8 +164,7 @@ const createRetryingEvent = (
 })
 
 const createErrorEvent = (error: string, seq: number): SessionEvent => ({
-  _tag: "event",
-  kind: "error",
+  _tag: "error",
   error,
   createdAt: Date.now(),
   seq,
@@ -290,7 +286,7 @@ export function useSessionFeed(
     const combined: SessionItem[] = [...store.messages, ...store.events]
     return combined.sort((a, b) => {
       if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-      if (a._tag === "event" && b._tag === "event") return a.seq - b.seq
+      if (a._tag !== "message" && b._tag !== "message") return a.seq - b.seq
       if (a._tag === b._tag) return 0
       return a._tag === "message" ? -1 : 1
     })

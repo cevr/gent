@@ -53,7 +53,6 @@ describe("scheduled jobs", () => {
             id: "reflect",
             cron: "0 21 * * 1-5",
             target: {
-              kind: "headless-agent",
               agent: "memory:reflect" as never,
               prompt: "Reflect on recent sessions.",
               cwd: "/repo",
@@ -123,7 +122,6 @@ describe("scheduled jobs", () => {
               id: "reflect",
               cron: "0 21 * * 1-5",
               target: {
-                kind: "headless-agent",
                 agent: "memory:reflect" as never,
                 prompt: "Reflect on recent sessions.",
               },
@@ -132,7 +130,6 @@ describe("scheduled jobs", () => {
               id: "meditate",
               cron: "0 9 * * 0",
               target: {
-                kind: "headless-agent",
                 agent: "memory:meditate" as never,
                 prompt: "Meditate on the memory vault.",
               },
@@ -174,7 +171,6 @@ describe("scheduled jobs", () => {
                   id: "session-only",
                   cron: "* * * * *",
                   target: {
-                    kind: "headless-agent",
                     agent: "session-agent" as never,
                     prompt: "session prompt",
                   },
@@ -188,7 +184,7 @@ describe("scheduled jobs", () => {
         {
           id: "process-only",
           cron: "* * * * *",
-          target: { kind: "headless-agent", agent: "p" as never, prompt: "p" },
+          target: { agent: "p" as never, prompt: "p" },
         },
       ])
       const collected = collectSchedules([sessionLoaded, processExt])

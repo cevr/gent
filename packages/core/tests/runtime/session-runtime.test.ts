@@ -375,10 +375,10 @@ describe("SessionRuntime", () => {
 
         const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
         expect(queue.steering).toEqual([
-          expect.objectContaining({ kind: "steering", content: "steer now" }),
+          expect.objectContaining({ _tag: "steering", content: "steer now" }),
         ])
         expect(queue.followUp).toEqual([
-          expect.objectContaining({ kind: "follow-up", content: "queued" }),
+          expect.objectContaining({ _tag: "follow-up", content: "queued" }),
         ])
 
         yield* controls.emitAll(0)

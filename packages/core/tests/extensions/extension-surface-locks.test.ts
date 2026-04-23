@@ -367,7 +367,7 @@ describe("Effect-purity locks (compile-time)", () => {
               {
                 id: "j",
                 cron: "0 0 * * *",
-                target: { kind: "headless-agent", agent: "cowork" as never, prompt: "hi" },
+                target: { agent: "cowork" as never, prompt: "hi" },
               },
             ],
           }),

@@ -5,8 +5,7 @@ describe("session event labels", () => {
   test("formats retrying progress", () => {
     const createdAt = 1_000
     const event: SessionEvent = {
-      _tag: "event",
-      kind: "retrying",
+      _tag: "retrying",
       attempt: 1,
       maxAttempts: 3,
       delayMs: 2000,

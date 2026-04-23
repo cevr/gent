@@ -14,7 +14,7 @@ describe("memory scheduled jobs", () => {
       expect(resources.every((r) => r.start === undefined && r.stop === undefined)).toBe(true)
       const schedules = resources.flatMap((r) => r.schedule ?? [])
       expect(schedules.map((s) => s.id)).toEqual(["reflect", "meditate"])
-      expect(schedules.every((s) => s.target.kind === "headless-agent")).toBe(true)
+      expect(schedules.every((s) => s.target.agent.startsWith("memory:"))).toBe(true)
       expect(schedules.every((s) => s.target.cwd === undefined)).toBe(true)
     }),
   )
