@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
+import { AgentRunError } from "@gent/core/domain/agent"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
@@ -69,7 +70,35 @@ describe("SessionRuntime", () => {
     return Layer.provideMerge(SessionRuntime.FromLoop, Layer.merge(deps, eventPublisherLayer))
   }
 
-  test("steerAgent delegates to AgentLoop.steer", async () => {
+  test("runOnce preserves AgentRunError from the internal loop", async () => {
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      runOnce: () => Effect.fail(new AgentRunError({ message: "run failed" })),
+      submit: () => Effect.void,
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      followUp: () => Effect.void,
+      isRunning: () => Effect.succeed(false),
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
+    })
+
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
+
+    await expect(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        yield* sessionRuntime.runOnce({
+          sessionId: "s1" as never,
+          branchId: "b1" as never,
+          agentName: "cowork",
+          prompt: "do the thing",
+        })
+      }).pipe(Effect.provide(layer), Effect.runPromise),
+    ).rejects.toMatchObject({ _tag: "AgentRunError", message: "run failed" })
+  })
+
+  test("dispatch ApplySteer hands control to the internal loop", async () => {
     let steered = false
     const agentLoopLayer = Layer.succeed(AgentLoop, {
       submit: () => Effect.void,
@@ -312,7 +341,7 @@ describe("SessionRuntime", () => {
     )
   })
 
-  test("respondInteraction delegates to AgentLoop.respondInteraction", async () => {
+  test("dispatch RespondInteraction hands the response to the internal loop", async () => {
     let responseSeen:
       | {
           sessionId: string
