@@ -15,7 +15,7 @@ import { ClientProvider } from "../src/client"
 import type { GentNamespacedClient, GentRuntime, Session } from "../src/client"
 import { ExtensionUIProvider } from "../src/extensions/context"
 import { RouterProvider, Route, type AppRoute } from "../src/router"
-import type { SessionInfo, SessionRuntime } from "@gent/sdk"
+import { emptyQueueSnapshot, type SessionInfo, type SessionRuntime } from "@gent/sdk"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { AgentName } from "@gent/core/domain/agent"
 import type { ClientLog } from "../src/utils/client-logger"
@@ -75,8 +75,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       command: () => noRpcError(undefined),
     },
     queue: {
-      drain: () => noRpcError({ steering: [], followUp: [] }),
-      get: () => noRpcError({ steering: [], followUp: [] }),
+      drain: () => noRpcError(emptyQueueSnapshot()),
+      get: () => noRpcError(emptyQueueSnapshot()),
     },
     interaction: {
       respondQuestions: () => noRpcError(undefined),

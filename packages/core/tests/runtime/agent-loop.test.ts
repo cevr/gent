@@ -36,6 +36,7 @@ import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
   assistantDraftFromMessage,
@@ -839,7 +840,7 @@ describe("streaming", () => {
             sessionId: "s1",
             branchId: "b1",
           })
-          expect(snapshotAfterFailure).toEqual({ steering: [], followUp: [] })
+          expect(snapshotAfterFailure).toEqual(emptyQueueSnapshot())
         }).pipe(Effect.provide(layer)),
       ),
     )

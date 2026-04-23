@@ -18,7 +18,7 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionRuntime, SessionRuntimeStateSchema } from "@gent/core/runtime/session-runtime"
 import { SessionSnapshot } from "@gent/core/server/transport-contract"
-import { QueueSnapshot } from "@gent/core/domain/queue"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
@@ -27,13 +27,13 @@ describe("Session Snapshot", () => {
     const eventStoreLayer = EventStore.Memory
     const sessionRuntimeLayer = Layer.succeed(SessionRuntime, {
       dispatch: () => Effect.void,
-      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>
         Effect.succeed(
           new SessionRuntimeStateSchema.Running({
             agent: "deepwork" as const,
-            queue: new QueueSnapshot({ steering: [], followUp: [] }),
+            queue: emptyQueueSnapshot(),
           }),
         ),
       getMetrics: () =>

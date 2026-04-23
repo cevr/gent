@@ -22,6 +22,7 @@ import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control
 import { Provider } from "@gent/core/providers/provider"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionRuntime } from "@gent/core/runtime/session-runtime"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 
 const testExtensions = resolveExtensions([
   {
@@ -56,7 +57,7 @@ const makeTestLayer = (logs: {
       Effect.succeed({
         _tag: "Idle" as const,
         agent: "cowork" as const,
-        queue: { steering: [], followUp: [] },
+        queue: emptyQueueSnapshot(),
       }),
   })
 

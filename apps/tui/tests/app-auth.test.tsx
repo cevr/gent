@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
 import { Route, useRouter, type RouterContextValue } from "../src/router"
 import { useClient } from "../src/client"
@@ -220,7 +221,7 @@ describe("App auth gate", () => {
             runtime: {
               _tag: "Idle" as const,
               agent: "deepwork" as const,
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             },
           }),
       },

@@ -1,20 +1,25 @@
 // Shared transport contract
+export {
+  SessionInfo,
+  BranchInfo,
+  MessageInfo,
+  SessionSnapshot,
+  CommandInfo,
+  DriverInfo,
+  DriverListResult,
+  GentConnectionError,
+} from "@gent/core/server/transport-contract.js"
 export type {
   GentLifecycle,
   ConnectionState,
   MessageInfoReadonly,
-  SessionInfo,
-  BranchInfo,
   BranchTreeNode,
-  SessionSnapshot,
   SessionRuntime,
   CreateSessionResult,
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
 } from "@gent/core/server/transport-contract.js"
-
-export { GentConnectionError } from "@gent/core/server/transport-contract.js"
 
 // Client constructors
 export {
@@ -34,13 +39,8 @@ export {
 export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Message types
-export type {
-  QueueEntryInfo,
-  QueueSnapshot,
-  AuthProviderInfo,
-  AuthMethod,
-  AuthAuthorization,
-} from "./client.js"
+export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/domain/queue.js"
+export type { AuthProviderInfo, AuthMethod, AuthAuthorization } from "./client.js"
 
 // Part types (re-exported from @gent/core)
 export type {

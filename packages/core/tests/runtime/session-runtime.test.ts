@@ -10,6 +10,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Agents } from "@gent/extensions/all-agents"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
@@ -48,7 +49,7 @@ const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
 const idleLoopState = {
   _tag: "Idle" as const,
   agent: "cowork" as const,
-  queue: { steering: [], followUp: [] },
+  queue: emptyQueueSnapshot(),
 }
 
 describe("SessionRuntime", () => {

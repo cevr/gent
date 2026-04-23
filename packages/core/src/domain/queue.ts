@@ -17,3 +17,6 @@ export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")(
   steering: Schema.Array(QueueEntryInfo),
   followUp: Schema.Array(QueueEntryInfo),
 }) {}
+
+export const emptyQueueSnapshot = (): QueueSnapshot =>
+  new QueueSnapshot({ steering: [], followUp: [] })

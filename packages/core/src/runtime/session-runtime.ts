@@ -1,6 +1,6 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { RunSpecSchema, AgentName } from "../domain/agent.js"
-import type { QueueSnapshot } from "../domain/queue.js"
+import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
   ErrorOccurred,
@@ -524,13 +524,13 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
     Layer.succeed(SessionRuntime, {
       runOnce: () => Effect.void,
       dispatch: () => Effect.void,
-      drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>
         Effect.succeed(
           new SessionRuntimeStateSchema.Idle({
             agent: "cowork" as const,
-            queue: { steering: [], followUp: [] },
+            queue: emptyQueueSnapshot(),
           }),
         ),
       getMetrics: () =>

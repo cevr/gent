@@ -14,6 +14,7 @@ import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensi
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { SessionRuntime, type SessionRuntimeService } from "@gent/core/runtime/session-runtime"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
   resolveAgentModel,
@@ -104,8 +105,8 @@ const sessionRuntimeStub = (runOnce: SessionRuntimeService["runOnce"] = () => Ef
   Layer.succeed(SessionRuntime, {
     runOnce,
     dispatch: () => Effect.void,
-    drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-    getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () => Effect.die("SessionRuntime.getState not used in AgentRunner tests"),
     getMetrics: () =>
       Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),

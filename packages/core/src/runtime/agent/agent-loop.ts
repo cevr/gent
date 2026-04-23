@@ -36,7 +36,7 @@ import {
   type AgentName as AgentNameType,
 } from "../../domain/agent.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
-import { type QueueSnapshot } from "../../domain/queue.js"
+import { emptyQueueSnapshot, type QueueSnapshot } from "../../domain/queue.js"
 import {
   AgentSwitched,
   StreamStarted,
@@ -2558,8 +2558,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       run: () => Effect.void,
       steer: () => Effect.void,
       followUp: () => Effect.void,
-      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
+      drainQueue: () => Effect.succeed(emptyQueueSnapshot()),
+      getQueue: () => Effect.succeed(emptyQueueSnapshot()),
       isRunning: (_input) => Effect.succeed(false),
       respondInteraction: () => Effect.void,
       getActor: () => Effect.die("AgentLoop.Test.getActor not implemented"),
@@ -2567,7 +2567,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         Effect.succeed(
           new LoopRuntimeStateSchema.Idle({
             agent: DEFAULT_AGENT_NAME,
-            queue: { steering: [], followUp: [] },
+            queue: emptyQueueSnapshot(),
           }),
         ),
       watchState: () => Effect.succeed(Stream.empty),

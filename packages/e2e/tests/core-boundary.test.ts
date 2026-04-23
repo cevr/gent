@@ -4,7 +4,7 @@ import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { MessageId } from "@gent/core/domain/ids"
-import { QueueEntryInfo } from "@gent/core/domain/queue"
+import { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
@@ -64,13 +64,13 @@ describe("SessionCommands → SessionRuntime boundary", () => {
     const layer = makeAppLayer(
       Layer.succeed(SessionRuntime, {
         dispatch: (command) => Ref.update(dispatchLog, (commands) => [...commands, command]),
-        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () =>
           Effect.succeed(
             new SessionRuntimeStateSchema.Idle({
               agent: "cowork",
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             }),
           ),
         getMetrics: () =>
@@ -107,13 +107,13 @@ describe("SessionCommands → SessionRuntime boundary", () => {
     const layer = makeAppLayer(
       Layer.succeed(SessionRuntime, {
         dispatch: (command) => Ref.update(dispatchLog, (commands) => [...commands, command]),
-        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () =>
           Effect.succeed(
             new SessionRuntimeStateSchema.Idle({
               agent: "cowork",
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             }),
           ),
         getMetrics: () =>
@@ -153,13 +153,13 @@ describe("SessionCommands → SessionRuntime boundary", () => {
     const layer = makeAppLayer(
       Layer.succeed(SessionRuntime, {
         dispatch: () => Effect.void,
-        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
         getState: () =>
           Effect.succeed(
             new SessionRuntimeStateSchema.Running({
               agent: "deepwork",
-              queue: {
+              queue: new QueueSnapshot({
                 steering: [
                   new QueueEntryInfo({
                     id: MessageId.of("queue-steering"),
@@ -176,7 +176,7 @@ describe("SessionCommands → SessionRuntime boundary", () => {
                     createdAt: 0,
                   }),
                 ],
-              },
+              }),
             }),
           ),
         getMetrics: () =>

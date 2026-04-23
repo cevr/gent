@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { onMount } from "solid-js"
 import { Effect, Stream } from "effect"
+import { emptyQueueSnapshot } from "@gent/sdk"
 import { createMockClient, renderWithProviders } from "./render-harness"
 import { useClient } from "../src/client"
 import type { ClientContextValue, SessionState } from "../src/client/context"
@@ -187,7 +188,7 @@ describe("ClientProvider session lifecycle", () => {
             runtime: {
               _tag: "Idle" as const,
               agent: "cowork" as const,
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             },
           })
         },
@@ -268,7 +269,7 @@ describe("ClientProvider session lifecycle", () => {
             runtime: {
               _tag: "Idle" as const,
               agent: "cowork" as const,
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             },
           })
         },
@@ -306,7 +307,7 @@ describe("ClientProvider session lifecycle", () => {
         runtime: {
           _tag: "Idle",
           agent: "cowork",
-          queue: { steering: [], followUp: [] },
+          queue: emptyQueueSnapshot(),
         },
       }),
     )

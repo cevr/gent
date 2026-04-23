@@ -2,7 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
-import { QueueSnapshot } from "../domain/queue.js"
+import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -144,7 +144,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         // Fetch current runtime state — idle sessions return Idle runtime
         const idleRuntime = new SessionRuntimeStateSchema.Idle({
           agent: DEFAULT_AGENT_NAME,
-          queue: new QueueSnapshot({ steering: [], followUp: [] }),
+          queue: emptyQueueSnapshot(),
         })
         const runtime = yield* sessionRuntime
           .getState({ sessionId: input.sessionId, branchId: input.branchId })

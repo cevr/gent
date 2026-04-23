@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { emptyQueueSnapshot } from "@gent/sdk"
 import { runSessionSubscriptionAttempt } from "../src/client/session-subscription"
 
 const noop = () => {}
@@ -28,7 +29,7 @@ describe("runSessionSubscriptionAttempt", () => {
           runtime: {
             _tag: "Idle" as const,
             agent: "cowork" as const,
-            queue: { steering: [], followUp: [] },
+            queue: emptyQueueSnapshot(),
           },
         }),
         hydrateSnapshot: () => {

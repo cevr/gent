@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import type { AgentName } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { emptyQueueSnapshot } from "@gent/sdk"
 import { resolveStartupAuthState, type InitialState } from "../src/app-bootstrap"
 import { createMockClient } from "./render-harness"
 
@@ -20,7 +21,7 @@ describe("resolveStartupAuthState", () => {
             runtime: {
               _tag: "Idle" as const,
               agent: "deepwork" as AgentName,
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             },
           }),
       },
@@ -82,7 +83,7 @@ describe("resolveStartupAuthState", () => {
             runtime: {
               _tag: "Idle" as const,
               agent: "cowork" as AgentName,
-              queue: { steering: [], followUp: [] },
+              queue: emptyQueueSnapshot(),
             },
           }),
       },
