@@ -153,6 +153,10 @@ describe("architecture policy", () => {
   test("public extension api does not re-export runtime or server internals", () => {
     const source = readFileSync(pathResolve(ROOT, "packages/core/src/extensions/api.ts"), "utf8")
     const pkg = readFileSync(pathResolve(ROOT, "packages/core/package.json"), "utf8")
+    const extensionsPkg = readFileSync(
+      pathResolve(ROOT, "packages/extensions/package.json"),
+      "utf8",
+    )
 
     expect(source).not.toMatch(/\bMachineEngine\b/)
     expect(source).not.toMatch(/\bMachineExecute\b/)
@@ -161,5 +165,22 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bEventPublisher\b/)
     expect(source).not.toMatch(/\.\.\/runtime\//)
     expect(pkg).not.toMatch(/"\.\/extensions\/internal"/)
+    expect(extensionsPkg).toMatch(/"\.\/core-internal": null/)
+    expect(extensionsPkg).toMatch(/"\.\/core-internal\.js": null/)
+  })
+
+  test("builtin extensions have exactly one core-internal bridge", () => {
+    const bridgeImport = "../../core/src/extensions/internal.js"
+    const violations = collectSourceFiles()
+      .filter((file) => file.includes("/packages/extensions/src/"))
+      .filter((file) => !file.endsWith("/packages/extensions/src/core-internal.ts"))
+      .flatMap((file) =>
+        sourceLines(file)
+          .filter(({ text }) => !isCommentLine(text))
+          .filter(({ text }) => text.includes(bridgeImport))
+          .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+      )
+
+    expect(violations).toEqual([])
   })
 })

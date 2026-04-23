@@ -4,6 +4,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./core-internal": null,
+    "./core-internal.js": null,
+    "./core-internal.ts": null,
     "./internal-resource-machine": null,
     "./internal-resource-machine.js": null,
     "./internal-resource-machine.ts": null,

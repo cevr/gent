@@ -319,7 +319,8 @@ const plugin: Plugin = {
         }
 
         // Relative imports that escape into core internals
-        const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers)\//
+        const INTERNAL_RELATIVE =
+          /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
 
         // Allowed @gent/core subpaths (everything else is forbidden)
         const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
