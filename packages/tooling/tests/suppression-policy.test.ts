@@ -11,6 +11,7 @@ type SuppressionRule =
   | "effect:strictEffectProvide:off"
   | "eslint:@typescript-eslint/no-explicit-any"
   | "eslint:@typescript-eslint/no-unsafe-type-assertion"
+  | "ts:@ts-expect-error"
 
 interface SuppressionInstance {
   readonly file: string
@@ -44,6 +45,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:strictEffectProvide:off": 2,
       "eslint:@typescript-eslint/no-explicit-any": 29,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 63,
+      "ts:@ts-expect-error": 19,
     },
   },
   {
@@ -220,6 +222,14 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
         file: rel,
         line: index + 1,
         rule: "eslint:@typescript-eslint/no-unsafe-type-assertion",
+        text: line.trim(),
+      })
+    }
+    if (/^\s*\/\/\s*@ts-expect-error\b/.test(line)) {
+      out.push({
+        file: rel,
+        line: index + 1,
+        rule: "ts:@ts-expect-error",
         text: line.trim(),
       })
     }
