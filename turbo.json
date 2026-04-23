@@ -32,6 +32,18 @@
       "outputs": [],
       "cache": false
     },
+    "policy": {
+      "inputs": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tests/**/*.ts",
+        "tests/**/*.tsx",
+        "policy/**/*.ts",
+        "package.json"
+      ],
+      "outputs": [],
+      "cache": false
+    },
     "test:e2e": {
       "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "package.json"],
       "outputs": [],

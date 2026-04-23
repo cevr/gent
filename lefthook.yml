@@ -10,3 +10,5 @@ pre-commit:
       run: bun run build
     - name: test
       run: bun run test
+    - name: policy
+      run: bun run policy

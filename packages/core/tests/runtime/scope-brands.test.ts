@@ -9,7 +9,7 @@
  * Suppression policy note: the few casts in this file are deliberate
  * test-fixture debt. Production scope-brand escapes are fenced separately by
  * `gent/brand-constructor-callers`, `gent/no-scope-brand-cast`, and the
- * suppression policy lock in `packages/tooling/tests/suppression-policy.test.ts`.
+ * suppression policy lock in `packages/tooling/policy/suppression-policy.test.ts`.
  */
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Context, type Scope } from "effect"

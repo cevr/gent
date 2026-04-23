@@ -404,11 +404,12 @@ Use the smallest honest boundary:
 
 ### Commands
 
-| Command            | Scope                                          | Target   |
-| ------------------ | ---------------------------------------------- | -------- |
-| `bun run test`     | core + tui + sdk + fast in-process integration | ~2-4s    |
-| `bun run test:e2e` | PTY e2e + supervisor + worker-http transport   | ~60-120s |
-| `bun run gate`     | typecheck + lint + fmt + build + test          | ~15s     |
+| Command            | Scope                                                 | Target   |
+| ------------------ | ----------------------------------------------------- | -------- |
+| `bun run test`     | product behavior: core + tui + sdk + fast integration | ~2-4s    |
+| `bun run policy`   | source-scan architecture and suppression policy tests | ~1s      |
+| `bun run test:e2e` | PTY e2e + supervisor + worker-http transport          | ~60-120s |
+| `bun run gate`     | typecheck + lint + fmt + build + test + policy        | ~15s     |
 
 ### Test structure
 

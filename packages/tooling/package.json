@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/fixtures.test.ts",
+    "policy": "env -u FORCE_COLOR NO_COLOR=1 bun test policy/"
   }
 }

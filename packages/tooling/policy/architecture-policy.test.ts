@@ -247,6 +247,23 @@ describe("architecture policy", () => {
     expect(extensionsPkg).toMatch(/"\.\/core-internal\.js": null/)
   })
 
+  test("production TUI shell does not import app runtime wiring directly", () => {
+    const mainSource = readFileSync(pathResolve(ROOT, "apps/tui/src/main.tsx"), "utf8")
+
+    expect(mainSource).not.toContain("@gent/core/server/dependencies.js")
+    expect(mainSource).not.toContain("@gent/core/server/index.js")
+    expect(mainSource).not.toContain("@gent/core/debug/session.js")
+    expect(mainSource).not.toContain("makeDirectGentClient")
+    expect(mainSource).not.toContain("run-debug-app")
+    expect(mainSource).not.toContain("Gent.spawn")
+    expect(mainSource).not.toContain("Gent.local")
+    expect(mainSource).toContain("Gent.server")
+    expect(mainSource).toContain("Gent.client")
+    expect(mainSource).toContain("Gent.state")
+    expect(mainSource).toContain("Gent.provider")
+    expect(mainSource).toContain('Flag.string("connect")')
+  })
+
   test("builtin extensions have exactly one core-internal bridge", () => {
     const bridgeImport = "../../core/src/extensions/internal.js"
     const violations = collectSourceFiles()
