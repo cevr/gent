@@ -10,7 +10,8 @@ export const DateFromNumber = Schema.Number.pipe(
   }),
 )
 
-// Message Part Types - matching AI SDK v6 shape
+// Persisted transcript projection. Runtime/model IO uses Effect Prompt/Response;
+// these schemas keep Gent-owned metadata, storage, and UI serialization stable.
 
 export class TextPart extends Schema.Class<TextPart>("TextPart")({
   type: Schema.Literal("text"),
@@ -27,7 +28,7 @@ export class ToolCallPart extends Schema.Class<ToolCallPart>("ToolCallPart")({
   type: Schema.Literal("tool-call"),
   toolCallId: ToolCallId,
   toolName: Schema.String,
-  input: Schema.Unknown, // AI SDK v6 uses 'input' not 'args'
+  input: Schema.Unknown,
 }) {}
 
 // Simplified ToolResultOutput - just JSON for now

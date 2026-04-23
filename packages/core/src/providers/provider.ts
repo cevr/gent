@@ -1,17 +1,8 @@
 import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message } from "../domain/message.js"
-import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
-import {
-  Finished,
-  ReasoningDelta,
-  TextDelta,
-  ToolCall,
-  type ProviderAuthInfo,
-  type ProviderHints,
-  type TurnEvent,
-} from "../domain/driver.js"
+import { type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
@@ -140,19 +131,6 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 export type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
 type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
 
-const toUsage = (usage: Response.FinishPart["usage"]) =>
-  usage !== undefined
-    ? (() => {
-        const inputTokens = usage.inputTokens.total
-        const outputTokens = usage.outputTokens.total
-        if (inputTokens === undefined && outputTokens === undefined) return undefined
-        return {
-          ...(inputTokens !== undefined ? { inputTokens } : {}),
-          ...(outputTokens !== undefined ? { outputTokens } : {}),
-        }
-      })()
-    : undefined
-
 let _streamPartIdCounter = 0
 const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
 
@@ -180,47 +158,6 @@ const finishPart = (params: {
     }),
     response: undefined,
   })
-
-const toTurnEvent =
-  (model: string) =>
-  (part: ProviderStreamPart): Effect.Effect<TurnEvent | undefined, ProviderError> => {
-    switch (part.type) {
-      case "text-delta":
-        return Effect.succeed(new TextDelta({ text: part.delta }))
-      case "reasoning-delta":
-        return Effect.succeed(new ReasoningDelta({ text: part.delta }))
-      case "tool-call":
-        return Effect.succeed(
-          new ToolCall({
-            toolCallId: ToolCallId.of(part.id),
-            toolName: part.name,
-            input: part.params,
-          }),
-        )
-      case "finish":
-        return Effect.succeed(
-          new Finished({
-            stopReason: part.reason,
-            ...(toUsage(part.usage) !== undefined ? { usage: toUsage(part.usage) } : {}),
-          }),
-        )
-      case "error":
-        return Effect.fail(
-          new ProviderError({
-            message: `API error: ${String(part.error)}`,
-            model,
-          }),
-        )
-      default:
-        return Effect.succeed(undefined)
-    }
-  }
-
-export const toTurnEventStream = (model: string, stream: ProviderStream) =>
-  stream.pipe(
-    Stream.mapEffect(toTurnEvent(model)),
-    Stream.filter((event): event is TurnEvent => event !== undefined),
-  )
 
 // ── Provider Request ──
 

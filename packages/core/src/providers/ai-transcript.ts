@@ -419,160 +419,62 @@ const responseFilePartToImagePart = (part: Response.FilePart): ImagePart | undef
       })
     : undefined
 
-interface ResponsePartsAccumulator {
-  readonly assistant: Array<TextPart | ReasoningPart | ImagePart | ToolCallPart>
-  readonly tool: ToolResultPart[]
-  readonly activeTextDeltas: Map<string, string>
-  readonly activeReasoningDeltas: Map<string, string>
-}
-
-const appendTextResponsePart = (
+const responsePartToAssistantProjection = (
   part: Response.AnyPart,
-  state: ResponsePartsAccumulator,
-): boolean => {
+): TextPart | ReasoningPart | ImagePart | ToolCallPart | undefined => {
   switch (part.type) {
     case "text":
-      state.assistant.push(new TextPart({ type: "text", text: part.text }))
-      return true
-    case "text-start":
-      state.activeTextDeltas.set(part.id, "")
-      return true
-    case "text-delta":
-      if (state.activeTextDeltas.has(part.id)) {
-        state.activeTextDeltas.set(
-          part.id,
-          `${state.activeTextDeltas.get(part.id) ?? ""}${part.delta}`,
-        )
-      }
-      return true
-    case "text-end": {
-      const text = state.activeTextDeltas.get(part.id)
-      if (text !== undefined) {
-        state.assistant.push(new TextPart({ type: "text", text }))
-        state.activeTextDeltas.delete(part.id)
-      }
-      return true
-    }
-    default:
-      return false
-  }
-}
-
-const appendReasoningResponsePart = (
-  part: Response.AnyPart,
-  state: ResponsePartsAccumulator,
-): boolean => {
-  switch (part.type) {
+      return new TextPart({ type: "text", text: part.text })
     case "reasoning":
-      state.assistant.push(new ReasoningPart({ type: "reasoning", text: part.text }))
-      return true
-    case "reasoning-start":
-      state.activeReasoningDeltas.set(part.id, "")
-      return true
-    case "reasoning-delta":
-      if (state.activeReasoningDeltas.has(part.id)) {
-        state.activeReasoningDeltas.set(
-          part.id,
-          `${state.activeReasoningDeltas.get(part.id) ?? ""}${part.delta}`,
-        )
-      }
-      return true
-    case "reasoning-end": {
-      const text = state.activeReasoningDeltas.get(part.id)
-      if (text !== undefined) {
-        state.assistant.push(new ReasoningPart({ type: "reasoning", text }))
-        state.activeReasoningDeltas.delete(part.id)
-      }
-      return true
-    }
-    default:
-      return false
-  }
-}
-
-const appendAssistantResponsePart = (
-  part: Response.AnyPart,
-  state: ResponsePartsAccumulator,
-): boolean => {
-  switch (part.type) {
-    case "file": {
-      const imagePart = responseFilePartToImagePart(part)
-      if (imagePart !== undefined) state.assistant.push(imagePart)
-      return true
-    }
+      return new ReasoningPart({ type: "reasoning", text: part.text })
+    case "file":
+      return responseFilePartToImagePart(part)
     case "tool-call":
-      state.assistant.push(
-        new ToolCallPart({
-          type: "tool-call",
-          toolCallId: ToolCallId.of(part.id),
-          toolName: part.name,
-          input: part.params,
-        }),
-      )
-      return true
+      return new ToolCallPart({
+        type: "tool-call",
+        toolCallId: ToolCallId.of(part.id),
+        toolName: part.name,
+        input: part.params,
+      })
     default:
-      return false
+      return undefined
   }
 }
 
-const appendToolResponsePart = (
-  part: Response.AnyPart,
-  state: ResponsePartsAccumulator,
-): boolean => {
-  if (part.type !== "tool-result") return false
-  if (part.preliminary === true) return true
-
-  state.tool.push(
-    new ToolResultPart({
-      type: "tool-result",
-      toolCallId: ToolCallId.of(part.id),
-      toolName: part.name,
-      output: {
-        type: part.isFailure ? "error-json" : "json",
-        value: part.encodedResult,
-      },
-    }),
-  )
-  return true
-}
+const responsePartToToolProjection = (part: Response.AnyPart): ToolResultPart | undefined =>
+  part.type === "tool-result" && part.preliminary !== true
+    ? new ToolResultPart({
+        type: "tool-result",
+        toolCallId: ToolCallId.of(part.id),
+        toolName: part.name,
+        output: {
+          type: part.isFailure ? "error-json" : "json",
+          value: part.encodedResult,
+        },
+      })
+    : undefined
 
 export const responsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): ResponseMessageParts => {
   const normalized = normalizeResponseParts(parts)
-  const state: ResponsePartsAccumulator = {
-    assistant: [],
-    tool: [],
-    activeTextDeltas: new Map(),
-    activeReasoningDeltas: new Map(),
-  }
+  const assistant: Array<TextPart | ReasoningPart | ImagePart | ToolCallPart> = []
+  const tool: ToolResultPart[] = []
 
   for (const part of normalized) {
-    if (appendTextResponsePart(part, state)) continue
-    if (appendReasoningResponsePart(part, state)) continue
-    if (appendAssistantResponsePart(part, state)) continue
-    appendToolResponsePart(part, state)
+    const assistantPart = responsePartToAssistantProjection(part)
+    if (assistantPart !== undefined) {
+      assistant.push(assistantPart)
+      continue
+    }
+    const toolPart = responsePartToToolProjection(part)
+    if (toolPart !== undefined) tool.push(toolPart)
   }
 
-  return { assistant: state.assistant, tool: state.tool }
+  return { assistant, tool }
 }
 
-const toPromptFromToolParts = (
-  parts: ReadonlyArray<ToolResultPart>,
-): Prompt.ToolMessage | undefined => {
-  const content = parts.map((part) =>
-    Prompt.toolResultPart({
-      id: part.toolCallId,
-      name: part.toolName,
-      isFailure: part.output.type === "error-json",
-      result: part.output.value,
-    }),
-  )
-
-  return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
-}
-
-const toPromptFromResponseAssistantParts = (
+const responsePartsToPromptAssistantMessage = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): Prompt.AssistantMessage | undefined => {
   const content: Prompt.AssistantMessagePart[] = []
@@ -614,6 +516,26 @@ const toPromptFromResponseAssistantParts = (
   return content.length > 0 ? Prompt.assistantMessage({ content }) : undefined
 }
 
+const responsePartsToPromptToolMessage = (
+  parts: ReadonlyArray<Response.AnyPart>,
+): Prompt.ToolMessage | undefined => {
+  const content = parts.flatMap(
+    (part): ReadonlyArray<Prompt.ToolMessagePart> =>
+      part.type === "tool-result" && part.preliminary !== true
+        ? [
+            Prompt.toolResultPart({
+              id: part.id,
+              name: part.name,
+              isFailure: part.isFailure,
+              result: part.encodedResult,
+            }),
+          ]
+        : [],
+  )
+
+  return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
+}
+
 export const promptFromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Prompt.Prompt => {
   const normalized = normalizeResponseParts(parts)
   if (!normalized.some((part) => part.type === "file")) {
@@ -621,8 +543,8 @@ export const promptFromResponseParts = (parts: ReadonlyArray<Response.AnyPart>):
   }
 
   const promptMessages: Prompt.Message[] = []
-  const assistant = toPromptFromResponseAssistantParts(normalized)
-  const tool = toPromptFromToolParts(responsePartsToMessageParts(normalized).tool)
+  const assistant = responsePartsToPromptAssistantMessage(normalized)
+  const tool = responsePartsToPromptToolMessage(normalized)
   if (assistant !== undefined) promptMessages.push(assistant)
   if (tool !== undefined) promptMessages.push(tool)
   return Prompt.fromMessages(promptMessages)
