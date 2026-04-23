@@ -250,6 +250,16 @@ describe("EventPublisher", () => {
     const persisted: string[] = []
     const nestedPulse = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
+    const pulseTagsRegistryLayer = ExtensionRegistry.fromResolved(
+      resolveExtensions([
+        {
+          manifest: { id: "pulse-only-ext" },
+          scope: "builtin",
+          sourcePath: "builtin",
+          contributions: { pulseTags: ["OuterEvent", "NestedEvent"] },
+        },
+      ]),
+    )
 
     const baseLayer = Layer.succeed(EventStore, {
       publish: (event: AgentEvent) =>
@@ -268,7 +278,7 @@ describe("EventPublisher", () => {
         Effect.gen(function* () {
           const listener = yield* CurrentMachinePublishListener
           if (event._tag === "OuterEvent") {
-            yield* listener?.(["outer-ext"]) ?? Effect.void
+            yield* listener?.([]) ?? Effect.void
             if (publishFn !== undefined) {
               yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
                 Effect.provideService(CurrentExtensionSession, {
@@ -279,7 +289,7 @@ describe("EventPublisher", () => {
             return [] as ReadonlyArray<string>
           }
           if (event._tag === "NestedEvent") {
-            yield* listener?.(["nested-ext"]) ?? Effect.void
+            yield* listener?.([]) ?? Effect.void
             return [] as ReadonlyArray<string>
           }
           return [] as ReadonlyArray<string>
@@ -292,7 +302,7 @@ describe("EventPublisher", () => {
 
     const layer = Layer.provide(
       EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, pulseTagsRegistryLayer, runtimePlatformLayer),
     )
 
     await Effect.gen(function* () {

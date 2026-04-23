@@ -101,7 +101,6 @@ export const makeMachineEngine = (
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
     const notifyPublishListener = (transitioned: ReadonlyArray<string>) =>
       Effect.gen(function* () {
-        if (transitioned.length === 0) return
         const listener = yield* CurrentMachinePublishListener
         if (listener === undefined) return
         yield* listener(transitioned)
