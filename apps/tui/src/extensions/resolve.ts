@@ -4,13 +4,13 @@
  * Mirrors server-side resolveExtensions() from registry.ts.
  * Precedence: project > user > builtin. Same-scope collisions throw.
  *
- * Per-kind conflict rules are NOT uniform — see the per-kind resolvers below.
+ * Per-tag conflict rules are NOT uniform — see the per-tag resolvers below.
  */
 
 import type {
   AutocompleteContribution,
   ClientContribution,
-  ClientContributionKind,
+  ClientContributionTag,
 } from "./client-facets.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
 import type { JSX } from "@opentui/solid"
@@ -74,7 +74,7 @@ const checkCollision = (
   }
 }
 
-// ── Per-kind extraction ──
+// ── Per-tag extraction ──
 
 interface SortedExtension {
   readonly ext: LoadedTuiExtension
@@ -89,14 +89,14 @@ const flatten = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<Sorte
   return out
 }
 
-// ── Per-kind resolvers ──
+// ── Per-tag resolvers ──
 
 const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, ToolRenderer> => {
   const renderers = new Map<string, ToolRenderer>()
   const scopes = new Map<string, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "renderer") continue
+    if (contribution._tag !== "renderer") continue
     for (const name of contribution.toolNames) {
       const key = name.toLowerCase()
       checkCollision(scopes.get(key), ext, "renderer", name)
@@ -114,7 +114,7 @@ const resolveWidgets = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Res
   const scopes = new Map<string, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "widget") continue
+    if (contribution._tag !== "widget") continue
     checkCollision(scopes.get(contribution.id), ext, "widget", contribution.id)
     widgetMap.set(contribution.id, {
       id: contribution.id,
@@ -139,7 +139,7 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
   const slashOwner = new Map<string, string>() // slash → command id
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "command") continue
+    if (contribution._tag !== "command") continue
     const entry = contribution
     checkCollision(idScopes.get(entry.id), ext, "command", entry.id)
 
@@ -197,7 +197,7 @@ const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, Soli
   const scopes = new Map<string, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "overlay") continue
+    if (contribution._tag !== "overlay") continue
     checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     overlays.set(contribution.id, contribution.component as SolidComponent)
@@ -214,7 +214,7 @@ const resolveInteractionRenderers = (
   const scopes = new Map<string | undefined, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "interaction-renderer") continue
+    if (contribution._tag !== "interaction-renderer") continue
     const key = contribution.metadataType
     const label = key ?? "(default)"
     checkCollision(scopes.get(key), ext, "interaction renderer", label)
@@ -233,7 +233,7 @@ const resolveComposerSurface = (
   let winnerScope: ScopeEntry | undefined
 
   for (const { ext, contribution } of flat) {
-    if (contribution._kind !== "composer-surface") continue
+    if (contribution._tag !== "composer-surface") continue
     if (winnerScope !== undefined) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
@@ -250,7 +250,7 @@ const resolveBorderLabels = (
 ): ReadonlyArray<ResolvedBorderLabel> => {
   const out: ResolvedBorderLabel[] = []
   for (const { contribution } of flat) {
-    if (contribution._kind !== "border-label") continue
+    if (contribution._tag !== "border-label") continue
     out.push({
       position: contribution.position,
       priority: contribution.priority ?? 100,
@@ -266,19 +266,19 @@ const resolveAutocomplete = (
 ): ReadonlyArray<AutocompleteContribution> => {
   const out: AutocompleteContribution[] = []
   for (const { contribution } of flat) {
-    if (contribution._kind !== "autocomplete") continue
+    if (contribution._tag !== "autocomplete") continue
     out.push(contribution)
   }
   return out
 }
 
 /**
- * Every kind the resolver knows how to dispatch on. If a new `_kind` is added
+ * Every tag the resolver knows how to dispatch on. If a new `_tag` is added
  * to `ClientContribution` without a corresponding case here, the type assertion
  * below fails at compile time AND the runtime check below throws — preventing
- * silent drop-on-the-floor handling of new contribution kinds.
+ * silent drop-on-the-floor handling of new contribution tags.
  */
-const HANDLED_KINDS: ReadonlySet<ClientContributionKind> = new Set<ClientContributionKind>([
+const HANDLED_TAGS: ReadonlySet<ClientContributionTag> = new Set<ClientContributionTag>([
   "renderer",
   "widget",
   "command",
@@ -293,8 +293,8 @@ const HANDLED_KINDS: ReadonlySet<ClientContributionKind> = new Set<ClientContrib
  * Resolve all TUI extension contributions with scope precedence.
  * Higher scope wins for same key. Same-scope collisions throw.
  *
- * Adding a new `ClientContribution` kind: register it in HANDLED_KINDS AND add
- * a per-kind resolver below — otherwise this function throws at the entry guard.
+ * Adding a new `ClientContribution` tag: register it in HANDLED_TAGS AND add
+ * a per-tag resolver below — otherwise this function throws at the entry guard.
  */
 export const resolveTuiExtensions = (
   extensions: ReadonlyArray<LoadedTuiExtension>,
@@ -308,12 +308,12 @@ export const resolveTuiExtensions = (
 
   const flat = flatten(sorted)
 
-  // Exhaustiveness gate — fail loud if a contribution carries an unknown _kind.
+  // Exhaustiveness gate — fail loud if a contribution carries an unknown _tag.
   for (const { ext, contribution } of flat) {
-    if (!HANDLED_KINDS.has(contribution._kind)) {
+    if (!HANDLED_TAGS.has(contribution._tag)) {
       throw new Error(
-        `Unknown TUI client contribution kind "${contribution._kind}" from "${ext.id}" (${ext.filePath}). ` +
-          `Add it to HANDLED_KINDS and register a per-kind resolver in apps/tui/src/extensions/resolve.ts.`,
+        `Unknown TUI client contribution tag "${contribution._tag}" from "${ext.id}" (${ext.filePath}). ` +
+          `Add it to HANDLED_TAGS and register a per-tag resolver in apps/tui/src/extensions/resolve.ts.`,
       )
     }
   }

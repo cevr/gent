@@ -119,10 +119,10 @@ export default { manifest: { id: "custom-read" }, setup: () => [] }`,
 export default {
   id: "@test/custom-read",
   setup: Effect.succeed([
-    { _kind: "renderer", toolNames: ["my_custom_tool"], component: () => "custom-tool-renderer" },
-    { _kind: "widget", id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" },
-    { _kind: "command", id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} },
-    { _kind: "overlay", id: "test-overlay", component: () => "test-overlay" },
+    { _tag: "renderer", toolNames: ["my_custom_tool"], component: () => "custom-tool-renderer" },
+    { _tag: "widget", id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" },
+    { _tag: "command", id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} },
+    { _tag: "overlay", id: "test-overlay", component: () => "test-overlay" },
   ]),
 }`,
   )
@@ -134,7 +134,7 @@ export default {
 export default {
   id: "@test/override-bash",
   setup: Effect.succeed([
-    { _kind: "renderer", toolNames: ["bash"], component: () => "project-bash-override" },
+    { _tag: "renderer", toolNames: ["bash"], component: () => "project-bash-override" },
   ]),
 }`,
   )
@@ -142,28 +142,28 @@ export default {
   // Discovery fixtures that should or should not survive the public seam
   writeFileSync(
     join(USER_DIR, "alpha.client.ts"),
-    "import { Effect } from 'effect'; export default { id: '@test/alpha', setup: Effect.succeed([{ _kind: 'command', id: 'alpha', title: 'Alpha', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/alpha', setup: Effect.succeed([{ _tag: 'command', id: 'alpha', title: 'Alpha', onSelect: () => {} }]) }",
   )
   writeFileSync(
     join(USER_DIR, "zeta.client.ts"),
-    "import { Effect } from 'effect'; export default { id: '@test/zeta', setup: Effect.succeed([{ _kind: 'command', id: 'zeta', title: 'Zeta', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/zeta', setup: Effect.succeed([{ _tag: 'command', id: 'zeta', title: 'Zeta', onSelect: () => {} }]) }",
   )
   writeFileSync(
     join(USER_DIR, ".hidden.client.tsx"),
-    "import { Effect } from 'effect'; export default { id: '@test/hidden', setup: Effect.succeed([{ _kind: 'command', id: 'hidden', title: 'Hidden', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/hidden', setup: Effect.succeed([{ _tag: 'command', id: 'hidden', title: 'Hidden', onSelect: () => {} }]) }",
   )
   writeFileSync(
     join(USER_DIR, "_internal.client.tsx"),
-    "import { Effect } from 'effect'; export default { id: '@test/internal', setup: Effect.succeed([{ _kind: 'command', id: 'internal', title: 'Internal', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/internal', setup: Effect.succeed([{ _tag: 'command', id: 'internal', title: 'Internal', onSelect: () => {} }]) }",
   )
   mkdirSync(join(USER_DIR, "__tests__"), { recursive: true })
   writeFileSync(
     join(USER_DIR, "__tests__", "test.client.tsx"),
-    "import { Effect } from 'effect'; export default { id: '@test/spec-only', setup: Effect.succeed([{ _kind: 'command', id: 'spec-only', title: 'Spec Only', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/spec-only', setup: Effect.succeed([{ _tag: 'command', id: 'spec-only', title: 'Spec Only', onSelect: () => {} }]) }",
   )
   writeFileSync(
     join(PROJECT_DIR, "prebuilt.client.mjs"),
-    "import { Effect } from 'effect'; export default { id: '@test/prebuilt', setup: Effect.succeed([{ _kind: 'command', id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} }]) }",
+    "import { Effect } from 'effect'; export default { id: '@test/prebuilt', setup: Effect.succeed([{ _tag: 'command', id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} }]) }",
   )
 
   // Extension that uses a local openOverlay stub in a command (ctx no longer passed to setup)
@@ -176,8 +176,8 @@ const ctx = { openOverlay: (_id) => {} }
 export default {
   id: "@test/ctx-user",
   setup: Effect.succeed([
-    { _kind: "command", id: "ctx-cmd", title: "Ctx Command", category: "test", onSelect: () => ctx.openOverlay("ctx-overlay") },
-    { _kind: "overlay", id: "ctx-overlay", component: () => "ctx-overlay-component" },
+    { _tag: "command", id: "ctx-cmd", title: "Ctx Command", category: "test", onSelect: () => ctx.openOverlay("ctx-overlay") },
+    { _tag: "overlay", id: "ctx-overlay", component: () => "ctx-overlay-component" },
   ]),
 }`,
   )
@@ -316,7 +316,7 @@ describe("loadTuiExtensions integration", () => {
 export default {
   id: "@test/user-bash",
   setup: Effect.succeed([
-    { _kind: "renderer", toolNames: ["bash"], component: () => "user-bash-override" },
+    { _tag: "renderer", toolNames: ["bash"], component: () => "user-bash-override" },
   ]),
 }`,
     )
@@ -379,7 +379,7 @@ export default {
   id: "@test/shared-client",
   setup: Effect.succeed([
     {
-      _kind: "command",
+      _tag: "command",
       id: "shared.ping",
       title: "Shared Ping",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -555,7 +555,7 @@ describe("same-scope collision detection", () => {
       `import { Effect } from "effect"
 export default {
   id: "@test/a",
-  setup: Effect.succeed([{ _kind: "renderer", toolNames: ["my_tool"], component: () => "a" }]),
+  setup: Effect.succeed([{ _tag: "renderer", toolNames: ["my_tool"], component: () => "a" }]),
 }`,
     )
     writeFileSync(
@@ -563,7 +563,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/b",
-  setup: Effect.succeed([{ _kind: "renderer", toolNames: ["my_tool"], component: () => "b" }]),
+  setup: Effect.succeed([{ _tag: "renderer", toolNames: ["my_tool"], component: () => "b" }]),
 }`,
     )
 
@@ -586,7 +586,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/a",
-  setup: Effect.succeed([{ _kind: "widget", id: "dup-widget", slot: "below-messages", component: () => "a" }]),
+  setup: Effect.succeed([{ _tag: "widget", id: "dup-widget", slot: "below-messages", component: () => "a" }]),
 }`,
     )
     writeFileSync(
@@ -594,7 +594,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/b",
-  setup: Effect.succeed([{ _kind: "widget", id: "dup-widget", slot: "above-input", component: () => "b" }]),
+  setup: Effect.succeed([{ _tag: "widget", id: "dup-widget", slot: "above-input", component: () => "b" }]),
 }`,
     )
 
@@ -617,7 +617,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/a",
-  setup: Effect.succeed([{ _kind: "command", id: "dup-cmd", title: "A", onSelect: () => {} }]),
+  setup: Effect.succeed([{ _tag: "command", id: "dup-cmd", title: "A", onSelect: () => {} }]),
 }`,
     )
     writeFileSync(
@@ -625,7 +625,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/b",
-  setup: Effect.succeed([{ _kind: "command", id: "dup-cmd", title: "B", onSelect: () => {} }]),
+  setup: Effect.succeed([{ _tag: "command", id: "dup-cmd", title: "B", onSelect: () => {} }]),
 }`,
     )
 
@@ -648,7 +648,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/a",
-  setup: Effect.succeed([{ _kind: "command", id: "cmd-a", title: "A", keybind: "ctrl+k", onSelect: () => {} }]),
+  setup: Effect.succeed([{ _tag: "command", id: "cmd-a", title: "A", keybind: "ctrl+k", onSelect: () => {} }]),
 }`,
     )
     writeFileSync(
@@ -656,7 +656,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/b",
-  setup: Effect.succeed([{ _kind: "command", id: "cmd-b", title: "B", keybind: "ctrl+k", onSelect: () => {} }]),
+  setup: Effect.succeed([{ _tag: "command", id: "cmd-b", title: "B", keybind: "ctrl+k", onSelect: () => {} }]),
 }`,
     )
 
@@ -679,7 +679,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/a",
-  setup: Effect.succeed([{ _kind: "overlay", id: "dup-overlay", component: () => "a" }]),
+  setup: Effect.succeed([{ _tag: "overlay", id: "dup-overlay", component: () => "a" }]),
 }`,
     )
     writeFileSync(
@@ -687,7 +687,7 @@ export default {
       `import { Effect } from "effect"
 export default {
   id: "@test/b",
-  setup: Effect.succeed([{ _kind: "overlay", id: "dup-overlay", component: () => "b" }]),
+  setup: Effect.succeed([{ _tag: "overlay", id: "dup-overlay", component: () => "b" }]),
 }`,
     )
 
@@ -985,7 +985,7 @@ describe("composerState contract", () => {
 export default {
   id: "@test/composer-reader",
   setup: Effect.succeed([{
-    _kind: "command",
+    _tag: "command",
     id: "test-composer-state",
     title: "Test",
     onSelect: () => {},

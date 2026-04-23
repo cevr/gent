@@ -10,10 +10,10 @@
 // `(ctx) => Array` arm and no imperative context bag.
 //
 // The `ClientContribution` union is the foundational data structure here —
-// adding a new kind requires registering it in the resolver's HANDLED_KINDS set
-// (apps/tui/src/extensions/resolve.ts) and adding a per-kind resolver, otherwise
-// the resolver throws at the entry guard for any unknown _kind.
-// Per-kind conflict rules are preserved by the resolver:
+// adding a new facet requires registering it in the resolver's HANDLED_TAGS set
+// (apps/tui/src/extensions/resolve.ts) and adding a per-tag resolver, otherwise
+// the resolver throws at the entry guard for any unknown _tag.
+// Per-tag conflict rules are preserved by the resolver:
 //   - renderers: last (highest scope) wins by tool name
 //   - widgets:   last (highest scope) wins by widget id; sorted by priority
 //   - commands:  last (highest scope) wins by command id; superseded
@@ -53,16 +53,16 @@ export interface AutocompleteItem {
   readonly description?: string
 }
 
-// ── Per-kind contribution shapes ──
+// ── Per-tag contribution shapes ──
 
 export interface RendererContribution<TComponent = unknown> {
-  readonly _kind: "renderer"
+  readonly _tag: "renderer"
   readonly toolNames: ReadonlyArray<string>
   readonly component: TComponent
 }
 
 export interface WidgetContribution<TComponent = unknown> {
-  readonly _kind: "widget"
+  readonly _tag: "widget"
   readonly id: string
   readonly slot: WidgetSlot
   /** Lower = earlier; default 100. */
@@ -86,7 +86,7 @@ export interface PaletteLevel {
 }
 
 export interface ClientCommandContribution {
-  readonly _kind: "command"
+  readonly _tag: "command"
   readonly id: string
   readonly title: string
   readonly description?: string
@@ -106,28 +106,28 @@ export interface ClientCommandContribution {
 }
 
 export interface OverlayContribution<TComponent = unknown> {
-  readonly _kind: "overlay"
+  readonly _tag: "overlay"
   readonly id: string
   /** Receives `{ open, onClose }` props at render time. */
   readonly component: TComponent
 }
 
 export interface InteractionRendererContribution<TComponent = unknown> {
-  readonly _kind: "interaction-renderer"
+  readonly _tag: "interaction-renderer"
   /** Matches against metadata.type. undefined = default fallback renderer. */
   readonly metadataType?: string
   readonly component: TComponent
 }
 
 export interface ComposerSurfaceContribution<TComponent = unknown> {
-  readonly _kind: "composer-surface"
+  readonly _tag: "composer-surface"
   readonly component: TComponent
 }
 
 export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
 
 export interface BorderLabelContribution {
-  readonly _kind: "border-label"
+  readonly _tag: "border-label"
   readonly position: BorderLabelPosition
   /** Lower = earlier; default 100. */
   readonly priority?: number
@@ -135,7 +135,7 @@ export interface BorderLabelContribution {
 }
 
 export interface AutocompleteContribution {
-  readonly _kind: "autocomplete"
+  readonly _tag: "autocomplete"
   readonly prefix: string
   readonly title: string
   /** Fetch items for the given filter. Sync OR Effect (no Promise).
@@ -169,30 +169,30 @@ export type ClientContribution<TComponent = unknown> =
   | BorderLabelContribution
   | AutocompleteContribution
 
-export type ClientContributionKind = ClientContribution["_kind"]
+export type ClientContributionTag = ClientContribution["_tag"]
 
 // ── Smart constructors ──
 
 export const rendererContribution = <TComponent>(
   toolNames: ReadonlyArray<string>,
   component: TComponent,
-): RendererContribution<TComponent> => ({ _kind: "renderer", toolNames, component })
+): RendererContribution<TComponent> => ({ _tag: "renderer", toolNames, component })
 
 export const widgetContribution = <TComponent>(opts: {
   readonly id: string
   readonly slot: WidgetSlot
   readonly priority?: number
   readonly component: TComponent
-}): WidgetContribution<TComponent> => ({ _kind: "widget", ...opts })
+}): WidgetContribution<TComponent> => ({ _tag: "widget", ...opts })
 
 export const clientCommandContribution = (
-  opts: Omit<ClientCommandContribution, "_kind">,
-): ClientCommandContribution => ({ _kind: "command", ...opts })
+  opts: Omit<ClientCommandContribution, "_tag">,
+): ClientCommandContribution => ({ _tag: "command", ...opts })
 
 export const overlayContribution = <TComponent>(opts: {
   readonly id: string
   readonly component: TComponent
-}): OverlayContribution<TComponent> => ({ _kind: "overlay", ...opts })
+}): OverlayContribution<TComponent> => ({ _tag: "overlay", ...opts })
 
 /**
  * Build an interaction renderer contribution. The component must be a function
@@ -205,7 +205,7 @@ export const interactionRendererContribution = <
   component: TComponent,
   metadataType?: string,
 ): InteractionRendererContribution<TComponent> => ({
-  _kind: "interaction-renderer",
+  _tag: "interaction-renderer",
   metadataType,
   component,
 })
@@ -218,15 +218,15 @@ export const composerSurfaceContribution = <
   TComponent extends (props: ComposerSurfaceProps) => unknown,
 >(
   component: TComponent,
-): ComposerSurfaceContribution<TComponent> => ({ _kind: "composer-surface", component })
+): ComposerSurfaceContribution<TComponent> => ({ _tag: "composer-surface", component })
 
 export const borderLabelContribution = (
-  opts: Omit<BorderLabelContribution, "_kind">,
-): BorderLabelContribution => ({ _kind: "border-label", ...opts })
+  opts: Omit<BorderLabelContribution, "_tag">,
+): BorderLabelContribution => ({ _tag: "border-label", ...opts })
 
 export const autocompleteContribution = (
-  opts: Omit<AutocompleteContribution, "_kind">,
-): AutocompleteContribution => ({ _kind: "autocomplete", ...opts })
+  opts: Omit<AutocompleteContribution, "_tag">,
+): AutocompleteContribution => ({ _tag: "autocomplete", ...opts })
 
 /** Overlay identifier (registered in `OverlayContribution`). */
 export type OverlayId = string

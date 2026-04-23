@@ -145,7 +145,7 @@ describe("transport-only widgets — stale-response gating", () => {
       // `produce()` reads via `liveModel()` (the keyed gate). Find it.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const borderLabel = (contributions as ReadonlyArray<any>).find(
-        (c) => c._kind === "border-label" && c.position === "top-left",
+        (c) => c._tag === "border-label" && c.position === "top-left",
       )
       expect(borderLabel).toBeDefined()
 
@@ -186,7 +186,7 @@ describe("transport-only widgets — stale-response gating", () => {
       const contributions = await runtime.runPromise(artifactsBuiltin.setup)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const borderLabel = (contributions as ReadonlyArray<any>).find(
-        (c) => c._kind === "border-label" && c.position === "bottom-right",
+        (c) => c._tag === "border-label" && c.position === "bottom-right",
       )
       expect(borderLabel).toBeDefined()
 

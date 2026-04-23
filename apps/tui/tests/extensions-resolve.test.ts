@@ -1,7 +1,7 @@
 /**
  * TUI extension resolver — per-slot conflict rule regression locks.
  *
- * The `ClientContribution` union has eight kinds, and each kind has its own
+ * The `ClientContribution` union has eight tags, and each tag has its own
  * conflict rule (NOT uniform). These tests pin every rule so future structural
  * refactors can't silently regress merge semantics:
  *
@@ -230,12 +230,12 @@ describe("resolveTuiExtensions — per-slot conflict rules", () => {
     expect(r.autocompleteItems.map((c) => c.prefix)).toEqual(["$", "/", "@"])
   })
 
-  test("unknown contribution _kind throws (exhaustiveness gate)", () => {
-    // Forge a contribution with a kind the resolver doesn't know about — the
+  test("unknown contribution _tag throws (exhaustiveness gate)", () => {
+    // Forge a contribution with a tag the resolver doesn't know about — the
     // entry guard must reject it rather than silently dropping it on the floor.
-    const bogus = { _kind: "bogus-kind", payload: "ignored" } as unknown as ClientContribution
+    const bogus = { _tag: "bogus-kind", payload: "ignored" } as unknown as ClientContribution
     expect(() => resolveTuiExtensions([make("a", "user", [bogus])])).toThrow(
-      /Unknown TUI client contribution kind/,
+      /Unknown TUI client contribution tag/,
     )
   })
 })
