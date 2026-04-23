@@ -81,6 +81,13 @@ describe("GentClient transport contract", () => {
           ).toBe(true)
 
           yield* waitFor(
+            client.message
+              .list({ branchId: created.branchId })
+              .pipe(Effect.mapError((error) => new Error(String(error)))),
+            (items) => items.some((message) => message.role === "assistant"),
+          )
+
+          yield* waitFor(
             client.session
               .getSnapshot({
                 sessionId: created.sessionId,

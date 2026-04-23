@@ -1,5 +1,5 @@
 import { Console, Effect, Option } from "effect"
-import type { AgentName } from "@gent/core/domain/agent.js"
+import { DEFAULT_AGENT_NAME, type AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
 import type { BranchId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
@@ -170,7 +170,9 @@ export const resolveStartupAuthState = (input: {
         : undefined
 
     const authAgent =
-      input.state._tag === "headless" ? (input.requestedAgent ?? sessionAgent) : sessionAgent
+      input.state._tag === "headless"
+        ? (input.requestedAgent ?? sessionAgent ?? DEFAULT_AGENT_NAME)
+        : (sessionAgent ?? input.requestedAgent ?? DEFAULT_AGENT_NAME)
 
     // Thread sessionId so per-session cwd resolves project-level
     // driverOverrides (counsel HIGH #2). Branch-picker has no session.

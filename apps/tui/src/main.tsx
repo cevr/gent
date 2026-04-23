@@ -203,6 +203,8 @@ const main = Command.make(
       )) as Context.Context<unknown>
       const visualOpt = yield* Config.option(Config.string("VISUAL"))
       const editorOpt = yield* Config.option(Config.string("EDITOR"))
+      const authFilePathOpt = yield* Config.option(Config.string("GENT_AUTH_FILE_PATH"))
+      const authKeyPathOpt = yield* Config.option(Config.string("GENT_AUTH_KEY_PATH"))
       const env = {
         visual: Option.getOrUndefined(visualOpt),
         editor: Option.getOrUndefined(editorOpt),
@@ -231,7 +233,14 @@ const main = Command.make(
         const serverState = debug || isolate ? Gent.state.memory() : Gent.state.sqlite()
         const serverProvider = debug ? Gent.provider.mock() : Gent.provider.live()
         return Effect.flatMap(
-          Gent.server({ cwd, state: serverState, provider: serverProvider, debug }),
+          Gent.server({
+            cwd,
+            state: serverState,
+            provider: serverProvider,
+            ...(Option.isSome(authFilePathOpt) ? { authFilePath: authFilePathOpt.value } : {}),
+            ...(Option.isSome(authKeyPathOpt) ? { authKeyPath: authKeyPathOpt.value } : {}),
+            debug,
+          }),
           Gent.client,
         )
       }

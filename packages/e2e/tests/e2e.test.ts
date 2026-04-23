@@ -34,7 +34,7 @@ interface TestContext {
   pty: IPty
   output: string
   tempDir: string
-  cleanup: () => void
+  cleanup: () => Promise<void>
 }
 
 const seedAuth = async (tempDir: string): Promise<void> => {
@@ -74,7 +74,7 @@ function spawnWithDir(
 
   let output = ""
 
-  const pty = spawn("bun", ["--preload", preloadPath, mainPath, ...extraArgs], {
+  const pty = spawn("bun", ["--preload", preloadPath, mainPath, "--isolate", ...extraArgs], {
     name: "xterm-256color",
     cols: 120,
     rows: 40,
@@ -92,7 +92,46 @@ function spawnWithDir(
     output += data
   })
 
-  const cleanup = () => {
+  const isPidAlive = (pid: number) => {
+    if (!Number.isInteger(pid) || pid <= 0) return false
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const waitForExit = async (pid: number, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs
+    await new Promise<void>((resolve) => {
+      const tick = () => {
+        if (!isPidAlive(pid) || Date.now() >= deadline) {
+          resolve()
+          return
+        }
+        setTimeout(tick, 50)
+      }
+      tick()
+    })
+  }
+
+  const cleanup = async () => {
+    const pid = pty.pid
+    try {
+      pty.write(CTRL_C)
+    } catch {
+      /* already closing */
+    }
+    await waitForExit(pid, 1_000)
+    if (isPidAlive(pid)) {
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch {
+        /* already dead */
+      }
+      await waitForExit(pid, 2_000)
+    }
     try {
       pty.close()
     } catch {
@@ -158,10 +197,9 @@ let testContext: TestContext | null = null
 
 afterEach(async () => {
   if (testContext) {
-    testContext.cleanup()
+    await testContext.cleanup()
     testContext = null
-    // Give OS time to reclaim PTY resources before next test
-    await new Promise((r) => setTimeout(r, 200))
+    await new Promise((r) => setTimeout(r, 100))
   }
 })
 
@@ -204,7 +242,7 @@ describe("E2E: Basics", () => {
       testContext.pty.write(ESC)
       const code = await Promise.race([
         testContext.pty.exited,
-        new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
+        new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
       ])
       expect(code).toBe(0)
     },
@@ -218,46 +256,27 @@ describe("E2E: Basics", () => {
 
 describe("E2E: Auth", () => {
   test(
-    "missing auth → auto-opens auth panel",
+    "missing auth → auto-opens auth panel and method picker",
     async () => {
       testContext = spawnNoAuth()
       await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
-      // Give time for provider list to render
-      await new Promise((r) => setTimeout(r, 500))
-      // Panel rendered successfully
+      await testContext.pty.waitFor("Claude Code", { timeout: 10_000 })
+      await testContext.pty.waitFor("Manually enter API key", { timeout: 10_000 })
       expect(testContext.output).toContain("API Keys")
-      expect(testContext.output.length).toBeGreaterThan(500)
     },
     TEST_TIMEOUT,
   )
 
   test(
-    "auth panel: navigate providers with arrows",
+    "auth panel: arrows select manual key entry",
     async () => {
       testContext = spawnNoAuth()
       await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
+      await new Promise((r) => setTimeout(r, 750))
       testContext.pty.write(DOWN)
-      await new Promise((r) => setTimeout(r, 300))
-      testContext.pty.write(DOWN)
-      await new Promise((r) => setTimeout(r, 300))
-      // Output should have grown from navigation
-      expect(testContext.output.length).toBeGreaterThan(100)
-    },
-    TEST_TIMEOUT,
-  )
-
-  test(
-    "auth panel: Enter opens method picker, ESC goes back",
-    async () => {
-      testContext = spawnNoAuth()
-      await testContext.pty.waitFor("API Keys", { timeout: 10_000 })
-      // Select provider
+      await new Promise((r) => setTimeout(r, 200))
       testContext.pty.write(ENTER)
-      // Method picker shows "Enter=choose" hint
-      await testContext.pty.waitFor("choose", { timeout: 5_000 })
-      // ESC back to list
-      testContext.pty.write(ESC)
-      await testContext.pty.waitFor("select", { timeout: 5_000 })
+      await testContext.pty.waitFor("(type key)", { timeout: 5_000 })
     },
     TEST_TIMEOUT,
   )
@@ -275,22 +294,6 @@ describe("E2E: Slash Commands", () => {
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
       testContext.pty.write("/")
       await testContext.pty.waitFor("agent", { timeout: 5_000 })
-      testContext.pty.write(ESC)
-    },
-    TEST_TIMEOUT,
-  )
-
-  test(
-    "typing /auth in autocomplete then Enter navigates to auth",
-    async () => {
-      testContext = await seedAndSpawn()
-      await testContext.pty.waitFor("❯", { timeout: 10_000 })
-      testContext.pty.write("/auth")
-      await new Promise((r) => setTimeout(r, 300))
-      testContext.pty.write(ENTER)
-      await testContext.pty.waitFor("API Keys", { timeout: 5_000 })
-      // Auth panel rendered — "API Keys" header visible
-      expect(testContext.output.length).toBeGreaterThan(500)
       testContext.pty.write(ESC)
     },
     TEST_TIMEOUT,

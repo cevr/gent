@@ -123,6 +123,58 @@ describe("resolveStartupAuthState", () => {
     expect(calls).toEqual([{ agentName: "deepwork", sessionId: "session-a" }])
   })
 
+  test("falls back to the default agent when a fresh session has no runtime agent yet", async () => {
+    const calls: Array<{ agentName?: AgentName; sessionId?: string }> = []
+    const client = createMockClient({
+      session: {
+        getSnapshot: () =>
+          Effect.succeed({
+            sessionId: SessionId.of("session-a"),
+            branchId: BranchId.of("branch-a"),
+            messages: [],
+            lastEventId: null,
+            reasoningLevel: undefined,
+            runtime: {
+              _tag: "Idle" as const,
+              agent: undefined,
+              queue: emptyQueueSnapshot(),
+            },
+          }),
+      },
+      auth: {
+        listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
+          calls.push(input)
+          return Effect.succeed([])
+        },
+      },
+    })
+
+    const state: InitialState = {
+      _tag: "session",
+      session: {
+        id: SessionId.of("session-a"),
+        branchId: BranchId.of("branch-a"),
+        name: "Session A",
+        createdAt: 0,
+        updatedAt: 0,
+        cwd: "/tmp",
+        reasoningLevel: undefined,
+        parentSessionId: undefined,
+        parentBranchId: undefined,
+      },
+    }
+
+    const auth = await Effect.runPromise(
+      resolveStartupAuthState({
+        client,
+        state,
+      }),
+    )
+
+    expect(auth.initialAgent).toBe("cowork")
+    expect(calls).toEqual([{ agentName: "cowork", sessionId: "session-a" }])
+  })
+
   test("skips pre-auth gating while the user is choosing a branch", async () => {
     const calls: Array<{ agentName?: AgentName; sessionId?: string }> = []
     const client = createMockClient({

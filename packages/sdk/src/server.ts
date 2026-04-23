@@ -60,6 +60,8 @@ export interface GentServerOptions {
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly env?: Record<string, string | undefined>
+  readonly authFilePath?: string
+  readonly authKeyPath?: string
   /** Seed storage with a debug session on startup. */
   readonly debug?: boolean
 }
@@ -174,6 +176,8 @@ const buildOwnedServer = (
         platform: process.platform,
         osVersion: os.release(),
         dbPath,
+        ...(options.authFilePath !== undefined ? { authFilePath: options.authFilePath } : {}),
+        ...(options.authKeyPath !== undefined ? { authKeyPath: options.authKeyPath } : {}),
         persistenceMode: stateSpec._tag === "memory" ? "memory" : "disk",
         sharedServerUrl: url,
         extensions: BuiltinExtensions,
