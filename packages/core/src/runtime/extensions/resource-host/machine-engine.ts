@@ -11,7 +11,7 @@
  * Internals are split by ownership:
  *   - `machine-protocol.ts`: protocol registry + decode/reply validation
  *   - `machine-lifecycle.ts`: actor spawn / restart / termination / status
- *   - `machine-mailbox.ts`: per-session serialization and same-fiber reentrancy
+ *   - `machine-mailbox.ts`: per-session serialization and same-session reentrancy
  *
  * @module
  */

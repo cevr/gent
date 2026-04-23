@@ -216,7 +216,7 @@ describe("architecture policy", () => {
     const violations = collectSourceFiles()
       .filter(
         (file) =>
-          !file.endsWith("packages/core/src/runtime/extensions/resource-host/machine-engine.ts"),
+          !file.endsWith("packages/core/src/runtime/extensions/resource-host/machine-mailbox.ts"),
       )
       .flatMap((file) =>
         sourceLines(file)

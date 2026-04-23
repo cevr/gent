@@ -4,7 +4,7 @@
  * - ordered delivery across actor restarts
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Layer, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
@@ -445,6 +445,94 @@ describe("extension concurrency", () => {
             .pipe(Effect.timeout("1 second"))
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
+      }),
+    )
+
+    it.live("concurrent same-session execute calls do not overlap actor critical sections", () =>
+      Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>()
+        const secondEntered = yield* Deferred.make<void>()
+        const releaseFirst = yield* Deferred.make<void>()
+        let activeRequests = 0
+        let overlapped = false
+        const ReadSerial = ExtensionMessage.reply(
+          "serialized-executor",
+          "ReadSerial",
+          {},
+          Schema.Struct({ order: Schema.Number }),
+        )
+
+        const extensions = [
+          {
+            manifest: { id: "serialized-executor", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: {
+                    ...reducerActor<{ reads: number }, never, ReturnType<typeof ReadSerial>>({
+                      id: "serialized-executor",
+                      initial: { reads: 0 },
+                      reduce: (state) => ({ state }),
+                      request: (state) =>
+                        Effect.gen(function* () {
+                          activeRequests += 1
+                          if (activeRequests > 1) overlapped = true
+
+                          if (state.reads === 0) {
+                            yield* Deferred.succeed(firstEntered, void 0)
+                            yield* Deferred.await(releaseFirst)
+                          } else {
+                            yield* Deferred.succeed(secondEntered, void 0)
+                          }
+
+                          activeRequests -= 1
+                          return {
+                            state: { reads: state.reads + 1 },
+                            reply: { order: state.reads + 1 },
+                          }
+                        }),
+                    }),
+                    protocols: { ReadSerial },
+                  },
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* MachineEngine
+            const first = yield* Effect.forkScoped(
+              runtime.execute(sessionId, ReadSerial(), branchId).pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Deferred.await(firstEntered).pipe(Effect.timeout("1 second"))
+
+            const second = yield* Effect.forkScoped(
+              runtime.execute(sessionId, ReadSerial(), branchId).pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Effect.yieldNow
+            expect(yield* Deferred.isDone(secondEntered)).toBe(false)
+            expect(overlapped).toBe(false)
+
+            yield* Deferred.succeed(releaseFirst, void 0)
+
+            expect(yield* Fiber.join(first)).toEqual({ order: 1 })
+            expect(yield* Fiber.join(second)).toEqual({ order: 2 })
+            expect(yield* Deferred.await(secondEntered).pipe(Effect.timeout("1 second"))).toBe(
+              undefined,
+            )
+            expect(overlapped).toBe(false)
+          }),
+        ).pipe(Effect.provide(layer))
       }),
     )
   })
