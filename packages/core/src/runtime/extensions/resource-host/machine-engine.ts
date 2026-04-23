@@ -870,6 +870,10 @@ export const makeMachineEngine = (
           },
         })(
           Effect.gen(function* () {
+            const currentSession = yield* CurrentMailboxSession
+            if (currentSession === sessionId) {
+              return yield* sendImmediate(sessionId, message, branchId)
+            }
             const slot = yield* ensureMailboxSlot(sessionId)
             const done = yield* Deferred.make<ExtensionProtocolError | undefined>()
             yield* Queue.offer(slot.queue, {
@@ -879,13 +883,6 @@ export const makeMachineEngine = (
               message,
               done,
             })
-            const currentSession = yield* CurrentMailboxSession
-            if (currentSession === sessionId) {
-              // Re-entrant send is queued behind the current mailbox item.
-              // Waiting here would deadlock; delivery continues once the
-              // outer item finishes.
-              return
-            }
             const result = yield* Deferred.await(done)
             if (result !== undefined) return yield* result
           }),

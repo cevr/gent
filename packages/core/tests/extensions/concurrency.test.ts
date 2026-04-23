@@ -7,8 +7,16 @@ import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Layer } from "effect"
 import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import {
+  MachineEngine,
+  type MachineEngineService,
+} from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import {
+  collectSubscriptions,
+  SubscriptionEngine,
+} from "@gent/core/runtime/extensions/resource-host"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -18,6 +26,17 @@ import { reducerActor } from "./helpers/reducer-actor"
 
 const sessionId = SessionId.of("test-session")
 const branchId = BranchId.of("test-branch")
+
+const makeRuntimeLayer = (
+  extensions: Parameters<typeof MachineEngine.fromExtensions>[0],
+): Layer.Layer<MachineEngine | SubscriptionEngine | ExtensionTurnControl> => {
+  const turnControl = ExtensionTurnControl.Test()
+  return Layer.mergeAll(
+    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    SubscriptionEngine.withSubscriptions(collectSubscriptions(extensions)),
+    turnControl,
+  )
+}
 
 describe("extension concurrency", () => {
   describe("actor spawn serialization", () => {
@@ -153,6 +172,177 @@ describe("extension concurrency", () => {
               restartCount: 1,
             },
           ])
+        }).pipe(Effect.provide(layer))
+      }),
+    )
+  })
+
+  describe("same-session mailbox reentrancy", () => {
+    it.live("nested publish from a subscription handler is queued without deadlocking", () =>
+      Effect.gen(function* () {
+        const completed = yield* Deferred.make<void>()
+        let runtimeRef: MachineEngineService | undefined
+
+        const extensions = [
+          {
+            manifest: { id: "nested-publisher", version: "1.0.0" },
+            kind: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  subscriptions: [
+                    {
+                      pattern: "nested:publish",
+                      handler: (envelope) =>
+                        Effect.gen(function* () {
+                          if (
+                            runtimeRef === undefined ||
+                            envelope.sessionId === undefined ||
+                            envelope.branchId === undefined
+                          ) {
+                            return yield* Effect.die("nested publish test runtime missing")
+                          }
+                          yield* runtimeRef.publish(
+                            new TurnCompleted({
+                              sessionId: envelope.sessionId,
+                              branchId: envelope.branchId,
+                              durationMs: 1,
+                            }),
+                            { sessionId: envelope.sessionId, branchId: envelope.branchId },
+                          )
+                        }),
+                    },
+                  ],
+                  machine: reducerActor({
+                    id: "nested-publisher",
+                    initial: { phase: "idle" as "idle" | "started" | "completed" },
+                    reduce: (state, event) => {
+                      if (event._tag === "SessionStarted" && state.phase === "idle") {
+                        return { state: { phase: "started" as const } }
+                      }
+                      if (event._tag === "TurnCompleted") {
+                        Effect.runSync(Deferred.succeed(completed, void 0).pipe(Effect.ignore))
+                        return { state: { phase: "completed" as const } }
+                      }
+                      return { state }
+                    },
+                    afterTransition: (before, after) =>
+                      before.phase === "idle" && after.phase === "started"
+                        ? [{ _tag: "BusEmit", channel: "nested:publish", payload: undefined }]
+                        : [],
+                  }),
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.gen(function* () {
+          const runtime = yield* MachineEngine
+          runtimeRef = runtime
+
+          yield* runtime
+            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .pipe(Effect.timeout("1 second"))
+          yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
+        }).pipe(Effect.provide(layer))
+      }),
+    )
+
+    it.live("nested send from a subscription handler is delivered without deadlocking", () =>
+      Effect.gen(function* () {
+        const received = yield* Deferred.make<void>()
+        let runtimeRef: MachineEngineService | undefined
+        const RecordNested = ExtensionMessage("nested-receiver", "RecordNested", {})
+
+        const extensions = [
+          {
+            manifest: { id: "nested-sender", version: "1.0.0" },
+            kind: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  subscriptions: [
+                    {
+                      pattern: "nested:send",
+                      handler: (envelope) =>
+                        Effect.gen(function* () {
+                          if (
+                            runtimeRef === undefined ||
+                            envelope.sessionId === undefined ||
+                            envelope.branchId === undefined
+                          ) {
+                            return yield* Effect.die("nested send test runtime missing")
+                          }
+                          yield* runtimeRef.send(
+                            envelope.sessionId,
+                            RecordNested(),
+                            envelope.branchId,
+                          )
+                        }),
+                    },
+                  ],
+                  machine: reducerActor({
+                    id: "nested-sender",
+                    initial: { sent: false },
+                    reduce: (state, event) =>
+                      event._tag === "SessionStarted" && !state.sent
+                        ? { state: { sent: true } }
+                        : { state },
+                    afterTransition: (before, after) =>
+                      !before.sent && after.sent
+                        ? [{ _tag: "BusEmit", channel: "nested:send", payload: undefined }]
+                        : [],
+                  }),
+                }),
+              ],
+            },
+          },
+          {
+            manifest: { id: "nested-receiver", version: "1.0.0" },
+            kind: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: {
+                    ...reducerActor<{ received: boolean }, ReturnType<typeof RecordNested>>({
+                      id: "nested-receiver",
+                      initial: { received: false },
+                      reduce: (state) => ({ state }),
+                      receive: () => {
+                        Effect.runSync(Deferred.succeed(received, void 0).pipe(Effect.ignore))
+                        return { state: { received: true } }
+                      },
+                    }),
+                    protocols: { RecordNested },
+                  },
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.gen(function* () {
+          const runtime = yield* MachineEngine
+          runtimeRef = runtime
+
+          yield* runtime
+            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .pipe(Effect.timeout("1 second"))
+          yield* Deferred.await(received).pipe(Effect.timeout("1 second"))
         }).pipe(Effect.provide(layer))
       }),
     )
