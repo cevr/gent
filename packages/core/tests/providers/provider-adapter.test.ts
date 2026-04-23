@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import { Finished, ReasoningDelta, TextDelta, ToolCall } from "@gent/core/domain/driver"
+import * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import {
@@ -153,9 +154,28 @@ describe("convertTools", () => {
     expect(result.tools["echo"]!.name).toBe("echo")
   })
 
-  test("creates WithHandler with handle function", () => {
+  test("creates advertise-only toolkit with handle function", () => {
     const result = convertTools([echoDef])
     expect(typeof result.handle).toBe("function")
+  })
+
+  test("advertise-only toolkit handle fails with configuration error", async () => {
+    const result = convertTools([echoDef])
+    const failure = await Effect.runPromise(
+      Effect.match(result.handle("echo", { text: "hi" }), {
+        onFailure: (error) => error,
+        onSuccess: () => undefined,
+      }),
+    )
+    expect(AiError.isAiError(failure)).toBe(true)
+    expect(failure).toEqual(
+      expect.objectContaining({
+        reason: expect.objectContaining({
+          _tag: "ToolConfigurationError",
+          toolName: "echo",
+        }),
+      }),
+    )
   })
 
   test("tool has json schema parameters", () => {

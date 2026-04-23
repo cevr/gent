@@ -20,8 +20,8 @@ import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as AiTool from "effect/unstable/ai/Tool"
-import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
+import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 
 // ── Provider Resolution ──
 
@@ -354,10 +354,34 @@ export function convertMessages(messages: ReadonlyArray<Message>): Prompt.Messag
   return result
 }
 
-// ── Tool Conversion (Capability → Toolkit.WithHandler) ──
+// ── Tool Conversion (Capability → canonical Tool / advertise-only Toolkit) ──
 
 // Tool JSON schema conversion — canonical implementation in domain/tool-schema.ts
 import { buildToolJsonSchema } from "../domain/tool-schema.js"
+
+const toCapabilityTool = (capability: AnyCapabilityContribution): AiTool.Any =>
+  AiTool.dynamic(capability.id, {
+    description: capability.description ?? "",
+    parameters: buildToolJsonSchema(capability),
+  })
+
+const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
+  tools: Tools,
+): AiToolkit.WithHandler<Tools> => ({
+  tools,
+  handle: (name) =>
+    Effect.fail(
+      AiError.make({
+        module: "Provider",
+        method: "makeAdvertiseOnlyToolkit.handle",
+        reason: new AiError.ToolConfigurationError({
+          toolName: String(name),
+          description:
+            "gent advertises capabilities to the model with disableToolCallResolution enabled; tool execution stays in SessionRuntime",
+        }),
+      }),
+    ),
+})
 
 /** @internal — exported for testing */
 export function convertTools(
@@ -366,23 +390,10 @@ export function convertTools(
   const toolsRecord: Record<string, AiTool.Any> = {}
 
   for (const capability of tools) {
-    const flat = buildToolJsonSchema(capability)
-    toolsRecord[capability.id] = AiTool.dynamic(capability.id, {
-      description: capability.description ?? "",
-      parameters: flat,
-    })
+    toolsRecord[capability.id] = toCapabilityTool(capability)
   }
 
-  // Manual WithHandler construction — Toolkit.make().asEffect() eagerly resolves
-  // handlers from context which crashes when none are provided. Since we use
-  // disableToolCallResolution: true, handlers are never called.
-  return {
-    tools: toolsRecord,
-    handle: (() =>
-      Effect.die("unreachable: disableToolCallResolution is true")) as AiToolkit.WithHandler<
-      Record<string, AiTool.Any>
-    >["handle"],
-  }
+  return makeAdvertiseOnlyToolkit(toolsRecord)
 }
 
 // ── Debug / test providers ──
