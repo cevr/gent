@@ -1,595 +1,816 @@
-# Planify: Gent First-Principles Simplification
+# Planify: Second Post-Simplification Architecture Plan
 
-Status: completed  
-Updated: 2026-04-22  
-Completed: 2026-04-22  
-Design stance: correctness over pragmatism. Maximal simplicity over migration convenience.
+## Intent
 
-This file is now an execution record. The plan below was implemented on `main`
-in commit-batched waves; it is retained as the architectural contract and audit
-trail for the simplification, not as an open proposal.
+Correctness-first rewrite plan after the first simplification wave.
 
-## Context
+The previous wave removed the obvious duplication: command dispatch exists, `SessionRuntimeContext` exists, public extension machines no longer expose runtime-only follow-up effects, and `_kind` is policy-locked out of owned source. This plan targets the remaining structural debt.
 
-`gent` should be a minimal, expressive, composable agent harness. Today it is carrying too many transitional shapes:
+No feature reduction. Breaking changes are acceptable when paired with migrations. Scope is not a constraint.
 
-- process-scoped policy for session-scoped behavior
-- two runtime abstractions for one session loop
-- two execution paths for one turn model
-- generic middleware hosts for core semantics
-- multiple callable extension representations
-- app-specific client facets inside core
-- duplicate transport surfaces
+## Audit Inputs
 
-This plan rewrites the architecture around a smaller set of honest nouns and deletes the residue.
+Subagents:
 
-## North Star
+- `Sartre`: runtime / actor ownership audit.
+- `Linnaeus`: extension system / suppression audit.
+- `Pauli`: Effect v4 / effect-smol AI audit.
+- `Ampere`: constructors / `_tag` / enum modeling audit.
+- `Averroes`: behavioral test audit.
 
-If starting from full hindsight, `gent` should center on six nouns:
+Local sources:
 
-- `Server`: process-wide services only
-- `Profile`: cwd-scoped extension graph and policy
-- `SessionRuntime`: the single session actor, inbox, checkpoint, and snapshot source
-- `Capability`: the single callable primitive
-- `Resource`: long-lived services, schedules, machines, event handlers
-- `Projection`: pure derived views for prompts, context, runtime, and client state
+- Brain principles: `/Users/cvr/.brain/principles/*.md`
+- Architecture docs: `ARCHITECTURE.md`, `docs/actor-model.md`
+- Effect source: `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/{Prompt.ts,Response.ts,Toolkit.ts,Tool.ts,LanguageModel.ts,Chat.ts}`
+- Repo scans: suppressions, `kind` / `status` / `_kind`, constructors, tests, provider AI bridge.
 
-Everything else is adapter code and should stay thin.
+## North Stars
 
-## Research Basis
+- `subtract-before-you-add`: delete duplicate local models before inventing helpers.
+- `use-the-platform`: Effect AI `Prompt`, `Response`, `Toolkit`, `LanguageModel`, and `Chat` are the platform for model IO.
+- `small-interface-deep-implementation`: public surfaces stay tiny; complexity goes behind owned services.
+- `make-impossible-states-unrepresentable`: state variants use constructors and `_tag`, not parallel optional strings.
+- `derive-dont-sync`: no duplicated runtime/profile/transport truth.
+- `boundary-discipline`: suppressions only at real membranes.
+- `test-through-public-interfaces`: behavior contracts first, type/source policy second.
+- Actor model: one owner per mutable state island; local supervision; let it crash inside isolated actors; no ambient mutable handles as public API.
 
-| Finding                                                                                                                                | Principles                                                                                                  | File Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Permission rules are loaded globally at startup even though runtime profiles are cwd-scoped.                                           | `correctness-over-pragmatism`, `boundary-discipline`, `derive-dont-sync`                                    | `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts:252-276`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-profile.ts:72-150`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts:95-145`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Runtime truth is duplicated across `AgentLoop`, `ActorProcess`, checkpoint state, and transport DTOs.                                  | `derive-dont-sync`, `make-impossible-states-unrepresentable`, `fix-root-causes`                             | `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts:168-320`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts:1-43`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1449-1484`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1553-1623`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:1721-1853`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts:88-126`; `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts:232-244`; `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts:126-177` |
-| Turn execution still forks into separate provider-stream and external-driver collectors.                                               | `small-interface-deep-implementation`, `boundary-discipline`, `subtract-before-you-add`                     | `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:405-500`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:727-1000`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:2038-2089`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Generic pipelines and subscriptions carry core semantics like prompt shaping, permission checks, input transforms, and turn observers. | `encode-lessons-in-structure`, `small-interface-deep-implementation`, `progressive-disclosure`              | `/Users/cvr/Developer/personal/gent/packages/core/src/domain/pipeline.ts:1-64`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/pipeline-host.ts:1-105`; `/Users/cvr/Developer/personal/gent/packages/core/src/domain/subscription.ts:1-62`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/subscription-host.ts:1-132`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/tool-runner.ts:112-127`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts:238-248`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:357-381`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts:541-547`                      |
-| Capability unification is still bridged back into tool/query/mutation/command shapes.                                                  | `subtract-before-you-add`, `migrate-callers-then-delete-legacy-apis`, `small-interface-deep-implementation` | `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts:67-220`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/capability-host.ts:43-220`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts:72-208`; `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts:196-291`; `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts:119-157`; `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts:475-559`                                                                                                                                                                                                         |
-| TUI client facets live in core and define a second extension system with `_kind` unions.                                               | `boundary-discipline`, `small-interface-deep-implementation`, `redesign-from-first-principles`              | `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-client.ts:1-25`; `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-client.ts:56-172`; `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/resolve.ts:94-315`; `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx:94-164`                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| REST duplicates RPC and the SDK still carries dead topology distinctions.                                                              | `boundary-discipline`, `subtract-before-you-add`, `encode-lessons-in-structure`                             | `/Users/cvr/Developer/personal/gent/packages/core/src/server/http-api.ts:1-65`; `/Users/cvr/Developer/personal/gent/packages/core/src/server/server-routes.ts:76-124`; `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts:78-559`; `/Users/cvr/Developer/personal/gent/packages/sdk/src/server.ts:1-9`; `/Users/cvr/Developer/personal/gent/packages/sdk/src/server.ts:69-74`; `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts:249-330`                                                                                                                                                                                                                                                                                              |
+## Target Architecture
 
-## Scope
+- `SessionRuntime`: dispatch/read-only public runtime surface. No direct `runOnce` escape hatch.
+- `AgentLoop`: internal session actor implementation. It owns loop execution, queue state, interaction state, and turn recovery.
+- `ProfileRuntime`: one composition helper for server/cwd/session profile runtime wiring.
+- `ResourceHost`: split into service-layer assembly, lifecycle finalization, actor protocol/mailbox runtime, and scheduler/subscription collection.
+- `Provider`: speaks Effect AI prompts, response parts, and toolkits at the model boundary.
+- `Transcript`: Gent metadata remains Gent-owned; AI conversation content is represented by Effect AI prompt/response parts.
+- `Domain`: owned unions use `_tag` constructors. Flat persisted scalars are allowed only when they are truly scalar and have one imported codec.
+- `TUI Extensions`: contribution slots are typed by slot, not downcast from `ClientContribution<any>`.
+- `Tests`: semantic groups mirror user/runtime contracts; source scans and skipped tests are quarantined or deleted.
 
-**In**
+## Execution Protocol
 
-- redesign runtime architecture around `Server`, `Profile`, `SessionRuntime`
-- reduce extension primitives to `Capability`, `Resource`, `Projection`
-- delete generic middleware where explicit structure is simpler
-- move client facets out of core
-- delete dead transport surfaces
+Every batch:
 
-**Out**
+1. Implement the batch only.
+2. Run `bun run gate`.
+3. Commit with the listed conventional commit title, or a narrower sub-commit title if split.
+4. Spawn exactly one review subagent against the commit diff and this plan section.
+5. Fix all findings before continuing.
 
-- feature additions
-- provider/model capability expansion
-- prompt/content product changes
-- UI cosmetics
+Extra rules:
 
-## Constraints
+- If a batch touches transport, runtime recovery, process supervision, or stream handoff, also run `bun run test:e2e`.
+- If a batch touches 20+ files across subsystems, split into sub-commits inside the batch. Each sub-commit still runs `bun run gate`.
+- No compatibility bridges that exist only to avoid migration. Migrate callers, then delete legacy APIs.
 
-- No feature loss.
-- Redesign is allowed and preferred when it produces a smaller honest architecture.
-- Sequential commits only.
-- Each commit must be independently shippable.
-- High-blast-radius steps may be split into adjacent sub-commits, but the design target must stay intact.
-- Legacy surfaces should be deleted once callers are migrated in the same wave.
-- Compatibility is not a goal by itself. Preserve only deliberate product contracts.
+## Current Receipts
 
-## Applicable Skills
+| Finding                                                   | Receipts                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SessionRuntime` still leaks `runOnce`                    | `packages/core/src/runtime/session-runtime.ts:176`, `packages/core/src/runtime/session-runtime.ts:432`, `packages/core/src/runtime/agent/agent-runner.ts:896`                                                                                                                                                                                                                            |
+| `SessionProfileCache.peek` is dead surface                | `packages/core/src/runtime/session-profile.ts:116`, `packages/core/src/runtime/session-profile.ts:282`, `packages/core/src/runtime/session-profile.ts:335`                                                                                                                                                                                                                               |
+| Profile/runtime wiring remains duplicated                 | `packages/core/src/server/dependencies.ts:148`, `packages/core/src/server/dependencies.ts:344`, `packages/core/src/runtime/session-profile.ts:156`, `packages/core/src/runtime/profile.ts:234`                                                                                                                                                                                           |
+| Mailbox ownership leaks through ambient service           | `packages/core/src/runtime/extensions/extension-actor-shared.ts:14`, `packages/core/src/runtime/extensions/resource-host/machine-engine.ts:719`, `packages/core/src/runtime/extensions/resource-host/machine-engine.ts:847`                                                                                                                                                              |
+| Resource host still has broad erased layer/machine casts  | `packages/core/src/runtime/extensions/resource-host/index.ts:103`, `packages/core/src/runtime/extensions/resource-host/index.ts:115`, `packages/core/src/runtime/extensions/resource-host/index.ts:171`, `packages/core/src/runtime/extensions/resource-host/machine-engine.ts:291`                                                                                                      |
+| Effect AI fidelity is lost at provider boundary           | `packages/core/src/providers/provider.ts:266`, `packages/core/src/providers/provider.ts:351`, `packages/core/src/providers/provider.ts:514`, `packages/core/src/providers/provider.ts:582`                                                                                                                                                                                               |
+| Gent duplicates AI transcript shapes                      | `packages/core/src/domain/message.ts:13`, `packages/core/src/domain/message.ts:79`, `packages/core/src/storage/sqlite-storage.ts:248`, `packages/core/src/runtime/agent/agent-loop.ts:172`                                                                                                                                                                                               |
+| Effect already has prompt/response/toolkit/chat substrate | `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Prompt.ts:1886`, `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Response.ts:369`, `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Toolkit.ts:279`, `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Chat.ts:103` |
+| TUI facet resolver downcasts every slot                   | `apps/tui/src/extensions/client-facets.ts:137`, `apps/tui/src/extensions/resolve.ts:21`, `apps/tui/src/extensions/resolve.ts:103`, `apps/tui/src/extensions/context.tsx:79`                                                                                                                                                                                                              |
+| Auth has `_tag` plus parallel `type`                      | `packages/core/src/domain/auth-store.ts:5`, `packages/core/src/domain/auth-store.ts:9`, `packages/core/src/domain/auth-store.ts:29`, `packages/core/src/domain/auth-store.ts:58`                                                                                                                                                                                                         |
+| Task status is duplicated across schemas/storage/tools    | `packages/core/src/domain/task.ts:8`, `packages/extensions/src/task-tools-storage.ts:37`, `packages/extensions/src/task-tools-service.ts:113`, `packages/extensions/src/task-tools/task-update.ts:5`                                                                                                                                                                                     |
+| Transport DTOs restate domain state as string bags        | `packages/core/src/server/transport-contract.ts:194`, `packages/core/src/server/transport-contract.ts:370`, `packages/core/src/server/transport-contract.ts:420`, `packages/core/src/server/transport-contract.ts:450`                                                                                                                                                                   |
+| Agent run provenance uses `as never`                      | `packages/extensions/src/plan-tool.ts:128`, `packages/extensions/src/plan-tool.ts:134`, `packages/extensions/src/review/review-tool.ts:239`, `packages/extensions/src/review/review-tool.ts:245`                                                                                                                                                                                         |
+| Tests still contain parked or white-box contracts         | `packages/core/tests/runtime/execution-overrides.test.ts:19`, `apps/tui/tests/tui-boundary.test.ts:5`, `packages/core/tests/server/extension-health.test.ts:4`, `packages/core/src/server/rpc-handler-groups/extension.ts:17`                                                                                                                                                            |
 
-- `planify`
-- `architecture`
-- `effect-v4`
-- `code-style`
-- `bun`
-- `test`
-- `counsel`
-- `react` for TUI edge work
+---
 
-## Gate Command
+## Wave 1: Runtime Surface And Profile Ownership
 
-`bun run gate`
+### Batch 1: `refactor(runtime): make session runtime dispatch-only`
 
-## Semantic Contracts
+**Justification**: `SessionRuntime.runOnce` is a second write ingress. One actor boundary means one command ingress.
 
-The redesign is allowed to delete surfaces. It is not allowed to delete these behaviors.
+**Principles**: `small-interface-deep-implementation`, `make-impossible-states-unrepresentable`, `boundary-discipline`
 
-### Runtime Contracts
+**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`
 
-- Session and branch isolation remains exact: concurrent sessions run independently; interrupts, queue state, and recovery stay scoped to one session/branch.
-- Loop creation remains serialized per session/branch.
-- Follow-up batching, interjection priority, continuation after tool calls, and turn completion semantics remain unchanged.
-- Interaction parking, interrupt during waiting, no-op response outside waiting, and resume-without-extra-model-call semantics remain unchanged.
-- Checkpoint recovery remains cursor-correct: running recovery completes, idle recovery resumes queued work, incompatible versions start fresh.
-- Runtime snapshot and watch output must come from the same state model.
-- External-driver turns and model-backed turns must preserve the same user-visible turn lifecycle while keeping external tool activity observability-only.
+**Files**:
 
-Locked by:
+- `packages/core/src/runtime/session-runtime.ts`
+- `packages/core/src/runtime/agent/agent-runner.ts`
+- `packages/core/tests/runtime/session-runtime.test.ts`
+- `packages/core/tests/runtime/agent-runner.test.ts`
+- `packages/core/tests/runtime/agent-loop.test.ts`
 
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/external-turn.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/session-queries.test.ts`
+**Sketch**:
 
-### Profile And Policy Contracts
+- Remove `runOnce` from `SessionRuntimeService`.
+- Keep `AgentLoop.runOnce` internal for local loop implementation if still useful.
+- Route `agent-runner.ts` through an internal child-run helper that owns its composition root instead of asking public `SessionRuntime` to run once.
+- Convert tests from `sessionRuntime.runOnce(...)` to `dispatch(SendUserMessageCommand)` or direct `AgentLoop` tests where the loop implementation is the target.
 
-- Session cwd controls auth/provider policy and permission behavior.
-- Server-style and per-cwd-style profile resolution must stay observably equivalent.
-- Extension wiring through the runtime profile must not drift between startup paths.
+**Migration**:
 
-Locked by:
+- Internal API break only.
+- Replace `SessionRuntimeService["runOnce"]` stubs with dispatch-capable stubs or direct `AgentLoopService` stubs.
 
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/auth-rpc.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/runtime-profile.test.ts`
-
-### Extension Contracts
-
-- Scope precedence remains identity-first: higher-precedence entries shadow lower-precedence ones even when the winner narrows audience or intent.
-- Capability decode/encode validation, audience filtering, intent filtering, and typed errors remain unchanged.
-- The final request boundary must still support full RPC round-trips for task-tool read/write flows.
-- Slash-command listing and invocation semantics remain intact.
-- Resource lifecycle ordering, schedule/machine round-tripping, and bus semantics remain intact.
-
-Locked by:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/capability-host.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/task-tools/task-rpc.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/server/extension-commands-rpc.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/registry.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/resource-host.test.ts`
-
-### Explicit Seam Contracts
-
-- Removing generic pipeline/subscription primitives is only valid if their behavior is re-expressed explicitly:
-  - prompt rewriting and ordered composition
-  - ACP codemode prompt rewrite
-  - permission/input transforms
-  - turn-reaction failure semantics equivalent to continue/isolate/halt
-- The explicit seams must be directly tested after the migration; deleting the old host tests without replacement is not allowed.
-
-Locked by:
-
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/pipeline-host.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/subscription-host.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/acp-prompt-pipeline.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/auto-integration.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/handoff.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/interaction-tools/ask-user.test.ts`
-
-### TUI Contracts
-
-- TUI extension discovery remains deterministic and hidden/test-only filtering remains intact.
-- Per-slot resolution semantics remain intact: renderer/widget/command/overlay/interaction-renderer/composer/border-label/autocomplete conflict rules do not drift.
-- Session switching, stale-response gating, reconnect behavior, and headless completion behavior remain unchanged.
-- Slash parsing and autocomplete behavior remain unchanged.
-
-Locked by:
-
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extensions-resolve.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-integration.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/extension-lifecycle.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/client-session-state.test.tsx`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/headless-runner.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/headless-cli-exit.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/slash-commands.test.ts`
-- `/Users/cvr/Developer/personal/gent/apps/tui/tests/autocomplete.test.ts`
-
-### SDK And Transport Contracts
-
-- Owned and attached server flows remain intact.
-- Supervisor lifecycle readiness, failure, restart, and cleanup semantics remain intact.
-- RPC remains the application contract; deleting REST is acceptable because the suite does not establish REST as a required product surface.
-
-Locked by:
-
-- `/Users/cvr/Developer/personal/gent/packages/sdk/tests/client.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/tests/local-supervisor.test.ts`
-- `/Users/cvr/Developer/personal/gent/packages/sdk/tests/supervisor.test.ts`
-
-## Per-Commit Review Protocol
-
-Every commit follows this sequence:
-
-1. implement only the files listed in the commit section
-2. run `bun run gate`
-3. commit with the exact conventional commit message from the plan
-4. run `okra counsel` against `HEAD` and the matching plan section
-5. if counsel flags issues: fix, rerun `bun run gate`, update the commit, rerun counsel
-6. proceed only after gate and counsel are clean
-
-Standard counsel prompt:
-
-```text
-Review HEAD against PLAN.md section "[Commit N title]".
-
-Plan:
-[paste the exact commit section]
-
-Diff:
-[git show --stat --patch --format=medium HEAD]
-
-Check:
-1. Scope drift or hidden extra work
-2. Principle compliance
-3. Missing deletions or leftover bridges
-4. Problems the gate would not catch
-
-Flag issues only. Ground claims in file paths.
-```
-
-Between waves, run `okra counsel --deep` on the full wave diff against this plan.
-
-## Wave 1: Runtime Truth
-
-Goal: establish one honest architecture for process scope, cwd scope, session scope, and turn execution.
-
-## Commit 1: fix(core): make Profile the owner of cwd-scoped policy
-
-**Justification**: `Profile` is not real if permissions and driver policy still leak from process startup. Make cwd-scoped policy resolve once in `Profile` and nowhere else.
-
-**Principles**
-
-- `correctness-over-pragmatism`: session policy must be derived from the session cwd
-- `boundary-discipline`: process scope and cwd scope must not be conflated
-- `derive-dont-sync`: resolve policy from the same profile graph as extensions and drivers
-
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                                   | Change                                                                                 | Lines      |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/dependencies.ts`          | remove global permission-rule assembly from server boot                                | `~252-276` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/profile.ts`              | make runtime profile resolution return cwd-scoped policy and driver configuration      | `~95-145`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-profile.ts`      | cache profile policy alongside loaded extensions and registries                        | `~46-150`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/actor-process.test.ts` | add multi-cwd regression covering permission isolation until `ActorProcess` is deleted | `~1-245`   |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: two sessions with different cwd configs do not share policy
-- preserve `auth.listProviders` session-cwd routing semantics
+- One subagent review of the commit against this batch before continuing.
 
-## Commit 2: refactor(core): introduce SessionRuntime as the only public session engine
+### Batch 2: `refactor(runtime): collapse profile runtime wiring`
 
-**Justification**: there should be one public runtime abstraction for a session. `ActorProcess` and `AgentLoop` as separate public concepts are architecture debt.
+**Justification**: server startup, cwd profile cache, and profile resolution still know the same wiring details. Profile data and live runtime services should be built by one helper.
 
-**Principles**
+**Principles**: `derive-dont-sync`, `subtract-before-you-add`, `fix-root-causes`
 
-- `small-interface-deep-implementation`: expose one runtime service
-- `boundary-discipline`: transport and storage talk to `SessionRuntime`, not loop internals
-- `encode-lessons-in-structure`: make the correct ownership unavoidable in module layout
+**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`
 
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
+**Files**:
 
-**Changes**
+- `packages/core/src/runtime/profile.ts`
+- `packages/core/src/runtime/session-profile.ts`
+- `packages/core/src/runtime/session-runtime-context.ts`
+- `packages/core/src/server/dependencies.ts`
+- `packages/core/tests/runtime/session-runtime-context.test.ts`
 
-| File                                                                               | Change                                                               | Lines                |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts`  | add new public runtime service and contract                          | new                  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts` | demote to internal implementation detail behind `SessionRuntime`     | `~1627-1682`         |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`    | shrink to temporary adapter or redirect entirely to `SessionRuntime` | `~111-127`           |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`      | switch transport handlers to the new runtime service                 | `~80-99`, `~193-275` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts`   | read runtime state from `SessionRuntime`                             | `~126-177`           |
+**Sketch**:
 
-**Verification**
+- Extract `buildProfileRuntime(...)` or equivalent into `runtime/profile.ts`.
+- It returns resolved extensions, registries, driver registry, machine runtime, subscription engine, permission service, base prompt sections, and lifecycle layer context.
+- Make server startup and `SessionProfileCache.Live` call the same helper.
+- Delete `SessionProfileCache.peek`; no callers, no speculative cache surface.
+- Keep scope ownership explicit: server scope for process/cwd resources, ephemeral scope for child runs.
 
-- `bun run gate`
-- counsel review against this commit section
-- targeted regression: all existing session actions flow through `SessionRuntime`
-- preserve all runtime contracts listed in `Semantic Contracts`
+**Migration**:
 
-## Commit 3: refactor(core): make SessionRuntime the only owner of inbox, queue, checkpoint, and snapshot
+- Internal API break.
+- Replace test fake profiles with the smaller `resolve(...)`-only shape.
 
-**Justification**: the loop state, pending refs, checkpoint payload, and transport snapshot are four versions of the same truth. Collapse them into one runtime-owned model.
-
-**Principles**
-
-- `derive-dont-sync`: one inbox, one queue, one checkpoint state
-- `make-impossible-states-unrepresentable`: remove dead runtime/status combinations
-- `fix-root-causes`: delete pending side channels instead of reconciling them
-
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                                          | Change                                                                                             | Lines                      |
-| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.state.ts`      | replace current public loop state projection with the internal `SessionRuntime` state model        | `~168-320`                 |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.checkpoint.ts` | shrink checkpoint schema to mailbox plus resumable cursor                                          | `~1-43`                    |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`            | delete `pendingQueueRef` and `pendingQueuesRef`; centralize queue mutation and snapshot derivation | `~1449-1484`, `~1721-1853` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`           | replace duplicate runtime DTOs with one shared session-runtime snapshot shape                      | `~232-244`                 |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts`           | tighten queue, interaction, and recovery tests against the new single-owner model                  | `~420-717`, `~1157-1745`   |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: queue, checkpoint restore, and snapshot all agree
-- preserve interaction parking/resume/interrupt semantics
+- One subagent review of the commit against this batch before continuing.
 
-## Commit 4: refactor(core): unify provider and external driver execution under one TurnEvent stream
+### Batch 3: `refactor(runtime): localize machine mailbox ownership`
 
-**Justification**: there is only one turn model. Driver kind should not fork the runtime above the driver boundary.
+**Justification**: `CurrentMailboxSession` is a local deadlock guard modeled as ambient context. Actor mailbox ownership belongs inside `MachineEngine`.
 
-**Principles**
+**Principles**: `serialize-shared-state-mutations`, `make-impossible-states-unrepresentable`, actor-model state isolation
 
-- `small-interface-deep-implementation`: one turn collector
-- `boundary-discipline`: drivers emit `TurnEvent`; runtime consumes `TurnEvent`
-- `subtract-before-you-add`: delete duplicate collectors and drifted semantics
+**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`
 
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
+**Files**:
 
-**Changes**
+- `packages/core/src/runtime/extensions/extension-actor-shared.ts`
+- `packages/core/src/runtime/extensions/resource-host/machine-engine.ts`
+- `packages/core/tests/extensions/actor.test.ts`
+- `packages/core/tests/extensions/concurrency.test.ts`
+- `packages/core/tests/extensions/resource-host.test.ts`
 
-| File                                                                                | Change                                                               | Lines                                 |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/driver.ts`             | define the unified runtime-visible turn stream contract              | `~272-320`                            |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/agent/agent-loop.ts`  | replace provider/external split collectors with one `TurnEvent` path | `~405-500`, `~727-1000`, `~2038-2089` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/providers/provider.ts`        | adapt model providers to the unified turn stream contract            | `~1-220`                              |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/agent-loop.test.ts` | cover identical semantics for model and external driver turns        | `~1157-1745`                          |
+**Sketch**:
 
-**Verification**
+- Delete `CurrentMailboxSession`.
+- Track current mailbox/session execution in `MachineEngine` local state.
+- Preserve nested publish/send deadlock prevention.
+- Keep `CurrentExtensionSession` only for the true extension-session context used by event publisher and spawned refs.
 
-- `bun run gate`
-- counsel review against this commit section
-- targeted regression: provider-backed and external-driver-backed turns produce the same runtime behavior
-- preserve external-tool observability-only semantics
+**Migration**:
 
-## Commit 5: refactor(core): delete ActorProcess and route all runtime access through SessionRuntime
+- Internal only.
+- Update tests to assert behavior: nested actor publishes do not deadlock, cross-session calls still serialize per owning mailbox.
 
-**Justification**: once `SessionRuntime` owns runtime truth, `ActorProcess` has no principled reason to exist.
-
-**Principles**
-
-- `subtract-before-you-add`: delete dead facades
-- `boundary-discipline`: transport and clients depend on runtime services, not actor wrappers
-- `encode-lessons-in-structure`: keep one runtime entry point
-
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                                   | Change                                                                           | Lines                |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/actor-process.ts`        | delete file or reduce to a private compatibility shim removed in the same commit | `~1-260`             |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`          | remove `ActorProcess` dependency and call `SessionRuntime` directly              | `~80-99`, `~121-275` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/session-queries.ts`       | stop reading runtime state through `ActorProcess`                                | `~144-177`           |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/runtime/actor-process.test.ts` | delete or replace with `SessionRuntime` acceptance tests                         | `~1-245`             |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: runtime APIs still behave with `ActorProcess` gone
-- preserve owned/attached server-facing runtime behavior
+- One subagent review of the commit against this batch before continuing.
 
-## Wave 1 Exit Criteria
+---
 
-- `Profile` owns cwd-scoped policy
-- `SessionRuntime` is the single public session engine
-- queue, checkpoint, inbox, and snapshot all come from one state model
-- driver kind no longer forks runtime logic above the driver boundary
-- `ActorProcess` is deleted
+## Wave 2: Extension Runtime Boundaries
 
-Run `okra counsel --deep` on the full Wave 1 diff before Wave 2.
+### Batch 4: `refactor(extensions): split resource host service lifecycle and actor protocol`
 
-## Wave 2: Primitive Reduction
+**Justification**: `ResourceHost` currently merges heterogeneous service layers, lifecycle hooks, and machine protocol runtime in one place. That forces broad `any` casts. The casts are a symptom of too many responsibilities.
 
-Goal: reduce the extension model to `Capability`, `Resource`, and `Projection`.
+**Principles**: `boundary-discipline`, `small-interface-deep-implementation`, `fix-root-causes`
 
-## Commit 6: refactor(core): replace generic pipeline and subscription hooks with explicit runtime slots
+**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`
 
-**Justification**: generic keyed middleware is hiding core control flow. Simpler architecture uses explicit, finite seams for prompt shaping, input normalization, permission policy, and runtime reactions.
+**Files**:
 
-**Principles**
+- `packages/core/src/runtime/extensions/resource-host/index.ts`
+- `packages/core/src/runtime/extensions/resource-host/machine-engine.ts`
+- `packages/core/src/runtime/extensions/resource-host/schedule-engine.ts`
+- `packages/core/src/runtime/extensions/resource-host/subscription-engine.ts`
+- `packages/core/src/runtime/extensions/spawn-machine-ref.ts`
+- `packages/core/src/runtime/extensions/effect-membrane.ts`
+- `packages/core/tests/extensions/resource-host.test.ts`
+- `packages/core/tests/extensions/runtime-slots.test.ts`
 
-- `encode-lessons-in-structure`: make extension seams explicit in types, not stringly hook registries
-- `progressive-disclosure`: expose only the minimal extension points
-- `small-interface-deep-implementation`: fewer primitives, stronger semantics
+**Sketch**:
 
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
+- Split host assembly into explicit modules:
+  - service layer collection
+  - lifecycle start/stop finalizers
+  - resource machine actor protocol
+  - subscription/scheduler collectors
+- Keep `sealErasedEffect` and `exitErasedEffect` as the only erased-effect membrane.
+- Move broad layer erasure to one helper with a narrower signature and a named reason.
+- Tighten machine protocol reply decoding so `machine-engine.ts` does not repeat unsafe narrowing at every branch.
 
-**Changes**
+**Migration**:
 
-| File                                                                              | Change                                                                   | Lines      |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/pipeline.ts`         | delete public pipeline primitive or reduce to private migration shim     | `~1-64`    |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/subscription.ts`     | delete public subscription primitive or reduce to private migration shim | `~1-62`    |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/resource.ts`         | add explicit runtime reaction slots where long-lived behavior belongs    | `~180-260` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/projection.ts`       | expand projection role for prompt/context/runtime derivation             | `~1-220`   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/session-runtime.ts` | own explicit input, prompt, policy, and turn-reaction seams              | new        |
+- Internal only.
+- Preserve resource scope semantics, lifecycle ordering, failure isolation, and actor status health surface.
 
-**Verification**
-
-- `bun run gate`
-- counsel review against this commit section
-- targeted regression: explicit slots cover existing prompt/input/policy/reaction use cases
-- add replacement tests for every deleted pipeline/subscription behavior class
-
-## Commit 7: refactor(core): migrate builtins off Pipeline and Subscription and delete their hosts
-
-**Justification**: the primitive reduction is not real until builtins stop relying on middleware registries.
-
-**Principles**
-
-- `migrate-callers-then-delete-legacy-apis`: move builtin callers, then delete the hosts
-- `subtract-before-you-add`: remove middleware engines once explicit seams exist
-- `boundary-discipline`: extensions declare what they are, not what registry key they patch
-
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                                           | Change                                                                         | Lines                                      |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------ |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/pipeline-host.ts`     | delete host                                                                    | `~1-105`                                   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/subscription-host.ts` | delete host                                                                    | `~1-132`                                   |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`          | remove pipeline/subscription compilation from resolved extension graph         | `~18-21`, `~44-47`, `~273-304`, `~426-483` |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/session-tools/index.ts`            | migrate prompt shaping to explicit projection/runtime slot                     | `~1-80`                                    |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/auto.ts`                           | migrate tool-result and turn-after behavior to explicit resource/runtime seams | `~666-667`                                 |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/handoff.ts`                        | migrate turn-after behavior to explicit resource/runtime seams                 | `~130-130`                                 |
-| `/Users/cvr/Developer/personal/gent/packages/core/tests/extensions/`                           | rewrite middleware-host tests around explicit seams                            | `~all relevant`                            |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: no builtin behavior still depends on pipeline/subscription hosts
-- ACP codemode prompt rewriting and auto/handoff workflows stay green
+- One subagent review of the commit against this batch before continuing.
 
-## Commit 8: refactor(core): make Capability the only callable substrate and collapse request surfaces
+### Batch 5: `refactor(extensions): type agent run provenance`
 
-**Justification**: callable behavior should have one internal representation and one public request boundary. Tool/query/mutation/command bridges are migration residue.
+**Justification**: `parentToolCallId as never` is not a boundary. It is missing provenance typing in `ctx.agent.run`.
 
-**Principles**
+**Principles**: `make-impossible-states-unrepresentable`, `boundary-discipline`, `encode-lessons-in-structure`
 
-- `small-interface-deep-implementation`: one callable substrate
-- `subtract-before-you-add`: delete bridge layers and duplicate routing
-- `migrate-callers-then-delete-legacy-apis`: move request callers, then remove legacy invoke APIs
+**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`
 
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
+**Files**:
 
-**Changes**
+- `packages/core/src/domain/agent.ts`
+- `packages/core/src/domain/extension-host-context.ts`
+- `packages/core/src/runtime/make-extension-host-context.ts`
+- `packages/extensions/src/plan-tool.ts`
+- `packages/extensions/src/review/review-tool.ts`
+- `packages/core/tests/extensions/plan-tool.test.ts`
+- `packages/core/tests/extensions/review/review-tool.test.ts`
 
-| File                                                                                          | Change                                                           | Lines      |
-| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/capability.ts`                   | seal the internal callable model around one capability node type | `~67-220`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/capability-host.ts`  | keep one dispatcher and simplify audience handling               | `~43-220`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/extensions/registry.ts`         | delete tool/query/mutation/command lowering                      | `~72-208`  |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`                      | expose only the final public authoring/request surface           | `~196-291` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/runtime/make-extension-host-context.ts` | replace `query`/`mutate` with one request invocation surface     | `~119-157` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/transport-contract.ts`           | reduce extension invocation to one request payload shape         | `~346-372` |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`                 | collapse duplicate request handlers into one entry point         | `~475-535` |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools/queries.ts`            | migrate read callers to the final request surface                | `~1-127`   |
-| `/Users/cvr/Developer/personal/gent/packages/extensions/src/task-tools/mutations.ts`          | migrate write callers to the final request surface               | `~1-220`   |
+**Sketch**:
 
-**Verification**
+- Thread branded `ToolCallId` provenance through `AgentRun` / `RunSpec` surfaces.
+- Ensure `ctx.agent.run` accepts the current tool-call provenance without casts.
+- Delete `as never` in plan and review tools.
+- Add a type lock that prevents unbranded string provenance.
 
-- `bun run gate`
-- counsel review against this commit section
-- targeted regression: all callable extension flows hit the same capability substrate
-- preserve capability audience/intent shadow semantics and task RPC round-trips
+**Migration**:
 
-## Wave 2 Exit Criteria
+- Internal extension API break if current public types expose `string`.
+- Migrate all extension callers in the same batch.
 
-- public extension model is `Capability`, `Resource`, `Projection`
-- generic pipeline/subscription primitives and hosts are deleted
-- one request boundary remains
-- capability bridges are deleted
-
-Run `okra counsel --deep` on the full Wave 2 diff before Wave 3.
-
-## Wave 3: Edge Simplification
-
-Goal: keep app-specific client facets at the app edge and delete dead transport adapters.
-
-## Commit 9: refactor(tui): move client facets out of core and redesign TUI extension edges
-
-**Justification**: TUI renderers, widgets, overlays, and commands are app concerns. Core should export ids, refs, runtime events, and projections, not a second client extension system.
-
-**Principles**
-
-- `boundary-discipline`: app facets belong at the app edge
-- `redesign-from-first-principles`: do not align the TUI model with core by adding another bridge
-- `small-interface-deep-implementation`: core stays small; TUI owns TUI
-
-**Skills**: `architecture`, `code-style`, `react`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                              | Change                                                             | Lines           |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/domain/extension-client.ts` | delete or move out of core                                         | `~1-229`        |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/client-facets.ts`     | create TUI-owned client facet model                                | new             |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/discovery.ts`         | keep discovery thin and TUI-local                                  | `~1-103`        |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/resolve.ts`           | rebuild resolver against TUI-local facets                          | `~1-331`        |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/extensions/builtins/`            | migrate builtin client extensions to the new TUI-local facet model | `~all relevant` |
-| `/Users/cvr/Developer/personal/gent/apps/tui/tests/extensions-resolve.test.ts`    | rewrite around TUI-local facets                                    | `~1-260`        |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: TUI extension precedence and collisions still work with core client facets gone
-- preserve all per-slot resolution semantics listed in `Semantic Contracts`
+- One subagent review of the commit against this batch before continuing.
 
-## Commit 10: refactor(tui): split transport, lifecycle, and session-view state into focused surfaces
+### Batch 6: `refactor(tui): type client extension facets by slot`
 
-**Justification**: the current client context is a god object. Simpler TUI architecture uses smaller focused surfaces and derived view hooks.
+**Justification**: TUI client contributions are already `_tag`-discriminated, but the resolver erases components to `any` and downcasts every slot. That is avoidable architecture leakage.
 
-**Principles**
+**Principles**: `make-impossible-states-unrepresentable`, `boundary-discipline`, `encode-lessons-in-structure`
 
-- `progressive-disclosure`: consumers depend on the smallest surface they need
-- `composition-over-flags`: compose focused providers and hooks
-- `small-interface-deep-implementation`: thinner public context, deeper internals
+**Skills**: `react`, `architecture`, `code-style`, `bun`, `test`
 
-**Skills**: `architecture`, `code-style`, `react`, `bun`, `test`, `counsel`
+**Files**:
 
-**Changes**
+- `apps/tui/src/extensions/client-facets.ts`
+- `apps/tui/src/extensions/resolve.ts`
+- `apps/tui/src/extensions/context.tsx`
+- `apps/tui/src/extensions/builtins/*.tsx`
+- `apps/tui/tests/extensions-resolve.test.ts`
+- `apps/tui/tests/extension-integration.test.ts`
 
-| File                                                                          | Change                                              | Lines                             |
-| ----------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------- |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/client/context.tsx`          | split wide context into focused providers and hooks | `~94-164`, `~202-327`, `~433-780` |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-session-feed.ts`   | consume focused runtime/session surfaces            | `~256-408`                        |
-| `/Users/cvr/Developer/personal/gent/apps/tui/src/hooks/use-child-sessions.ts` | consume minimal runtime/session surface             | `~25-116`                         |
+**Sketch**:
 
-**Verification**
+- Split component-bearing contributions by exact prop surface instead of `TComponent = unknown`.
+- Replace `ClientContribution<any>` with a concrete union of slot-specific component types.
+- Define one `ClientRuntime` type alias instead of `ManagedRuntime<any, never>`.
+- Keep dynamic import membrane in `loader-boundary.ts`; make everything after it typed.
+- Delete resolver downcasts for renderer/widget/overlay/interaction/composer slots.
 
-- `bun run gate`
-- counsel review against this commit section
-- targeted regression: session switching, reconnect behavior, and extension pulse refreshes still work
-- preserve headless completion behavior and stale-response gating
+**Migration**:
 
-## Commit 11: refactor(server): delete REST and collapse SDK topology to the real transport model
+- Breaking TUI extension authoring change.
+- Migrate builtins and tests in the same batch.
 
-**Justification**: RPC is the real contract. REST and dead topology aliases are adapter residue and should be removed unless they are deliberate product surfaces.
-
-**Principles**
-
-- `subtract-before-you-add`: delete dead adapters
-- `boundary-discipline`: one transport contract
-- `encode-lessons-in-structure`: split RPC handlers by concern while keeping one real edge
-
-**Skills**: `architecture`, `effect-v4`, `code-style`, `bun`, `test`, `counsel`
-
-**Changes**
-
-| File                                                                           | Change                                                                                | Lines            |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- | ---------------- |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/http-api.ts`      | delete REST contract                                                                  | `~1-65`          |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/server-routes.ts` | assemble only RPC and product-owned support routes                                    | `~76-124`        |
-| `/Users/cvr/Developer/personal/gent/packages/core/src/server/rpc-handlers.ts`  | split handler assembly by concern while keeping RPC as the only application transport | `~78-559`        |
-| `/Users/cvr/Developer/personal/gent/packages/sdk/src/server.ts`                | remove dead `remote` topology and simplify server shape                               | `~1-9`, `~69-74` |
-| `/Users/cvr/Developer/personal/gent/packages/sdk/src/client.ts`                | collapse client constructors onto the real transport model                            | `~249-330`       |
-
-**Verification**
+**Gate**:
 
 - `bun run gate`
-- counsel review against this commit section
-- targeted regression: owned and attached server flows still work with REST deleted
-- preserve supervisor lifecycle semantics and SDK constructor behavior
+- One subagent review of the commit against this batch before continuing.
 
-## Final Verification
+---
 
-After Commit 11:
+## Wave 3: Effect AI As Canonical Model Boundary
 
-1. run `bun run gate`
-2. run `okra counsel --deep` on the full branch against this entire plan
-3. review for:
-   - scope drift
-   - principle violations
-   - leftover bridges or dead adapters
-   - duplicated representations of the same truth
-   - missing tests around the new core nouns
-   - any semantic contract listed above that no longer has a direct regression lock
+### Batch 7: `refactor(ai): add canonical effect-ai transcript bridge`
 
-## Done Means
+**Justification**: Gent persists session metadata, but it should not own a parallel AI conversation language. Effect already owns prompt/response/tool parts.
 
-- `Server` owns only process-wide services
-- `Profile` owns cwd-scoped policy and extension graph
-- `SessionRuntime` is the only public session engine
-- `Capability`, `Resource`, and `Projection` are the only core extension primitives
-- provider and external drivers share one turn execution model
-- client facets live at the app edge, not in core
-- RPC is the only application transport
+**Principles**: `use-the-platform`, `subtract-before-you-add`, `boundary-discipline`
+
+**Skills**: `effect-v4`, `architecture`, `repo`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/domain/message.ts`
+- `packages/core/src/providers/provider.ts`
+- `packages/core/src/providers/ai-transcript.ts` (new)
+- `packages/core/src/storage/sqlite-storage.ts`
+- `packages/core/tests/providers/provider-resolution.test.ts`
+- `packages/core/tests/storage/sqlite-storage.test.ts`
+- Effect refs: `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/ai/Prompt.ts`, `Response.ts`
+
+**Sketch**:
+
+- Add a bridge module that converts Gent persisted `Message` records to `Prompt.Message` / `Prompt.Prompt`.
+- Add reverse helpers where response parts need to become persisted assistant/tool messages.
+- Preserve current wire/storage shape in this batch.
+- Add round-trip tests for text, reasoning, image media type, tool call, tool result, system messages, metadata-hidden messages.
+- Explicitly document which Gent fields are metadata (`kind`, `turnDurationMs`, `MessageMetadata`) and which are AI content.
+
+**Migration**:
+
+- No storage migration yet.
+- This is a scaffold batch that makes the invasive migration measurable.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 8: `refactor(ai): make provider requests speak Effect AI`
+
+**Justification**: `Provider.stream` currently accepts Gent messages, converts by hand, and advertises tools via a handler that always errors. The provider boundary should be an Effect AI boundary.
+
+**Principles**: `use-the-platform`, `small-interface-deep-implementation`, `fix-root-causes`
+
+**Skills**: `effect-v4`, `architecture`, `repo`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/providers/provider.ts`
+- `packages/core/src/domain/driver.ts`
+- `packages/core/src/domain/capability.ts`
+- `packages/core/src/domain/tool-schema.ts`
+- `packages/core/src/runtime/agent/agent-loop.ts`
+- `packages/extensions/src/{anthropic,openai,mistral,google}/index.ts`
+- Effect refs: `LanguageModel.ts`, `Toolkit.ts`, `Tool.ts`
+
+**Sketch**:
+
+- Change primary provider request shape to accept `Prompt.RawInput` or `Prompt.Prompt`.
+- Keep a temporary internal adapter from Gent messages while agent loop migrates.
+- Replace advertise-only toolkit with a real `Toolkit` builder whose handlers route through Gent tool execution policy or intentionally disables resolution through a typed, named mode.
+- Thread provider options that Effect AI already supports instead of custom ad hoc request fields where possible.
+- Treat `Provider.generate` as a compatibility wrapper or delete it if no internal call sites remain.
+
+**Migration**:
+
+- Internal API break.
+- Migrate all provider callers in the same batch or next batch before deleting compatibility adapter.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 9: `refactor(ai): replay turns from response parts`
+
+**Justification**: Agent loop manually reconstructs assistant drafts and prompt replay. Effect has `Prompt.fromResponseParts`; use it as the canonical replay primitive.
+
+**Principles**: `derive-dont-sync`, `use-the-platform`, `subtract-before-you-add`
+
+**Skills**: `effect-v4`, `architecture`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/runtime/agent/agent-loop.ts`
+- `packages/core/src/runtime/agent/agent-loop.state.ts`
+- `packages/core/src/providers/ai-transcript.ts`
+- `packages/core/src/storage/sqlite-storage.ts`
+- `packages/core/tests/runtime/agent-loop.test.ts`
+- `packages/core/tests/runtime/external-turn.test.ts`
+- Effect refs: `Prompt.ts:1886`, `Chat.ts:103`, `Chat.ts:358`
+
+**Sketch**:
+
+- Persist enough response-part information to replay assistant/tool turns without bespoke draft reconstruction.
+- Use `Prompt.fromResponseParts(...)` for model-history reconstruction.
+- Keep event emission and session/branch metadata in Gent; do not hand event-store ownership to Effect Chat.
+- Evaluate whether `Chat` can own only per-turn prompt history or whether Gent needs a thin `ChatLike` adapter because of branch/session persistence.
+
+**Migration**:
+
+- Storage migration required if persisted message parts gain response-part metadata.
+- Include a decoder that reads old rows and writes new rows on update, or a one-time migration in SQLite startup.
+
+**Gate**:
+
+- `bun run gate`
+- `bun run test:e2e`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 10: `refactor(ai): centralize response stream construction`
+
+**Justification**: live provider and debug providers duplicate `Response.StreamPart` construction and usage normalization.
+
+**Principles**: `subtract-before-you-add`, `encode-lessons-in-structure`, `use-the-platform`
+
+**Skills**: `effect-v4`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/providers/provider.ts`
+- `packages/core/src/debug/provider.ts`
+- `packages/core/src/providers/ai-stream.ts` (new)
+- `packages/core/tests/debug/sequence-provider.test.ts`
+- `packages/core/tests/providers/provider-auth.test.ts`
+
+**Sketch**:
+
+- Extract constructors for text delta, reasoning delta, tool call, tool result, finish, error, usage conversion.
+- Export stream-to-turn-event conversion from the same module.
+- Make debug providers and sequence providers use the same stream helpers as live provider.
+
+**Migration**:
+
+- Internal only.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+---
+
+## Wave 4: Domain Variants And Constructors
+
+### Batch 11: `refactor(domain): remove parallel discriminators from auth and message state`
+
+**Justification**: `AuthInfo` has `_tag` plus `type`. `MessageInfo.kind` is optional and creates hidden third state. Owned variants need one discriminator.
+
+**Principles**: `make-impossible-states-unrepresentable`, `derive-dont-sync`, `migrate-callers-then-delete-legacy-apis`
+
+**Skills**: `effect-v4`, `architecture`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/domain/auth-store.ts`
+- `packages/core/src/domain/auth-method.ts`
+- `packages/core/src/domain/auth-guard.ts`
+- `packages/core/src/domain/message.ts`
+- `packages/core/src/server/transport-contract.ts`
+- `packages/core/src/server/session-utils.ts`
+- `apps/tui/src/hooks/use-session-feed.ts`
+- `apps/tui/src/components/message-list.tsx`
+- `packages/core/tests/domain/auth-store.test.ts`
+- `packages/core/tests/server/session-queries.test.ts`
+
+**Sketch**:
+
+- Remove `type` from `AuthApi` / `AuthOauth` as the canonical shape.
+- Keep legacy auth-file decode that accepts old `{ type: "api" }` / raw key payloads and re-encodes to `_tag`.
+- Replace optional message `kind` with a required domain variant or a required canonical scalar with constructor helpers. Prefer `_tag` if the shape carries behavior; keep scalar only if it is pure storage metadata.
+- Update transport DTOs and TUI feed adapters to import domain schema instead of restating literals.
+
+**Migration**:
+
+- Auth storage migration from legacy `type` payload to `_tag`.
+- Message rows with absent `kind` decode to the canonical regular constructor.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 12: `refactor(domain): centralize task lifecycle state`
+
+**Justification**: task status is one lifecycle but is repeated across domain, storage, service, tool params, and request schemas.
+
+**Principles**: `derive-dont-sync`, `make-impossible-states-unrepresentable`, `encode-lessons-in-structure`
+
+**Skills**: `effect-v4`, `architecture`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/domain/task.ts`
+- `packages/extensions/src/task-tools-storage.ts`
+- `packages/extensions/src/task-tools-service.ts`
+- `packages/extensions/src/task-tools/task-update.ts`
+- `packages/extensions/src/task-tools/requests.ts`
+- `packages/extensions/src/task-tools/projection.ts`
+- `apps/tui/src/components/task-widget.tsx`
+- `packages/core/tests/extensions/task-tools/task-tools.test.ts`
+- `packages/core/tests/extensions/task-tools/task-rpc.test.ts`
+
+**Sketch**:
+
+- Make `TaskStatus` the only imported codec for status.
+- Replace storage `status: string` and fallback-to-pending decode with schema decode that fails or migrates explicitly.
+- Move transition validation onto constructors/functions in `domain/task.ts`.
+- Keep DB column text if appropriate; the domain codec owns validation.
+- If statuses gain payloads later, promote to `_tag` variants then. Do not fake a tagged union for a scalar just to worship `_tag`.
+
+**Migration**:
+
+- Existing valid status rows stay unchanged.
+- Invalid rows fail loudly or migrate through an explicit repair path; no silent `"pending"` fallback.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 13: `refactor(transport): import domain variants into RPC DTOs`
+
+**Justification**: transport contract restates health, activation, actor status, driver kind, and connection states as local string bags.
+
+**Principles**: `derive-dont-sync`, `boundary-discipline`, `small-interface-deep-implementation`
+
+**Skills**: `effect-v4`, `architecture`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/server/transport-contract.ts`
+- `packages/core/src/domain/extension.ts`
+- `packages/core/src/domain/driver.ts`
+- `packages/core/src/server/extension-health.ts`
+- `packages/core/src/server/rpc-handler-groups/extension.ts`
+- `apps/tui/src/client/context.tsx`
+- `apps/tui/tests/widgets-render.test.tsx`
+
+**Sketch**:
+
+- Move reusable transport-facing state schemas into domain modules or import existing domain schemas.
+- Convert conceptual variants with payloads to `_tag` constructors.
+- Keep externally dictated flat wire fields flat only where they are true wire protocol, not owned domain state.
+- Update TUI consumers to pattern-match domain variants instead of comparing repeated strings where shape differs.
+
+**Migration**:
+
+- RPC breaking change if DTO shapes change.
+- Update SDK/TUI callers in the same batch.
+
+**Gate**:
+
+- `bun run gate`
+- `bun run test:e2e`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 14: `refactor(domain): standardize schema constructors on make`
+
+**Justification**: the codebase uses both `new X(...)` and factory-style construction for schema-owned values. One construction idiom reduces churn and makes migrations mechanical.
+
+**Principles**: `encode-lessons-in-structure`, `subtract-before-you-add`, `make-impossible-states-unrepresentable`
+
+**Skills**: `effect-v4`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/domain/schema-tagged-enum-class.ts`
+- `packages/core/src/domain/*.ts`
+- `packages/core/src/runtime/**/*.ts`
+- `packages/core/src/server/**/*.ts`
+- `packages/extensions/src/**/*.ts`
+- `apps/tui/src/**/*.ts`
+- `packages/tooling/tests/architecture-policy.test.ts`
+
+**Sketch**:
+
+- Confirm every `Schema.Class` / `TaggedEnumClass` variant exposes a typed `.make`.
+- Add missing types to `TaggedEnumClassVariant` if runtime already supports `.make`.
+- Migrate schema-owned values to `X.make(...)` / `Enum.Variant.make(...)`.
+- Leave platform constructors (`Map`, `Set`, `Date`, `URL`, `Response`, `Error`, `RegExp`, `AbortController`) alone.
+- Add a policy test that flags new `new SchemaOwnedClass(...)` call sites outside approved constructor-internal files.
+
+**Migration**:
+
+- Mechanical call-site migration.
+- No wire/storage behavior change.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+---
+
+## Wave 5: Storage And SQL Boundaries
+
+### Batch 15: `refactor(storage): make sqlite decoding schema-first`
+
+**Justification**: SQLite rows currently reconstruct schema classes manually and sometimes fall back silently. Storage should be a narrow schema decode/encode boundary.
+
+**Principles**: `boundary-discipline`, `prove-it-works`, `fix-root-causes`
+
+**Skills**: `effect-v4`, `architecture`, `repo`, `code-style`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/storage/sqlite-storage.ts`
+- `packages/core/src/storage/search-storage.ts`
+- `packages/core/src/storage/checkpoint-storage.ts`
+- `packages/extensions/src/task-tools-storage.ts`
+- `packages/core/tests/storage/sqlite-storage.test.ts`
+- `packages/core/tests/storage/task-storage.test.ts`
+- Effect refs: `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/sql/SqlClient.ts`, `Statement.ts`
+
+**Sketch**:
+
+- Introduce row schemas for persisted records.
+- Decode JSON fields through `Schema.fromJsonString(...)` at the boundary.
+- Remove silent fallback for invalid enum/status rows unless covered by an explicit migration path.
+- Use Effect SQL references/transformers where they delete repeated row mapping, not as cargo cult.
+- Keep `bun:sqlite` constraints in mind; verify with Bun tests, not Vitest.
+
+**Migration**:
+
+- Include migrations for auth/message/task transcript shape changes from prior waves.
+- Add old-row fixtures to prove backward decode.
+
+**Gate**:
+
+- `bun run gate`
+- `bun run test:e2e`
+- One subagent review of the commit against this batch before continuing.
+
+---
+
+## Wave 6: Behavioral Test Restructure
+
+### Batch 16: `test(runtime): restore missing runtime and rpc contracts`
+
+**Justification**: skipped tests and pure helper checks are not behavior coverage.
+
+**Principles**: `test-through-public-interfaces`, `prove-it-works`, `encode-lessons-in-structure`
+
+**Skills**: `test`, `effect-v4`, `bun`, `architecture`
+
+**Files**:
+
+- `packages/core/tests/runtime/execution-overrides.test.ts`
+- `packages/core/tests/server/extension-health.test.ts`
+- `packages/core/tests/server/extension-commands-rpc.test.ts`
+- `packages/core/tests/server/session-commands.test.ts`
+- `packages/core/tests/server/session-queries.test.ts`
+- `packages/core/src/server/rpc-handler-groups/extension.ts`
+- `packages/core/tests/extensions/task-tools/task-rpc.test.ts`
+
+**Sketch**:
+
+- Replace skipped `parentToolCallId` coverage with a live assertion through the current public runtime path.
+- Add RPC acceptance coverage for `extension.listStatus`, not just pure health summary formatting.
+- Consolidate server RPC tests into semantic groups: session lifecycle, auth, extension status/commands, capability request.
+- Keep pure helper tests only where the helper is genuinely pure and domain-important.
+
+**Migration**:
+
+- Test-only file moves/renames allowed.
+- Preserve all behavior assertions before deleting old one-off files.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 17: `test(tui): regroup tui tests by behavior surface`
+
+**Justification**: TUI tests are useful but too flat. The directory layout hides which contracts are protected.
+
+**Principles**: `test-through-public-interfaces`, `progressive-disclosure`, `encode-lessons-in-structure`
+
+**Skills**: `react`, `test`, `bun`, `code-style`
+
+**Files**:
+
+- `apps/tui/tests/*.test.ts`
+- `apps/tui/tests/*.test.tsx`
+- `apps/tui/tests/tui-boundary.test.ts`
+- `apps/tui/tests/app-bootstrap.test.ts`
+- `apps/tui/tests/headless-runner.test.ts`
+- `apps/tui/tests/app-auth.test.tsx`
+- `apps/tui/tests/render-harness.tsx`
+
+**Sketch**:
+
+- Group tests by semantic surface: bootstrap/headless, session state, client transport, extensions, command/composer, rendering widgets.
+- Delete or replace `tui-boundary.test.ts` source-string assertions with executable startup assertions.
+- Keep existing meaningful reducer/render tests, but move them so the path explains the behavior.
+- Update imports/helpers after moves.
+
+**Migration**:
+
+- Test-only.
+- No product behavior change.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 18: `test(policy): lock architecture debt from returning`
+
+**Justification**: Once the rewrite deletes debt, policy tests should encode the lesson so it stays deleted.
+
+**Principles**: `encode-lessons-in-structure`, `prove-it-works`, `fix-root-causes`
+
+**Skills**: `test`, `code-style`, `bun`
+
+**Files**:
+
+- `packages/tooling/tests/architecture-policy.test.ts`
+- `packages/tooling/tests/suppression-policy.test.ts`
+- `packages/core/tests/extensions/extension-surface-locks.test.ts`
+- `packages/core/tests/runtime/scope-brands.test.ts`
+
+**Sketch**:
+
+- Add no skipped tests policy unless explicitly allowlisted with expiry.
+- Add no white-box source-scan tests outside `packages/tooling/tests`.
+- Tighten suppression counts after each suppression-burning wave.
+- Add guard against new `kind` / `status` literal unions in owned domain files unless allowlisted as scalar protocol fields.
+- Add guard against public `SessionRuntime` write methods other than `dispatch`.
+
+**Migration**:
+
+- Test/policy only.
+- Update allowlist docs with exact reasons where debt intentionally remains.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+---
+
+## Wave 7: Documentation And Migration Receipts
+
+### Batch 19: `docs(architecture): record second-wave architecture`
+
+**Justification**: architecture changes only stick when future agents know the shape.
+
+**Principles**: `encode-lessons-in-structure`, `progressive-disclosure`, `boundary-discipline`
+
+**Skills**: `architecture`, `documenter`, `effect-v4`, `code-style`, `bun`
+
+**Files**:
+
+- `ARCHITECTURE.md`
+- `AGENTS.md`
+- `docs/actor-model.md`
+- `packages/core/AGENTS.md` if present
+- `apps/tui/AGENTS.md`
+
+**Sketch**:
+
+- Document the final runtime ownership model.
+- Document Effect AI as the provider transcript boundary.
+- Document the extension membrane policy: allowed membranes, disallowed ad hoc casts.
+- Document constructor policy: `_tag`, `TaggedEnumClass`, `.make`, and exceptions.
+- Document test taxonomy after file moves.
+
+**Migration**:
+
+- Docs only.
+
+**Gate**:
+
+- `bun run gate`
+- One subagent review of the commit against this batch before continuing.
+
+### Batch 20: `chore(migrations): publish compatibility cleanup receipts`
+
+**Justification**: Breaking changes are fine only if migrations are explicit and proven.
+
+**Principles**: `migrate-callers-then-delete-legacy-apis`, `prove-it-works`, `outcome-oriented-execution`
+
+**Skills**: `architecture`, `effect-v4`, `bun`, `test`
+
+**Files**:
+
+- `packages/core/src/storage/*`
+- `packages/extensions/src/*`
+- `packages/sdk/src/*`
+- `apps/tui/src/*`
+- migration notes under `docs/` if needed
+
+**Sketch**:
+
+- Remove temporary compatibility adapters introduced in earlier waves.
+- Add or update migration notes for auth, message transcript, task status, provider request, and RPC DTO changes.
+- Verify no deprecated imports remain.
+- Run full final verification.
+
+**Migration**:
+
+- Delete legacy adapters only after all callers moved.
+- Keep persisted-data decoders for old on-disk data where users may already have rows.
+
+**Gate**:
+
+- `bun run gate`
+- `bun run test:e2e`
+- One final deep subagent review of the whole wave diff before marking plan complete.
