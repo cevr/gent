@@ -55,6 +55,7 @@ import { ConfigService } from "../config-service.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
 import { RuntimeComposer } from "../composer.js"
+import { SessionRuntime } from "../session-runtime.js"
 import type { PromptSection } from "../../server/system-prompt.js"
 
 interface ChildMetadata {
@@ -767,7 +768,7 @@ export const InProcessRunner = (
   | Storage
   | EventStore
   | EventPublisher
-  | AgentLoop
+  | SessionRuntime
   | ExtensionRegistry
   | Provider
   | ServerProfileService
@@ -778,7 +779,7 @@ export const InProcessRunner = (
       const storage = yield* Storage
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
-      const loop = yield* AgentLoop
+      const sessionRuntime = yield* SessionRuntime
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
@@ -896,7 +897,7 @@ export const InProcessRunner = (
                     ? { ...(normalizedRunSpec ?? {}), parentToolCallId: toolCallId }
                     : normalizedRunSpec
                 yield* runWithTimeout(
-                  loop.runOnce({
+                  sessionRuntime.runOnce({
                     sessionId,
                     branchId,
                     agentName: params.agent.name,

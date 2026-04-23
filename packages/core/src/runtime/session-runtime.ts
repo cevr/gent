@@ -13,7 +13,7 @@ import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
+import { AgentLoop, invokeToolPhase, type AgentLoopService } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { type MakeExtensionHostContextDeps } from "./make-extension-host-context.js"
@@ -179,6 +179,7 @@ export const SessionRuntimeMetrics = Schema.Struct({
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
 export interface SessionRuntimeService {
+  readonly runOnce: AgentLoopService["runOnce"]
   readonly dispatch: (command: RuntimeCommand) => Effect.Effect<void, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: SessionRuntimeTarget,
@@ -468,6 +469,8 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       })
 
       return {
+        runOnce: (input) => agentLoop.runOnce(input),
+
         dispatch: (command) =>
           dispatchCommand(command).pipe(
             Effect.catchCause((cause) => Effect.fail(wrapError("dispatch failed", cause))),
@@ -554,12 +557,12 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
 
   static Live = (config: { readonly baseSections: ReadonlyArray<PromptSection> }) => {
     const loopLive = AgentLoop.Live(config)
-    const sessionRuntimeLive = SessionRuntime.FromLoop.pipe(Layer.provideMerge(loopLive))
-    return Layer.merge(loopLive, sessionRuntimeLive)
+    return SessionRuntime.FromLoop.pipe(Layer.provideMerge(loopLive))
   }
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {
+      runOnce: () => Effect.void,
       dispatch: () => Effect.void,
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),

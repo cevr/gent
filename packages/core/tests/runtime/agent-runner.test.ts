@@ -9,8 +9,8 @@ import {
 } from "@gent/core/providers/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { ConfigService } from "@gent/core/runtime/config-service"
+import { SessionRuntime, type SessionRuntimeService } from "@gent/core/runtime/session-runtime"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
   resolveAgentModel,
@@ -98,6 +98,18 @@ const ephemeralParentDeps = Layer.mergeAll(
   ConfigService.Test(),
 )
 
+const sessionRuntimeStub = (runOnce: SessionRuntimeService["runOnce"] = () => Effect.void) =>
+  Layer.succeed(SessionRuntime, {
+    runOnce,
+    dispatch: () => Effect.void,
+    drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+    getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+    getState: () => Effect.die("SessionRuntime.getState not used in AgentRunner tests"),
+    getMetrics: () =>
+      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+    watchState: () => Effect.die("SessionRuntime.watchState not used in AgentRunner tests"),
+  })
+
 describe("RunSpec", () => {
   test("dual model pair resolves to cowork and deepwork models", () => {
     const registry = resolveExtensions([
@@ -137,18 +149,9 @@ describe("RunSpec", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: (input) => {
-          capturedInput = input
-          return Effect.void
-        },
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
+      sessionRuntimeStub((input) => {
+        capturedInput = input
+        return Effect.void
       }),
       recorderLayer,
       eventStoreLayer,
@@ -211,16 +214,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
       recorderLayer,
       eventStoreLayer,
       eventPublisherLayer,
@@ -297,16 +291,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.fail(new AgentRunError({ message: "permanent failure" })),
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(() => Effect.fail(new AgentRunError({ message: "permanent failure" }))),
       recorderLayer,
       eventStoreLayer,
       eventPublisherLayer,
@@ -360,16 +345,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.sleep("50 millis"),
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(() => Effect.sleep("50 millis")),
       eventStoreLayer,
       eventPublisherLayer,
     )
@@ -426,16 +402,7 @@ describe("AgentRunner", () => {
         [new TextChunk({ text: "ephemeral response" }), new FinishChunk({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -506,16 +473,7 @@ describe("AgentRunner", () => {
         [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -610,16 +568,7 @@ describe("AgentRunner", () => {
         [new TextChunk({ text: "tool finished" }), new FinishChunk({ finishReason: "stop" })],
       ]),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
     )
     const runnerLayer = InProcessRunner({}).pipe(
       Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
@@ -670,16 +619,7 @@ describe("AgentRunner", () => {
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
       eventStoreLayer,
       eventPublisherLayer,
     )
@@ -735,37 +675,29 @@ describe("AgentRunner", () => {
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
     // Mock AgentLoop that writes a reasoning-only assistant message
-    const mockLoop = Layer.succeed(AgentLoop, {
-      runOnce: (input) =>
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = new Date()
-          yield* storage.createMessage(
-            new Message({
-              id: MessageId.of(`${input.sessionId}:assistant:1`),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "assistant",
-              parts: [new ReasoningPart({ type: "reasoning", text: "I analyzed the repository" })],
-              createdAt: now,
-            }),
-          )
-        }),
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      followUp: () => Effect.void,
-      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      isRunning: () => Effect.succeed(false),
-    })
+    const mockRuntime = sessionRuntimeStub((input) =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+        yield* storage.createMessage(
+          new Message({
+            id: MessageId.of(`${input.sessionId}:assistant:1`),
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            role: "assistant",
+            parts: [new ReasoningPart({ type: "reasoning", text: "I analyzed the repository" })],
+            createdAt: now,
+          }),
+        )
+      }),
+    )
 
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      mockLoop,
+      mockRuntime,
       eventStoreLayer,
       eventPublisherLayer,
       BunFileSystem.layer,
@@ -814,40 +746,32 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
-    const mockLoop = Layer.succeed(AgentLoop, {
-      runOnce: (input) =>
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = new Date()
-          yield* storage.createMessage(
-            new Message({
-              id: MessageId.of(`${input.sessionId}:assistant:1`),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "assistant",
-              parts: [
-                new ReasoningPart({ type: "reasoning", text: "thinking step" }),
-                new TextPart({ type: "text", text: "the actual answer" }),
-              ],
-              createdAt: now,
-            }),
-          )
-        }),
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      followUp: () => Effect.void,
-      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      isRunning: () => Effect.succeed(false),
-    })
+    const mockRuntime = sessionRuntimeStub((input) =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+        yield* storage.createMessage(
+          new Message({
+            id: MessageId.of(`${input.sessionId}:assistant:1`),
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            role: "assistant",
+            parts: [
+              new ReasoningPart({ type: "reasoning", text: "thinking step" }),
+              new TextPart({ type: "text", text: "the actual answer" }),
+            ],
+            createdAt: now,
+          }),
+        )
+      }),
+    )
 
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      mockLoop,
+      mockRuntime,
       eventStoreLayer,
       eventPublisherLayer,
       BunFileSystem.layer,
@@ -891,40 +815,32 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
-    const mockLoop = Layer.succeed(AgentLoop, {
-      runOnce: (input) =>
-        Effect.gen(function* () {
-          const storage = yield* Storage
-          const now = new Date()
-          yield* storage.createMessage(
-            new Message({
-              id: MessageId.of(`${input.sessionId}:assistant:1`),
-              sessionId: input.sessionId,
-              branchId: input.branchId,
-              role: "assistant",
-              parts: [
-                new ReasoningPart({ type: "reasoning", text: "internal thinking" }),
-                new TextPart({ type: "text", text: "visible answer" }),
-              ],
-              createdAt: now,
-            }),
-          )
-        }),
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      followUp: () => Effect.void,
-      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      isRunning: () => Effect.succeed(false),
-    })
+    const mockRuntime = sessionRuntimeStub((input) =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+        yield* storage.createMessage(
+          new Message({
+            id: MessageId.of(`${input.sessionId}:assistant:1`),
+            sessionId: input.sessionId,
+            branchId: input.branchId,
+            role: "assistant",
+            parts: [
+              new ReasoningPart({ type: "reasoning", text: "internal thinking" }),
+              new TextPart({ type: "text", text: "visible answer" }),
+            ],
+            createdAt: now,
+          }),
+        )
+      }),
+    )
 
     const deps = Layer.mergeAll(
       Storage.Test(),
       ExtensionRegistry.Test(),
       Provider.Debug(),
       ToolRunner.Test(),
-      mockLoop,
+      mockRuntime,
       eventStoreLayer,
       eventPublisherLayer,
       BunFileSystem.layer,
@@ -1109,16 +1025,7 @@ describe("ephemeral service propagation", () => {
       eventPublisherLayer,
       testRegistryLayer,
       providerLayer,
-      Layer.succeed(AgentLoop, {
-        runOnce: () => Effect.void,
-        submit: () => Effect.void,
-        run: () => Effect.void,
-        steer: () => Effect.void,
-        followUp: () => Effect.void,
-        drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-        isRunning: () => Effect.succeed(false),
-      }),
+      sessionRuntimeStub(),
       ephemeralParentDeps,
     )
     const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
@@ -1208,16 +1115,7 @@ describe("ephemeral service propagation", () => {
         eventPublisherLayer,
         toolRegistry,
         providerLayer,
-        Layer.succeed(AgentLoop, {
-          runOnce: () => Effect.void,
-          submit: () => Effect.void,
-          run: () => Effect.void,
-          steer: () => Effect.void,
-          followUp: () => Effect.void,
-          drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-          getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-          isRunning: () => Effect.succeed(false),
-        }),
+        sessionRuntimeStub(),
         ephemeralParentDeps,
       )
       const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
