@@ -10,7 +10,6 @@ type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
  * Polls renderOnce until the predicate matches or the timeout expires.
  * Uses wall-clock timeout (not iteration count) for predictable behavior.
  */
-/* eslint-disable no-await-in-loop -- intentional polling loop */
 export const waitForRenderedFrame = async (
   setup: TestSetup,
   predicate: (frame: string) => boolean,
@@ -21,13 +20,14 @@ export const waitForRenderedFrame = async (
   let lastFrame = ""
 
   while (Date.now() - startedAt < timeoutMs) {
+    // eslint-disable-next-line no-await-in-loop -- intentional polling loop
     await setup.renderOnce()
     const frame = renderFrame(setup)
     lastFrame = frame
     if (predicate(frame)) return frame
+    // eslint-disable-next-line no-await-in-loop -- intentional polling loop
     await new Promise((r) => setTimeout(r, 10))
   }
 
   throw new Error(`timed out waiting for rendered frame: ${label}\n${lastFrame}`)
 }
-/* eslint-enable no-await-in-loop */

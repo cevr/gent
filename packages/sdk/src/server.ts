@@ -10,9 +10,9 @@ import { BunHttpServer, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { FetchHttpClient, HttpClient, HttpRouter } from "effect/unstable/http"
 import { Clock, Effect, Layer, Context } from "effect"
 import type { Scope } from "effect"
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — server primitive owns filesystem path resolution
 import { resolve as pathResolve, join as pathJoin } from "node:path"
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — server primitive reads process host metadata
 import * as os from "node:os"
 
 import { createDependencies } from "@gent/core/server/dependencies.js"

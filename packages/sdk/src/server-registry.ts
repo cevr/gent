@@ -7,9 +7,9 @@
  * - CrossProcessLock: mkdir-based lock for startup serialization
  */
 
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — registry key includes host identity
 import { hostname } from "node:os"
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — registry uses synchronous lock-file operations
 import {
   existsSync,
   mkdirSync,
@@ -19,7 +19,7 @@ import {
   unlinkSync,
   rmdirSync,
 } from "node:fs"
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — registry resolves stable per-build paths
 import { join, resolve } from "node:path"
 
 import { Effect, Schema } from "effect"

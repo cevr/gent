@@ -3,7 +3,7 @@
  * Import from @gent/core/test-utils/fixtures
  */
 
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off — test fixture lifecycle comes from bun:test
 import { afterEach } from "bun:test"
 import { Cause, Clock, Effect, Schema } from "effect"
 import * as fs from "node:fs"

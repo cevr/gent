@@ -128,9 +128,9 @@ export const makeMachineLifecycle = (params: {
           ...(restartCount > 0 ? { restartCount } : {}),
         })
 
-        /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration */
         const spawnExit = yield* Effect.exit(
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration
           spawnMachineExtensionRef(spec.extensionId, spec.actor, {
             sessionId,
             branchId,
@@ -140,7 +140,6 @@ export const makeMachineLifecycle = (params: {
             never
           >,
         )
-        /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
 
         if (spawnExit._tag === "Failure") {
           const error = formatCause(spawnExit.cause)

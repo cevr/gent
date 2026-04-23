@@ -6,6 +6,8 @@ type SuppressionRule =
   | "effect:anyUnknownInErrorContext:off"
   | "effect:effectSucceedWithVoid:off"
   | "effect:globalConsoleInEffect:off"
+  | "effect:globalErrorInEffectCatch:off"
+  | "effect:globalErrorInEffectFailure:off"
   | "effect:nodeBuiltinImport:off"
   | "effect:preferSchemaOverJson:off"
   | "effect:strictEffectProvide:off"
@@ -53,11 +55,12 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       /packages\/core\/src\/test-utils\//.test(file),
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
+      "effect:nodeBuiltinImport:off": 1,
       "effect:strictEffectProvide:off": 2,
       "eslint:@typescript-eslint/no-explicit-any": 9,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 46,
-      "eslint:no-await-in-loop": 1,
-      "eslint:no-control-regex": 1,
+      "eslint:no-await-in-loop": 2,
+      "eslint:no-control-regex": 6,
       "ts:@ts-expect-error": 30,
     },
   },
@@ -76,6 +79,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "packages/core/src/runtime/extensions/resource-host/machine-engine.ts",
         "packages/core/src/runtime/extensions/resource-host/machine-lifecycle.ts",
         "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
+        "packages/core/src/runtime/extensions/extension-storage.ts",
         "packages/core/src/domain/extension-load-boundary.ts",
         "packages/core/src/extensions/api.ts",
         "apps/tui/src/components/autocomplete-popup-boundary.ts",
@@ -83,6 +87,9 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       ].includes(file),
     counts: {
       "effect:anyUnknownInErrorContext:off": 22,
+      "effect:globalErrorInEffectCatch:off": 1,
+      "effect:globalErrorInEffectFailure:off": 1,
+      "effect:preferSchemaOverJson:off": 1,
       "eslint:@typescript-eslint/no-explicit-any": 8,
       "eslint:@typescript-eslint/no-non-null-assertion": 2,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 27,
@@ -98,6 +105,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/main.tsx",
         "apps/tui/src/utils/client-logger.ts",
         "apps/tui/src/workspace/context.tsx",
+        "packages/core/src/server/build-fingerprint.ts",
         "packages/sdk/src/server.ts",
         "packages/sdk/src/supervisor.ts",
         "packages/core/src/runtime/log-paths.ts",
@@ -109,7 +117,9 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:effectSucceedWithVoid:off": 3,
       "effect:globalConsoleInEffect:off": 2,
-      "effect:nodeBuiltinImport:off": 4,
+      "effect:globalErrorInEffectCatch:off": 1,
+      "effect:globalErrorInEffectFailure:off": 1,
+      "effect:nodeBuiltinImport:off": 6,
       "effect:strictEffectProvide:off": 8,
       "eslint:@typescript-eslint/no-empty-object-type": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 6,
@@ -159,6 +169,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),
     counts: {
+      "effect:nodeBuiltinImport:off": 3,
       "eslint:@typescript-eslint/no-empty-object-type": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 16,
     },
@@ -211,6 +222,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 40,
       "eslint:no-process-env": 3,
       "eslint:typescript-eslint/consistent-type-imports": 1,
+      "effect:nodeBuiltinImport:off": 1,
+      "effect:preferSchemaOverJson:off": 2,
     },
   },
 ]
@@ -236,12 +249,11 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
   const lines = source.split("\n")
   const out: SuppressionInstance[] = []
   for (const [index, line] of lines.entries()) {
-    const effectMatch = line.match(/@effect-diagnostics-next-line\s+([^\s]+)/)
-    if (effectMatch !== null) {
+    for (const rule of parseEffectRules(line)) {
       out.push({
         file: rel,
         line: index + 1,
-        rule: `effect:${effectMatch[1]}` as SuppressionRule,
+        rule,
         text: line.trim(),
       })
     }
@@ -265,10 +277,26 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
   return out
 }
 
+const parseEffectRules = (line: string): ReadonlyArray<SuppressionRule> => {
+  const effectMatch = line.match(/@effect-diagnostics(?<nextLine>-next-line)?\s+(?<rules>.*)$/)
+  const rulesText = effectMatch?.groups?.rules.trim()
+  if (rulesText === undefined || rulesText.length === 0) return []
+
+  const [ruleList = ""] = rulesText.split(/\s(?:--|—)\s/, 1)
+  const rules = ruleList
+    .split(/\s+/)
+    .map((rule) => rule.trim())
+    .filter((rule) => rule.length > 0)
+
+  const scopedRules = effectMatch.groups?.nextLine === "-next-line" ? rules.slice(0, 1) : rules
+  return scopedRules.map((rule) => `effect:${rule}` as SuppressionRule)
+}
+
 const parseEslintRules = (line: string): ReadonlyArray<SuppressionRule> => {
-  const eslintMatch = line.match(/\beslint-disable(?:-next-line|-line)?\b(?<rules>.*)$/)
+  const eslintMatch = line.match(/\beslint-disable(?<scope>-next-line|-line)?\b(?<rules>.*)$/)
   const rulesText = eslintMatch?.groups?.rules
   if (rulesText === undefined) return []
+  if (eslintMatch.groups?.scope === undefined) return ["eslint:<block>" as SuppressionRule]
 
   const withoutBlockEnd = rulesText.replace(/\*\/\s*$/, "")
   const [ruleList = ""] = withoutBlockEnd.split(/\s--\s/, 1)
@@ -306,6 +334,8 @@ const APPROVED_SUPPRESSION_RULES = new Set<SuppressionRule>([
   "effect:anyUnknownInErrorContext:off",
   "effect:effectSucceedWithVoid:off",
   "effect:globalConsoleInEffect:off",
+  "effect:globalErrorInEffectCatch:off",
+  "effect:globalErrorInEffectFailure:off",
   "effect:nodeBuiltinImport:off",
   "effect:preferSchemaOverJson:off",
   "effect:strictEffectProvide:off",

@@ -181,17 +181,23 @@ const spawnNoAuth = (): TestContext => {
   return spawnWithDir(tempDir)
 }
 
-/* eslint-disable no-control-regex -- ANSI stripping regexes must match control bytes literally */
 function stripAnsi(str: string): string {
-  return str
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    .replace(/\x1b\[\?[0-9;]*[a-zA-Z$]/g, "")
-    .replace(/\x1b\][^\x07]*\x07/g, "")
-    .replace(/\x1b\[>[0-9]*[a-zA-Z]/g, "")
-    .replace(/\x1b\[[0-9]*"/g, "")
+  return (
+    str
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\[\?[0-9;]*[a-zA-Z$]/g, "")
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\][^\x07]*\x07/g, "")
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\[>[0-9]*[a-zA-Z]/g, "")
+      // eslint-disable-next-line no-control-regex -- ANSI stripping regexes must match control bytes literally
+      .replace(/\x1b\[[0-9]*"/g, "")
+  )
 }
-/* eslint-enable no-control-regex */
 
 let testContext: TestContext | null = null
 
