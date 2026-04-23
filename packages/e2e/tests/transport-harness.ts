@@ -9,7 +9,7 @@ import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   type InProcessLayerConfig,
 } from "@gent/core/test-utils/in-process-layer.js"
-import { Provider, type SignalProviderControls } from "@gent/core/providers/provider.js"
+import { createSignalProvider, type SignalProviderControls } from "@gent/core/debug/provider.js"
 import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 import { GitReader } from "@gent/extensions/librarian/git-reader.js"
 import { Gent, type GentClientBundle } from "@gent/sdk"
@@ -59,7 +59,7 @@ const makeDirectSignalCase = (): SignalTransportCase => ({
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer, controls } = yield* Provider.Signal(reply)
+          const { layer, controls } = yield* createSignalProvider(reply)
           const bundle = yield* Gent.test(baseLocalLayerWithProvider(layer))
           return yield* assertion(bundle, controls)
         }),

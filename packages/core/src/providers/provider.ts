@@ -1,4 +1,4 @@
-import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
@@ -158,18 +158,6 @@ const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter
 const textDeltaPart = (text: string, id = makeStreamPartId("text")): ProviderStreamPart =>
   Response.makePart("text-delta", { id, delta: text })
 
-const toolCallPart = (
-  toolName: string,
-  input: unknown,
-  options?: { toolCallId?: ToolCallId },
-): ProviderStreamPart =>
-  Response.makePart("tool-call", {
-    id: options?.toolCallId ?? ToolCallId.of(makeStreamPartId("tool")),
-    name: toolName,
-    params: input,
-    providerExecuted: false,
-  })
-
 const finishPart = (params: {
   finishReason: Response.FinishReason
   usage?: { inputTokens: number; outputTokens: number }
@@ -192,7 +180,7 @@ const finishPart = (params: {
     response: undefined,
   })
 
-export const toTurnEvent =
+const toTurnEvent =
   (model: string) =>
   (part: ProviderStreamPart): Effect.Effect<TurnEvent | undefined, ProviderError> => {
     switch (part.type) {
@@ -275,7 +263,7 @@ export interface ProviderService {
 // ── Message Conversion (our MessagePart → Prompt.Message) ──
 
 /** @internal — exported for testing */
-export function convertMessages(messages: ReadonlyArray<Message>): Prompt.Message[] {
+function convertMessages(messages: ReadonlyArray<Message>): Prompt.Message[] {
   const result: Prompt.Message[] = []
 
   for (const msg of messages) {
@@ -378,8 +366,7 @@ const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
     ),
 })
 
-/** @internal — exported for testing */
-export function convertTools(
+function convertTools(
   tools: ReadonlyArray<AnyCapabilityContribution>,
 ): AiToolkit.WithHandler<Record<string, AiTool.Any>> {
   const toolsRecord: Record<string, AiTool.Any> = {}
@@ -391,11 +378,7 @@ export function convertTools(
   return makeAdvertiseOnlyToolkit(toolsRecord)
 }
 
-// ── Debug / test providers ──
-//
-// Formerly in `debug/provider.ts`. Inlined here so the static methods
-// on Provider (`Provider.Debug`, `Provider.Sequence`, etc.) avoid a
-// circular ESM import.
+// ── Debug providers ──
 
 const _extractLatestUserText = (messages: ReadonlyArray<Message>): string => {
   const latest = [...messages].reverse().find((message) => message.role === "user")
@@ -515,222 +498,6 @@ const _DebugFailingProvider = () => {
   return _debugFailingProviderCache
 }
 
-export interface SignalProviderControls {
-  readonly emitNext: () => Effect.Effect<void>
-  readonly emitAll: () => Effect.Effect<void>
-  readonly waitForStreamStart: Effect.Effect<void>
-}
-
-const _createSignalProvider = (
-  reply: string,
-  options?: { inputTokens?: number; outputTokens?: number },
-) =>
-  Effect.gen(function* () {
-    const gate = yield* Queue.unbounded<null>()
-    const streamStarted = yield* Deferred.make<void>()
-
-    const parts = reply
-      .split(/(?<=[.!?])\s+/)
-      .filter((chunk) => chunk.length > 0)
-      .map((text) => textDeltaPart(`${text} `))
-
-    const allParts = [
-      ...parts,
-      finishPart({
-        finishReason: "stop",
-        usage: {
-          inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
-          outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
-        },
-      }),
-    ]
-
-    const layer = Layer.succeed(Provider, {
-      stream: () =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(streamStarted, void 0)
-          return Stream.fromIterable(allParts).pipe(
-            Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part))),
-          )
-        }),
-      generate: () => Effect.succeed(reply),
-    })
-
-    const controls: SignalProviderControls = {
-      emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
-      emitAll: () => Effect.forEach(allParts, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
-      waitForStreamStart: Deferred.await(streamStarted),
-    }
-
-    return { layer, controls }
-  })
-
-export interface SequenceStep {
-  readonly parts: ReadonlyArray<ProviderStreamPart>
-  readonly assertRequest?: (request: ProviderRequest) => void
-  readonly gated?: boolean
-}
-
-export interface SequenceProviderControls {
-  readonly waitForCall: (index: number) => Effect.Effect<void>
-  readonly emitAll: (index: number) => Effect.Effect<void>
-  readonly callCount: Effect.Effect<number>
-  readonly assertDone: () => Effect.Effect<void>
-}
-
-const _createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
-  Effect.gen(function* () {
-    const indexRef = yield* Ref.make(0)
-
-    const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
-    const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
-
-    yield* Effect.forEach(steps, (step, i) => {
-      const gate = emitGates[i]
-      if (!step.gated && gate) return Deferred.succeed(gate, void 0)
-      return Effect.void
-    })
-
-    const layer = Layer.succeed(Provider, {
-      stream: (request: ProviderRequest) =>
-        Effect.gen(function* () {
-          const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
-
-          if (idx >= steps.length) {
-            return yield* new ProviderError({
-              message: `Sequence provider: stream() called ${idx + 1} times but only ${steps.length} steps scripted`,
-              model: request.model,
-            })
-          }
-
-          const step = steps[idx] ?? steps[0]
-          const started = callStarted[idx] ?? callStarted[0]
-          const gate = emitGates[idx] ?? emitGates[0]
-
-          if (started) yield* Deferred.succeed(started, void 0)
-
-          if (step?.assertRequest) {
-            yield* Effect.try({
-              try: () => step.assertRequest?.(request),
-              catch: (e) =>
-                new ProviderError({
-                  message: `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
-                  model: request.model,
-                }),
-            })
-          }
-
-          if (gate) {
-            return Stream.fromEffect(Deferred.await(gate)).pipe(
-              Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
-            )
-          }
-          return Stream.fromIterable(step?.parts ?? [])
-        }),
-      generate: () => Effect.succeed("sequence provider"),
-    })
-
-    const controls: SequenceProviderControls = {
-      waitForCall: (index) => {
-        const deferred = callStarted[index]
-        if (index < 0 || index >= steps.length || !deferred) {
-          return Effect.die(
-            new Error(`waitForCall: index ${index} out of range [0, ${steps.length})`),
-          )
-        }
-        return Deferred.await(deferred)
-      },
-
-      emitAll: (index) => {
-        const deferred = emitGates[index]
-        if (index < 0 || index >= steps.length || !deferred) {
-          return Effect.die(new Error(`emitAll: index ${index} out of range [0, ${steps.length})`))
-        }
-        return Deferred.succeed(deferred, void 0)
-      },
-
-      callCount: Ref.get(indexRef),
-
-      assertDone: () =>
-        Effect.gen(function* () {
-          const consumed = yield* Ref.get(indexRef)
-          if (consumed < steps.length) {
-            return yield* Effect.die(
-              new Error(
-                `Sequence provider: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
-              ),
-            )
-          }
-        }),
-    }
-
-    return { layer, controls }
-  })
-
-// ── Step builders ──
-
-let _stepCallIdCounter = 0
-
-const _makeStepToolCallId = () => ToolCallId.of(`step-tc-${++_stepCallIdCounter}`)
-
-/** A turn that emits a single text response and finishes with "stop". */
-export const textStep = (text: string): SequenceStep => ({
-  parts: [
-    textDeltaPart(text),
-    finishPart({
-      finishReason: "stop",
-      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) },
-    }),
-  ],
-})
-
-/** A turn that emits a single tool call and finishes with "tool-calls". */
-export const toolCallStep = (
-  toolName: string,
-  input: unknown,
-  options?: { toolCallId?: ToolCallId },
-): SequenceStep => ({
-  parts: [
-    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? _makeStepToolCallId() }),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: 20 },
-    }),
-  ],
-})
-
-/** A turn that emits text before a tool call. */
-export const textThenToolCallStep = (
-  text: string,
-  toolName: string,
-  input: unknown,
-  options?: { toolCallId?: ToolCallId },
-): SequenceStep => ({
-  parts: [
-    textDeltaPart(text),
-    toolCallPart(toolName, input, { toolCallId: options?.toolCallId ?? _makeStepToolCallId() }),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: Math.max(1, Math.ceil(text.length / 4)) + 20 },
-    }),
-  ],
-})
-
-/** A turn that emits multiple tool calls and finishes with "tool-calls". */
-export const multiToolCallStep = (
-  ...calls: ReadonlyArray<{ toolName: string; input: unknown; toolCallId?: ToolCallId }>
-): SequenceStep => ({
-  parts: [
-    ...calls.map((c) =>
-      toolCallPart(c.toolName, c.input, { toolCallId: c.toolCallId ?? _makeStepToolCallId() }),
-    ),
-    finishPart({
-      finishReason: "tool-calls",
-      usage: { inputTokens: 10, outputTokens: 20 * calls.length },
-    }),
-  ],
-})
-
 // ── Provider Live ──
 
 export class Provider extends Context.Service<Provider, ProviderService>()(
@@ -833,19 +600,10 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
     }),
   )
 
-  // ── Debug / test provider statics ──
-  //
-  // Inlined from the former `debug/provider.ts` to avoid a circular
-  // import (debug/provider → Provider class → debug/provider).
-
-  /** Scripted multi-turn provider. Each `stream()` call consumes the next step. */
-  static Sequence = _createSequenceProvider
+  // ── Debug provider statics ──
 
   /** Debug provider — canned text responses, optional delays/retries. */
   static Debug = _DebugProvider
-
-  /** Signal-controlled provider for lifecycle assertions. */
-  static Signal = _createSignalProvider
 
   /** Always-failing provider for error path tests. */
   static get Failing() {

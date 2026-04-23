@@ -8,8 +8,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -19,7 +18,7 @@ describe("DriverRpcs", () => {
   it.live("driver.list returns registered drivers and current overrides", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const before = yield* client.driver.list()
         // Built-in agents extension contributes the "anthropic" model driver
@@ -34,7 +33,7 @@ describe("DriverRpcs", () => {
   it.live("driver.set persists an override; driver.list reflects it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d.kind === "model")
@@ -52,7 +51,7 @@ describe("DriverRpcs", () => {
   it.live("driver.set rejects unknown driver id with NotFoundError", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const result = yield* client.driver
           .set({
@@ -68,7 +67,7 @@ describe("DriverRpcs", () => {
   it.live("driver.clear removes an existing override", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
         const someModel = drivers.find((d) => d.kind === "model")
@@ -87,7 +86,7 @@ describe("DriverRpcs", () => {
   it.live("driver.clear is a no-op for an unknown agent", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         yield* client.driver.clear({ agentName: "does-not-exist" })
         const after = yield* client.driver.list()

@@ -4,8 +4,7 @@ import { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset.js"
-import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
 import { SessionStarted } from "@gent/core/domain/event"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
@@ -17,7 +16,7 @@ const withRuntime = (
   fn: (runtime: typeof MachineEngine.Type) => Effect.Effect<void, unknown, MachineEngine>,
 ) =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+    const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
     const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
     yield* Effect.gen(function* () {

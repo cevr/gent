@@ -11,8 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, type Layer, Ref, Stream, Schema } from "effect"
-import { toolCallStep, textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
@@ -85,7 +84,7 @@ describe("capability permissionRules E2E", () => {
     () =>
       Effect.gen(function* () {
         // Step 1: model calls bash → step 2: model sends text after seeing error result
-        const { layer: providerLayer } = yield* Provider.Sequence([
+        const { layer: providerLayer } = yield* createSequenceProvider([
           toolCallStep("bash", { command: "ls -la" }),
           textStep("Understood, bash is denied."),
         ])
@@ -145,7 +144,7 @@ describe("capability permissionRules E2E", () => {
     "bash tool call allowed when no deny rule is present (control case)",
     () =>
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([
+        const { layer: providerLayer } = yield* createSequenceProvider([
           toolCallStep("bash", { command: "echo hello" }),
           textStep("Bash ran successfully."),
         ])

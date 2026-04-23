@@ -1,11 +1,10 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import type { GentExtension, LoadedExtension } from "@gent/core/domain/extension"
-import { textStep } from "@gent/core/debug/provider"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExtensionRegistry, listSlashCommands } from "@gent/core/runtime/extensions/registry"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { Provider } from "@gent/core/providers/provider"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
@@ -83,7 +82,7 @@ describe("extension command RPCs", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupCommandsExt
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )

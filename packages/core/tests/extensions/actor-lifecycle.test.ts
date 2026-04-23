@@ -11,8 +11,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
 import type { LoadedExtension, ReduceResult, RequestResult } from "@gent/core/domain/extension"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
-import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { defineResource } from "@gent/core/domain/contribution"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -90,7 +89,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
           )
@@ -123,7 +122,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [counterExtension] }),
           )
@@ -158,7 +157,7 @@ describe("Actor lifecycle across RPC boundaries", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([
+          const { layer: providerLayer } = yield* createSequenceProvider([
             textStep("session reply"),
             textStep("message reply"),
           ])

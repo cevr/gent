@@ -16,6 +16,7 @@ import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Provider, ProviderError } from "@gent/core/providers/provider"
 import {
+  createSequenceProvider,
   finishPart,
   reasoningDeltaPart,
   textDeltaPart,
@@ -1045,7 +1046,7 @@ describe("continuation", () => {
 
   test("tool call auto-continues to next LLM call", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "hello" }),
         textStep("Done with tools."),
       ])
@@ -1061,7 +1062,7 @@ describe("continuation", () => {
 
   test("text-only response does not trigger continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         textStep("Just text, no tools."),
       ])
 
@@ -1076,7 +1077,7 @@ describe("continuation", () => {
 
   test("multi-hop tool calls chain until text response", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         toolCallStep("echo", { text: "step 3" }),
@@ -1094,7 +1095,7 @@ describe("continuation", () => {
 
   test("TurnCompleted fires once per turn, not per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Done."),
@@ -1117,7 +1118,7 @@ describe("continuation", () => {
 
   test("interrupt during tool execution stops continuation", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("Continuation response."), gated: true },
       ])
@@ -1153,7 +1154,7 @@ describe("continuation", () => {
 
   test("GUARD: ToolsFinished without interrupt routes to Resolving", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "tool" }),
         textStep("Continuation reached."),
       ])
@@ -1174,7 +1175,7 @@ describe("continuation", () => {
 
   test("GUARD: multi-hop persists distinct messages per step", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "step 1" }),
         toolCallStep("echo", { text: "step 2" }),
         textStep("Final answer."),
@@ -1214,7 +1215,7 @@ describe("continuation", () => {
 
   test("queued follow-up executes normally after interrupt", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer, controls } = yield* Provider.Sequence([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         toolCallStep("echo", { text: "step 1" }),
         { ...textStep("gated response"), gated: true },
         textStep("follow-up response"),

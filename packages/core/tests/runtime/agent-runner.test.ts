@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { Provider } from "@gent/core/providers/provider"
 import {
+  createSequenceProvider,
   finishPart,
   textDeltaPart,
   textStep,
@@ -1036,7 +1037,9 @@ describe("ephemeral service propagation", () => {
 
   test("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ephemeral text output")])
+      const { layer: providerLayer } = yield* createSequenceProvider([
+        textStep("ephemeral text output"),
+      ])
       const layer = makeEphemeralLayer(providerLayer)
 
       yield* Effect.gen(function* () {
@@ -1094,7 +1097,7 @@ describe("ephemeral service propagation", () => {
         ]),
       )
 
-      const { layer: providerLayer } = yield* Provider.Sequence([
+      const { layer: providerLayer } = yield* createSequenceProvider([
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])

@@ -11,8 +11,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { textStep } from "@gent/core/debug/provider"
-import { Provider } from "@gent/core/providers/provider"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -22,7 +21,7 @@ describe("auth.listProviders", () => {
   it.live("returns providers without sessionId (back-compat with launch-cwd default)", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
@@ -35,7 +34,7 @@ describe("auth.listProviders", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
           const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
 
           // Create a session — this gives us a real sessionId tied to a real cwd.
