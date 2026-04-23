@@ -1,23 +1,18 @@
 /**
  * RunSpec threading tests.
  *
- * Verifies that RunSpec (including parentToolCallId)
- * survive the full chain: client.message.send → RPC → session-commands
- * → session-runtime → agentLoop.submit → resolveTurnContext → deriveAll.
+ * Verifies the CLI serialization round-trip used by SubprocessRunner.
  *
- * Also tests the CLI serialization round-trip used by SubprocessRunner.
+ * Public message.send runSpec behavior is covered by
+ * tests/server/session-commands.test.ts.
  */
 
-import { describe, test, expect, it } from "bun:test"
+import { describe, test, expect } from "bun:test"
 import { Schema } from "effect"
 import { ToolCallId } from "@gent/core/domain/ids"
 import { RunSpecSchema } from "@gent/core/domain/agent"
 
 // ── Tests ──
-
-describe("runSpec through RPC", () => {
-  it.skip("parentToolCallId reaches ExtensionTurnContext via message.send", () => {}) // the previous WorkflowContribution.turn / derive surface is gone in C2. // TODO(c2): rewrite to capture ExtensionTurnContext via a different hook —
-})
 
 describe("RunSpec CLI serialization", () => {
   const codec = Schema.fromJsonString(RunSpecSchema)

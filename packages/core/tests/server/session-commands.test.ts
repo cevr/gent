@@ -2,6 +2,9 @@ import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Stream } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
+import { ToolCallId } from "@gent/core/domain/ids"
+import type { LoadedExtension } from "@gent/core/domain/extension"
+import type { ProjectionContribution } from "@gent/core/domain/projection"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
@@ -27,6 +30,28 @@ const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
     yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
     return closed
   })
+
+const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
+  id: "parent-tool-call-probe",
+  query: (ctx) => Effect.succeed(ctx.turn.parentToolCallId),
+  prompt: (parentToolCallId) =>
+    parentToolCallId === undefined
+      ? []
+      : [
+          {
+            id: "parent-tool-call-probe",
+            content: `parentToolCallId:${parentToolCallId}`,
+            priority: 45,
+          },
+        ],
+}
+
+const parentToolCallProbeExtension: LoadedExtension = {
+  manifest: { id: "parent-tool-call-probe" },
+  scope: "builtin",
+  sourcePath: "test",
+  contributions: { projections: [parentToolCallProbeProjection] },
+}
 
 describe("session.delete", () => {
   it.live("closes session event streams and removes the session from public queries", () =>
@@ -170,6 +195,58 @@ describe("message.send", () => {
               message.parts.some((part) => part.type === "text" && part.text === assistantText),
           ),
         ).toBe(true)
+        yield* controls.assertDone()
+      }),
+    ),
+  )
+
+  it.live("threads runSpec parentToolCallId through the public message contract", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const assistantText = "parent tool call acceptance reply"
+        const parentToolCallId = ToolCallId.make("tc-parent-acceptance")
+        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+          {
+            ...textStep(assistantText),
+            assertRequest: (request) => {
+              expect(JSON.stringify(request.prompt)).toContain(
+                `parentToolCallId:${parentToolCallId}`,
+              )
+            },
+          },
+        ])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [],
+            extensions: [parentToolCallProbeExtension],
+          }),
+        )
+        const created = yield* client.session.create({ cwd: process.cwd() })
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "thread parent tool call id",
+          runSpec: { parentToolCallId },
+        })
+
+        yield* waitFor(
+          client.session.getSnapshot({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+          (current) =>
+            current.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === assistantText),
+            ),
+          5_000,
+          "assistant reply from parentToolCallId turn",
+        )
+
         yield* controls.assertDone()
       }),
     ),
