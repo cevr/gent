@@ -249,12 +249,14 @@ describe("architecture policy", () => {
   })
 
   test("runtime modules do not import server prompt internals", () => {
+    const serverPromptImport =
+      /(?:@gent\/core\/server\/system-prompt|(?:\.\.\/)+server\/system-prompt)/
     const violations = collectSourceFiles()
       .filter((file) => file.includes("/packages/core/src/runtime/"))
       .flatMap((file) =>
         sourceLines(file)
           .filter(({ text }) => !isCommentLine(text))
-          .filter(({ text }) => /\.\.\/(?:\.\.\/)?server\/system-prompt/.test(text))
+          .filter(({ text }) => serverPromptImport.test(text))
           .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
       )
 
