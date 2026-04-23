@@ -9,3 +9,7 @@
 
 - `Schema.Unknown` for dynamic JSON (`ToolCallPart.input`, `ToolResultPart.output.value`)
 - Decode with `Schema.decodeUnknownSync(schema)(value)` before use
+
+## Runtime Boundary
+
+- Server-facing code uses `SessionRuntime` only. `AgentLoop` is a runtime-internal implementation detail.

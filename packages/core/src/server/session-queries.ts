@@ -9,8 +9,7 @@ import { MessageStorage } from "../storage/message-storage.js"
 import { EventStorage } from "../storage/event-storage.js"
 import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
-import { SessionRuntime } from "../runtime/session-runtime.js"
-import { LoopRuntimeStateSchema } from "../runtime/agent/agent-loop.state.js"
+import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
 import type {
   BranchInfo,
@@ -143,7 +142,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         })
 
         // Fetch current runtime state — idle sessions return Idle runtime
-        const idleRuntime = new LoopRuntimeStateSchema.Idle({
+        const idleRuntime = new SessionRuntimeStateSchema.Idle({
           agent: DEFAULT_AGENT_NAME,
           queue: { steering: [], followUp: [] },
         })

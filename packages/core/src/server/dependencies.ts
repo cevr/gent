@@ -9,7 +9,6 @@ import { PromptPresenter } from "../domain/prompt-presenter.js"
 import type { GentExtension } from "../domain/extension.js"
 import { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ApprovalService } from "../runtime/approval-service.js"
 import { InProcessRunner, SubprocessRunner } from "../runtime/agent/agent-runner.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
@@ -316,41 +315,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     }),
   ).pipe(Layer.provide(allDeps))
 
-  const agentRuntimeLive = Layer.provide(
-    Layer.unwrap(
-      Effect.gen(function* () {
-        // Reuse the resolver's profile data and compile sections inside this
-        // runtime — extension services (e.g. `Skills`) are now in scope so any
-        // dynamic prompt section can resolve correctly.
-        const profile = yield* RuntimeProfileTag
-        const baseSections = yield* compileBaseSections(profile)
-        const runnerConfig = {
-          ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
-            ? { subprocessBinaryPath: config.subprocessBinaryPath }
-            : {}),
-          ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
-          ...(config.sharedServerUrl !== undefined
-            ? { sharedServerUrl: config.sharedServerUrl }
-            : {}),
-          baseSections,
-        }
-        const agentLoopLive = AgentLoop.Live({ baseSections })
-        const agentRunnerLive =
-          config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
-            ? SubprocessRunner(runnerConfig)
-            : InProcessRunner(runnerConfig).pipe(Layer.provideMerge(agentLoopLive))
-
-        return Layer.mergeAll(agentLoopLive, agentRunnerLive)
-      }),
-    ),
-    allDeps,
-  )
-
-  // Wake checkpointed agent loops on startup so in-flight turns resume
-  // without waiting for a client to open the session.
-  // Checkpoint restore is lazy — triggered by findOrRestoreLoop when a
-  // client opens a session. No eager wake on startup.
-
   // SessionProfileCache — lazy per-cwd extension/config/prompt profiles.
   // After construction, wire the profile cache into the EventPublisher
   // router handle so per-cwd dispatch can resolve profiles.
@@ -377,8 +341,43 @@ export const createDependencies = (config: DependenciesConfig) => {
     allDeps,
   )
 
-  const allWithRuntime = Layer.mergeAll(allDeps, agentRuntimeLive, sessionProfileCacheLive)
+  const sessionRuntimeLive = Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        // Compile prompt sections once at the runtime boundary, then let
+        // SessionRuntime own the underlying AgentLoop layer internally.
+        const profile = yield* RuntimeProfileTag
+        const baseSections = yield* compileBaseSections(profile)
+        return SessionRuntime.Live({ baseSections })
+      }),
+    ),
+    Layer.mergeAll(allDeps, sessionProfileCacheLive),
+  )
 
-  const sessionRuntimeLive = Layer.provide(SessionRuntime.Live, allWithRuntime)
-  return Layer.mergeAll(allWithRuntime, sessionRuntimeLive, interactionRecoveryLive)
+  const allWithRuntime = Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionRuntimeLive)
+
+  const agentRuntimeLive = Layer.provide(
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const profile = yield* RuntimeProfileTag
+        const baseSections = yield* compileBaseSections(profile)
+        const runnerConfig = {
+          ...(config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
+            ? { subprocessBinaryPath: config.subprocessBinaryPath }
+            : {}),
+          ...(config.dbPath !== undefined && config.dbPath !== "" ? { dbPath: config.dbPath } : {}),
+          ...(config.sharedServerUrl !== undefined
+            ? { sharedServerUrl: config.sharedServerUrl }
+            : {}),
+          baseSections,
+        }
+        return config.subprocessBinaryPath !== undefined && config.subprocessBinaryPath !== ""
+          ? SubprocessRunner(runnerConfig)
+          : InProcessRunner(runnerConfig)
+      }),
+    ),
+    allWithRuntime,
+  )
+
+  return Layer.mergeAll(allWithRuntime, agentRuntimeLive, interactionRecoveryLive)
 }

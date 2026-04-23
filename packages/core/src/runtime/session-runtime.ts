@@ -11,6 +11,7 @@ import { EventPublisher } from "../domain/event-publisher.js"
 import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
+import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
@@ -261,7 +262,7 @@ export const respondInteractionCommand = (
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
-  static Live = Layer.effect(
+  static FromLoop = Layer.effect(
     SessionRuntime,
     Effect.gen(function* () {
       const agentLoop = yield* AgentLoop
@@ -550,6 +551,12 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       } satisfies SessionRuntimeService
     }),
   )
+
+  static Live = (config: { readonly baseSections: ReadonlyArray<PromptSection> }) => {
+    const loopLive = AgentLoop.Live(config)
+    const sessionRuntimeLive = SessionRuntime.FromLoop.pipe(Layer.provideMerge(loopLive))
+    return Layer.merge(loopLive, sessionRuntimeLive)
+  }
 
   static Test = (): Layer.Layer<SessionRuntime> =>
     Layer.succeed(SessionRuntime, {

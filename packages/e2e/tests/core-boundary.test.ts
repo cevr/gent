@@ -3,22 +3,24 @@ import { Effect, Layer, Ref, Stream } from "effect"
 import { EventStore } from "@gent/core/domain/event"
 import { Permission } from "@gent/core/domain/permission"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
-import type { Message } from "@gent/core/domain/message"
+import { MessageId } from "@gent/core/domain/ids"
+import { QueueEntryInfo } from "@gent/core/domain/queue"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Provider } from "@gent/core/providers/provider"
 import { AppServicesLive } from "@gent/core/server/index"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionCommands } from "@gent/core/server/session-commands"
-import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { SessionQueries } from "@gent/core/server/session-queries"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import {
+  SessionRuntime,
+  SessionRuntimeStateSchema,
+  type RuntimeCommand,
+} from "@gent/core/runtime/session-runtime"
+import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { SessionRuntime } from "@gent/core/runtime/session-runtime"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Agents } from "@gent/extensions/all-agents"
 
 const runtimePlatformLayer = RuntimePlatform.Test({
@@ -38,82 +40,44 @@ const testExtensionRegistryLayer = ExtensionRegistry.fromResolved(
   ]),
 )
 
-const makeAppLayer = (
-  storageDeps: Layer.Layer<
-    Storage | EventStore | AgentLoop | ToolRunner | ExtensionRegistry,
-    never,
-    never
-  >,
-) => {
-  const eventPublisherLayer = Layer.provide(
-    EventPublisherLive,
-    Layer.merge(storageDeps, runtimePlatformLayer),
-  )
-  const baseRuntime = Layer.mergeAll(
-    storageDeps,
-    eventPublisherLayer,
+const makeAppLayer = (sessionRuntimeLayer: Layer.Layer<SessionRuntime>) => {
+  const baseDeps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    EventStore.Memory,
+    sessionRuntimeLayer,
+    testExtensionRegistryLayer,
+    runtimePlatformLayer,
     Provider.Debug(),
     Permission.Live([], "allow"),
     ConfigService.Test(),
+    MachineEngine.Test(),
+    SessionCwdRegistry.Test(),
+    ApprovalService.Test(),
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseRuntime)
-  const deps = Layer.mergeAll(baseRuntime, sessionRuntimeLayer, ApprovalService.Test())
-  return Layer.provideMerge(AppServicesLive, Layer.merge(deps, runtimePlatformLayer))
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  return Layer.provideMerge(AppServicesLive, Layer.merge(baseDeps, eventPublisherLayer))
 }
 
-describe("SessionCommands → SessionRuntime integration", () => {
-  const makeIntegrationLayer = (runLog: Ref.Ref<Array<{ sessionId: string; content: string }>>) => {
-    const agentLoopLayer = Layer.effect(
-      AgentLoop,
-      Effect.gen(function* () {
-        const log = yield* Effect.succeed(runLog)
-        const appendMessage = (message: Message) =>
-          Ref.update(log, (entries) => [
-            ...entries,
-            {
-              sessionId: message.sessionId,
-              content: message.parts
-                .filter((part): part is { type: "text"; text: string } => part.type === "text")
-                .map((part) => part.text)
-                .join(""),
-            },
-          ])
-
-        return {
-          submit: (message: Message) => appendMessage(message),
-          run: (message: Message) => appendMessage(message),
-          steer: () => Effect.void,
-          followUp: () => Effect.void,
-          isRunning: () => Effect.succeed(false),
-          respondInteraction: () => Effect.void,
-          watchState: () => Effect.succeed(Stream.empty),
-          getState: () =>
-            Effect.succeed({
-              _tag: "Idle" as const,
-              agent: "cowork" as const,
+describe("SessionCommands → SessionRuntime boundary", () => {
+  test("createSession then sendMessage dispatches SendUserMessage to SessionRuntime", async () => {
+    const dispatchLog = Ref.makeUnsafe<RuntimeCommand[]>([])
+    const layer = makeAppLayer(
+      Layer.succeed(SessionRuntime, {
+        dispatch: (command) => Ref.update(dispatchLog, (commands) => [...commands, command]),
+        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getState: () =>
+          Effect.succeed(
+            new SessionRuntimeStateSchema.Idle({
+              agent: "cowork",
               queue: { steering: [], followUp: [] },
             }),
-        }
+          ),
+        getMetrics: () =>
+          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        watchState: () => Effect.succeed(Stream.empty),
       }),
     )
-
-    const storageDeps = Layer.mergeAll(
-      Storage.TestWithSql(),
-      EventStore.Memory,
-      agentLoopLayer,
-      testExtensionRegistryLayer,
-      ToolRunner.Test(),
-      MachineEngine.Test(),
-      ResourceManagerLive,
-      SessionCwdRegistry.Test(),
-    )
-
-    return makeAppLayer(storageDeps)
-  }
-
-  test("createSession then sendMessage reaches AgentLoop.run", async () => {
-    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
-    const layer = makeIntegrationLayer(runLog)
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -126,70 +90,37 @@ describe("SessionCommands → SessionRuntime integration", () => {
           content: "hello from sendMessage",
         })
 
-        const entries = yield* Ref.get(runLog)
-        expect(entries.length).toBe(1)
-        expect(entries[0]!.sessionId).toBe(session.sessionId)
-        expect(entries[0]!.content).toBe("hello from sendMessage")
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("sendMessage reaches AgentLoop.run", async () => {
-    const runLog = Ref.makeUnsafe<Array<{ sessionId: string; content: string }>>([])
-    const layer = makeIntegrationLayer(runLog)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const commands = yield* SessionCommands
-        const session = yield* commands.createSession({ name: "Send Test" })
-
-        yield* commands.sendMessage({
+        const dispatched = yield* Ref.get(dispatchLog)
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]).toMatchObject({
+          _tag: "SendUserMessage",
           sessionId: session.sessionId,
           branchId: session.branchId,
           content: "hello from sendMessage",
         })
-
-        const entries = yield* Ref.get(runLog)
-        expect(entries.length).toBe(1)
-        expect(entries[0]!.sessionId).toBe(session.sessionId)
-        expect(entries[0]!.content).toBe("hello from sendMessage")
       }).pipe(Effect.provide(layer)),
     )
   })
 
-  test("steer reaches AgentLoop.steer", async () => {
-    let steered = false
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () =>
-        Effect.sync(() => {
-          steered = true
-        }),
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () =>
-        Effect.succeed({
-          _tag: "Idle" as const,
-          agent: "cowork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
-    })
-
-    const storageDeps = Layer.mergeAll(
-      Storage.TestWithSql(),
-      EventStore.Memory,
-      agentLoopLayer,
-      testExtensionRegistryLayer,
-      ToolRunner.Test(),
-      MachineEngine.Test(),
-      ResourceManagerLive,
-      SessionCwdRegistry.Test(),
+  test("steer dispatches ApplySteer to SessionRuntime", async () => {
+    const dispatchLog = Ref.makeUnsafe<RuntimeCommand[]>([])
+    const layer = makeAppLayer(
+      Layer.succeed(SessionRuntime, {
+        dispatch: (command) => Ref.update(dispatchLog, (commands) => [...commands, command]),
+        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getState: () =>
+          Effect.succeed(
+            new SessionRuntimeStateSchema.Idle({
+              agent: "cowork",
+              queue: { steering: [], followUp: [] },
+            }),
+          ),
+        getMetrics: () =>
+          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        watchState: () => Effect.succeed(Stream.empty),
+      }),
     )
-    const layer = makeAppLayer(storageDeps)
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -203,65 +134,90 @@ describe("SessionCommands → SessionRuntime integration", () => {
           agent: "deepwork",
         })
 
-        expect(steered).toBe(true)
+        const dispatched = yield* Ref.get(dispatchLog)
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]).toMatchObject({
+          _tag: "ApplySteer",
+          command: {
+            _tag: "SwitchAgent",
+            sessionId: session.sessionId,
+            branchId: session.branchId,
+            agent: "deepwork",
+          },
+        })
       }).pipe(Effect.provide(layer)),
     )
   })
 
-  test("session runtime getState delegates to the loop snapshot", async () => {
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      followUp: () => Effect.void,
-      drainQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      getQueue: () => Effect.succeed({ steering: [], followUp: [] }),
-      isRunning: () => Effect.succeed(true),
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () =>
-        Effect.succeed({
-          _tag: "Running" as const,
-          agent: "deepwork" as const,
-          queue: {
-            steering: [{ content: "steer" }],
-            followUp: [{ content: "follow-up" }],
-          },
-        }),
-    })
-
-    const storageDeps = Layer.mergeAll(
-      Storage.TestWithSql(),
-      EventStore.Memory,
-      agentLoopLayer,
-      testExtensionRegistryLayer,
-      ToolRunner.Test(),
-      MachineEngine.Test(),
-      ResourceManagerLive,
-      SessionCwdRegistry.Test(),
+  test("session snapshot reads runtime state from SessionRuntime", async () => {
+    const layer = makeAppLayer(
+      Layer.succeed(SessionRuntime, {
+        dispatch: () => Effect.void,
+        drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
+        getState: () =>
+          Effect.succeed(
+            new SessionRuntimeStateSchema.Running({
+              agent: "deepwork",
+              queue: {
+                steering: [
+                  new QueueEntryInfo({
+                    id: MessageId.of("queue-steering"),
+                    kind: "steering",
+                    content: "steer",
+                    createdAt: 0,
+                  }),
+                ],
+                followUp: [
+                  new QueueEntryInfo({
+                    id: MessageId.of("queue-follow-up"),
+                    kind: "follow-up",
+                    content: "follow-up",
+                    createdAt: 0,
+                  }),
+                ],
+              },
+            }),
+          ),
+        getMetrics: () =>
+          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        watchState: () => Effect.succeed(Stream.empty),
+      }),
     )
-    const eventPublisherLayer = Layer.provide(
-      EventPublisherLive,
-      Layer.merge(storageDeps, runtimePlatformLayer),
-    )
-    const layer = Layer.provide(SessionRuntime.Live, Layer.merge(storageDeps, eventPublisherLayer))
 
-    const result = await Effect.runPromise(
+    const snapshot = await Effect.runPromise(
       Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        return yield* sessionRuntime.getState({
-          sessionId: SessionId.of("state-session"),
-          branchId: BranchId.of("state-branch"),
+        const commands = yield* SessionCommands
+        const queries = yield* SessionQueries
+        const session = yield* commands.createSession({ name: "Snapshot Test" })
+
+        return yield* queries.getSessionSnapshot({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
         })
       }).pipe(Effect.provide(layer)),
     )
 
-    expect(result).toEqual({
+    expect(snapshot.runtime).toEqual({
       _tag: "Running",
       agent: "deepwork",
       queue: {
-        steering: [{ content: "steer" }],
-        followUp: [{ content: "follow-up" }],
+        steering: [
+          {
+            id: "queue-steering",
+            kind: "steering",
+            content: "steer",
+            createdAt: 0,
+          },
+        ],
+        followUp: [
+          {
+            id: "queue-follow-up",
+            kind: "follow-up",
+            content: "follow-up",
+            createdAt: 0,
+          },
+        ],
       },
     })
   })

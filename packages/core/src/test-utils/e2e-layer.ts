@@ -28,7 +28,6 @@ import { ApprovalService } from "../runtime/approval-service.js"
 import { MODEL_CONTEXT_WINDOWS } from "../runtime/context-estimation.js"
 import type { Provider } from "../providers/provider.js"
 import { ProviderAuth } from "../providers/provider-auth.js"
-import { AgentLoop } from "../runtime/agent/agent-loop.js"
 import { ToolRunner } from "../runtime/agent/tool-runner.js"
 import { ConfigService } from "../runtime/config-service.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -238,22 +237,11 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         Layer.merge(baseDeps, baseEventStoreLive),
       )
       const toolRunnerLive = Layer.provide(ToolRunner.Live, baseDeps)
-      const agentLoopDeps = Layer.mergeAll(baseDeps, eventPublisherLive, toolRunnerLive)
-      const agentLoopLive = Layer.provide(
-        AgentLoop.Live({
+      const sessionRuntimeLive = Layer.provide(
+        SessionRuntime.Live({
           baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
         }),
-        agentLoopDeps,
-      )
-      const sessionRuntimeLive = Layer.provide(
-        SessionRuntime.Live,
-        Layer.mergeAll(
-          baseDeps,
-          baseEventStoreLive,
-          eventPublisherLive,
-          toolRunnerLive,
-          agentLoopLive,
-        ),
+        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
       )
 
       return Layer.provideMerge(
@@ -263,7 +251,6 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           baseEventStoreLive,
           eventPublisherLive,
           toolRunnerLive,
-          agentLoopLive,
           sessionRuntimeLive,
         ),
       )

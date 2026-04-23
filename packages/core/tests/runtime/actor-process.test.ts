@@ -66,7 +66,7 @@ describe("SessionRuntime", () => {
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return Layer.provideMerge(SessionRuntime.Live, Layer.merge(deps, eventPublisherLayer))
+    return Layer.provideMerge(SessionRuntime.FromLoop, Layer.merge(deps, eventPublisherLayer))
   }
 
   test("steerAgent delegates to AgentLoop.steer", async () => {
@@ -256,7 +256,10 @@ describe("SessionRuntime", () => {
       ResourceManagerLive,
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    const layer = Layer.provideMerge(SessionRuntime.Live, Layer.merge(deps, eventPublisherLayer))
+    const layer = Layer.provideMerge(
+      SessionRuntime.FromLoop,
+      Layer.merge(deps, eventPublisherLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {

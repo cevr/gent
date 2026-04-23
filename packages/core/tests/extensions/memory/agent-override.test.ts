@@ -79,7 +79,7 @@ const makeTestLayer = (logs: {
     Permission.Live([], "allow"),
     ConfigService.Test(),
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live, baseRuntime)
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.FromLoop, baseRuntime)
   const deps = Layer.mergeAll(baseRuntime, sessionRuntimeLayer, ApprovalService.Test())
   return Layer.provideMerge(AppServicesLive, deps)
 }
