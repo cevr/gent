@@ -41,8 +41,9 @@
  *
  * @module
  */
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { ExtensionLoadError } from "../domain/extension.js"
+import { sealRuntimeLoadedEffect } from "../domain/extension-load-boundary.js"
 import type {
   GentExtension,
   ExtensionSetupContext,
@@ -326,22 +327,13 @@ const resolveField = <A>(
     // declared error channel (e.g. `Effect.fail("bad")` on `unknown` would
     // be propagated raw — loader.ts only catches defects). Codex C8 BLOCK 1.
     if (Effect.isEffect(result)) {
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS factory has erased E/R; mapError below re-seals into ExtensionLoadError, and Effect.isEffect proves the value is an Effect
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const erased = result as Effect.Effect<unknown, unknown>
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — `erased` is intentionally typed `unknown,unknown`; sealed below converts the error channel to ExtensionLoadError via mapError
-      const sealed = erased.pipe(
-        Effect.mapError((cause) =>
-          Schema.is(ExtensionLoadError)(cause)
-            ? cause
-            : new ExtensionLoadError({
-                extensionId: manifest.id,
-                message: `${field} factory failed: ${String(cause)}`,
-                cause,
-              }),
-        ),
-      )
-      const value = yield* sealed
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS bucket factory crosses the explicit load membrane here; E/R are intentionally erased and re-sealed to ExtensionLoadError
+      const value = yield* sealRuntimeLoadedEffect({
+        extensionId: manifest.id,
+        effect: () => result,
+        failureMessage: (cause) => `${field} factory failed: ${String(cause)}`,
+        defectMessage: (cause) => `${field} factory defect: ${String(cause)}`,
+      })
       if (!Array.isArray(value)) {
         return yield* new ExtensionLoadError({
           extensionId: manifest.id,

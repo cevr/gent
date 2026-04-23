@@ -20,6 +20,23 @@ import {
   type ResolvedTuiExtensions,
 } from "./resolve"
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TUI runtime membrane: discovered modules may require any subset of the provider runtime's services
+type AnyClientRuntime = ManagedRuntime.ManagedRuntime<any, never>
+
+type AnyExtensionClientModule = ExtensionClientModule<unknown, unknown>
+
+const getClientModuleError = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null) return "module must export an object"
+  const id = Reflect.get(value, "id")
+  if (typeof id !== "string") return "missing id"
+  const setup = Reflect.get(value, "setup")
+  if (!Effect.isEffect(setup)) return "setup must be an Effect value"
+  return undefined
+}
+
+const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
+  getClientModuleError(value) === undefined
+
 /**
  * Run an extension's Effect-typed setup against the per-provider runtime.
  * The runtime carries every TUI service the setup may yield (FileSystem,
@@ -27,23 +44,20 @@ import {
  * `runtime.runPromise` enforces dependency satisfaction dynamically.
  */
 const invokeSetup = async (
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ext: ExtensionClientModule<unknown, any>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runtime: ManagedRuntime.ManagedRuntime<any, never>,
-): Promise<ReadonlyArray<ClientContribution>> => {
-  // The module's R is asserted at this boundary because the type system
-  // can't prove runtime-vs-module union compatibility across discovery +
-  // cast; runtime.runPromise enforces it dynamically.
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS module: E and R erased; runtime.runPromise enforces dependency satisfaction
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const erased = ext.setup as Effect.Effect<ReadonlyArray<ClientContribution>, unknown, unknown>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — same erasure as above; runPromise dynamically enforces all required services exist on the runtime
-  return runtime.runPromise(erased)
-}
+  ext: AnyExtensionClientModule,
+  runtime: AnyClientRuntime,
+): Promise<ReadonlyArray<ClientContribution>> => runtime.runPromise(ext.setup)
+
+const discoverExtensionsWithRuntime = (
+  runtime: ManagedRuntime.ManagedRuntime<FileSystem.FileSystem | Path.Path, never>,
+  params: { userDir: string; projectDir: string },
+): Promise<ReadonlyArray<DiscoveredTuiExtension>> =>
+  runtime.runPromise(
+    discoverTuiExtensions({ userDir: params.userDir, projectDir: params.projectDir }),
+  )
 
 interface ImportedExtension {
-  readonly module: ExtensionClientModule
+  readonly module: AnyExtensionClientModule
   readonly kind: DiscoveredTuiExtension["kind"]
   readonly filePath: string
 }
@@ -54,19 +68,15 @@ const importExtension = async (
 ): Promise<ImportedExtension | undefined> => {
   try {
     const mod = await import(entry.filePath)
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const clientModule = (mod.default ?? mod) as ExtensionClientModule
+    const candidate = mod.default ?? mod
 
-    if (typeof clientModule.id !== "string") {
-      console.log(`[tui-ext] Skipping ${entry.filePath}: missing id`)
-      return undefined
-    }
-    if (!Effect.isEffect(clientModule.setup)) {
-      console.log(`[tui-ext] Skipping ${entry.filePath}: setup must be an Effect value`)
+    const error = getClientModuleError(candidate)
+    if (error !== undefined || !isExtensionClientModule(candidate)) {
+      console.log(`[tui-ext] Skipping ${entry.filePath}: ${error ?? "invalid module shape"}`)
       return undefined
     }
 
-    return { module: clientModule, kind: entry.kind, filePath: entry.filePath }
+    return { module: candidate, kind: entry.kind, filePath: entry.filePath }
   } catch (err) {
     console.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`)
     return undefined
@@ -85,8 +95,7 @@ const importExtension = async (
  * `FileSystem | Path | <other services>` works.
  */
 export const loadTuiExtensions = async (opts: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly builtins?: ReadonlyArray<ExtensionClientModule<unknown, any>>
+  readonly builtins?: ReadonlyArray<AnyExtensionClientModule>
   readonly userDir: string
   readonly projectDir: string
   readonly disabled?: ReadonlyArray<string>
@@ -100,9 +109,10 @@ export const loadTuiExtensions = async (opts: {
   // Discovery runs through the runtime so `FileSystem`/`Path` come from the
   // same Layer that powers Effect-typed extension setups. This is the only
   // place outside `invokeSetup` that crosses the runtime boundary.
-  const discovered = await opts.runtime.runPromise(
-    discoverTuiExtensions({ userDir: opts.userDir, projectDir: opts.projectDir }),
-  )
+  const discovered = await discoverExtensionsWithRuntime(opts.runtime, {
+    userDir: opts.userDir,
+    projectDir: opts.projectDir,
+  })
 
   // Import user/project modules, then filter by disabled before calling setup()
   const imported = await Promise.all(discovered.map((entry) => importExtension(entry)))

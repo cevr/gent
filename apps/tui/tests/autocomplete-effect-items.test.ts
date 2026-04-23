@@ -13,7 +13,8 @@
  * normalizes to `[]`.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, ManagedRuntime } from "effect"
+import { Effect, ManagedRuntime, Schema } from "effect"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol.js"
 import {
   type AutocompleteContribution,
   type AutocompleteItem,
@@ -28,6 +29,13 @@ import {
 } from "../src/extensions/client-transport"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
+
+const ListThings = ExtensionMessage.reply(
+  "@test/autocomplete",
+  "ListThings",
+  {},
+  Schema.Array(Schema.String),
+)
 
 /** Mirror of the `runItems` adapter in `autocomplete-popup.tsx:51`. */
 const runItems = async <R>(
@@ -49,7 +57,7 @@ const makeFakeTransport = (
     readonly askReply?: unknown
   } = {},
 ): ClientTransportShape => {
-  const ask = async () => opts.askReply ?? []
+  const ask = () => Effect.succeed(opts.askReply ?? [])
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   const fakeClient = {
     extension: { ask },
@@ -99,9 +107,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
     const layer = makeClientTransportLayer(transport)
     const runtime = ManagedRuntime.make(layer)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fakeMessage = { _tag: "ListThings" } as any
-    const exit = await runtime.runPromiseExit(askExtension(fakeMessage))
+    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
       // The cause should carry the typed NoActiveSessionError.
@@ -124,9 +130,7 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
       title: "Test",
       items: (_filter: string) =>
         Effect.gen(function* () {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const fakeMessage = { _tag: "ListThings" } as any
-          const reply = yield* askExtension(fakeMessage)
+          const reply = yield* askExtension(ListThings())
           return [{ id: "x", label: String(reply) }] as const
         }),
     })
@@ -141,6 +145,34 @@ describe("autocomplete Effect items() through ClientTransport (C9.2)", () => {
   test("NoActiveSessionError is a Schema.TaggedError instance", () => {
     const err = new NoActiveSessionError()
     expect(err._tag).toBe("NoActiveSessionError")
+  })
+
+  test("askExtension seals transport failures to ClientTransportRequestError", async () => {
+    const transport = makeFakeTransport()
+    transport.client.extension.ask = () => Effect.fail(new Error("transport boom"))
+    const runtime = ManagedRuntime.make(makeClientTransportLayer(transport))
+
+    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const causeStr = JSON.stringify(exit.cause)
+      expect(causeStr).toContain("ClientTransportRequestError")
+      expect(causeStr).toContain("transport boom")
+    }
+    await runtime.dispose()
+  })
+
+  test("askExtension seals decode failures to ClientTransportReplyDecodeError", async () => {
+    const transport = makeFakeTransport({ askReply: { nope: true } })
+    const runtime = ManagedRuntime.make(makeClientTransportLayer(transport))
+
+    const exit = await runtime.runPromiseExit(askExtension(ListThings()))
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") {
+      const causeStr = JSON.stringify(exit.cause)
+      expect(causeStr).toContain("ClientTransportReplyDecodeError")
+    }
+    await runtime.dispose()
   })
 
   test("makeClientTransportLayer constructs a Layer that provides ClientTransport", async () => {

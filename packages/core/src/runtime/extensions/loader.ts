@@ -4,6 +4,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import type { ExtensionKind, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
+import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 /** Static prompt sections live on `Capability.prompt` (folded by the
@@ -91,8 +92,8 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
     const candidates: GentExtension[] = []
     const seen = new Set<unknown>()
 
-    if (mod.default !== undefined) {
-      const resolved = resolveToGentExtension(mod.default)
+    if (mod["default"] !== undefined) {
+      const resolved = resolveToGentExtension(mod["default"])
       if (resolved !== undefined && !seen.has(resolved)) {
         seen.add(resolved)
         candidates.push(resolved)
@@ -236,26 +237,20 @@ export const setupExtension = (
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const spawner = yield* ChildProcessSpawner
-    const contributions: ExtensionContributions = yield* extension
-      .setup({
-        cwd,
-        source: sourcePath,
-        home,
-        fs,
-        path,
-        spawner,
-      })
-      .pipe(
-        Effect.catchDefect((defect) =>
-          Effect.fail(
-            new ExtensionLoadError({
-              extensionId: extension.manifest.id,
-              message: `Extension setup threw: ${String(defect)}`,
-              cause: defect,
-            }),
-          ),
-        ),
-      )
+    const contributions: ExtensionContributions = yield* sealRuntimeLoadedEffect({
+      extensionId: extension.manifest.id,
+      effect: () =>
+        extension.setup({
+          cwd,
+          source: sourcePath,
+          home,
+          fs,
+          path,
+          spawner,
+        }),
+      failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
+      defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
+    })
 
     return {
       manifest: extension.manifest,

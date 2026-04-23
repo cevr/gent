@@ -16,7 +16,6 @@ export default defineClientExtension("@gent/skills-ui", {
       title: "Skills",
       items: (filter: string) =>
         Effect.gen(function* () {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — askExtension returns `any` E to keep autocomplete-items ergonomic; the popup adapter normalizes failures to []
           const skills = yield* askExtension(SkillsProtocol.ListSkills())
           const lowerFilter = filter.toLowerCase()
           return skills

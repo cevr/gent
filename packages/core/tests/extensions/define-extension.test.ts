@@ -14,7 +14,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { defineExtension, defineResource, tool } from "@gent/core/extensions/api"
 import { buildResourceLayer } from "@gent/core/runtime/extensions/resource-host"
 import { PermissionRule } from "@gent/core/domain/permission"
-import { ExtensionLoadError, type ExtensionSetupContext } from "@gent/core/domain/extension"
+import type { ExtensionSetupContext } from "@gent/core/domain/extension"
 import { resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
@@ -259,11 +259,15 @@ describe("defineExtension", () => {
     Effect.gen(function* () {
       const ext = defineExtension({
         id: "boom",
-        capabilities: () =>
-          Effect.fail(new ExtensionLoadError({ extensionId: "boom", message: "nope" })),
+        capabilities: () => Effect.fail("nope"),
       })
       const exit = yield* Effect.exit(setupOf(ext))
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = JSON.stringify(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain("capabilities factory failed: nope")
+      }
     }),
   )
 })

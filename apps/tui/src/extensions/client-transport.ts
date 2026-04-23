@@ -82,26 +82,75 @@ export class NoActiveSessionError extends Schema.TaggedErrorClass<NoActiveSessio
   {},
 ) {}
 
+export class ClientTransportRequestError extends Schema.TaggedErrorClass<ClientTransportRequestError>()(
+  "ClientTransportRequestError",
+  {
+    extensionId: Schema.String,
+    tag: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
+
+export class ClientTransportReplyDecodeError extends Schema.TaggedErrorClass<ClientTransportReplyDecodeError>()(
+  "ClientTransportReplyDecodeError",
+  {
+    extensionId: Schema.String,
+    tag: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
+
 export const askExtension = <M extends AnyExtensionRequestMessage>(
   message: M,
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — typed E channel would need to enumerate every server error union; askExtension stays any-typed for ergonomic use inside autocomplete items, where the popup adapter normalizes failures to []
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Effect.Effect<ExtractExtensionReply<M>, any, ClientTransport> =>
+): Effect.Effect<
+  ExtractExtensionReply<M>,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  ClientTransport
+> =>
   Effect.gen(function* () {
     const transport = yield* ClientTransport
     const session = transport.currentSession()
     if (session === undefined) {
       return yield* new NoActiveSessionError()
     }
-    const reply = yield* transport.client.extension.ask({
-      sessionId: session.sessionId,
-      message,
-      branchId: session.branchId,
-    })
+    const reply = yield* transport.client.extension
+      .ask({
+        sessionId: session.sessionId,
+        message,
+        branchId: session.branchId,
+      })
+      .pipe(
+        Effect.catchEager((cause) =>
+          Effect.fail(
+            new ClientTransportRequestError({
+              extensionId: message.extensionId,
+              tag: message._tag,
+              message: `request failed: ${String(cause)}`,
+              cause,
+            }),
+          ),
+        ),
+      )
     const decoder = getExtensionReplyDecoder(message)
     if (decoder === undefined) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return reply as ExtractExtensionReply<M>
+      return yield* new ClientTransportReplyDecodeError({
+        extensionId: message.extensionId,
+        tag: message._tag,
+        message: "missing reply decoder for request message",
+        cause: message,
+      })
     }
-    return yield* Schema.decodeUnknownEffect(decoder)(reply)
+    return yield* Schema.decodeUnknownEffect(decoder)(reply).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ClientTransportReplyDecodeError({
+            extensionId: message.extensionId,
+            tag: message._tag,
+            message: `reply decode failed: ${String(cause)}`,
+            cause,
+          }),
+      ),
+    )
   })
