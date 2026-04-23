@@ -6,7 +6,7 @@ import { Storage } from "@gent/core/storage/sqlite-storage"
 import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
 
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { messageToInfo } from "@gent/core/server/session-utils"
 
 describe("Storage", () => {
@@ -589,7 +589,7 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.Test())),
     )
 
-    it.live("invalid stored metadata decodes to undefined instead of crashing", () =>
+    it.live("invalid stored metadata decodes to undefined across read surfaces", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
@@ -606,6 +606,14 @@ describe("Storage", () => {
         const messages = yield* storage.listMessages("bad-meta-b")
         expect(messages).toHaveLength(1)
         expect(messages[0]!.metadata).toBeUndefined()
+
+        const message = yield* storage.getMessage(MessageId.of("bad-meta-msg"))
+        expect(message?.metadata).toBeUndefined()
+
+        const detail = yield* storage.getSessionDetail(SessionId.of("bad-meta-s"))
+        expect(detail.branches).toHaveLength(1)
+        expect(detail.branches[0]!.messages).toHaveLength(1)
+        expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
