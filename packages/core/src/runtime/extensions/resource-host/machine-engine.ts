@@ -34,6 +34,7 @@ import { CurrentExtensionSession } from "../extension-actor-shared.js"
 import { ExtensionTurnControl } from "../turn-control.js"
 import { makeMachineLifecycle } from "./machine-lifecycle.js"
 import { makeSessionMailbox } from "./machine-mailbox.js"
+import { CurrentMachinePublishListener } from "./machine-publish-listener.js"
 import { collectMachineProtocol, extractMachine, protocolError } from "./machine-protocol.js"
 
 export interface MachineEngineService {
@@ -98,6 +99,13 @@ export const makeMachineEngine = (
       )
     const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
       effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
+    const notifyPublishListener = (transitioned: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        if (transitioned.length === 0) return
+        const listener = yield* CurrentMachinePublishListener
+        if (listener === undefined) return
+        yield* listener(transitioned)
+      })
 
     const publishImmediate = (event: AgentEvent, ctx: ExtensionReduceContext) =>
       Effect.gen(function* () {
@@ -215,7 +223,9 @@ export const makeMachineEngine = (
           attributes: { "extension.event": event._tag },
         })(
           Effect.gen(function* () {
-            const effect = withSession(ctx.sessionId, publishImmediate(event, ctx))
+            const effect = withSession(ctx.sessionId, publishImmediate(event, ctx)).pipe(
+              Effect.tap(notifyPublishListener),
+            )
             if (yield* mailbox.isWorkerFiber(ctx.sessionId)) {
               yield* mailbox.post(ctx.sessionId, effect.pipe(Effect.asVoid))
               return [] as ReadonlyArray<string>

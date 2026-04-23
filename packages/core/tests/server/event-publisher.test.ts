@@ -11,6 +11,7 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
 import { SessionProfileCache, type SessionProfile } from "@gent/core/runtime/session-profile"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { CurrentMachinePublishListener } from "@gent/core/runtime/extensions/resource-host/machine-publish-listener"
 
 const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" })
@@ -243,6 +244,70 @@ describe("EventPublisher", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(delivered).toEqual(["OuterEvent", "BusNestedEvent"])
+  })
+
+  test("nested publish still emits ExtensionStateChanged pulses when transitions are async", async () => {
+    const persisted: string[] = []
+    const nestedPulse = Effect.runSync(Deferred.make<void>())
+    let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
+
+    const baseLayer = Layer.succeed(EventStore, {
+      publish: (event: AgentEvent) =>
+        Effect.sync(() => {
+          persisted.push(event._tag)
+          if (event._tag === "ExtensionStateChanged" && persisted.includes("NestedEvent")) {
+            Effect.runSync(Deferred.succeed(nestedPulse, void 0).pipe(Effect.ignore))
+          }
+        }),
+      subscribe: () => Effect.void as never,
+      removeSession: () => Effect.void,
+    })
+
+    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
+      publish: (event) =>
+        Effect.gen(function* () {
+          const listener = yield* CurrentMachinePublishListener
+          if (event._tag === "OuterEvent") {
+            yield* listener?.(["outer-ext"]) ?? Effect.void
+            if (publishFn !== undefined) {
+              yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
+                Effect.provideService(CurrentExtensionSession, {
+                  sessionId: SessionId.of("session-1"),
+                }),
+              )
+            }
+            return [] as ReadonlyArray<string>
+          }
+          if (event._tag === "NestedEvent") {
+            yield* listener?.(["nested-ext"]) ?? Effect.void
+            return [] as ReadonlyArray<string>
+          }
+          return [] as ReadonlyArray<string>
+        }),
+      send: () => Effect.void,
+      execute: () => Effect.die("not implemented"),
+      getActorStatuses: () => Effect.succeed([]),
+      terminateAll: () => Effect.void,
+    })
+
+    const layer = Layer.provide(
+      EventPublisherLive,
+      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
+    )
+
+    await Effect.gen(function* () {
+      const publisher = yield* EventPublisher
+      publishFn = publisher.publish
+      yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+      yield* Deferred.await(nestedPulse)
+    }).pipe(Effect.provide(layer), Effect.runPromise)
+
+    expect(persisted).toEqual([
+      "OuterEvent",
+      "ExtensionStateChanged",
+      "NestedEvent",
+      "ExtensionStateChanged",
+    ])
   })
 })
 

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
-import { EventStore, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
+import { EventStore, SessionStarted, StreamStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -358,6 +358,142 @@ describe("extension concurrency", () => {
           yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
           expect(observerEvents).toEqual(["SessionStarted", "TurnCompleted"])
         }).pipe(Effect.provide(layer))
+      }),
+    )
+
+    it.live("nested publish outruns already-queued same-session work", () =>
+      Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>()
+        const releaseFirst = yield* Deferred.make<void>()
+        const secondCompleted = yield* Deferred.make<void>()
+        const observed: string[] = []
+        let runtimeRef: MachineEngineService | undefined
+
+        const extensions = [
+          {
+            manifest: { id: "queued-ordering-publisher", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  subscriptions: [
+                    {
+                      pattern: "nested:publish:queued",
+                      handler: (envelope) =>
+                        Effect.gen(function* () {
+                          if (
+                            runtimeRef === undefined ||
+                            envelope.sessionId === undefined ||
+                            envelope.branchId === undefined
+                          ) {
+                            return yield* Effect.die("queued nested publish test runtime missing")
+                          }
+                          yield* Deferred.succeed(firstEntered, void 0)
+                          yield* Deferred.await(releaseFirst)
+                          yield* runtimeRef.publish(
+                            new TurnCompleted({
+                              sessionId: envelope.sessionId,
+                              branchId: envelope.branchId,
+                              durationMs: 1,
+                            }),
+                            { sessionId: envelope.sessionId, branchId: envelope.branchId },
+                          )
+                        }),
+                    },
+                  ],
+                  machine: reducerActor({
+                    id: "queued-ordering-publisher",
+                    initial: { started: false },
+                    reduce: (state, event) =>
+                      event._tag === "SessionStarted" && !state.started
+                        ? { state: { started: true } }
+                        : { state },
+                    afterTransition: (before, after) =>
+                      !before.started && after.started
+                        ? [
+                            {
+                              _tag: "BusEmit",
+                              channel: "nested:publish:queued",
+                              payload: undefined,
+                            },
+                          ]
+                        : [],
+                  }),
+                }),
+              ],
+            },
+          },
+          {
+            manifest: { id: "queued-ordering-observer", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: reducerActor({
+                    id: "queued-ordering-observer",
+                    initial: { seen: [] as string[] },
+                    reduce: (state, event) => {
+                      const nextSeen = [...state.seen, event._tag]
+                      observed.push(event._tag)
+                      if (observed.length === 3) {
+                        Effect.runSync(
+                          Deferred.succeed(secondCompleted, void 0).pipe(Effect.ignore),
+                        )
+                      }
+                      if (
+                        event._tag === "SessionStarted" &&
+                        !state.seen.includes("SessionStarted")
+                      ) {
+                        return { state: { seen: nextSeen } }
+                      }
+                      if (event._tag === "TurnCompleted" || event._tag === "StreamStarted") {
+                        return { state: { seen: nextSeen } }
+                      }
+                      return { state }
+                    },
+                  }),
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* MachineEngine
+            runtimeRef = runtime
+
+            const first = yield* Effect.forkScoped(
+              runtime
+                .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+                .pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Deferred.await(firstEntered).pipe(Effect.timeout("1 second"))
+
+            const second = yield* Effect.forkScoped(
+              runtime
+                .publish(new StreamStarted({ sessionId, branchId }), { sessionId, branchId })
+                .pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Deferred.succeed(releaseFirst, void 0)
+            yield* Deferred.await(secondCompleted).pipe(Effect.timeout("1 second"))
+
+            yield* Fiber.join(first)
+            yield* Fiber.join(second)
+
+            expect(observed).toEqual(["SessionStarted", "TurnCompleted", "StreamStarted"])
+          }).pipe(Effect.provide(layer)),
+        )
       }),
     )
 
