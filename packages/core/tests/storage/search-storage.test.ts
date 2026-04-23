@@ -101,6 +101,42 @@ describe("searchMessages", () => {
       expect(results.every((r) => r.createdAt > Date.now() - 86400000)).toBe(true)
     }))
 
+  test("filters by sessionId", () =>
+    Effect.gen(function* () {
+      const first = yield* createFixture({ sessionName: "first" })
+      const second = yield* createFixture({ sessionName: "second" })
+
+      yield* addMessage(first.sessionId, first.branchId, "user", "shared-session-filter-term")
+      yield* addMessage(second.sessionId, second.branchId, "user", "shared-session-filter-term")
+
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("shared-session-filter-term", {
+        sessionId: first.sessionId,
+      })
+
+      expect(results.length).toBeGreaterThan(0)
+      expect(results.every((result) => result.sessionId === first.sessionId)).toBe(true)
+    }))
+
+  test("filters by dateBefore (older messages only)", () =>
+    Effect.gen(function* () {
+      const { sessionId, branchId } = yield* createFixture()
+      const oldDate = new Date(Date.now() - 86400000 * 30)
+      const recentDate = new Date()
+
+      yield* addMessage(sessionId, branchId, "user", "datebefore searchterm alpha", oldDate)
+      yield* addMessage(sessionId, branchId, "user", "datebefore searchterm beta", recentDate)
+
+      const cutoff = Date.now() - 86400000
+      const searchStore = yield* SearchStorage
+      const results = yield* searchStore.searchMessages("datebefore searchterm", {
+        dateBefore: cutoff,
+      })
+
+      expect(results.length).toBeGreaterThan(0)
+      expect(results.every((result) => result.createdAt < cutoff)).toBe(true)
+    }))
+
   test("respects limit parameter", () =>
     Effect.gen(function* () {
       const { sessionId, branchId } = yield* createFixture()

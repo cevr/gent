@@ -19,6 +19,20 @@ export const sanitizeFts5Query = (raw: string): string => {
     .join(" ")
 }
 
+const buildSearchFilters = (
+  sql: SqlClient.SqlClient,
+  options?: {
+    sessionId?: string
+    dateAfter?: number
+    dateBefore?: number
+  },
+) =>
+  sql.and([
+    ...(options?.sessionId !== undefined ? [sql`m.session_id = ${options.sessionId}`] : []),
+    ...(options?.dateAfter !== undefined ? [sql`m.created_at > ${options.dateAfter}`] : []),
+    ...(options?.dateBefore !== undefined ? [sql`m.created_at < ${options.dateBefore}`] : []),
+  ])
+
 export interface SearchResult {
   readonly sessionId: string
   readonly sessionName: string | null
@@ -51,33 +65,30 @@ export class SearchStorage extends Context.Service<SearchStorage, SearchStorageS
         searchMessages: Effect.fn("SearchStorage.searchMessages")(
           function* (query, options) {
             const limit = options?.limit ?? 20
-            const sessionFilter = options?.sessionId
-            const dateAfter = options?.dateAfter
-            const dateBefore = options?.dateBefore
 
             const ftsQuery = sanitizeFts5Query(query)
             if (ftsQuery.length === 0) return []
+            const filters = buildSearchFilters(sql, options)
 
-            let whereExtra = ""
-            if (sessionFilter !== undefined) {
-              whereExtra += ` AND m.session_id = '${sessionFilter.replace(/'/g, "''")}'`
-            }
-            if (dateAfter !== undefined) {
-              whereExtra += ` AND m.created_at > ${dateAfter}`
-            }
-            if (dateBefore !== undefined) {
-              whereExtra += ` AND m.created_at < ${dateBefore}`
-            }
-
-            const rows = yield* sql.unsafe<{
+            const rows = yield* sql<{
               session_id: string
               session_name: string | null
               branch_id: string
               snippet_text: string
               created_at: number
-            }>(
-              `SELECT m.session_id, s.name as session_name, m.branch_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text, m.created_at FROM messages_fts fts JOIN messages m ON m.id = fts.message_id JOIN sessions s ON s.id = m.session_id WHERE messages_fts MATCH '${ftsQuery.replace(/'/g, "''")}'${whereExtra} ORDER BY m.created_at DESC LIMIT ${limit}`,
-            )
+            }>`SELECT
+                m.session_id,
+                s.name as session_name,
+                m.branch_id,
+                snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet_text,
+                m.created_at
+              FROM messages_fts fts
+              JOIN messages m ON m.id = fts.message_id
+              JOIN sessions s ON s.id = m.session_id
+              WHERE messages_fts MATCH ${ftsQuery}
+                AND ${filters}
+              ORDER BY m.created_at DESC
+              LIMIT ${limit}`
 
             return rows.map((row) => ({
               sessionId: row.session_id,
