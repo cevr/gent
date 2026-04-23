@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { SqlClient } from "effect/unstable/sql"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { TaskStorage, TaskStorageReadOnly } from "@gent/extensions/task-tools-storage"
 import { Session, Branch } from "@gent/core/domain/message"
@@ -158,6 +159,29 @@ describe("Task Dependencies", () => {
       // After deleting t2, its dep entries should also be gone
       const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
       expect(deps.length).toBe(0)
+    }))
+
+  test("deleteTask rolls back dependency deletion when task delete fails", () =>
+    Effect.gen(function* () {
+      const { storage } = yield* setup
+      const sql = yield* SqlClient.SqlClient
+      yield* storage.createTask(makeTask("t1"))
+      yield* storage.createTask(makeTask("t2"))
+      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      yield* sql.unsafe(`
+        CREATE TRIGGER fail_task_delete
+        BEFORE DELETE ON tasks
+        WHEN old.id = 't1'
+        BEGIN
+          SELECT RAISE(ABORT, 'forced task delete failure');
+        END
+      `)
+
+      const error = yield* Effect.flip(storage.deleteTask(TaskId.of("t1")))
+
+      expect(error._tag).toBe("TaskStorageError")
+      expect(yield* storage.getTask(TaskId.of("t1"))).toBeDefined()
+      expect(yield* storage.getTaskDeps(TaskId.of("t2"))).toEqual(["t1"])
     }))
 
   test("duplicate dep is idempotent", () =>

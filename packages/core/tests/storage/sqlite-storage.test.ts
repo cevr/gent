@@ -542,6 +542,106 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.Test())),
     )
 
+    it.live("rolls back message insert when session timestamp update fails", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const start = new Date(0)
+        const messageTime = new Date(1000)
+
+        yield* storage.createSession(
+          new Session({
+            id: "tx-message-session",
+            createdAt: start,
+            updatedAt: start,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "tx-message-branch",
+            sessionId: "tx-message-session",
+            createdAt: start,
+          }),
+        )
+        yield* sql.unsafe(`
+          CREATE TRIGGER tx_fail_session_update
+          BEFORE UPDATE ON sessions
+          WHEN old.id = 'tx-message-session'
+          BEGIN
+            SELECT RAISE(ABORT, 'forced session update failure');
+          END
+        `)
+
+        const error = yield* Effect.flip(
+          storage.createMessage(
+            new Message({
+              id: "tx-message",
+              sessionId: "tx-message-session",
+              branchId: "tx-message-branch",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "rollback" })],
+              createdAt: messageTime,
+            }),
+          ),
+        )
+
+        expect(error._tag).toBe("StorageError")
+        expect(yield* storage.getMessage("tx-message")).toBeUndefined()
+        const session = yield* storage.getSession("tx-message-session")
+        expect(session?.updatedAt.getTime()).toBe(start.getTime())
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("createMessageIfAbsent leaves session timestamp unchanged when insert is ignored", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const start = new Date(0)
+        const firstTime = new Date(1000)
+        const duplicateTime = new Date(2000)
+
+        yield* storage.createSession(
+          new Session({
+            id: "if-absent-session",
+            createdAt: start,
+            updatedAt: start,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "if-absent-branch",
+            sessionId: "if-absent-session",
+            createdAt: start,
+          }),
+        )
+
+        yield* storage.createMessageIfAbsent(
+          new Message({
+            id: "if-absent-message",
+            sessionId: "if-absent-session",
+            branchId: "if-absent-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "first" })],
+            createdAt: firstTime,
+          }),
+        )
+        yield* storage.createMessageIfAbsent(
+          new Message({
+            id: "if-absent-message",
+            sessionId: "if-absent-session",
+            branchId: "if-absent-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "duplicate" })],
+            createdAt: duplicateTime,
+          }),
+        )
+
+        const session = yield* storage.getSession("if-absent-session")
+        expect(session?.updatedAt.getTime()).toBe(firstTime.getTime())
+        const message = yield* storage.getMessage("if-absent-message")
+        expect(message?.parts).toEqual([new TextPart({ type: "text", text: "first" })])
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
     it.live("orders messages by createdAt then id", () =>
       Effect.gen(function* () {
         const storage = yield* Storage

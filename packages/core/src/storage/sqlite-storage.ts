@@ -623,8 +623,12 @@ const makeStorage = Effect.gen(function* () {
     createMessage: Effect.fn("Storage.createMessage")(
       function* (message) {
         const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
-        yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
-        yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+          }),
+        )
         return message
       },
       Effect.mapError(mapError("Failed to create message")),
@@ -633,8 +637,17 @@ const makeStorage = Effect.gen(function* () {
     createMessageIfAbsent: Effect.fn("Storage.createMessageIfAbsent")(
       function* (message) {
         const { partsJson, metadataJson } = yield* encodeStoredMessage(message)
-        yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
-        yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${partsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            const rows = yield* sql<{
+              changed: number
+            }>`SELECT changes() as changed`
+            if ((rows[0]?.changed ?? 0) > 0) {
+              yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
+            }
+          }),
+        )
         return message
       },
       Effect.mapError(mapError("Failed to create message if absent")),
@@ -662,18 +675,22 @@ const makeStorage = Effect.gen(function* () {
 
     deleteMessages: Effect.fn("Storage.deleteMessages")(
       function* (branchId, afterMessageId) {
-        if (afterMessageId !== undefined) {
-          const msgs = yield* sql<{
-            id: string
-            created_at: number
-          }>`SELECT id, created_at FROM messages WHERE id = ${afterMessageId}`
-          const msg = msgs[0]
-          if (msg !== undefined) {
-            yield* sql`DELETE FROM messages WHERE branch_id = ${branchId} AND (created_at > ${msg.created_at} OR (created_at = ${msg.created_at} AND id > ${msg.id}))`
-          }
-        } else {
-          yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
-        }
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            if (afterMessageId !== undefined) {
+              const msgs = yield* sql<{
+                id: string
+                created_at: number
+              }>`SELECT id, created_at FROM messages WHERE id = ${afterMessageId}`
+              const msg = msgs[0]
+              if (msg !== undefined) {
+                yield* sql`DELETE FROM messages WHERE branch_id = ${branchId} AND (created_at > ${msg.created_at} OR (created_at = ${msg.created_at} AND id > ${msg.id}))`
+              }
+            } else {
+              yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
+            }
+          }),
+        )
       },
       Effect.mapError(mapError("Failed to delete messages")),
     ),
@@ -696,9 +713,13 @@ const makeStorage = Effect.gen(function* () {
         const createdAt = yield* Clock.currentTimeMillis
         const traceId = options?.traceId
         const eventJson = yield* encodeEvent(event)
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at, trace_id) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt}, ${traceId ?? null})`
-        const rows = yield* sql<{ id: number }>`SELECT last_insert_rowid() as id`
-        const id = rows[0]?.id ?? 0
+        const id = yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at, trace_id) VALUES (${sessionId}, ${branchId ?? null}, ${event._tag}, ${eventJson}, ${createdAt}, ${traceId ?? null})`
+            const rows = yield* sql<{ id: number }>`SELECT last_insert_rowid() as id`
+            return rows[0]?.id ?? 0
+          }),
+        )
         return new EventEnvelope({
           id: EventId.of(id),
           event,
@@ -708,7 +729,6 @@ const makeStorage = Effect.gen(function* () {
       },
       Effect.mapError(mapError("Failed to append event")),
     ),
-
     listEvents: Effect.fn("Storage.listEvents")(
       function* ({ sessionId, branchId, afterId }) {
         const sinceId = afterId ?? 0

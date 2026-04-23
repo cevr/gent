@@ -241,8 +241,12 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
                 : yield* encodeTaskMetadata(fields.metadata)
           }
 
-          yield* sql`UPDATE tasks SET ${sql.update(updates)} WHERE id = ${id}`
-          return yield* selectTaskById(sql, id)
+          return yield* sql.withTransaction(
+            Effect.gen(function* () {
+              yield* sql`UPDATE tasks SET ${sql.update(updates)} WHERE id = ${id}`
+              return yield* selectTaskById(sql, id)
+            }),
+          )
         },
         Effect.mapError(mapError("Failed to update task")),
       ),
