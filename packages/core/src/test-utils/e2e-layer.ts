@@ -38,6 +38,7 @@ import { MachineEngine } from "../runtime/extensions/resource-host/machine-engin
 import { ExtensionTurnControl } from "../runtime/extensions/turn-control.js"
 import { ModelRegistry } from "../runtime/model-registry.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
+import type { SessionProfileCache } from "../runtime/session-profile.js"
 import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
@@ -64,6 +65,8 @@ export interface E2ELayerConfig {
   readonly subagentRunner?: AgentRunner
   /** Approval service override. Default auto-approves for legacy E2E tests. */
   readonly approvalLayer?: Layer.Layer<ApprovalService, never, EventPublisher>
+  /** Optional per-cwd profile cache for shared-server routing tests. */
+  readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** Per-extension layer overrides (e.g., memory vault test layer) */
@@ -229,6 +232,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         // Test variant — there is no SessionProfileCache wired here, so
         // the eventual router will fall back to its primary-cwd path.
         SessionCwdRegistry.Test(),
+        ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
         ...extensionLayers,
         ...(config.extraLayers ?? []),
       )

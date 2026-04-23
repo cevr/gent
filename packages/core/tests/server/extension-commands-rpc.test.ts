@@ -1,8 +1,12 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type { GentExtension, LoadedExtension } from "../../src/domain/extension.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import { ExtensionRegistry, listSlashCommands } from "@gent/core/runtime/extensions/registry"
+import {
+  ExtensionRegistry,
+  listSlashCommands,
+  resolveExtensions,
+} from "@gent/core/runtime/extensions/registry"
 import { setupExtension } from "@gent/core/runtime/extensions/loader"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
@@ -11,6 +15,9 @@ import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
 import { CommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { SessionProfileCache, type SessionProfile } from "@gent/core/runtime/session-profile"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []
@@ -60,6 +67,58 @@ describe("extension command RPCs", () => {
     ),
     BunServices.layer,
   )
+
+  const allowAllPermission = {
+    check: () => Effect.succeed("allowed" as const),
+    addRule: () => Effect.void,
+    removeRule: () => Effect.void,
+    getRules: () => Effect.succeed([]),
+  }
+
+  const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const resolved = resolveExtensions(extensions)
+        const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+        const driverRegistryContext = yield* Layer.build(
+          DriverRegistry.fromResolved({
+            modelDrivers: resolved.modelDrivers,
+            externalDrivers: resolved.externalDrivers,
+          }),
+        )
+        const machineContext = yield* Layer.build(MachineEngine.Test())
+        return {
+          cwd,
+          extensions,
+          resolved,
+          permissionService: allowAllPermission,
+          registryService: Context.get(registryContext, ExtensionRegistry),
+          driverRegistryService: Context.get(driverRegistryContext, DriverRegistry),
+          extensionStateRuntime: Context.get(machineContext, MachineEngine),
+          subscriptionEngine: undefined,
+          baseSections: [],
+          instructions: "",
+        } satisfies SessionProfile
+      }),
+    )
+
+  const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
+    manifest: { id: extensionId },
+    scope: "builtin",
+    sourcePath: "test",
+    contributions: {
+      capabilities: [
+        {
+          id: commandId,
+          audiences: ["human-slash", "transport-public"],
+          intent: "write",
+          input: Schema.String,
+          output: Schema.Void,
+          effect: () => Effect.void,
+        },
+      ],
+    },
+  })
 
   test("listCommands returns registered commands", async () => {
     await Effect.runPromise(
@@ -152,6 +211,49 @@ describe("extension command RPCs", () => {
           const commands = yield* client.extension.listCommands({ sessionId })
 
           expect(commands.map((command) => command.name)).toEqual(["visible"])
+        }),
+      ),
+    )
+  })
+
+  test("RPC listCommands resolves commands from the requested session profile", async () => {
+    const alphaCwd = "/tmp/gent-alpha-profile"
+    const betaCwd = "/tmp/gent-beta-profile"
+    const alphaExt = makeCommandExtension("@test/alpha-profile", "alpha")
+    const betaExt = makeCommandExtension("@test/beta-profile", "beta")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const alphaProfile = yield* makeProfile(alphaCwd, [alphaExt])
+          const betaProfile = yield* makeProfile(betaCwd, [betaExt])
+          const sessionProfileCacheLayer = SessionProfileCache.Test(
+            new Map([
+              [alphaCwd, alphaProfile],
+              [betaCwd, betaProfile],
+            ]),
+          )
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+            }),
+          )
+          const alpha = yield* client.session.create({ cwd: alphaCwd })
+          const beta = yield* client.session.create({ cwd: betaCwd })
+
+          const alphaCommands = yield* client.extension.listCommands({
+            sessionId: alpha.sessionId,
+          })
+          const betaCommands = yield* client.extension.listCommands({
+            sessionId: beta.sessionId,
+          })
+
+          expect(alphaCommands.map((command) => command.name)).toEqual(["alpha"])
+          expect(betaCommands.map((command) => command.name)).toEqual(["beta"])
         }),
       ),
     )

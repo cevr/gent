@@ -11,8 +11,11 @@ import {
   type ProviderStreamPart,
 } from "@gent/core/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
 import { ConfigService } from "@gent/core/runtime/config-service"
+import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
+import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
@@ -23,6 +26,7 @@ import {
 } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
@@ -66,6 +70,13 @@ const bashStubTool = tool({
   execute: (params) => Effect.succeed({ output: params.command }),
 })
 
+const readStubTool = tool({
+  id: "read",
+  description: "Stub read tool for tests",
+  params: Schema.Struct({ path: Schema.String }),
+  execute: (params) => Effect.succeed({ output: params.path }),
+})
+
 const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
     {
@@ -93,6 +104,59 @@ const withEventPublisher = (
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     ),
   )
+
+const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
+  const resolved = resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: {
+        agents: Object.values(Agents),
+        capabilities: [bashStubTool, readStubTool],
+      },
+    },
+  ])
+  const registryLayer = ExtensionRegistry.fromResolved(resolved)
+  const storageLayer = Storage.TestWithSql()
+  const eventStoreLayer = EventStoreLive.pipe(Layer.provide(storageLayer))
+  const eventPublisherLayer = Layer.provide(
+    EventPublisherLive,
+    Layer.mergeAll(
+      storageLayer,
+      eventStoreLayer,
+      registryLayer,
+      MachineEngine.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ),
+  )
+  const baseDeps = Layer.mergeAll(
+    storageLayer,
+    eventStoreLayer,
+    eventPublisherLayer,
+    registryLayer,
+    DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    }),
+    providerLayer,
+    ToolRunner.Test(),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+    ephemeralParentDeps,
+  )
+  const sessionRuntimeLayer = Layer.provide(
+    SessionRuntime.Live({ baseSections: [] }),
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
+  const deps = Layer.mergeAll(baseDeps, sessionRuntimeLayer)
+  const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
+  return Layer.mergeAll(deps, runnerLayer)
+}
 
 // Extra services the parent context needs for ephemeral child runtime
 const ephemeralParentDeps = Layer.mergeAll(
@@ -165,6 +229,62 @@ describe("RunSpec", () => {
       expect(b).toBe(resolveAgentModel(Agents.deepwork))
       expect(a).not.toBe(b)
     }).pipe(Effect.provide(impl), Effect.runPromise)
+  })
+
+  test("durable helper-agent runSpec reaches the provider through AgentRunner", async () => {
+    const { layer: providerLayer, controls } = await Effect.runPromise(
+      createSequenceProvider([
+        {
+          ...textStep("child result"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("custom/model")
+            expect(request.reasoning).toBe("high")
+            expect(request.tools?.map((candidate) => candidate.id)).toEqual(["bash"])
+          },
+        },
+      ]),
+    )
+    const layer = makeLiveAgentRunnerLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({ id: "parent-runspec", name: "Parent", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "parent-runspec-branch", sessionId: "parent-runspec", createdAt: now }),
+        )
+
+        const result = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "check forwarding",
+          parentSessionId: SessionId.make("parent-runspec"),
+          parentBranchId: BranchId.make("parent-runspec-branch"),
+          cwd: process.cwd(),
+          runSpec: {
+            persistence: "durable",
+            tags: ["auto-loop"],
+            overrides: {
+              modelId: ModelId.make("custom/model"),
+              allowedTools: ["bash"],
+              deniedTools: ["read"],
+              reasoningEffort: "high",
+              systemPromptAddendum: "Extra helper-agent instructions",
+            },
+          },
+        })
+
+        expect(result._tag).toBe("success")
+        if (result._tag === "success") {
+          expect(result.text).toContain("child result")
+        }
+        yield* controls.assertDone()
+      }).pipe(Effect.provide(layer)),
+    )
   })
 })
 
