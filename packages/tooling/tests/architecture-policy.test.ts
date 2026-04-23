@@ -127,4 +127,26 @@ describe("architecture policy", () => {
       expect(source).not.toMatch(/\bcompileBaseSections\b/)
     }
   })
+
+  test("machine mailbox ownership is not exported as shared extension context", () => {
+    const sharedSource = readFileSync(
+      pathResolve(ROOT, "packages/core/src/runtime/extensions/extension-actor-shared.ts"),
+      "utf8",
+    )
+    expect(sharedSource).not.toMatch(/\bCurrentMailboxSession\b/)
+
+    const violations = collectSourceFiles()
+      .filter(
+        (file) =>
+          !file.endsWith("packages/core/src/runtime/extensions/resource-host/machine-engine.ts"),
+      )
+      .flatMap((file) =>
+        sourceLines(file)
+          .filter(({ text }) => !isCommentLine(text))
+          .filter(({ text }) => /\bCurrentMailboxSession\b/.test(text))
+          .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+      )
+
+    expect(violations).toEqual([])
+  })
 })

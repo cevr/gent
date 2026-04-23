@@ -54,9 +54,14 @@ import {
   isExtensionRequestDefinition,
   listExtensionProtocolDefinitions,
 } from "../../../domain/extension-protocol.js"
-import { CurrentExtensionSession, CurrentMailboxSession } from "../extension-actor-shared.js"
+import { CurrentExtensionSession } from "../extension-actor-shared.js"
 import { spawnMachineExtensionRef } from "../spawn-machine-ref.js"
 import { ExtensionTurnControl } from "../turn-control.js"
+
+const CurrentMailboxSession = Context.Reference<SessionId | undefined>(
+  "@gent/core/src/runtime/extensions/resource-host/machine-engine/CurrentMailboxSession",
+  { defaultValue: () => undefined },
+)
 
 /** Extract the (at most one) `Resource.machine` declared by an extension. */
 const extractMachine = (ext: LoadedExtension): AnyResourceMachine | undefined => {
@@ -716,7 +721,7 @@ export const makeMachineEngine = (
           case "publish": {
             const changed = yield* publishImmediate(item.event, item.ctx).pipe(
               Effect.provideService(CurrentExtensionSession, currentSession),
-              Effect.provideService(CurrentMailboxSession, currentSession),
+              Effect.provideService(CurrentMailboxSession, item.sessionId),
             )
             yield* Deferred.succeed(item.done, changed)
             return
@@ -725,7 +730,7 @@ export const makeMachineEngine = (
             const exit = yield* Effect.exit(
               sendImmediate(item.sessionId, item.message, item.branchId).pipe(
                 Effect.provideService(CurrentExtensionSession, currentSession),
-                Effect.provideService(CurrentMailboxSession, currentSession),
+                Effect.provideService(CurrentMailboxSession, item.sessionId),
               ),
             )
             if (exit._tag === "Success") {
@@ -749,7 +754,7 @@ export const makeMachineEngine = (
             const exit = yield* Effect.exit(
               executeImmediate(item.sessionId, item.message, item.branchId).pipe(
                 Effect.provideService(CurrentExtensionSession, currentSession),
-                Effect.provideService(CurrentMailboxSession, currentSession),
+                Effect.provideService(CurrentMailboxSession, item.sessionId),
               ),
             )
             if (exit._tag === "Success") {
@@ -844,11 +849,8 @@ export const makeMachineEngine = (
               event,
               done,
             })
-            const currentSession = yield* Effect.serviceOption(CurrentMailboxSession)
-            if (
-              currentSession._tag === "Some" &&
-              currentSession.value.sessionId === ctx.sessionId
-            ) {
+            const currentSession = yield* CurrentMailboxSession
+            if (currentSession === ctx.sessionId) {
               // Re-entrant publish from inside the same mailbox: cannot
               // wait on `done` (would deadlock). The caller is itself an
               // effect inside the mailbox loop and will be told via the
@@ -877,6 +879,13 @@ export const makeMachineEngine = (
               message,
               done,
             })
+            const currentSession = yield* CurrentMailboxSession
+            if (currentSession === sessionId) {
+              // Re-entrant send is queued behind the current mailbox item.
+              // Waiting here would deadlock; delivery continues once the
+              // outer item finishes.
+              return
+            }
             const result = yield* Deferred.await(done)
             if (result !== undefined) return yield* result
           }),

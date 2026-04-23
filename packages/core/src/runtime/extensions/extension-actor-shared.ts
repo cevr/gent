@@ -11,11 +11,6 @@ export class CurrentExtensionSession extends Context.Service<
   { readonly sessionId: SessionId }
 >()("@gent/core/src/runtime/extensions/extension-actor-shared/CurrentExtensionSession") {}
 
-export class CurrentMailboxSession extends Context.Service<
-  CurrentMailboxSession,
-  { readonly sessionId: SessionId }
->()("@gent/core/src/runtime/extensions/extension-actor-shared/CurrentMailboxSession") {}
-
 /**
  * Typed persistence codec — wraps Schema.fromJsonString preserving the State type.
  * Eliminates `as Schema.Any` + `as State` cast pairs in from-machine and from-reducer.
