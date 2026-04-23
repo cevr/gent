@@ -7,10 +7,10 @@
  */
 
 import { Effect, Layer, Schema, Context } from "effect"
-import * as Fs from "node:fs" // eslint-disable-line -- vault needs direct fs access
-import * as Path from "node:path" // eslint-disable-line -- vault needs direct path access
-import { createHash } from "node:crypto" // eslint-disable-line
-import { homedir } from "node:os" // eslint-disable-line
+import * as Fs from "node:fs"
+import * as Path from "node:path"
+import { createHash } from "node:crypto"
+import { homedir } from "node:os"
 import { type ReadOnly, withReadOnly } from "@gent/core/extensions/api"
 
 // ── Types ──

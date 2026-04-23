@@ -42,7 +42,7 @@ import { findOpenPort } from "./supervisor.js"
 
 // ── Types ──
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
 type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
 

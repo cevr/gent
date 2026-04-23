@@ -57,7 +57,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
         // Simple approach: slice by visible characters
         if (startCol === 0) return line
         // Remove ANSI, slice, but this loses colors. Acceptable for panning.
-        // eslint-disable-next-line no-control-regex
+        // eslint-disable-next-line no-control-regex -- ANSI escape stripping needs literal control-byte patterns
         const stripped = line.replace(/\x1b\[[0-9;]*m/g, "")
         return stripped.slice(startCol, startCol + viewWidth)
       })

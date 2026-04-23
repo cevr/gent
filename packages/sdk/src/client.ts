@@ -245,7 +245,7 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
 // Gent — unified client constructors
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer with no requirements should infer the empty service context
 type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
 export type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
 

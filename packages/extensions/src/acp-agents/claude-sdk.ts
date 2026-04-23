@@ -202,7 +202,7 @@ function makeLiveService(): ClaudeSdkServiceShape {
           includePartialMessages: true,
           abortController: teardownController,
           env: {
-            // eslint-disable-next-line no-process-env
+            // eslint-disable-next-line no-process-env -- Claude SDK child process inherits the user's shell environment
             ...process.env,
             CLAUDE_CODE_OAUTH_TOKEN: oauthToken,
           },

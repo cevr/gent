@@ -9,8 +9,19 @@ type SuppressionRule =
   | "effect:nodeBuiltinImport:off"
   | "effect:preferSchemaOverJson:off"
   | "effect:strictEffectProvide:off"
+  | "eslint:@typescript-eslint/no-empty-object-type"
   | "eslint:@typescript-eslint/no-explicit-any"
+  | "eslint:@typescript-eslint/no-implied-eval"
+  | "eslint:@typescript-eslint/no-non-null-assertion"
+  | "eslint:@typescript-eslint/no-require-imports"
   | "eslint:@typescript-eslint/no-unsafe-type-assertion"
+  | "eslint:import/namespace"
+  | "eslint:no-await-in-loop"
+  | "eslint:no-constant-condition"
+  | "eslint:no-control-regex"
+  | "eslint:no-new"
+  | "eslint:no-process-env"
+  | "eslint:typescript-eslint/consistent-type-imports"
   | "ts:@ts-expect-error"
 
 interface SuppressionInstance {
@@ -43,8 +54,10 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 16,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 58,
+      "eslint:@typescript-eslint/no-explicit-any": 9,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 46,
+      "eslint:no-await-in-loop": 1,
+      "eslint:no-control-regex": 1,
       "ts:@ts-expect-error": 30,
     },
   },
@@ -71,7 +84,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 22,
       "eslint:@typescript-eslint/no-explicit-any": 8,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 28,
+      "eslint:@typescript-eslint/no-non-null-assertion": 2,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 27,
     },
   },
   {
@@ -97,6 +111,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:globalConsoleInEffect:off": 2,
       "effect:nodeBuiltinImport:off": 4,
       "effect:strictEffectProvide:off": 8,
+      "eslint:@typescript-eslint/no-empty-object-type": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 6,
     },
   },
@@ -111,6 +126,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       ].includes(file),
     counts: {
       "effect:preferSchemaOverJson:off": 3,
+      "eslint:no-await-in-loop": 1,
     },
   },
   {
@@ -118,12 +134,14 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     reason:
       "Nominal-brand constructors and schema metaprogramming are one of the few places where carefully-owned casts are load-bearing. The rule is ownership, not convenience.",
     matches: (file) =>
-      /packages\/core\/src\/domain\/(capability(\/|\.ts)|ids\.ts|read-only\.ts|schema-tagged-enum-class\.ts|resource\.ts|tool\.ts|projection\.ts|extension\.ts|contribution\.ts|tool-schema\.ts|sdk-boundary\.ts|interaction-request\.ts)/.test(
+      /packages\/core\/src\/domain\/(capability(\/|\.ts)|ids\.ts|read-only\.ts|schema-tagged-enum-class\.ts|resource\.ts|tool\.ts|projection\.ts|extension\.ts|contribution\.ts|tool-schema\.ts|sdk-boundary\.ts|interaction-request\.ts|permission\.ts)/.test(
         file,
       ),
     counts: {
       "eslint:@typescript-eslint/no-explicit-any": 10,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 16,
+      "eslint:import/namespace": 3,
+      "eslint:no-new": 1,
     },
   },
   {
@@ -141,7 +159,18 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),
     counts: {
+      "eslint:@typescript-eslint/no-empty-object-type": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 16,
+    },
+  },
+  {
+    id: "runtime-platform-adapters",
+    reason:
+      "Runtime adapters for optional native/platform dependencies may carry local lint suppressions where the import model or foreign API shape requires it.",
+    matches: (file) => file === "packages/core/src/runtime/file-index/native-adapter.ts",
+    counts: {
+      "eslint:no-constant-condition": 1,
+      "eslint:typescript-eslint/consistent-type-imports": 2,
     },
   },
   {
@@ -161,11 +190,13 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     reason:
       "TUI framework adapters still bridge generic UI/runtime surfaces. This bucket exists to keep that debt local while the client model keeps shrinking.",
     matches: (file) =>
-      /apps\/tui\/src\/(app\.tsx|atom-solid\/|components\/(?!autocomplete-popup-boundary)|extensions\/(?!loader-boundary)(?!client-facets\.ts)|hooks\/use-cache\.ts|routes\/|theme\/|utils\/(format-error|run-with-reconnect)\.ts)/.test(
+      /apps\/tui\/src\/(app\.tsx|atom-solid\/|client\/|components\/(?!autocomplete-popup-boundary)|extensions\/(?!loader-boundary)(?!client-facets\.ts)|hooks\/use-cache\.ts|routes\/|theme\/|utils\/(format-error|run-with-reconnect|mermaid)\.ts)/.test(
         file,
       ),
     counts: {
+      "eslint:@typescript-eslint/no-non-null-assertion": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
+      "eslint:no-control-regex": 2,
     },
   },
   {
@@ -175,7 +206,11 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     matches: (file) =>
       /packages\/extensions\/src\//.test(file) || file === "apps/server/src/debug/scenario.ts",
     counts: {
+      "eslint:@typescript-eslint/no-implied-eval": 1,
+      "eslint:@typescript-eslint/no-require-imports": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 40,
+      "eslint:no-process-env": 3,
+      "eslint:typescript-eslint/consistent-type-imports": 1,
     },
   },
 ]
@@ -210,19 +245,11 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
         text: line.trim(),
       })
     }
-    if (line.includes("@typescript-eslint/no-explicit-any")) {
+    for (const rule of parseEslintRules(line)) {
       out.push({
         file: rel,
         line: index + 1,
-        rule: "eslint:@typescript-eslint/no-explicit-any",
-        text: line.trim(),
-      })
-    }
-    if (line.includes("@typescript-eslint/no-unsafe-type-assertion")) {
-      out.push({
-        file: rel,
-        line: index + 1,
-        rule: "eslint:@typescript-eslint/no-unsafe-type-assertion",
+        rule,
         text: line.trim(),
       })
     }
@@ -238,6 +265,40 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
   return out
 }
 
+const parseEslintRules = (line: string): ReadonlyArray<SuppressionRule> => {
+  const eslintMatch = line.match(/\beslint-disable(?:-next-line|-line)?\b(?<rules>.*)$/)
+  const rulesText = eslintMatch?.groups?.rules
+  if (rulesText === undefined) return []
+
+  const withoutBlockEnd = rulesText.replace(/\*\/\s*$/, "")
+  const [ruleList = ""] = withoutBlockEnd.split(/\s--\s/, 1)
+  const rules = ruleList
+    .split(",")
+    .map((rule) => rule.trim())
+    .filter((rule) => rule.length > 0)
+
+  return rules.length === 0
+    ? ["eslint:<all>" as SuppressionRule]
+    : rules.map((rule) => `eslint:${rule}` as SuppressionRule)
+}
+
+const hasInlineReason = (suppression: SuppressionInstance): boolean =>
+  !suppression.rule.startsWith("eslint:") || /\s--\s+\S/.test(suppression.text)
+
+const ESLINT_RULES_REQUIRING_INLINE_REASON = new Set<SuppressionRule>([
+  "eslint:@typescript-eslint/no-empty-object-type",
+  "eslint:@typescript-eslint/no-implied-eval",
+  "eslint:@typescript-eslint/no-non-null-assertion",
+  "eslint:@typescript-eslint/no-require-imports",
+  "eslint:import/namespace",
+  "eslint:no-await-in-loop",
+  "eslint:no-constant-condition",
+  "eslint:no-control-regex",
+  "eslint:no-new",
+  "eslint:no-process-env",
+  "eslint:typescript-eslint/consistent-type-imports",
+])
+
 const collectSuppressions = (): ReadonlyArray<SuppressionInstance> =>
   SCAN_ROOTS.flatMap((dir) => walkFiles(pathResolve(ROOT, dir)).flatMap(parseSuppressions))
 
@@ -248,8 +309,19 @@ const APPROVED_SUPPRESSION_RULES = new Set<SuppressionRule>([
   "effect:nodeBuiltinImport:off",
   "effect:preferSchemaOverJson:off",
   "effect:strictEffectProvide:off",
+  "eslint:@typescript-eslint/no-empty-object-type",
   "eslint:@typescript-eslint/no-explicit-any",
+  "eslint:@typescript-eslint/no-implied-eval",
+  "eslint:@typescript-eslint/no-non-null-assertion",
+  "eslint:@typescript-eslint/no-require-imports",
   "eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "eslint:import/namespace",
+  "eslint:no-await-in-loop",
+  "eslint:no-constant-condition",
+  "eslint:no-control-regex",
+  "eslint:no-new",
+  "eslint:no-process-env",
+  "eslint:typescript-eslint/consistent-type-imports",
   "ts:@ts-expect-error",
 ])
 
@@ -271,6 +343,15 @@ describe("suppression policy", () => {
       .map((instance) => `${instance.file}:${instance.line} ${instance.rule}`)
 
     expect(violations).toEqual([])
+  })
+
+  test("newly-accounted eslint suppressions explain the local exception inline", () => {
+    const reasonless = collectSuppressions()
+      .filter((instance) => ESLINT_RULES_REQUIRING_INLINE_REASON.has(instance.rule))
+      .filter((instance) => !hasInlineReason(instance))
+      .map((instance) => `${instance.file}:${instance.line} ${instance.rule}`)
+
+    expect(reasonless).toEqual([])
   })
 
   test("every suppression belongs to an approved architectural bucket", () => {

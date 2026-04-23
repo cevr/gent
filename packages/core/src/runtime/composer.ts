@@ -366,10 +366,10 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       ]
       const merged: OpaqueLayer =
         allLayers.length === 1
-          ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- length guard proves first layer exists
             allLayers[0]!
           : Layer.mergeAll(
-              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- mergeAll branch requires the first layer
               allLayers[0]!,
               ...allLayers.slice(1),
             )

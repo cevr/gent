@@ -13,9 +13,9 @@ import { RuntimePlatform } from "../runtime-platform.js"
 // a static `import type` would fail module resolution.
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line typescript-eslint/consistent-type-imports
+// eslint-disable-next-line typescript-eslint/consistent-type-imports -- optional native module may be absent at install time
 type FileFinder = import("@ff-labs/fff-bun").FileFinder
-// eslint-disable-next-line typescript-eslint/consistent-type-imports
+// eslint-disable-next-line typescript-eslint/consistent-type-imports -- optional native module may be absent at install time
 type FffModule = typeof import("@ff-labs/fff-bun")
 
 let _mod: FffModule | undefined
@@ -138,7 +138,7 @@ const makeNativeService = (
         let pageIndex = 0
         let totalFiles = 0
 
-        // eslint-disable-next-line no-constant-condition
+        // eslint-disable-next-line no-constant-condition -- cursor loop exits on empty page or backend error
         while (true) {
           const result = entry.finder.fileSearch("", { pageSize, pageIndex })
           if (!result.ok) {

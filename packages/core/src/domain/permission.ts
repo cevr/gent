@@ -6,7 +6,7 @@ const ValidRegexPattern = Schema.String.pipe(
     Schema.makeFilter<string>(
       (s) => {
         try {
-          new RegExp(s) // eslint-disable-line no-new
+          new RegExp(s) // eslint-disable-line no-new -- constructor validates user-provided pattern
           return undefined
         } catch (e) {
           return `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`

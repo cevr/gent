@@ -109,7 +109,7 @@ export class GitReader extends Context.Service<GitReader, GitReaderService>()(
     Layer.effect(
       GitReader,
       Effect.gen(function* () {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports, typescript-eslint/consistent-type-imports
+        // eslint-disable-next-line @typescript-eslint/no-require-imports, typescript-eslint/consistent-type-imports -- es-git is a NAPI CJS backend loaded inside the live layer
         const esGit: typeof import("es-git") = require("es-git")
         const fs = yield* FileSystem.FileSystem
         const cred = (url: string) => resolveCredential(fs, home, url)

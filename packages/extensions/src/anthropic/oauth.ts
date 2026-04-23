@@ -535,7 +535,7 @@ const refreshViaOAuth = (
 const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
   Effect.tryPromise({
     try: async () => {
-      // eslint-disable-next-line no-process-env
+      // eslint-disable-next-line no-process-env -- auth probe inherits local CLI credentials from the shell
       const env = { ...process.env, TERM: "dumb" }
       const proc = Bun.spawn(["claude", "-p", ".", "--model", "haiku"], {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -705,7 +705,7 @@ export const getUserAgent = (): string =>
  */
 export const getBillingHeaderInputs = (): { version: string; entrypoint: string } => ({
   version: getCliVersion(),
-  // eslint-disable-next-line no-process-env
+  // eslint-disable-next-line no-process-env -- CLI entrypoint is passed through Anthropic's environment contract
   entrypoint: process.env["CLAUDE_CODE_ENTRYPOINT"] ?? "cli",
 })
 

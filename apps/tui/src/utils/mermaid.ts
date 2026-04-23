@@ -61,7 +61,7 @@ function getMaxLineWidth(text: string): number {
   let max = 0
   for (const line of text.split("\n")) {
     // Strip ANSI escape codes for accurate width
-    // eslint-disable-next-line no-control-regex
+    // eslint-disable-next-line no-control-regex -- ANSI escape stripping needs literal control-byte patterns
     const stripped = line.replace(/\x1b\[[0-9;]*m/g, "")
     if (stripped.length > max) max = stripped.length
   }

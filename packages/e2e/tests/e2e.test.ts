@@ -181,7 +181,7 @@ const spawnNoAuth = (): TestContext => {
   return spawnWithDir(tempDir)
 }
 
-/* eslint-disable no-control-regex */
+/* eslint-disable no-control-regex -- ANSI stripping regexes must match control bytes literally */
 function stripAnsi(str: string): string {
   return str
     .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")

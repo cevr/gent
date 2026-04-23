@@ -142,9 +142,9 @@ const buildVariantClass = <Tag extends string, F extends VariantFields>(
  * AND the constructor call shape (`MyEnum.cases.Variant.make({...fields})`). The
  * `_tag` literal is added by `Schema.TaggedClass` and is not part of `F`.
  */
-// eslint-disable-next-line import/namespace
+// eslint-disable-next-line import/namespace -- Schema namespace exposes type members oxlint cannot prove
 export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFields>
-  // eslint-disable-next-line import/namespace
+  // eslint-disable-next-line import/namespace -- Schema namespace exposes type members oxlint cannot prove
   extends Schema.Codec<
     Schema.Struct.Type<F> & { readonly _tag: Tag },
     Schema.Struct.Encoded<F> & { readonly _tag: Tag },
@@ -177,7 +177,7 @@ export interface TaggedEnumClassVariant<Tag extends string, F extends VariantFie
  *   surface is real but the precise generic shape is awkward to express
  *   without referencing internals).
  */
-// eslint-disable-next-line import/namespace
+// eslint-disable-next-line import/namespace -- Schema namespace exposes type members oxlint cannot prove
 export type TaggedEnumClass<V extends VariantsMap> = Schema.Codec<
   { readonly [K in keyof V]: Schema.Struct.Type<V[K]> & { readonly _tag: K } }[keyof V],
   { readonly [K in keyof V]: Schema.Struct.Encoded<V[K]> & { readonly _tag: K } }[keyof V],
