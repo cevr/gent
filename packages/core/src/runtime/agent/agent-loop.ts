@@ -27,7 +27,6 @@ import {
   AgentDefinition,
   AgentName,
   AgentRunError,
-  AgentRunnerService,
   DEFAULT_AGENT_NAME,
   RunSpecSchema,
   resolveAgentDriver,
@@ -60,10 +59,6 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
-import { PromptPresenter } from "../../domain/prompt-presenter.js"
-import { SearchStorage } from "../../storage/search-storage.js"
-import { RuntimePlatform } from "../runtime-platform.js"
-import { ApprovalService } from "../approval-service.js"
 import { ConfigService } from "../config-service.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../server/system-prompt.js"
@@ -1604,45 +1599,22 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
             const publishEventOrDie = (event: AgentEvent) => publishEvent(event).pipe(Effect.orDie)
 
-            // Resolve services lazily — by the time makeLoop runs, all services
-            // exist in the ambient scope (including AgentRunnerService, which
-            // depends on AgentLoop and would create a circular Layer dep)
-            const lazyDeps = yield* Effect.all({
-              platform: Effect.serviceOption(RuntimePlatform),
-              approvalService: Effect.serviceOption(ApprovalService),
-              promptPresenter: Effect.serviceOption(PromptPresenter),
-              searchStorage: Effect.serviceOption(SearchStorage),
-              agentRunner: Effect.serviceOption(AgentRunnerService),
-              sessionProfileCache: Effect.serviceOption(SessionProfileCache),
-            })
+            // SessionProfileCache remains genuinely optional here. All other
+            // host defaults are now resolved through the ambient host helper.
+            const sessionProfileCache = yield* Effect.serviceOption(SessionProfileCache)
 
             const hostDeps = yield* makeAmbientExtensionHostContextDeps({
               extensionStateRuntime,
               extensionRegistry,
               storage,
               overrides: {
-                ...(lazyDeps.platform._tag === "Some" ? { platform: lazyDeps.platform.value } : {}),
-                ...(lazyDeps.approvalService._tag === "Some"
-                  ? { approvalService: lazyDeps.approvalService.value }
-                  : {}),
-                ...(lazyDeps.promptPresenter._tag === "Some"
-                  ? { promptPresenter: lazyDeps.promptPresenter.value }
-                  : {}),
-                ...(lazyDeps.searchStorage._tag === "Some"
-                  ? { searchStorage: lazyDeps.searchStorage.value }
-                  : {}),
-                ...(lazyDeps.agentRunner._tag === "Some"
-                  ? { agentRunner: lazyDeps.agentRunner.value }
-                  : {}),
                 turnControl: extensionTurnControl,
                 eventPublisher,
               },
             })
 
             const profileCache =
-              lazyDeps.sessionProfileCache._tag === "Some"
-                ? lazyDeps.sessionProfileCache.value
-                : undefined
+              sessionProfileCache._tag === "Some" ? sessionProfileCache.value : undefined
 
             /** Resolve per-turn context: session cwd → profile → registry + baseSections + hostCtx.
              *  Falls back to server-wide defaults when no profile cache or no session cwd. */

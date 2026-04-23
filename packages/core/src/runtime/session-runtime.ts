@@ -1,5 +1,5 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
-import { RunSpecSchema, AgentName, AgentRunnerService } from "../domain/agent.js"
+import { RunSpecSchema, AgentName } from "../domain/agent.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import {
   AgentRestarted,
@@ -17,11 +17,6 @@ import { AgentLoop, invokeToolPhase, type AgentLoopService } from "./agent/agent
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
-import { RuntimePlatform } from "./runtime-platform.js"
-import { ApprovalService } from "./approval-service.js"
-import { PromptPresenter } from "../domain/prompt-presenter.js"
-import { ExtensionTurnControl } from "./extensions/turn-control.js"
-import { SearchStorage } from "../storage/search-storage.js"
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { ResourceManager } from "./resource-manager.js"
@@ -275,37 +270,11 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
       const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
       const extensionStateRuntime = yield* MachineEngine
-      const optionalHostServices = yield* Effect.all({
-        platform: Effect.serviceOption(RuntimePlatform),
-        approvalService: Effect.serviceOption(ApprovalService),
-        promptPresenter: Effect.serviceOption(PromptPresenter),
-        turnControl: Effect.serviceOption(ExtensionTurnControl),
-        searchStorage: Effect.serviceOption(SearchStorage),
-        agentRunner: Effect.serviceOption(AgentRunnerService),
-      })
       const hostDeps = yield* makeAmbientExtensionHostContextDeps({
         extensionStateRuntime,
         extensionRegistry,
         storage,
         overrides: {
-          ...(optionalHostServices.platform._tag === "Some"
-            ? { platform: optionalHostServices.platform.value }
-            : {}),
-          ...(optionalHostServices.approvalService._tag === "Some"
-            ? { approvalService: optionalHostServices.approvalService.value }
-            : {}),
-          ...(optionalHostServices.promptPresenter._tag === "Some"
-            ? { promptPresenter: optionalHostServices.promptPresenter.value }
-            : {}),
-          ...(optionalHostServices.turnControl._tag === "Some"
-            ? { turnControl: optionalHostServices.turnControl.value }
-            : {}),
-          ...(optionalHostServices.searchStorage._tag === "Some"
-            ? { searchStorage: optionalHostServices.searchStorage.value }
-            : {}),
-          ...(optionalHostServices.agentRunner._tag === "Some"
-            ? { agentRunner: optionalHostServices.agentRunner.value }
-            : {}),
           eventPublisher,
         },
       })

@@ -15,13 +15,16 @@ import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
-import type { RuntimePlatformShape } from "./runtime-platform.js"
-import type { ApprovalServiceShape } from "./approval-service.js"
-import type { PromptPresenterService } from "../domain/prompt-presenter.js"
+import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
+import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
+import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import type { ExtensionTurnControlService } from "./extensions/turn-control.js"
+import {
+  ExtensionTurnControl,
+  type ExtensionTurnControlService,
+} from "./extensions/turn-control.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
-import type { SearchStorageService } from "../storage/search-storage.js"
+import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
 import { Message, Session, Branch } from "../domain/message.js"
 import type { EventPublisherService } from "../domain/event-publisher.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
@@ -32,6 +35,7 @@ import {
   BranchSwitched,
   SessionStarted,
 } from "../domain/event.js"
+import { AgentRunnerService } from "../domain/agent.js"
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
@@ -146,6 +150,69 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   eventPublisher: Effect.service(HostEventPublisherRef),
 })
 
+type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
+
+const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOverrides> = Effect.gen(
+  function* () {
+    const available = yield* Effect.all({
+      platform: Effect.serviceOption(RuntimePlatform),
+      approvalService: Effect.serviceOption(ApprovalService),
+      promptPresenter: Effect.serviceOption(PromptPresenter),
+      turnControl: Effect.serviceOption(ExtensionTurnControl),
+      searchStorage: Effect.serviceOption(SearchStorage),
+      agentRunner: Effect.serviceOption(AgentRunnerService),
+    })
+
+    return {
+      ...(available.platform._tag === "Some" ? { platform: available.platform.value } : {}),
+      ...(available.approvalService._tag === "Some"
+        ? { approvalService: available.approvalService.value }
+        : {}),
+      ...(available.promptPresenter._tag === "Some"
+        ? { promptPresenter: available.promptPresenter.value }
+        : {}),
+      ...(available.turnControl._tag === "Some"
+        ? { turnControl: available.turnControl.value }
+        : {}),
+      ...(available.searchStorage._tag === "Some"
+        ? { searchStorage: available.searchStorage.value }
+        : {}),
+      ...(available.agentRunner._tag === "Some"
+        ? { agentRunner: available.agentRunner.value }
+        : {}),
+    }
+  },
+)
+
+const withAmbientHostContextOverrides = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  overrides: AmbientHostContextOverrides,
+): Effect.Effect<A, E, R> => {
+  let next = effect
+  if (overrides.platform !== undefined) {
+    next = next.pipe(Effect.provideService(HostPlatformRef, overrides.platform))
+  }
+  if (overrides.approvalService !== undefined) {
+    next = next.pipe(Effect.provideService(HostApprovalServiceRef, overrides.approvalService))
+  }
+  if (overrides.promptPresenter !== undefined) {
+    next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
+  }
+  if (overrides.turnControl !== undefined) {
+    next = next.pipe(Effect.provideService(HostTurnControlRef, overrides.turnControl))
+  }
+  if (overrides.searchStorage !== undefined) {
+    next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
+  }
+  if (overrides.agentRunner !== undefined) {
+    next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
+  }
+  if (overrides.eventPublisher !== undefined) {
+    next = next.pipe(Effect.provideService(HostEventPublisherRef, overrides.eventPublisher))
+  }
+  return next
+}
+
 export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionStateRuntime: MachineEngineService
   readonly extensionRegistry: ExtensionRegistryService
@@ -157,18 +224,21 @@ export const makeAmbientExtensionHostContextDeps = (
   input: MakeAmbientExtensionHostContextDepsInput,
 ): Effect.Effect<MakeExtensionHostContextDeps> =>
   Effect.gen(function* () {
-    const defaults = yield* loadAmbientHostContextDefaults
+    const defaults = yield* withAmbientHostContextOverrides(loadAmbientHostContextDefaults, {
+      ...(yield* availableAmbientHostContextOverrides),
+      ...input.overrides,
+    })
     return {
-      platform: input.overrides?.platform ?? defaults.platform,
+      platform: defaults.platform,
       extensionStateRuntime: input.extensionStateRuntime,
-      approvalService: input.overrides?.approvalService ?? defaults.approvalService,
-      promptPresenter: input.overrides?.promptPresenter ?? defaults.promptPresenter,
+      approvalService: defaults.approvalService,
+      promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,
-      turnControl: input.overrides?.turnControl ?? defaults.turnControl,
+      turnControl: defaults.turnControl,
       storage: input.storage,
-      searchStorage: input.overrides?.searchStorage ?? defaults.searchStorage,
-      agentRunner: input.overrides?.agentRunner ?? defaults.agentRunner,
-      eventPublisher: input.overrides?.eventPublisher ?? defaults.eventPublisher,
+      searchStorage: defaults.searchStorage,
+      agentRunner: defaults.agentRunner,
+      eventPublisher: defaults.eventPublisher,
     }
   })
 
