@@ -345,16 +345,13 @@ export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext =
     deleteSession: dieStub("session.deleteSession"),
     deleteBranch: dieStub("session.deleteBranch"),
     deleteMessages: dieStub("session.deleteMessages"),
+    queueFollowUp: dieStub("session.queueFollowUp"),
   },
   interaction: {
     approve: dieStub("interaction.approve"),
     present: dieStub("interaction.present"),
     confirm: dieStub("interaction.confirm"),
     review: dieStub("interaction.review"),
-  },
-  turn: {
-    queueFollowUp: dieStub("turn.queueFollowUp"),
-    interject: dieStub("turn.interject"),
   },
   ...overrides,
 })

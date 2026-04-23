@@ -15,6 +15,13 @@ const makeCtx = (overrides: {
   ) => Effect.Effect<AgentRunResult>
   reviewDecision?: "yes" | "no" | "edit"
 }): ToolContext => {
+  const base = testToolContext({
+    sessionId: "test-session",
+    branchId: "test-branch",
+    toolCallId: "test-call",
+    cwd: "/tmp",
+    home: "/tmp",
+  })
   const agentRun =
     overrides.agentRun ??
     (() =>
@@ -25,13 +32,7 @@ const makeCtx = (overrides: {
         agentName: "test",
       }))
   return {
-    ...testToolContext({
-      sessionId: "test-session",
-      branchId: "test-branch",
-      toolCallId: "test-call",
-      cwd: "/tmp",
-      home: "/tmp",
-    }),
+    ...base,
     extension: {
       send: dieStub("extension.send"),
       ask: dieStub("extension.ask"),
@@ -48,6 +49,7 @@ const makeCtx = (overrides: {
         Effect.succeed(["anthropic/claude-opus-4-6", "openai/gpt-5.4"] as const),
     },
     session: {
+      ...base.session,
       listMessages: dieStub("session.listMessages"),
       getSession: dieStub("session.getSession"),
       getDetail: dieStub("session.getDetail"),
@@ -64,10 +66,6 @@ const makeCtx = (overrides: {
           decision: overrides.reviewDecision ?? "yes",
           path: "/tmp/test-plan.md",
         }),
-    },
-    turn: {
-      queueFollowUp: dieStub("turn.queueFollowUp"),
-      interject: dieStub("turn.interject"),
     },
   }
 }

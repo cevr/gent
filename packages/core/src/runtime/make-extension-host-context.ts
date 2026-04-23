@@ -472,6 +472,13 @@ export const makeExtensionHostContext = (
 
     deleteMessages: (params) =>
       deps.storage.deleteMessages(runInfo.branchId, params.afterMessageId),
+
+    queueFollowUp: (params) =>
+      deps.turnControl.queueFollowUp({
+        sessionId: runInfo.sessionId,
+        branchId: runInfo.branchId,
+        ...params,
+      }),
   },
 
   interaction: {
@@ -494,21 +501,6 @@ export const makeExtensionHostContext = (
       }),
     review: (params) =>
       deps.promptPresenter.review({
-        sessionId: runInfo.sessionId,
-        branchId: runInfo.branchId,
-        ...params,
-      }),
-  },
-
-  turn: {
-    queueFollowUp: (params) =>
-      deps.turnControl.queueFollowUp({
-        sessionId: runInfo.sessionId,
-        branchId: runInfo.branchId,
-        ...params,
-      }),
-    interject: (params) =>
-      deps.turnControl.interject({
         sessionId: runInfo.sessionId,
         branchId: runInfo.branchId,
         ...params,

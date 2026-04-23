@@ -6,49 +6,24 @@ import type { ToolContext } from "@gent/core/domain/tool"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
-const makeCtx = (approvalService: { present: ToolContext["approve"] }): ToolContext => ({
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
-  toolCallId: ToolCallId.of("test-call"),
-  approve: approvalService.present,
-  cwd: "/tmp",
-  home: "/tmp",
-  extension: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-    getUiSnapshots: () => Effect.die("not wired"),
-    getUiSnapshot: () => Effect.die("not wired"),
-  },
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
-  agent: {
-    get: () => Effect.die("not wired"),
-    require: () => Effect.die("not wired"),
-    run: () => Effect.die("not wired"),
-    resolveDualModelPair: () => Effect.die("not wired"),
-  },
-  session: {
-    listMessages: () => Effect.die("not wired"),
-    getSession: () => Effect.die("not wired"),
-    getDetail: () => Effect.die("not wired"),
-    renameCurrent: () => Effect.die("not wired"),
-    estimateContextPercent: () => Effect.die("not wired"),
-    search: () => Effect.die("not wired"),
-  },
-  interaction: {
-    approve: approvalService.present,
-    present: () => Effect.die("not wired"),
-    confirm: () => Effect.die("not wired"),
-    review: () => Effect.die("not wired"),
-  },
-  turn: {
-    queueFollowUp: () => Effect.die("not wired"),
-    interject: () => Effect.die("not wired"),
-  },
-})
+const makeCtx = (approvalService: {
+  present: ToolContext["interaction"]["approve"]
+}): ToolContext =>
+  testToolContext({
+    sessionId: SessionId.of("test-session"),
+    branchId: BranchId.of("test-branch"),
+    toolCallId: ToolCallId.of("test-call"),
+    cwd: "/tmp",
+    home: "/tmp",
+    interaction: {
+      approve: approvalService.present,
+      present: () => Effect.die("not wired"),
+      confirm: () => Effect.die("not wired"),
+      review: () => Effect.die("not wired"),
+    },
+  })
 
 const PlatformLayer = Layer.merge(
   BunServices.layer,

@@ -202,7 +202,7 @@ export const BashTool = tool({
           }
         }
 
-        yield* ctx.turn.queueFollowUp({
+        yield* ctx.session.queueFollowUp({
           content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
         })
       }).pipe(Effect.catchEager(() => Effect.void))

@@ -41,9 +41,6 @@ export interface ExtensionHostContext {
 
   /** Human interaction (approval, present, confirm, review) */
   readonly interaction: ExtensionHostContext.Interaction
-
-  /** Turn-control (follow-ups, interjections) */
-  readonly turn: ExtensionHostContext.Turn
 }
 
 export declare namespace ExtensionHostContext {
@@ -163,6 +160,11 @@ export declare namespace ExtensionHostContext {
     readonly deleteMessages: (params: {
       afterMessageId?: MessageId
     }) => Effect.Effect<void, StorageError>
+
+    readonly queueFollowUp: (params: {
+      content: string
+      metadata?: MessageMetadata
+    }) => Effect.Effect<void>
   }
 
   interface Interaction {
@@ -188,14 +190,5 @@ export declare namespace ExtensionHostContext {
       { decision: "yes" | "no" | "edit"; path: string; content?: string },
       EventStoreError | PlatformError.PlatformError | InteractionPendingError
     >
-  }
-
-  interface Turn {
-    readonly queueFollowUp: (params: {
-      content: string
-      metadata?: MessageMetadata
-    }) => Effect.Effect<void>
-
-    readonly interject: (params: { content: string }) => Effect.Effect<void>
   }
 }

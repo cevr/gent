@@ -656,7 +656,7 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     // Queue follow-up telling model to call the handoff tool.
     // @gent/handoff owns presentation — auto just requests the handoff.
-    yield* ctx.turn.queueFollowUp({
+    yield* ctx.session.queueFollowUp({
       content: [
         `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
         `Include this context:`,

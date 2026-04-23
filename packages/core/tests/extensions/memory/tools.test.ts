@@ -15,6 +15,7 @@ import { MemoryRememberTool, MemoryForgetTool } from "@gent/extensions/memory/to
 import { Test as MemoryVaultTest, projectKey as projectKeyOf } from "@gent/extensions/memory/vault"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 let tmpDir: string
 
@@ -28,8 +29,8 @@ afterEach(() => {
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const makeCtx = (cwd: string): ToolContext => {
-  const ctx: ToolContext = {
+const makeCtx = (cwd: string): ToolContext =>
+  testToolContext({
     sessionId: SessionId.of("019d97c0-0000-7000-0000-000000000000"),
     branchId: BranchId.of("019d97c0-0000-7001-0000-000000000000"),
     toolCallId: ToolCallId.of("tc1"),
@@ -70,13 +71,7 @@ const makeCtx = (cwd: string): ToolContext => {
       confirm: dieStub("confirm"),
       review: dieStub("review"),
     },
-    turn: {
-      queueFollowUp: dieStub("queueFollowUp"),
-      interject: dieStub("interject"),
-    },
-  }
-  return ctx
-}
+  })
 
 describe("MemoryRememberTool — auto-derived projectKey", () => {
   test("project scope without project_key writes under derived key", async () => {

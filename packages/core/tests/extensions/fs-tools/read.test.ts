@@ -4,18 +4,15 @@ import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/extensions/fs-tools/read"
 import type { ToolContext } from "@gent/core/domain/tool"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
-const ctx: ToolContext = {
+const ctx: ToolContext = testToolContext({
   sessionId: "test-session",
   branchId: "test-branch",
   toolCallId: "test-call",
   cwd: "/tmp",
   home: "/tmp",
-  extensions: {
-    send: () => Effect.die("not wired"),
-    ask: () => Effect.die("not wired"),
-  },
-}
+})
 
 const PlatformLayer = Layer.merge(
   BunServices.layer,

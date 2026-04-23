@@ -558,7 +558,7 @@ describe("streaming", () => {
       params: Schema.Struct({ content: Schema.String }),
       execute: ({ content }, ctx) =>
         Effect.gen(function* () {
-          yield* ctx.turn.queueFollowUp({ content })
+          yield* ctx.session.queueFollowUp({ content })
           return { queued: content }
         }),
     })

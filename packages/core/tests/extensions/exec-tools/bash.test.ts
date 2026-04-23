@@ -102,16 +102,13 @@ const stubCtx: ToolContext = {
     deleteSession: dieStub("deleteSession"),
     deleteBranch: dieStub("deleteBranch"),
     deleteMessages: dieStub("deleteMessages"),
+    queueFollowUp: dieStub("queueFollowUp"),
   },
   interaction: {
     approve: () => Effect.succeed({ approved: true }),
     present: dieStub("present"),
     confirm: dieStub("confirm"),
     review: dieStub("review"),
-  },
-  turn: {
-    queueFollowUp: dieStub("queueFollowUp"),
-    interject: dieStub("interject"),
   },
 }
 
