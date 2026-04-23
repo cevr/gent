@@ -1,133 +1,111 @@
 # Actor Model Spec (Gent)
 
-BEAM-inspired, Effect-first, local-first with cluster support.
+Actor model as the organizing metaphor. Not as an excuse for extra public surfaces.
 
-## Scope
+## Stable Boundary
 
-- Stable UX: modes/agents fixed; models rotate underneath.
-- Actor model for sessions, agents, tools, planning, subagents.
-- Local-first execution with a full @effect/cluster adapter.
+`SessionRuntime` is the public session actor boundary.
 
-## Goals
+Public write surface:
 
-- Deterministic, observable, cancelable runs.
-- Uniform mailbox semantics for all tool calls.
-- Clear seams for distributed execution.
-- Minimal config; curated modes.
+- `dispatch(command: RuntimeCommand)`
 
-## Non-Goals
+Public read surface:
 
-- Dynamic creation of ad-hoc modes beyond built-ins.
-- Provider-specific behavior in core runtime.
+- `getState(...)`
+- `watchState(...)`
+- `getQueuedMessages(...)`
+- `drainQueuedMessages(...)`
+- `getMetrics(...)`
 
-## Stable Surface (Modes + Agents)
+`AgentLoop` is internal. `ActorProcess` is dead. RPC, SDK, and direct callers all converge on `SessionRuntime`.
 
-- Primary: `cowork`, `deepwork`
-- Subagents: `explore`, `architect`
-- System: `title`
+## Runtime Command Algebra
 
-Model selection is per-mode only. No user-facing model switching.
-Pricing metadata is sourced from models.dev (registry).
+The runtime mailbox is explicit:
 
-## Actor Taxonomy
+- `SendUserMessage`
+- `RecordToolResult`
+- `InvokeTool`
+- `ApplySteer`
+- `RespondInteraction`
 
-SessionActor (state machine)
+Those commands are schema-tagged values with `_tag`, not ambient method bags or stringly-typed payloads.
 
-- Owns: session+branch lifecycle, current agent, run queue
-- Receives: user messages, interrupts, tool results
+## Ownership
 
-AgentActor (state machine)
+`SessionRuntime` owns:
 
-- Executes a single model run
-- Emits tool calls + streaming events
+- session + branch command ingress
+- queue serialization
+- checkpoint / recovery
+- interaction parking + resume
+- runtime state snapshots
+- watch-state fanout
 
-ToolActor (state machine)
+`AgentLoop` owns:
 
-- Executes all tools via mailbox
-- Uniform cancel/timeout/metrics
-- Routes tool results back to SessionActor
+- turn reduction
+- model / external turn execution
+- tool phase orchestration
+- internal loop state transitions
 
-PlannerActor (state machine)
-
-- Prompt tool lifecycle: present/confirm/review -> respond -> continue
-
-SubagentActor (router)
-
-- Delegates to SubagentRunner (in-proc default)
+`ToolRunner` owns tool execution. It is not a public actor boundary.
 
 ## Mailbox Semantics
 
-- FIFO per sessionId+branchId
-- Interrupt preempts current run
-- Interject enqueues next message
-- Tool results routed by toolCallId
+- FIFO per `sessionId + branchId`
+- one active turn per runtime target
+- interrupt preempts the active turn
+- interject queues a steering turn
+- follow-ups batch structurally
+- tool results route by `toolCallId`
+- waiting-for-interaction is cold state, not a blocked fiber
 
-## ActorProcess RPC (stable boundary)
+## Actor Shape
 
-Requests
+The runtime is still actor-like:
 
-- SendUserMessage { sessionId, branchId, content, agentOverride?, bypass? }
-- SendToolResult { sessionId, branchId, toolCallId, toolName, output, isError? }
-- Interrupt { sessionId, branchId, kind: cancel|interrupt|interject, message? }
-- GetState { sessionId, branchId }
-- GetMetrics { sessionId, branchId }
+- isolated state per session/branch
+- explicit message algebra
+- serialized processing
+- crash-safe recovery via checkpoint + storage
+- diagnostic event receipts
 
-Responses
-
-- GetState -> { status, agent?, queueDepth, lastError? }
-- GetMetrics -> { turns, tokens, toolCalls, retries, durationMs }
-
-Same protocol for local and cluster.
-
-## Supervision Policy
-
-cowork
-
-- Provider errors: retry with DEFAULT_RETRY_CONFIG
-- Tool errors: no retry
-- User interrupts: no retry
-
-deepwork
-
-- Provider errors: extended backoff
-- Tool retries only if tool is safe/idempotent
+What changed is the boundary honesty. We do not expose every internal actor-ish mechanism as a first-class API.
 
 ## Tool Lifecycle
 
-1. AgentActor emits tool-call
-2. ToolActor executes tool via ToolRunner
-3. ToolActor reports tool-result
-4. SessionActor decides resume/abort
+1. `SessionRuntime` accepts a turn command
+2. `AgentLoop` resolves prompt, driver, tools, and queue state
+3. driver emits turn events
+4. tool calls run through `ToolRunner`
+5. results feed back into loop state
+6. runtime publishes receipts and persists durable state
 
-All tool calls are mailboxed for consistent cancellation and metrics.
+Model turns and external-driver turns share the same runtime ownership. There is no second public loop.
 
-## Local Execution (A)
+## Supervision
 
-- In-process actors via Machine.spawn (effect-machine)
-- ToolActor backed by ToolRunner
-- Subagents: in-process default, subprocess optional
+Core rule: let it crash inside the owned boundary, then recover at the boundary that owns durability.
 
-## Cluster Execution (C)
+- provider stream failure -> loop emits error receipt and runtime surfaces failure
+- tool timeout / failure -> tool receipt emitted, loop applies policy
+- restart / crash -> checkpoint + storage restore loop/runtime state
+- extension actor failure -> isolated to the owning extension runtime/resource
 
-Entity mapping
+## Persistence
 
-- SessionActor is a cluster Entity
-- EntityId = `${sessionId}:${branchId}`
+Persistence is structural, not optional folklore:
 
-Runtime
+- storage holds durable session / message / event / interaction facts
+- checkpoint holds resumable loop/runtime state
+- interaction resume replays from storage, not in-memory continuations
 
-- SingleRunner for local SQL
-- HttpRunner for multi-node
-- Storage pluggable: SQLite default, Postgres optional
-- SingleRunner expects an @effect/sql SqlClient provided by the host
+## Non-Goals
 
-## Persistence (optional)
+- exposing internal loop actors as public APIs
+- rebuilding a second mutable runtime bridge
+- cluster/distribution design in this document
 
-- Snapshot + replay hooks for actor state
-- Not required for v1
-
-## Failure Modes
-
-- Provider stream failure -> AgentActor fails, SessionActor emits error event
-- Tool timeout -> ToolActor reports error, SessionActor applies policy
-- Shard move -> SessionActor rehydrates from storage
+See `docs/migrations/runtime-union-provider.md` for the migration from the old `ActorProcess` boundary.

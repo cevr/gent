@@ -3,9 +3,9 @@
 ## Overview
 
 Extensions add capabilities to gent: tools for the LLM, typed RPCs between
-extensions, UI actions (slash commands / palette), prompt-shaping pipelines,
-event observers, read-only projections, long-lived resources (with optional
-state machines, schedules, pub/sub), and LLM drivers.
+extensions, UI actions (slash commands / palette), read-only projections,
+long-lived resources (with optional state machines, schedules, subscriptions),
+agents, and LLM drivers.
 
 Single entry point: `defineExtension({ id, ...buckets })`. Each bucket is a
 typed array of values built with small factories. gent is a library used
@@ -36,7 +36,7 @@ That's it. Save as `~/.gent/extensions/greet.ts` and restart gent.
 
 ## Named Concepts
 
-You need at most 10 concepts to write a complete extension:
+You need at most 8 concepts to write a complete extension:
 
 | #   | Concept           | What it is                                       |
 | --- | ----------------- | ------------------------------------------------ |
@@ -44,12 +44,10 @@ You need at most 10 concepts to write a complete extension:
 | 2   | `tool`            | LLM-callable tool (params + execute)             |
 | 3   | `request`         | Extension-to-extension typed RPC (read or write) |
 | 4   | `action`          | Human-triggered UI affordance (slash / palette)  |
-| 5   | `pipeline`        | Transforming middleware at named hooks           |
-| 6   | `subscription`    | Void observer at named events                    |
-| 7   | `defineResource`  | Long-lived state with explicit scope             |
-| 8   | `defineAgent`     | Spawnable subagent                               |
-| 9   | `PermissionRule`  | Allow/deny rule for tool patterns                |
-| 10  | Projection        | Read-only view for prompt sections / tool policy |
+| 5   | `defineResource`  | Long-lived state with explicit scope             |
+| 6   | `projection`      | Read-only view for prompt sections / tool policy |
+| 7   | `defineAgent`     | Spawnable subagent                               |
+| 8   | `PermissionRule`  | Allow/deny rule for tool patterns                |
 
 All imports come from one path: `@gent/core/extensions/api`.
 
@@ -173,72 +171,32 @@ export default defineExtension({
 })
 ```
 
-## Pipeline (transforming middleware)
+## Projection (read-only derivation)
 
-Six hooks. Handler shape: `(input, next) => Effect<output>`. Call `next` to
-invoke the inner chain, transform its output, or skip it entirely to
-short-circuit.
-
-| Hook               | Output type              | Purpose                        |
-| ------------------ | ------------------------ | ------------------------------ |
-| `prompt.system`    | `string`                 | Modify the system prompt       |
-| `tool.execute`     | `unknown`                | Intercept tool execution       |
-| `permission.check` | `PermissionResult`       | Override permission decisions  |
-| `context.messages` | `ReadonlyArray<Message>` | Filter/modify context messages |
-| `tool.result`      | `unknown`                | Enrich/modify tool results     |
-| `message.input`    | `string`                 | Transform user input on send   |
+Use projections for prompt shaping, policy derivation, and read-only state views.
 
 ```ts
-import { defineExtension, pipeline } from "@gent/core/extensions/api"
-import { Effect } from "effect"
+import { defineExtension, projection } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+const StatusProjection = projection({
+  id: "status",
+  output: Schema.String,
+  query: () => Effect.succeed("ready"),
+})
 
 export default defineExtension({
-  id: "prompt-rules",
-  pipelines: [
-    pipeline("prompt.system", (input, next) =>
-      next(input).pipe(Effect.map((s) => s + "\n## House rule\nAlways write tests.")),
-    ),
-  ],
+  id: "status-ext",
+  projections: [StatusProjection],
 })
 ```
 
-Composition order: builtin (innermost) -> user -> project (outermost).
-
-## Subscription (void observer)
-
-Three events. Handler shape: `(event) => Effect<void>`. No `next` —
-subscriptions don't transform; they fan out. Each declares a failure mode:
-
-| Mode       | On failure                                                 |
-| ---------- | ---------------------------------------------------------- |
-| `continue` | Log debug, skip; remaining subscriptions still fire        |
-| `isolate`  | Log warning with extension id, skip; remaining still fire  |
-| `halt`     | Log error and surface a defect; subsequent ones don't fire |
-
-| Event            | Purpose                  |
-| ---------------- | ------------------------ |
-| `turn.before`    | Pre-turn observation     |
-| `turn.after`     | Post-turn observation    |
-| `message.output` | Observe assistant output |
-
-```ts
-import { defineExtension, subscription } from "@gent/core/extensions/api"
-import { Effect } from "effect"
-
-export default defineExtension({
-  id: "turn-logger",
-  subscriptions: [
-    subscription("turn.after", "isolate", (event) =>
-      Effect.logInfo(`Turn completed in ${event.durationMs}ms`),
-    ),
-  ],
-})
-```
+Read-only rule: projections are fenced. Their `R` channel may not yield write-capable services.
 
 ## Resource (long-lived state)
 
 A Resource declares its scope (lifetime) and carries an optional service
-Layer, state machine, schedule, pub/sub subscriptions, and lifecycle hooks.
+Layer, state machine, schedule, subscriptions, and lifecycle hooks.
 
 | Scope     | Lifetime                |
 | --------- | ----------------------- |
@@ -279,7 +237,27 @@ defineResource({
 })
 ```
 
-One machine per extension. Only `scope: "process"` machines are accepted today.
+Use `subscriptions` on a Resource for turn reactions and side effects:
+
+```ts
+import { defineExtension, defineResource } from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+export default defineExtension({
+  id: "turn-logger",
+  resources: [
+    defineResource({
+      scope: "process",
+      subscriptions: [
+        {
+          pattern: "agent:TurnCompleted",
+          handler: (event) => Effect.logInfo(`Observed ${event.channel}`),
+        },
+      ],
+    }),
+  ],
+})
+```
 
 ## Agent
 
@@ -299,39 +277,12 @@ export default defineExtension({
 })
 ```
 
-## Stateful Extension (cross-bucket shared state)
-
-Hoist state to module scope so multiple buckets see the same counter:
-
-```ts
-import { defineExtension, pipeline, subscription } from "@gent/core/extensions/api"
-import { Effect } from "effect"
-
-let turns = 0
-
-export default defineExtension({
-  id: "turn-counter",
-  subscriptions: [
-    subscription("turn.after", "continue", () => {
-      turns++
-      return Effect.void
-    }),
-  ],
-  pipelines: [
-    pipeline("prompt.system", (input, next) =>
-      next({ ...input, basePrompt: input.basePrompt + `\nThis is turn ${turns + 1}.` }),
-    ),
-  ],
-})
-```
-
 ## Validation
 
 The framework validates all loaded extensions before creating the registry:
 
 - **At most one** Resource with `machine` per extension
 - **Duplicate IDs** in same scope degrade the conflicting extension
-- **Capability `audiences`** must be non-empty (enforced by factories)
 - **Model-audience tools** require a non-empty `description`
 - Same-name tools/agents/drivers in same scope degrade
 
@@ -342,9 +293,16 @@ builtin).
 
 | Extension                               | Demonstrates                                    |
 | --------------------------------------- | ----------------------------------------------- |
-| `packages/extensions/src/session-tools` | `tool` + `pipeline` composition                 |
+| `packages/extensions/src/session-tools` | `tool` + explicit prompt/policy integration     |
 | `packages/extensions/src/task-tools`    | `tool` + `request` + `defineResource` + machine |
 | `packages/extensions/src/memory`        | `tool` + projection + `defineResource`          |
 | `packages/extensions/src/auto.ts`       | `defineResource` with `machine` + projection    |
-| `examples/extensions/prompt-rules.ts`   | Minimal `pipeline` example                      |
-| `examples/extensions/turn-counter.ts`   | Cross-bucket shared state                       |
+
+## Migration Notes
+
+- `query(...)` / `mutation(...)` -> `request(...)`
+- `command(...)` -> `action(...)`
+- generic middleware APIs are gone from the authoring model
+- `_kind` contribution unions are gone; the bucket name is the discriminator
+
+See `docs/migrations/runtime-union-provider.md` for concrete before/after recipes.

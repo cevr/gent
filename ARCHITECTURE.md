@@ -586,3 +586,6 @@ Request-ID correlation: TUI generates `crypto.randomUUID()` at `sendMessage`/`cr
 - No process-purity dogma. Same-process direct transport is fine.
 
 This doc describes the architecture we want to keep, not the migration history we already paid for.
+
+If you are migrating old runtime, union, capability, or provider code, see
+`docs/migrations/runtime-union-provider.md`.
