@@ -13,8 +13,7 @@ export class QueueEntryInfo extends Schema.Class<QueueEntryInfo>("QueueEntryInfo
   agentOverride: Schema.optional(AgentName),
 }) {}
 
-export const QueueSnapshot = Schema.Struct({
+export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")({
   steering: Schema.Array(QueueEntryInfo),
   followUp: Schema.Array(QueueEntryInfo),
-})
-export type QueueSnapshot = typeof QueueSnapshot.Type
+}) {}

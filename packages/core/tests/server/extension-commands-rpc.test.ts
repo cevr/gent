@@ -10,6 +10,7 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
 import { buildExtensionRpcHandlers } from "@gent/core/server/rpc-handler-groups/extension"
+import { CommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 
 describe("extension command RPCs", () => {
@@ -90,6 +91,7 @@ describe("extension command RPCs", () => {
           createdSessionId = sessionId
 
           const commands = yield* client.extension.listCommands({ sessionId })
+          expect(commands[0]).toBeInstanceOf(CommandInfo)
           expect(commands.map((command) => command.name)).toEqual(["greet"])
           const greet = commands.find((command) => command.name === "greet")
           expect(greet?.description).toBe("Say hello")

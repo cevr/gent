@@ -3,6 +3,7 @@ import type { AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
 import type { BranchId } from "@gent/core/domain/ids.js"
 import type { ProviderId } from "@gent/core/domain/model.js"
+import { SessionInfo as SessionInfoDto } from "@gent/core/server/transport-contract.js"
 import type { GentNamespacedClient, GentRpcError, BranchInfo, SessionInfo } from "@gent/sdk"
 import type { Session } from "./client/index"
 import { Route } from "./router/index"
@@ -48,17 +49,18 @@ export const toSession = (session: SessionInfo): Session | undefined => {
 const toSessionInfo = (
   result: { sessionId: SessionId; branchId: BranchId; name: string },
   cwd: string,
-): SessionInfo => ({
-  id: result.sessionId,
-  name: result.name,
-  cwd,
-  reasoningLevel: undefined,
-  branchId: result.branchId,
-  parentSessionId: undefined,
-  parentBranchId: undefined,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-})
+): SessionInfo =>
+  new SessionInfoDto({
+    id: result.sessionId,
+    name: result.name,
+    cwd,
+    reasoningLevel: undefined,
+    branchId: result.branchId,
+    parentSessionId: undefined,
+    parentBranchId: undefined,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
 
 export const resolveAppBootstrap = (
   state: Exclude<InitialState, { _tag: "headless" }>,

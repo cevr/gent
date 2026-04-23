@@ -16,7 +16,9 @@ import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machi
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
-import { SessionRuntime } from "@gent/core/runtime/session-runtime"
+import { SessionRuntime, SessionRuntimeStateSchema } from "@gent/core/runtime/session-runtime"
+import { SessionSnapshot } from "@gent/core/server/transport-contract"
+import { QueueSnapshot } from "@gent/core/domain/queue"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 
@@ -28,11 +30,12 @@ describe("Session Snapshot", () => {
       drainQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getQueuedMessages: () => Effect.succeed({ steering: [], followUp: [] }),
       getState: () =>
-        Effect.succeed({
-          _tag: "Running" as const,
-          agent: "deepwork" as const,
-          queue: { steering: [], followUp: [] },
-        }),
+        Effect.succeed(
+          new SessionRuntimeStateSchema.Running({
+            agent: "deepwork" as const,
+            queue: new QueueSnapshot({ steering: [], followUp: [] }),
+          }),
+        ),
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
       watchState: () => Effect.succeed(Stream.empty),
@@ -76,6 +79,7 @@ describe("Session Snapshot", () => {
         sessionId: session.sessionId,
         branchId: session.branchId,
       })
+      expect(result).toBeInstanceOf(SessionSnapshot)
       expect(result.sessionId).toBeDefined()
       expect(result.messages).toEqual([])
     }).pipe(Effect.provide(testLayer))

@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { AuthApi } from "../../domain/auth-store.js"
 import { SessionId } from "../../domain/ids.js"
 import { NotFoundError } from "../errors.js"
+import { DriverInfo, DriverListResult } from "../transport-contract.js"
 import type {
   AuthorizeAuthInput,
   CallbackAuthInput,
@@ -29,20 +30,26 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
       const models = yield* deps.driverRegistry.listModels()
       const externals = yield* deps.driverRegistry.listExternal()
       const drivers = [
-        ...models.map((driver) => ({
-          id: driver.id,
-          kind: "model" as const,
-          ...(driver.name !== undefined ? { description: driver.name } : {}),
-        })),
-        ...externals.map((driver) => ({
-          id: driver.id,
-          kind: "external" as const,
-        })),
+        ...models.map(
+          (driver) =>
+            new DriverInfo({
+              id: driver.id,
+              kind: "model",
+              ...(driver.name !== undefined ? { description: driver.name } : {}),
+            }),
+        ),
+        ...externals.map(
+          (driver) =>
+            new DriverInfo({
+              id: driver.id,
+              kind: "external",
+            }),
+        ),
       ]
-      return {
+      return new DriverListResult({
         drivers,
         overrides: config.driverOverrides ?? {},
-      }
+      })
     }),
 
   "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>

@@ -2,7 +2,7 @@ import { Effect, Layer, Context } from "effect"
 import { DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { Session, SessionTreeNode } from "../domain/message.js"
-import type { QueueSnapshot } from "../domain/queue.js"
+import { QueueSnapshot } from "../domain/queue.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
@@ -11,13 +11,13 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { NotFoundError, type AppServiceError } from "./errors.js"
 import { SessionRuntime, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 import { buildBranchTree, branchToInfo, messageToInfo, sessionToInfo } from "./session-utils.js"
+import { SessionSnapshot } from "./transport-contract.js"
 import type {
   BranchInfo,
   BranchTreeNode,
   GetSessionSnapshotInput,
   MessageInfoReadonly,
   SessionInfo,
-  SessionSnapshot,
 } from "./transport-contract.js"
 
 export interface SessionQueriesService {
@@ -144,7 +144,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         // Fetch current runtime state — idle sessions return Idle runtime
         const idleRuntime = new SessionRuntimeStateSchema.Idle({
           agent: DEFAULT_AGENT_NAME,
-          queue: { steering: [], followUp: [] },
+          queue: new QueueSnapshot({ steering: [], followUp: [] }),
         })
         const runtime = yield* sessionRuntime
           .getState({ sessionId: input.sessionId, branchId: input.branchId })
@@ -155,7 +155,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
         // mount and subscribe to `ExtensionStateChanged` events for refetch
         // signals. The privileged out-of-band UI snapshot channel is gone.
 
-        return {
+        return new SessionSnapshot({
           sessionId: input.sessionId,
           branchId: input.branchId,
           name: session.name,
@@ -164,7 +164,7 @@ export class SessionQueries extends Context.Service<SessionQueries, SessionQueri
           reasoningLevel: session.reasoningLevel,
           activeBranchId: session.activeBranchId,
           runtime,
-        }
+        })
       })
 
       return {

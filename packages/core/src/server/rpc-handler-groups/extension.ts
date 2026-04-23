@@ -3,6 +3,7 @@ import { BranchId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
 import { buildExtensionHealthSnapshot } from "../extension-health.js"
+import { CommandInfo } from "../transport-contract.js"
 import type {
   AskExtensionMessageInput,
   ListExtensionCommandsInput,
@@ -113,13 +114,14 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     Effect.gen(function* () {
       const { registry } = yield* deps.resolveSessionProfile(sessionId)
       return listSlashCommands(registry.getResolved().extensions, { publicOnly: true }).map(
-        (command) => ({
-          name: command.name,
-          description: command.description,
-          extensionId: command.extensionId,
-          capabilityId: command.capabilityId,
-          intent: command.intent,
-        }),
+        (command) =>
+          new CommandInfo({
+            name: command.name,
+            description: command.description,
+            extensionId: command.extensionId,
+            capabilityId: command.capabilityId,
+            intent: command.intent,
+          }),
       )
     }),
 })

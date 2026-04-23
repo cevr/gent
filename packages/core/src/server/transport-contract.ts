@@ -36,7 +36,7 @@ export const CreateSessionResult = Schema.Struct({
 })
 export type CreateSessionResult = typeof CreateSessionResult.Type
 
-export const SessionInfo = Schema.Struct({
+export class SessionInfo extends Schema.Class<SessionInfo>("SessionInfo")({
   id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
@@ -46,8 +46,7 @@ export const SessionInfo = Schema.Struct({
   parentBranchId: Schema.optional(BranchId),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
-})
-export type SessionInfo = typeof SessionInfo.Type
+}) {}
 
 export interface SessionTreeNode {
   id: SessionId
@@ -96,7 +95,7 @@ export const GetSessionTreeInput = Schema.Struct({
 })
 export type GetSessionTreeInput = typeof GetSessionTreeInput.Type
 
-export const BranchInfo = Schema.Struct({
+export class BranchInfo extends Schema.Class<BranchInfo>("BranchInfo")({
   id: BranchId,
   sessionId: SessionId,
   parentBranchId: Schema.optional(BranchId),
@@ -104,8 +103,7 @@ export const BranchInfo = Schema.Struct({
   name: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
   createdAt: Schema.Number,
-})
-export type BranchInfo = typeof BranchInfo.Type
+}) {}
 
 export const ListBranchesInput = Schema.Struct({
   sessionId: SessionId,
@@ -193,7 +191,7 @@ export const SendMessageInput = Schema.Struct({
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
-export const MessageInfo = Schema.Struct({
+export class MessageInfo extends Schema.Class<MessageInfo>("MessageInfo")({
   id: MessageId,
   sessionId: SessionId,
   branchId: BranchId,
@@ -203,8 +201,8 @@ export const MessageInfo = Schema.Struct({
   createdAt: Schema.Number,
   turnDurationMs: Schema.optional(Schema.Number),
   metadata: Schema.optional(MessageMetadata),
-})
-export type MessageInfoReadonly = typeof MessageInfo.Type
+}) {}
+export type MessageInfoReadonly = MessageInfo
 
 export const ListMessagesInput = Schema.Struct({
   branchId: BranchId,
@@ -217,7 +215,7 @@ export const GetSessionSnapshotInput = Schema.Struct({
 })
 export type GetSessionSnapshotInput = typeof GetSessionSnapshotInput.Type
 
-export const SessionSnapshot = Schema.Struct({
+export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnapshot")({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.optional(Schema.String),
@@ -227,8 +225,7 @@ export const SessionSnapshot = Schema.Struct({
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntime),
-})
-export type SessionSnapshot = typeof SessionSnapshot.Type
+}) {}
 
 export const SessionRuntime = SessionRuntimeStateSchema
 export type SessionRuntime = typeof SessionRuntime.Type
@@ -362,14 +359,13 @@ export const ListExtensionCommandsInput = Schema.Struct({
 })
 export type ListExtensionCommandsInput = typeof ListExtensionCommandsInput.Type
 
-export const CommandInfo = Schema.Struct({
+export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
   name: Schema.String,
   description: Schema.optional(Schema.String),
   extensionId: Schema.String,
   capabilityId: Schema.String,
   intent: Schema.Literals(["read", "write"]),
-})
-export type CommandInfo = typeof CommandInfo.Type
+}) {}
 
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
@@ -453,21 +449,19 @@ export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 
 /** Per-driver descriptor returned by `driver.list`. `kind` distinguishes
  *  model drivers (provider-routed) from external drivers (e.g. ACP). */
-export const DriverInfo = Schema.Struct({
+export class DriverInfo extends Schema.Class<DriverInfo>("DriverInfo")({
   id: Schema.String,
   kind: Schema.Literals(["model", "external"]),
   description: Schema.optional(Schema.String),
-})
-export type DriverInfo = typeof DriverInfo.Type
+}) {}
 
 /** Snapshot returned by `driver.list`. Carries every registered driver
  *  and the active per-agent override map. The TUI joins these against
  *  the agent catalogue to render `/driver`. */
-export const DriverListResult = Schema.Struct({
+export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
   overrides: Schema.Record(Schema.String, DriverRef),
-})
-export type DriverListResult = typeof DriverListResult.Type
+}) {}
 
 export const SetDriverOverrideInput = Schema.Struct({
   agentName: Schema.String,

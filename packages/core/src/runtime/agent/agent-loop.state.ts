@@ -95,16 +95,17 @@ const toQueueEntry = (
 const toQueueSnapshot = (
   steeringItems: ReadonlyArray<QueuedTurnItem>,
   followUpItems: ReadonlyArray<QueuedTurnItem>,
-): QueueSnapshot => ({
-  steering: steeringItems.flatMap((item) => {
-    const entry = toQueueEntry("steering", item)
-    return entry === undefined ? [] : [entry]
-  }),
-  followUp: followUpItems.flatMap((item) => {
-    const entry = toQueueEntry("follow-up", item)
-    return entry === undefined ? [] : [entry]
-  }),
-})
+): QueueSnapshot =>
+  new QueueSnapshot({
+    steering: steeringItems.flatMap((item) => {
+      const entry = toQueueEntry("steering", item)
+      return entry === undefined ? [] : [entry]
+    }),
+    followUp: followUpItems.flatMap((item) => {
+      const entry = toQueueEntry("follow-up", item)
+      return entry === undefined ? [] : [entry]
+    }),
+  })
 
 export const emptyLoopQueueState = (): LoopQueueState => ({
   steering: [],

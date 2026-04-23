@@ -18,6 +18,9 @@ export { make, type Registry, type RegistryOptions } from "./registry"
 // result.ts
 export {
   type Result,
+  InitialResult,
+  SuccessResult,
+  FailureResult,
   initial,
   success,
   failure,
