@@ -24,9 +24,18 @@
 //   - border labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
-import type { Effect } from "effect"
+import type { Effect, ManagedRuntime } from "effect"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.js"
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
+import type { ToolRenderer } from "../components/tool-renderers/types"
+import type { JSX } from "@opentui/solid"
+import type { ClientTransport } from "./client-transport"
+import type {
+  ClientComposer,
+  ClientLifecycle,
+  ClientShell,
+  ClientWorkspace,
+} from "./client-services"
 
 /** Widget placement slots in the session view */
 export type WidgetSlot = "below-messages" | "above-input" | "below-input"
@@ -46,6 +55,27 @@ export interface ComposerSurfaceProps {
   readonly mode: "editing" | "shell"
 }
 
+/** Props passed to registered overlay components. */
+export interface OverlayProps {
+  readonly open: boolean
+  readonly onClose: () => void
+}
+
+export type WidgetComponent = () => JSX.Element
+export type OverlayComponent = (props: OverlayProps) => JSX.Element
+export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
+export type ComposerSurfaceComponent = (props: ComposerSurfaceProps) => JSX.Element
+
+export type ClientRuntimeServices =
+  | ClientDeps
+  | ClientTransport
+  | ClientWorkspace
+  | ClientShell
+  | ClientComposer
+  | ClientLifecycle
+
+export type ClientRuntime = ManagedRuntime.ManagedRuntime<ClientRuntimeServices, never>
+
 /** Item in an autocomplete popup */
 export interface AutocompleteItem {
   readonly id: string
@@ -53,21 +83,27 @@ export interface AutocompleteItem {
   readonly description?: string
 }
 
+export type AutocompleteItemsEffect = Effect.Effect<
+  ReadonlyArray<AutocompleteItem>,
+  Error,
+  ClientRuntimeServices
+>
+
 // ── Per-tag contribution shapes ──
 
-export interface RendererContribution<TComponent = unknown> {
+export interface RendererContribution {
   readonly _tag: "renderer"
   readonly toolNames: ReadonlyArray<string>
-  readonly component: TComponent
+  readonly component: ToolRenderer
 }
 
-export interface WidgetContribution<TComponent = unknown> {
+export interface WidgetContribution {
   readonly _tag: "widget"
   readonly id: string
   readonly slot: WidgetSlot
   /** Lower = earlier; default 100. */
   readonly priority?: number
-  readonly component: TComponent
+  readonly component: WidgetComponent
 }
 
 export interface PaletteLevelEntry {
@@ -105,23 +141,23 @@ export interface ClientCommandContribution {
   readonly paletteLevel?: () => PaletteLevel
 }
 
-export interface OverlayContribution<TComponent = unknown> {
+export interface OverlayContribution {
   readonly _tag: "overlay"
   readonly id: string
   /** Receives `{ open, onClose }` props at render time. */
-  readonly component: TComponent
+  readonly component: OverlayComponent
 }
 
-export interface InteractionRendererContribution<TComponent = unknown> {
+export interface InteractionRendererContribution {
   readonly _tag: "interaction-renderer"
   /** Matches against metadata.type. undefined = default fallback renderer. */
   readonly metadataType?: string
-  readonly component: TComponent
+  readonly component: InteractionRendererComponent
 }
 
-export interface ComposerSurfaceContribution<TComponent = unknown> {
+export interface ComposerSurfaceContribution {
   readonly _tag: "composer-surface"
-  readonly component: TComponent
+  readonly component: ComposerSurfaceComponent
 }
 
 export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
@@ -147,10 +183,7 @@ export interface AutocompleteContribution {
    *  when resolved. C9.3 deleted the Promise variant per
    *  `migrate-callers-then-delete-legacy-apis`; async work goes through
    *  Effect now. */
-  readonly items: (filter: string) =>
-    | ReadonlyArray<AutocompleteItem>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    | Effect.Effect<ReadonlyArray<AutocompleteItem>, any, any>
+  readonly items: (filter: string) => ReadonlyArray<AutocompleteItem> | AutocompleteItemsEffect
   /** Format the selected item id for insertion into the draft. Default: `${prefix}${id} ` */
   readonly formatInsertion?: (id: string) => string
   /** Called after an item is selected. Use for side effects like frecency tracking. */
@@ -159,13 +192,13 @@ export interface AutocompleteContribution {
 
 // ── Union ──
 
-export type ClientContribution<TComponent = unknown> =
-  | RendererContribution<TComponent>
-  | WidgetContribution<TComponent>
+export type ClientContribution =
+  | RendererContribution
+  | WidgetContribution
   | ClientCommandContribution
-  | OverlayContribution<TComponent>
-  | InteractionRendererContribution<TComponent>
-  | ComposerSurfaceContribution<TComponent>
+  | OverlayContribution
+  | InteractionRendererContribution
+  | ComposerSurfaceContribution
   | BorderLabelContribution
   | AutocompleteContribution
 
@@ -173,38 +206,36 @@ export type ClientContributionTag = ClientContribution["_tag"]
 
 // ── Smart constructors ──
 
-export const rendererContribution = <TComponent>(
+export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
-  component: TComponent,
-): RendererContribution<TComponent> => ({ _tag: "renderer", toolNames, component })
+  component: ToolRenderer,
+): RendererContribution => ({ _tag: "renderer", toolNames, component })
 
-export const widgetContribution = <TComponent>(opts: {
+export const widgetContribution = (opts: {
   readonly id: string
   readonly slot: WidgetSlot
   readonly priority?: number
-  readonly component: TComponent
-}): WidgetContribution<TComponent> => ({ _tag: "widget", ...opts })
+  readonly component: WidgetComponent
+}): WidgetContribution => ({ _tag: "widget", ...opts })
 
 export const clientCommandContribution = (
   opts: Omit<ClientCommandContribution, "_tag">,
 ): ClientCommandContribution => ({ _tag: "command", ...opts })
 
-export const overlayContribution = <TComponent>(opts: {
+export const overlayContribution = (opts: {
   readonly id: string
-  readonly component: TComponent
-}): OverlayContribution<TComponent> => ({ _tag: "overlay", ...opts })
+  readonly component: OverlayComponent
+}): OverlayContribution => ({ _tag: "overlay", ...opts })
 
 /**
  * Build an interaction renderer contribution. The component must be a function
  * accepting `InteractionRendererProps` — core owns this prop shape (it's what
  * the TUI shell calls renderers with), so we type the factory tightly.
  */
-export const interactionRendererContribution = <
-  TComponent extends (props: InteractionRendererProps) => unknown,
->(
-  component: TComponent,
+export const interactionRendererContribution = (
+  component: InteractionRendererComponent,
   metadataType?: string,
-): InteractionRendererContribution<TComponent> => ({
+): InteractionRendererContribution => ({
   _tag: "interaction-renderer",
   metadataType,
   component,
@@ -214,11 +245,9 @@ export const interactionRendererContribution = <
  * Build a composer-surface contribution. The component must be a function
  * accepting `ComposerSurfaceProps` — core owns this prop shape.
  */
-export const composerSurfaceContribution = <
-  TComponent extends (props: ComposerSurfaceProps) => unknown,
->(
-  component: TComponent,
-): ComposerSurfaceContribution<TComponent> => ({ _tag: "composer-surface", component })
+export const composerSurfaceContribution = (
+  component: ComposerSurfaceComponent,
+): ComposerSurfaceContribution => ({ _tag: "composer-surface", component })
 
 export const borderLabelContribution = (
   opts: Omit<BorderLabelContribution, "_tag">,
@@ -250,8 +279,8 @@ export interface ComposerState {
  * the transport yields it and the per-provider `ManagedRuntime` provides
  * it. Errors flow on the typed `ClientSetupError` channel.
  */
-export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> = ClientEffect<
-  ReadonlyArray<ClientContribution<TComponent>>,
+export type ExtensionClientSetup<R extends ClientRuntimeServices = ClientDeps> = ClientEffect<
+  ReadonlyArray<ClientContribution>,
   ClientSetupError,
   R
 >
@@ -262,12 +291,12 @@ export type ExtensionClientSetup<TComponent = unknown, R = ClientDeps> = ClientE
  * additional services (e.g. a TUI-side `ClientTransport`) widens `R` and
  * relies on the loader's runtime to provide every service it requires.
  */
-export interface ExtensionClientModule<TComponent = unknown, R = ClientDeps> {
+export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientDeps> {
   readonly id: string
-  readonly setup: ExtensionClientSetup<TComponent, R>
+  readonly setup: ExtensionClientSetup<R>
 }
 
-export type AnyExtensionClientModule = ExtensionClientModule<unknown, unknown>
+export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
 
 /**
  * Standalone factory for TUI client modules. Server extensions and TUI
@@ -278,10 +307,10 @@ export type AnyExtensionClientModule = ExtensionClientModule<unknown, unknown>
  * Read the typed transport via `yield* ClientTransport` and the other
  * services via `yield* ClientShell` / `ClientComposer` / `ClientWorkspace`.
  */
-function standaloneClientModule<TComponent = unknown, R = unknown>(
+function standaloneClientModule<R extends ClientRuntimeServices = ClientDeps>(
   id: string,
-  spec: { readonly setup: ExtensionClientSetup<TComponent, R> },
-): ExtensionClientModule<TComponent, R> {
+  spec: { readonly setup: ExtensionClientSetup<R> },
+): ExtensionClientModule<R> {
   return { id, setup: spec.setup }
 }
 

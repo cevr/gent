@@ -11,17 +11,18 @@
  * world and the Effect runtime.
  */
 
-import { Effect, type FileSystem, type ManagedRuntime, type Path } from "effect"
-import type { AnyExtensionClientModule, ClientContribution } from "./client-facets.js"
+import { Effect } from "effect"
+import type {
+  AnyExtensionClientModule,
+  ClientContribution,
+  ClientRuntime,
+} from "./client-facets.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
   type LoadedTuiExtension,
   type ResolvedTuiExtensions,
 } from "./resolve"
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TUI runtime membrane: discovered modules may require any subset of the provider runtime's services
-type AnyClientRuntime = ManagedRuntime.ManagedRuntime<any, never>
 
 const getClientModuleError = (value: unknown): string | undefined => {
   if (typeof value !== "object" || value === null) return "module must export an object"
@@ -43,11 +44,11 @@ const isExtensionClientModule = (value: unknown): value is AnyExtensionClientMod
  */
 const invokeSetup = async (
   ext: AnyExtensionClientModule,
-  runtime: AnyClientRuntime,
+  runtime: ClientRuntime,
 ): Promise<ReadonlyArray<ClientContribution>> => runtime.runPromise(ext.setup)
 
 const discoverExtensionsWithRuntime = (
-  runtime: ManagedRuntime.ManagedRuntime<FileSystem.FileSystem | Path.Path, never>,
+  runtime: ClientRuntime,
   params: { userDir: string; projectDir: string },
 ): Promise<ReadonlyArray<DiscoveredTuiExtension>> =>
   runtime.runPromise(
@@ -100,7 +101,7 @@ export const loadTuiExtensions = async (opts: {
   /** ManagedRuntime that satisfies the union of services any Effect-typed
    *  setup may yield, plus `FileSystem | Path` for discovery. The TUI
    *  shell builds this with the full client-services Layer. */
-  readonly runtime: ManagedRuntime.ManagedRuntime<FileSystem.FileSystem | Path.Path, never>
+  readonly runtime: ClientRuntime
 }): Promise<ResolvedTuiExtensions> => {
   const disabledSet = new Set(opts.disabled ?? [])
 

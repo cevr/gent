@@ -22,13 +22,18 @@ import {
 } from "solid-js"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import type { JSX as _JSX } from "@opentui/solid"
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 import { builtinClientModules } from "./builtins/index"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 import type { ResolvedBorderLabel, ResolvedTuiExtensions, ResolvedWidget } from "./resolve"
-import type { AutocompleteContribution } from "./client-facets.js"
+import type {
+  AutocompleteContribution,
+  ClientRuntime,
+  ComposerSurfaceComponent,
+  InteractionRendererComponent,
+  OverlayComponent,
+} from "./client-facets.js"
 import { loadTuiExtensions } from "./loader-boundary"
 import { loadDisabledExtensions } from "./context-boundary"
 import { makeClientTransportLayer } from "./client-transport"
@@ -46,16 +51,13 @@ import {
   useClientTransportState,
 } from "../client/context"
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SolidComponent = (props?: any) => _JSX.Element
-
 export interface ExtensionUIContextValue {
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   readonly commands: Accessor<ReadonlyArray<Command>>
-  readonly overlays: Accessor<Map<string, SolidComponent>>
-  readonly interactionRenderers: Accessor<Map<string | undefined, SolidComponent>>
-  readonly composerSurface: Accessor<SolidComponent | undefined>
+  readonly overlays: Accessor<Map<string, OverlayComponent>>
+  readonly interactionRenderers: Accessor<Map<string | undefined, InteractionRendererComponent>>
+  readonly composerSurface: Accessor<ComposerSurfaceComponent | undefined>
   readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   readonly loading: Accessor<boolean>
@@ -78,8 +80,7 @@ export interface ExtensionUIContextValue {
   readonly branchId: Accessor<string | undefined>
   /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly clientRuntime: ManagedRuntime.ManagedRuntime<any, never>
+  readonly clientRuntime: ClientRuntime
 }
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
@@ -151,7 +152,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
   // (send/sendMessage/overlays), `ClientComposer` (reactive composer
   // state). The loader's `invokeSetup` runs each setup against this
   // runtime.
-  const clientRuntime = ManagedRuntime.make(
+  const clientRuntime: ClientRuntime = ManagedRuntime.make(
     Layer.mergeAll(
       BunFileSystem.layer,
       BunServices.layer,

@@ -43,9 +43,9 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 20,
+      "eslint:@typescript-eslint/no-explicit-any": 18,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 59,
-      "ts:@ts-expect-error": 23,
+      "ts:@ts-expect-error": 25,
     },
   },
   {
@@ -68,8 +68,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/loader-boundary.ts",
       ].includes(file),
     counts: {
-      "effect:anyUnknownInErrorContext:off": 23,
-      "eslint:@typescript-eslint/no-explicit-any": 10,
+      "effect:anyUnknownInErrorContext:off": 22,
+      "eslint:@typescript-eslint/no-explicit-any": 8,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 29,
     },
   },
@@ -141,7 +141,6 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),
     counts: {
-      "eslint:@typescript-eslint/no-explicit-any": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
     },
   },
@@ -166,8 +165,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         file,
       ),
     counts: {
-      "eslint:@typescript-eslint/no-explicit-any": 11,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 34,
+      "eslint:@typescript-eslint/no-explicit-any": 7,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 29,
     },
   },
   {

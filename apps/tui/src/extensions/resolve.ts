@@ -11,15 +11,14 @@ import type {
   AutocompleteContribution,
   ClientContribution,
   ClientContributionTag,
+  ComposerSurfaceComponent,
+  InteractionRendererComponent,
+  OverlayComponent,
+  WidgetComponent,
 } from "./client-facets.js"
 import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
-import type { JSX } from "@opentui/solid"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
-
-/** Generic Solid component for widgets/overlays (no required props) */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SolidComponent = (props?: any) => JSX.Element
 
 export type ExtensionKind = ExtensionScope
 
@@ -27,15 +26,14 @@ export interface LoadedTuiExtension {
   readonly id: string
   readonly kind: ExtensionKind
   readonly filePath: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly contributions: ReadonlyArray<ClientContribution<any>>
+  readonly contributions: ReadonlyArray<ClientContribution>
 }
 
 export interface ResolvedWidget {
   readonly id: string
   readonly slot: "below-messages" | "above-input" | "below-input"
   readonly priority: number
-  readonly component: SolidComponent
+  readonly component: WidgetComponent
 }
 
 export interface ResolvedBorderLabel {
@@ -48,9 +46,9 @@ export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   readonly commands: ReadonlyArray<Command>
-  readonly overlays: Map<string, SolidComponent>
-  readonly interactionRenderers: Map<string | undefined, SolidComponent>
-  readonly composerSurface: SolidComponent | undefined
+  readonly overlays: Map<string, OverlayComponent>
+  readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
+  readonly composerSurface: ComposerSurfaceComponent | undefined
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
 }
@@ -78,7 +76,7 @@ const checkCollision = (
 
 interface SortedExtension {
   readonly ext: LoadedTuiExtension
-  readonly contribution: ClientContribution<unknown>
+  readonly contribution: ClientContribution
 }
 
 const flatten = (sorted: ReadonlyArray<LoadedTuiExtension>): ReadonlyArray<SortedExtension> => {
@@ -100,8 +98,7 @@ const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, Too
     for (const name of contribution.toolNames) {
       const key = name.toLowerCase()
       checkCollision(scopes.get(key), ext, "renderer", name)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      renderers.set(key, contribution.component as ToolRenderer)
+      renderers.set(key, contribution.component)
       scopes.set(key, { kind: ext.kind, source: ext.filePath })
     }
   }
@@ -120,8 +117,7 @@ const resolveWidgets = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Res
       id: contribution.id,
       slot: contribution.slot,
       priority: contribution.priority ?? 100,
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      component: contribution.component as SolidComponent,
+      component: contribution.component,
     })
     scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
   }
@@ -192,15 +188,14 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
   return [...commandMap.values()]
 }
 
-const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, SolidComponent> => {
-  const overlays = new Map<string, SolidComponent>()
+const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, OverlayComponent> => {
+  const overlays = new Map<string, OverlayComponent>()
   const scopes = new Map<string, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
     if (contribution._tag !== "overlay") continue
     checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    overlays.set(contribution.id, contribution.component as SolidComponent)
+    overlays.set(contribution.id, contribution.component)
     scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
   }
 
@@ -209,8 +204,8 @@ const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, Soli
 
 const resolveInteractionRenderers = (
   flat: ReadonlyArray<SortedExtension>,
-): Map<string | undefined, SolidComponent> => {
-  const renderers = new Map<string | undefined, SolidComponent>()
+): Map<string | undefined, InteractionRendererComponent> => {
+  const renderers = new Map<string | undefined, InteractionRendererComponent>()
   const scopes = new Map<string | undefined, ScopeEntry>()
 
   for (const { ext, contribution } of flat) {
@@ -218,8 +213,7 @@ const resolveInteractionRenderers = (
     const key = contribution.metadataType
     const label = key ?? "(default)"
     checkCollision(scopes.get(key), ext, "interaction renderer", label)
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    renderers.set(key, contribution.component as SolidComponent)
+    renderers.set(key, contribution.component)
     scopes.set(key, { kind: ext.kind, source: ext.filePath })
   }
 
@@ -228,8 +222,8 @@ const resolveInteractionRenderers = (
 
 const resolveComposerSurface = (
   flat: ReadonlyArray<SortedExtension>,
-): SolidComponent | undefined => {
-  let winner: SolidComponent | undefined
+): ComposerSurfaceComponent | undefined => {
+  let winner: ComposerSurfaceComponent | undefined
   let winnerScope: ScopeEntry | undefined
 
   for (const { ext, contribution } of flat) {
@@ -237,8 +231,7 @@ const resolveComposerSurface = (
     if (winnerScope !== undefined) {
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    winner = contribution.component as SolidComponent
+    winner = contribution.component
     winnerScope = { kind: ext.kind, source: ext.filePath }
   }
 

@@ -9,6 +9,8 @@ import {
   rendererContribution,
   widgetContribution,
   type ClientContribution,
+  type OverlayProps,
+  type WidgetComponent,
 } from "../src/extensions/client-facets.js"
 import { resolveTuiExtensions, type LoadedTuiExtension } from "../src/extensions/resolve"
 import type { ToolRenderer } from "../src/components/tool-renderers/types"
@@ -21,10 +23,32 @@ const make = (
 
 const renderer = (label: string): ToolRenderer => (() => label) as unknown as ToolRenderer
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const widget = (label: string): any => (() => label) as unknown
+const widget =
+  (label: string): WidgetComponent =>
+  () =>
+    label
+const overlay = (label: string) => (_props: OverlayProps) => label
 
 describe("resolveTuiExtensions", () => {
+  test("client contribution constructors enforce slot-specific component contracts", () => {
+    const good = widgetContribution({
+      id: "typed-widget",
+      slot: "below-input",
+      component: widget("typed"),
+    })
+
+    // @ts-expect-error — widgets receive no props; overlays own open/onClose props
+    widgetContribution({
+      id: "bad-widget",
+      slot: "below-input",
+      component: (_props: OverlayProps) => "bad",
+    })
+    // @ts-expect-error — composer surfaces receive ComposerSurfaceProps, not overlay props
+    composerSurfaceContribution((_props: OverlayProps) => "bad")
+
+    expect(good._tag).toBe("widget")
+  })
+
   test("higher scope wins for visible renderer surfaces", () => {
     const resolved = resolveTuiExtensions([
       make("builtin-tools", "builtin", [rendererContribution(["bash"], renderer("builtin"))]),
@@ -112,10 +136,10 @@ describe("resolveTuiExtensions", () => {
   test("overlay surfaces use scope precedence and same-scope collisions still fail loudly", () => {
     const resolved = resolveTuiExtensions([
       make("builtin-overlay", "builtin", [
-        overlayContribution({ id: "modal", component: widget("builtin") }),
+        overlayContribution({ id: "modal", component: overlay("builtin") }),
       ]),
       make("project-overlay", "project", [
-        overlayContribution({ id: "modal", component: widget("project") }),
+        overlayContribution({ id: "modal", component: overlay("project") }),
       ]),
     ])
 
@@ -123,8 +147,8 @@ describe("resolveTuiExtensions", () => {
 
     expect(() =>
       resolveTuiExtensions([
-        make("a", "user", [overlayContribution({ id: "dup", component: widget("a") })]),
-        make("b", "user", [overlayContribution({ id: "dup", component: widget("b") })]),
+        make("a", "user", [overlayContribution({ id: "dup", component: overlay("a") })]),
+        make("b", "user", [overlayContribution({ id: "dup", component: overlay("b") })]),
       ]),
     ).toThrow(/Same-scope TUI overlay collision/)
   })
