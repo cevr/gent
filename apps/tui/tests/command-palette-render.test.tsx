@@ -1,10 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, test } from "bun:test"
-import { createEffect } from "solid-js"
+import { createEffect, onMount } from "solid-js"
+import { Effect } from "effect"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { CommandPalette } from "../src/components/command-palette"
 import { useCommand } from "../src/command"
-import { renderFrame, renderWithProviders } from "./render-harness"
+import { Route, useRouter, type RouterContextValue } from "../src/router"
+import { useClient } from "../src/client"
+import type { ClientContextValue } from "../src/client/context"
+import { createMockClient, renderFrame, renderWithProviders } from "./render-harness"
+import { waitForRenderedFrame } from "./helpers"
 
 function OpenPaletteOnMount() {
   const command = useCommand()
@@ -12,6 +18,22 @@ function OpenPaletteOnMount() {
     command.openPalette()
   })
   return <CommandPalette />
+}
+
+function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
+  const client = useClient()
+  onMount(() => {
+    props.onReady(client)
+  })
+  return <box />
+}
+
+function RouterProbe(props: { readonly onReady: (router: RouterContextValue) => void }) {
+  const router = useRouter()
+  onMount(() => {
+    props.onReady(router)
+  })
+  return <box />
 }
 
 describe("CommandPalette renderer", () => {
@@ -33,5 +55,89 @@ describe("CommandPalette renderer", () => {
     expect(frame).toContain("System")
     expect(frame).toContain("Dark")
     expect(frame).toContain("Light")
+  })
+
+  test("switches sessions through the sessions palette", async () => {
+    let ctx: ClientContextValue | undefined
+    let router: RouterContextValue | undefined
+    const alphaSessionId = SessionId.make("session-alpha")
+    const alphaBranchId = BranchId.make("branch-alpha")
+    const betaSessionId = SessionId.make("session-beta")
+    const betaBranchId = BranchId.make("branch-beta")
+    const client = createMockClient({
+      session: {
+        list: () =>
+          Effect.succeed([
+            {
+              id: alphaSessionId,
+              branchId: alphaBranchId,
+              name: "Alpha",
+              createdAt: 0,
+              updatedAt: 1,
+            },
+            {
+              id: betaSessionId,
+              branchId: betaBranchId,
+              name: "Beta",
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          ]),
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <OpenPaletteOnMount />
+          <ClientProbe onReady={(value) => (ctx = value)} />
+          <RouterProbe onReady={(value) => (router = value)} />
+        </>
+      ),
+      {
+        client,
+        initialSession: {
+          id: alphaSessionId,
+          branchId: alphaBranchId,
+          name: "Alpha",
+          createdAt: 0,
+          updatedAt: 1,
+        },
+        initialRoute: Route.session(alphaSessionId, alphaBranchId),
+        width: 90,
+        height: 28,
+      },
+    )
+    if (ctx === undefined || router === undefined) {
+      throw new Error("client or router context not ready")
+    }
+
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Commands") && frame.includes("Sessions"),
+      "commands root",
+    )
+    setup.mockInput.pressEnter()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Sessions") && frame.includes("Beta"),
+      "sessions level",
+    )
+    setup.mockInput.pressArrow("down")
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => !frame.includes("Sessions"),
+      "sessions palette closed",
+    )
+
+    expect(router.route()).toEqual(Route.session(betaSessionId, betaBranchId))
+    expect(ctx.session()).toEqual({
+      sessionId: betaSessionId,
+      branchId: betaBranchId,
+      name: "Beta",
+      reasoningLevel: undefined,
+    })
   })
 })

@@ -31,6 +31,23 @@ import { useScopedKeyboard } from "../../keyboard/context"
 const EXT_ID = "@gent/task-tools"
 const QUERY_ID = "task.list"
 
+const isTaskEntry = (value: unknown): value is TaskEntry =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "subject" in value &&
+  typeof value.subject === "string" &&
+  "status" in value &&
+  (value.status === "pending" ||
+    value.status === "in_progress" ||
+    value.status === "completed" ||
+    value.status === "failed" ||
+    value.status === "stopped")
+
+const parseTaskEntries = (value: unknown): readonly TaskEntry[] =>
+  Array.isArray(value) ? value.filter(isTaskEntry) : []
+
 export default defineClientExtension("@gent/task-tools", {
   setup: Effect.gen(function* () {
     const transport = yield* ClientTransport
@@ -50,8 +67,8 @@ export default defineClientExtension("@gent/task-tools", {
       readonly branchId: string
       readonly tasks: readonly TaskEntry[]
     }
-    let getState!: () => Keyed | undefined
-    let setState!: (next: Keyed | undefined) => void
+    let getState: () => Keyed | undefined = () => undefined
+    let setState: (next: Keyed | undefined) => void = () => {}
 
     const liveTasks = (): readonly TaskEntry[] => {
       const s = getState()
@@ -86,13 +103,10 @@ export default defineClientExtension("@gent/task-tools", {
         ) {
           return
         }
-        // The query returns `readonly Task[]`; widget reads only `subject`
-        // and `status` (subset of `TaskEntry`). Cast is structurally safe.
         setState({
           sessionId: captured.sessionId,
           branchId: captured.branchId,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          tasks: out as readonly TaskEntry[],
+          tasks: parseTaskEntries(out),
         })
       } catch (err) {
         // Visible refresh failures matter — surface to console (the only

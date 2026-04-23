@@ -15,12 +15,32 @@
 import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
-import type { Artifact } from "@gent/extensions/artifacts-protocol.js"
-import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol.js"
+import { ArtifactProtocol, type Artifact } from "@gent/extensions/artifacts-protocol.js"
 import { ClientTransport } from "../client-transport"
 import { ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
+
+const isArtifact = (value: unknown): value is Artifact =>
+  typeof value === "object" &&
+  value !== null &&
+  "id" in value &&
+  typeof value.id === "string" &&
+  "label" in value &&
+  typeof value.label === "string" &&
+  "sourceTool" in value &&
+  typeof value.sourceTool === "string" &&
+  "content" in value &&
+  typeof value.content === "string" &&
+  "status" in value &&
+  (value.status === "active" || value.status === "resolved") &&
+  "createdAt" in value &&
+  typeof value.createdAt === "number" &&
+  "updatedAt" in value &&
+  typeof value.updatedAt === "number"
+
+const parseArtifacts = (value: unknown): readonly Artifact[] =>
+  Array.isArray(value) ? value.filter(isArtifact) : []
 
 export default defineClientExtension(EXT_ID, {
   setup: Effect.gen(function* () {
@@ -36,8 +56,8 @@ export default defineClientExtension(EXT_ID, {
       readonly branchId: string
       readonly items: readonly Artifact[]
     }
-    let getState!: () => Keyed | undefined
-    let setState!: (next: Keyed | undefined) => void
+    let getState: () => Keyed | undefined = () => undefined
+    let setState: (next: Keyed | undefined) => void = () => {}
 
     const liveItems = (): readonly Artifact[] => {
       const s = getState()
@@ -67,8 +87,7 @@ export default defineClientExtension(EXT_ID, {
         setState({
           sessionId: captured.sessionId,
           branchId: captured.branchId,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          items: reply as readonly Artifact[],
+          items: parseArtifacts(reply),
         })
       } catch (err) {
         console.warn(

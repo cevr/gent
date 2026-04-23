@@ -273,6 +273,7 @@ export function useSessionFeed(
   })
   const [turnCount, setTurnCount] = createSignal(0)
   const [activeTool, setActiveTool] = createSignal<string | undefined>(undefined)
+  const [streamReadyKey, setStreamReadyKey] = createSignal<string | null>(null)
   let eventSeq = 0
 
   // Track the active key to guard against stale async writes and reset prompt state
@@ -282,6 +283,7 @@ export function useSessionFeed(
     setStore({ messages: [], events: [] })
     setTurnCount(0)
     setActiveTool(undefined)
+    setStreamReadyKey(null)
     eventSeq = 0
   }
 
@@ -306,6 +308,41 @@ export function useSessionFeed(
 
   // Track which prompts have been sent (keyed by feedKey to handle re-navigation)
   const sentPrompts = new Set<string>()
+
+  createEffect(
+    on(
+      [activeSessionKey, feedKey, streamReadyKey, () => canSendPrompt?.() ?? true],
+      ([active, key, readyKey, canSend]) => {
+        if (initialPrompt === undefined || initialPrompt === "") return
+        if (active === null || active !== key || readyKey !== key || !canSend) return
+        if (sentPrompts.has(key)) return
+
+        const session = sessionId()
+        const branch = branchId()
+        sentPrompts.add(key)
+        client.log.info("feed.sendInitialPrompt", {
+          sessionId: session,
+          branchId: branch,
+        })
+        client.runtime.cast(
+          client.client.message
+            .send({
+              sessionId: session,
+              branchId: branch,
+              content: initialPrompt,
+            })
+            .pipe(
+              Effect.catchEager((err) =>
+                Effect.sync(() => {
+                  if (currentKey !== key) return
+                  client.setConnectionIssue(formatConnectionIssue(err))
+                }),
+              ),
+            ),
+        )
+      },
+    ),
+  )
 
   createEffect(
     on([activeSessionKey, feedKey], ([active, key]) => {
@@ -367,27 +404,10 @@ export function useSessionFeed(
                   Effect.forkScoped,
                 )
 
-                // Send the prompt only after the event stream is established
-                // and the caller signals readiness (e.g. auth gate resolved).
-                if (initialPrompt !== undefined && initialPrompt !== "" && !sentPrompts.has(key)) {
-                  // Wait for canSendPrompt if provided (polls via short sleep)
-                  if (canSendPrompt !== undefined) {
-                    while (!canSendPrompt()) {
-                      yield* Effect.sleep("50 millis")
-                      if (currentKey !== key) return yield* Fiber.join(eventsFiber)
-                    }
-                  }
-                  sentPrompts.add(key)
-                  client.log.info("feed.sendInitialPrompt", {
-                    sessionId: session,
-                    branchId: branch,
-                  })
-                  yield* client.client.message.send({
-                    sessionId: session,
-                    branchId: branch,
-                    content: initialPrompt,
-                  })
-                }
+                yield* Effect.sync(() => {
+                  if (currentKey !== key) return
+                  setStreamReadyKey(key)
+                })
 
                 return yield* Fiber.join(eventsFiber)
               }),

@@ -89,6 +89,7 @@ export interface SessionController {
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
+  resolveAuthGate: () => void
   closeOverlay: () => void
   onSessionTreeSelect: (sessionId: SessionId) => void
   onForkSelect: (messageId: MessageId) => void
@@ -675,6 +676,14 @@ export function createSessionController(props: {
     )
   }
 
+  const closeOverlay = () => dispatchSessionUi({ _tag: "CloseOverlay" })
+
+  const resolveAuthGate = () => {
+    setValidatedAgent(client.agent())
+    setAuthGateState("closed")
+    closeOverlay()
+  }
+
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
     executeSlashCommand(cmd, args, command.commands()).pipe(
       Effect.tap((result) =>
@@ -816,7 +825,8 @@ export function createSessionController(props: {
     onSlashCommand,
     onRestoreQueue,
     dispatchComposer,
-    closeOverlay: () => dispatchSessionUi({ _tag: "CloseOverlay" }),
+    resolveAuthGate,
+    closeOverlay,
     onSessionTreeSelect,
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),

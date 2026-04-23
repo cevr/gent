@@ -12,6 +12,27 @@ import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
 
+type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
+
+const waitForMessage = async (
+  setup: AppAuthRenderSetup,
+  messages: readonly { readonly content: string }[],
+  content: string,
+  timeoutMs = 2_000,
+): Promise<void> => {
+  const startedAt = Date.now()
+  const poll = async (): Promise<void> => {
+    await setup.renderOnce()
+    if (messages.some((message) => message.content === content)) return
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`timed out waiting for message: ${content}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    return poll()
+  }
+  return poll()
+}
+
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
@@ -381,6 +402,141 @@ describe("App auth gate", () => {
     expect(authFrame).toContain("API Keys")
     // Prompt still not sent while auth overlay is open
     expect(sentMessages).toEqual([])
+    setup.renderer.destroy()
+  })
+
+  test("auth-gated session route can search prompt history after auth resolves", async () => {
+    let hasOpenAiKey = false
+    const sentMessages: Array<{
+      sessionId: SessionId
+      branchId: BranchId
+      content: string
+      requestId: string
+    }> = []
+
+    const alphaSessionId = SessionId.make("session-alpha")
+    const alphaBranchId = BranchId.make("branch-alpha")
+    const initialPrompt = "deferred route-flow prompt"
+    const historyPrompt = "batch eighteen prompt search route flow"
+
+    const client = createMockClient({
+      session: {
+        getSnapshot: ({
+          sessionId,
+          branchId,
+        }: {
+          readonly sessionId: SessionId
+          readonly branchId: BranchId
+        }) =>
+          Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId: null,
+            reasoningLevel: undefined,
+            runtime: {
+              _tag: "Idle" as const,
+              agent: "cowork" as const,
+              queue: emptyQueueSnapshot(),
+            },
+          }),
+      },
+      auth: {
+        listProviders: () =>
+          Effect.succeed([
+            {
+              provider: "openai",
+              hasKey: hasOpenAiKey,
+              required: true,
+              source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
+              authType: undefined,
+            },
+          ]),
+        listMethods: () =>
+          Effect.succeed({
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+        setKey: ({ key }: { readonly key: string }) =>
+          Effect.sync(() => {
+            hasOpenAiKey = key.length > 0
+          }),
+      },
+      message: {
+        send: (input: {
+          readonly sessionId: SessionId
+          readonly branchId: BranchId
+          readonly content: string
+          readonly requestId: string
+        }) =>
+          Effect.sync(() => {
+            sentMessages.push(input)
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <App missingAuthProviders={["openai"]} />
+        </>
+      ),
+      {
+        client,
+        runtime,
+        initialAgent: "cowork",
+        initialSession: {
+          id: alphaSessionId,
+          branchId: alphaBranchId,
+          name: "Alpha",
+          createdAt: 0,
+          updatedAt: 1,
+        },
+        initialRoute: Route.session(alphaSessionId, alphaBranchId, initialPrompt),
+        width: 100,
+        height: 30,
+      },
+    )
+
+    await waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
+    expect(sentMessages).toEqual([])
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Enter API key for openai"),
+      "openai key input",
+    )
+    await setup.mockInput.typeText("sk-test")
+    setup.mockInput.pressEnter()
+
+    await waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed")
+    expect(hasOpenAiKey).toBe(true)
+    await waitForMessage(setup, sentMessages, initialPrompt)
+    expect(sentMessages.find((message) => message.content === initialPrompt)).toMatchObject({
+      sessionId: alphaSessionId,
+      branchId: alphaBranchId,
+    })
+
+    await setup.mockInput.typeText(historyPrompt)
+    setup.mockInput.pressEnter()
+    await waitForMessage(setup, sentMessages, historyPrompt)
+
+    setup.mockInput.pressKey("r", { ctrl: true })
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Prompt Search") && frame.includes(historyPrompt),
+      "prompt search history",
+    )
+    setup.mockInput.pressEscape()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => !frame.includes("Prompt Search"),
+      "prompt search closed",
+    )
     setup.renderer.destroy()
   })
 })
