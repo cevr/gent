@@ -7,7 +7,7 @@
  * Owns its own DDL — no dependency on host Storage service.
  */
 
-import { Clock, Context, Effect, Layer, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Option, Schema } from "effect"
 import {
   Task,
   TaskStatus,
@@ -29,17 +29,10 @@ export class TaskStorageError extends Schema.TaggedErrorClass<TaskStorageError>(
 ) {}
 
 const MetadataJson = Schema.fromJsonString(Schema.Unknown)
+const decodeMetadataJson = Schema.decodeUnknownOption(MetadataJson)
 const encodeMetadataJson = Schema.encodeSync(MetadataJson)
 
 const mapError = (message: string) => (e: unknown) => new TaskStorageError({ message, cause: e })
-
-const safeJsonParse = (s: string): unknown => {
-  try {
-    return JSON.parse(s)
-  } catch {
-    return undefined
-  }
-}
 
 interface TaskRow {
   id: TaskId
@@ -58,6 +51,22 @@ interface TaskRow {
 }
 
 const isTaskStatus = Schema.is(TaskStatus)
+const encodeTaskMetadata = (metadata: unknown) =>
+  Effect.try({
+    try: () => encodeMetadataJson(metadata),
+    catch: () => new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
+  })
+
+const decodeTaskMetadata = (metadata: string | null) =>
+  metadata === null ? undefined : Option.getOrUndefined(decodeMetadataJson(metadata))
+
+const selectTaskById = (sql: SqlClient.SqlClient, id: TaskId) =>
+  sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`.pipe(
+    Effect.map((rows) => {
+      const row = rows[0]
+      return row === undefined ? undefined : taskFromRow(row)
+    }),
+  )
 
 const taskFromRow = (row: TaskRow) =>
   new Task({
@@ -71,7 +80,7 @@ const taskFromRow = (row: TaskRow) =>
     agentType: row.agent_type ?? undefined,
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,
-    metadata: row.metadata !== null ? safeJsonParse(row.metadata) : undefined,
+    metadata: decodeTaskMetadata(row.metadata),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   })
@@ -178,14 +187,7 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
     return {
       createTask: Effect.fn("TaskStorage.createTask")(
         function* (task) {
-          const meta =
-            task.metadata === undefined
-              ? null
-              : yield* Effect.try({
-                  try: () => encodeMetadataJson(task.metadata),
-                  catch: () =>
-                    new TaskStorageError({ message: "Task metadata is not JSON-serializable" }),
-                })
+          const meta = task.metadata === undefined ? null : yield* encodeTaskMetadata(task.metadata)
           yield* sql`INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at) VALUES (${task.id}, ${task.sessionId}, ${task.branchId}, ${task.subject}, ${task.description ?? null}, ${task.status}, ${task.owner ?? null}, ${task.agentType ?? null}, ${task.prompt ?? null}, ${task.cwd ?? null}, ${meta}, ${task.createdAt.getTime()}, ${task.updatedAt.getTime()})`
           return task
         },
@@ -194,11 +196,7 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
 
       getTask: Effect.fn("TaskStorage.getTask")(
         function* (id) {
-          const rows =
-            yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-          const row = rows[0]
-          if (row === undefined) return undefined
-          return taskFromRow(row)
+          return yield* selectTaskById(sql, id)
         },
         Effect.mapError(mapError("Failed to get task")),
       ),
@@ -217,65 +215,46 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
       updateTask: Effect.fn("TaskStorage.updateTask")(
         function* (id, fields) {
           const now = yield* Clock.currentTimeMillis
-          const VALID_STATUSES = new Set([
-            "pending",
-            "in_progress",
-            "completed",
-            "failed",
-            "stopped",
-          ])
-          if (fields.status !== undefined && !VALID_STATUSES.has(fields.status)) {
+          if (fields.status !== undefined && !isTaskStatus(fields.status)) {
             return yield* new TaskStorageError({
               message: `Invalid task status: ${fields.status}`,
             })
           }
 
-          const sets: string[] = ["updated_at = ?"]
-          const params: (string | number | null)[] = [now]
+          const updates: Record<string, string | number | null> = {
+            updated_at: now,
+          }
 
           if (fields.status !== undefined) {
-            sets.push("status = ?")
-            params.push(fields.status)
+            updates["status"] = fields.status
           }
           if ("description" in fields) {
-            sets.push("description = ?")
-            params.push(fields.description ?? null)
+            updates["description"] = fields.description ?? null
           }
           if ("owner" in fields) {
-            sets.push("owner = ?")
-            params.push(fields.owner ?? null)
+            updates["owner"] = fields.owner ?? null
           }
           if ("metadata" in fields) {
-            sets.push("metadata = ?")
-            if (fields.metadata === null || fields.metadata === undefined) {
-              params.push(null)
-            } else {
-              params.push(
-                yield* Effect.try({
-                  try: () => encodeMetadataJson(fields.metadata),
-                  catch: () =>
-                    new TaskStorageError({ message: "Metadata is not JSON-serializable" }),
-                }),
-              )
-            }
+            updates["metadata"] =
+              fields.metadata === null || fields.metadata === undefined
+                ? null
+                : yield* encodeTaskMetadata(fields.metadata)
           }
 
-          params.push(id)
-          yield* sql.unsafe(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, params)
-
-          const rows =
-            yield* sql<TaskRow>`SELECT id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at FROM tasks WHERE id = ${id}`
-          const row = rows[0]
-          if (row === undefined) return undefined
-          return taskFromRow(row)
+          yield* sql`UPDATE tasks SET ${sql.update(updates)} WHERE id = ${id}`
+          return yield* selectTaskById(sql, id)
         },
         Effect.mapError(mapError("Failed to update task")),
       ),
 
       deleteTask: Effect.fn("TaskStorage.deleteTask")(
         function* (id) {
-          yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
-          yield* sql`DELETE FROM tasks WHERE id = ${id}`
+          yield* sql.withTransaction(
+            Effect.gen(function* () {
+              yield* sql`DELETE FROM task_deps WHERE task_id = ${id} OR blocked_by_id = ${id}`
+              yield* sql`DELETE FROM tasks WHERE id = ${id}`
+            }),
+          )
         },
         Effect.mapError(mapError("Failed to delete task")),
       ),

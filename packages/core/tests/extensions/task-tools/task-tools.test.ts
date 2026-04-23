@@ -249,6 +249,29 @@ describe("TaskService.remove", () => {
       expect(events).toContain("TaskDeleted")
     }).pipe(Effect.provide(layer)),
   )
+
+  it.live("removes dependency edges referencing the deleted task", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskService = yield* TaskService
+      const blocker = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Blocker",
+      })
+      const blocked = yield* taskService.create({
+        sessionId: SessionId.of("s1"),
+        branchId: "b1",
+        subject: "Blocked",
+      })
+
+      yield* taskService.addDep(blocked.id, blocker.id)
+      expect(yield* taskService.getDeps(blocked.id)).toEqual([blocker.id])
+
+      yield* taskService.remove(blocker.id)
+      expect(yield* taskService.getDeps(blocked.id)).toEqual([])
+    }).pipe(Effect.provide(layer)),
+  )
 })
 
 describe("DelegateTool background mode", () => {
