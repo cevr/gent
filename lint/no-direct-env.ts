@@ -289,7 +289,6 @@ const plugin: Plugin = {
      * Extensions may import from:
      *   - `./api.js` or `../api.js` (relative to extension file in core)
      *   - `@gent/core/extensions/api` (package path, for extracted extensions)
-     *   - `@gent/core/extensions/internal` (builtin-only runtime seam)
      *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
      *   - Sibling extension files (relative `./` or `../` within extensions/)
      *
@@ -310,14 +309,20 @@ const plugin: Plugin = {
         const inExtensionsPackage = filename.includes("packages/extensions/")
         if (!inCoreExtensions && !inExtensionsPackage) return {}
 
-        // Exempt: api.ts is the bridge between internals and the public surface
-        if (filename.endsWith("/extensions/api.ts")) return {}
+        // Exempt: api.ts is the public bridge; core-internal.ts is the
+        // builtin-only bridge for Gent-owned extensions.
+        if (
+          filename.endsWith("/extensions/api.ts") ||
+          filename.endsWith("/packages/extensions/src/core-internal.ts")
+        ) {
+          return {}
+        }
 
         // Relative imports that escape into core internals
         const INTERNAL_RELATIVE = /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers)\//
 
         // Allowed @gent/core subpaths (everything else is forbidden)
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/(?:api|internal)(?:\.js)?$/
+        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/api(?:\.js)?$/
 
         return {
           ImportDeclaration(node: { source: { value: string }; type: string }) {
@@ -335,7 +340,7 @@ const plugin: Plugin = {
             // Package imports into core internals (skip allowed paths)
             if (source.startsWith("@gent/core/") && !ALLOWED_PACKAGE.test(source)) {
               context.report({
-                message: `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/internal", not internal paths. Forbidden: "${source}"`,
+                message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
                 node,
               })
               return

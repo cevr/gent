@@ -16,7 +16,7 @@ import {
   Task,
   TaskId,
 } from "@gent/core/extensions/api"
-import { EventPublisher } from "@gent/core/extensions/internal"
+import { EventPublisher } from "../core-internal.js"
 import { TaskService } from "../task-tools-service.js"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"

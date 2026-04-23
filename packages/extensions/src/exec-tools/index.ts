@@ -1,10 +1,7 @@
 import { Layer, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineExtension, resource } from "@gent/core/extensions/api"
-import {
-  defineInternalResource,
-  type InternalResourceMachine,
-} from "../internal-resource-machine.js"
+import { defineInternalResource, type InternalResourceMachine } from "../core-internal.js"
 import { BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID, ExecToolsProtocol } from "./protocol.js"
 

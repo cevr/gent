@@ -12,7 +12,7 @@
 
 import { Effect, Schema } from "effect"
 import { type ProjectionContribution, ProjectionError } from "@gent/core/extensions/api"
-import { InteractionPendingReader } from "@gent/core/extensions/internal"
+import { InteractionPendingReader } from "../core-internal.js"
 
 export const InteractionUiModel = Schema.Struct({
   requestId: Schema.optional(Schema.String),

@@ -152,6 +152,7 @@ describe("architecture policy", () => {
 
   test("public extension api does not re-export runtime or server internals", () => {
     const source = readFileSync(pathResolve(ROOT, "packages/core/src/extensions/api.ts"), "utf8")
+    const pkg = readFileSync(pathResolve(ROOT, "packages/core/package.json"), "utf8")
 
     expect(source).not.toMatch(/\bMachineEngine\b/)
     expect(source).not.toMatch(/\bMachineExecute\b/)
@@ -159,5 +160,6 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bInteractionPendingReader\b/)
     expect(source).not.toMatch(/\bEventPublisher\b/)
     expect(source).not.toMatch(/\.\.\/runtime\//)
+    expect(pkg).not.toMatch(/"\.\/extensions\/internal"/)
   })
 })

@@ -18,7 +18,6 @@
     "./runtime/extensions/turn-control.ts": null,
     "./runtime/*": "./src/runtime/*",
     "./extensions/api": "./src/extensions/api.ts",
-    "./extensions/internal": "./src/extensions/internal.ts",
     "./server/*": "./src/server/*",
     "./test-utils": "./src/test-utils/index.ts",
     "./test-utils/*": "./src/test-utils/*"

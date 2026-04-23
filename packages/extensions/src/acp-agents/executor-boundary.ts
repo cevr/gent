@@ -14,7 +14,7 @@
 
 import { Context, Effect } from "effect"
 import { ToolCallId, makeToolContext, type ToolContext } from "@gent/core/extensions/api"
-import { ToolRunner } from "@gent/core/extensions/internal"
+import { ToolRunner } from "../core-internal.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 
 /**

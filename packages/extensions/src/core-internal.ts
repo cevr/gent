@@ -8,6 +8,18 @@ import type {
   ResourceSpec,
 } from "@gent/core/extensions/api"
 
+export {
+  EventPublisher,
+  InteractionPendingReader,
+  MachineExecute,
+  MachineEngine,
+  ToolRunner,
+  type ExtensionStorage,
+  type InteractionPendingReaderService,
+  type PendingInteraction,
+  type ToolRunnerService,
+} from "../../core/src/extensions/internal.js"
+
 type RuntimeExtensionEffect =
   | {
       readonly _tag: "QueueFollowUp"
@@ -41,5 +53,5 @@ export const defineInternalResource = <
   },
 ): ResourceContribution<A, S, R, E> =>
   // Builtins may emit runtime turn-control effects; public extension machines cannot.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- this package-local membrane widens builtin-only runtime effects back to the public contribution shape.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Gent-owned builtin bridge widens runtime-only machine effects back into the shared contribution shape.
   spec as ResourceContribution<A, S, R, E>
