@@ -9,6 +9,7 @@
 
 import type {
   AutocompleteContribution,
+  BorderLabelItem,
   ClientContribution,
   ClientContributionTag,
   ComposerSurfaceComponent,
@@ -42,7 +43,7 @@ export interface ResolvedWidget {
 export interface ResolvedBorderLabel {
   readonly position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
   readonly priority: number
-  readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
+  readonly produce: () => ReadonlyArray<BorderLabelItem>
 }
 
 export interface ResolvedTuiExtensions {

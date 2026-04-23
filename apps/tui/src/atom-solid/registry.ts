@@ -1,11 +1,12 @@
 import { createRoot, getOwner, runWithOwner } from "solid-js"
 import type { Accessor, Owner } from "solid-js"
 import * as Context from "effect/Context"
+import * as Effect from "effect/Effect"
+import type * as Fiber from "effect/Fiber"
 import type { Atom, AtomInstance, Writable, WritableInstance } from "./atom"
 
-export interface Registry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services: Context.Context<any>
+export interface Registry<Services = unknown> {
+  readonly fork: <A, E, R extends Services>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
   readonly read: <A>(atom: Atom<A>) => Accessor<A>
   readonly get: <A>(atom: Atom<A>) => A
   readonly set: <R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)) => void
@@ -14,22 +15,21 @@ export interface Registry {
   readonly dispose: () => void
 }
 
-export interface RegistryOptions {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services?: Context.Context<any>
+export interface RegistryOptions<Services = unknown> {
+  readonly services?: Context.Context<Services>
   readonly maxEntries?: number
 }
 
-export const make = (options?: RegistryOptions): Registry =>
+export const make = <Services = unknown>(options?: RegistryOptions<Services>): Registry<Services> =>
   new RegistryImpl(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    options?.services ?? (Context.empty() as Context.Context<any>),
+    options?.services ??
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      (Context.empty() as Context.Context<Services>),
     options?.maxEntries,
   )
 
-class RegistryImpl implements Registry {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly services: Context.Context<any>
+class RegistryImpl<Services> implements Registry<Services> {
+  private readonly services: Context.Context<Services>
   private readonly instances = new Map<Atom<unknown>, AtomInstance<unknown>>()
   private readonly refCounts = new Map<Atom<unknown>, number>()
   private readonly maxEntries: number | undefined
@@ -37,8 +37,7 @@ class RegistryImpl implements Registry {
   private readonly owner: Owner
   private readonly disposeRoot: () => void
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(services: Context.Context<any>, maxEntries?: number) {
+  constructor(services: Context.Context<Services>, maxEntries?: number) {
     this.services = services
     this.maxEntries = maxEntries
     this.shouldEvict = maxEntries !== undefined && maxEntries > 0
@@ -59,6 +58,10 @@ class RegistryImpl implements Registry {
     this.disposeRoot = disposeRoot
   }
 
+  fork<A, E, R extends Services>(effect: Effect.Effect<A, E, R>): Fiber.Fiber<A, E> {
+    return Effect.runForkWith(this.services)(effect)
+  }
+
   read<A>(atom: Atom<A>): Accessor<A> {
     return this.ensure(atom).get
   }
@@ -68,12 +71,7 @@ class RegistryImpl implements Registry {
   }
 
   set<R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)): void {
-    const instance = this.ensure(atom) as AtomInstance<unknown>
-    if (!("set" in instance)) {
-      throw new Error("Atom is not writable")
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    ;(instance as WritableInstance<R, W>).set(value)
+    this.ensureWritable(atom).set(value)
   }
 
   refresh<A>(atom: Atom<A>): void {
@@ -117,13 +115,25 @@ class RegistryImpl implements Registry {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return existing as AtomInstance<A>
     }
-    const created = runWithOwner(this.owner, () => atom.build(this))
+    const created = runWithOwner(this.owner, () =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      atom.build(this as Registry),
+    )
     if (created === undefined) {
       throw new Error("Atom build returned no instance")
     }
     this.instances.set(atom as Atom<unknown>, created as AtomInstance<unknown>)
     this.evictIfNeeded()
     return created
+  }
+
+  private ensureWritable<R, W>(atom: Writable<R, W>): WritableInstance<R, W> {
+    const instance = this.ensure(atom)
+    if (!("set" in instance)) {
+      throw new Error("Atom is not writable")
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    return instance as WritableInstance<R, W>
   }
 
   private touch(atom: Atom<unknown>, instance?: AtomInstance<unknown>): void {

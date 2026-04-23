@@ -26,6 +26,7 @@ import { ExtensionWidgets } from "../components/extension-widgets"
 import { useExtensionUI } from "../extensions/context"
 import { Auth } from "./auth"
 import { Permissions } from "./permissions"
+import type { BorderLabelColor } from "../extensions/client-facets.js"
 
 export interface SessionProps {
   sessionId: SessionId
@@ -58,20 +59,19 @@ export function Session(props: SessionProps) {
   }
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: unknown) => {
+  const resolveColor = (color: BorderLabelColor) => {
     if (typeof color === "string") {
-      const colorMap: Record<string, unknown> = {
+      const colorMap = {
         warning: theme.warning,
         info: theme.info,
+        success: theme.success,
         primary: theme.primary,
         text: theme.text,
         textMuted: theme.textMuted,
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return (colorMap[color] ?? theme.text) as typeof theme.text
+      return colorMap[color]
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return color as typeof theme.text
+    return color
   }
 
   const topLeftLabels = (): BorderLabelItem[] => {

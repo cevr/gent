@@ -3,7 +3,6 @@ import type { Accessor } from "solid-js"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
-import type * as Context from "effect/Context"
 import type { Registry } from "./registry"
 import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
@@ -70,10 +69,8 @@ export const effect = <A, E, R>(
     const get = <T>(atom: Atom<T>) => registry.read(atom)()
 
     const runEffect = (eff: Effect.Effect<A, E, R>) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const services = registry.services as Context.Context<R>
       let cancelled = false
-      const fiber = Effect.runForkWith(services)(eff)
+      const fiber = registry.fork(eff)
       fiber.addObserver((exit) => {
         if (cancelled) return
         setResult(Exit.isSuccess(exit) ? Result.success(exit.value) : Result.failure(exit.cause))

@@ -7,7 +7,7 @@ import {
   useContext,
 } from "solid-js"
 import type { Accessor, ParentProps } from "solid-js"
-import * as Context from "effect/Context"
+import type * as Context from "effect/Context"
 import type { Atom, Writable } from "./atom"
 import * as Registry from "./registry"
 import type { Result } from "./result"
@@ -15,8 +15,7 @@ import type { Result } from "./result"
 let _defaultRegistry: Registry.Registry | undefined
 const defaultRegistry = (() => {
   if (_defaultRegistry === undefined) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-    _defaultRegistry = Registry.make({ services: Context.empty() as Context.Context<any> })
+    _defaultRegistry = Registry.make()
   }
   return _defaultRegistry
 })()
@@ -42,9 +41,11 @@ export interface RegistryProviderProps extends ParentProps {
 }
 
 export const RegistryProvider = (props: RegistryProviderProps) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
-  const services = props.services ?? (Context.empty() as Context.Context<any>)
-  const registry = props.registry ?? Registry.make({ services, maxEntries: props.maxEntries })
+  const registry =
+    props.registry ??
+    (props.services === undefined
+      ? Registry.make({ maxEntries: props.maxEntries })
+      : Registry.make({ services: props.services, maxEntries: props.maxEntries }))
   const shouldDispose = props.registry === undefined
 
   onCleanup(() => {

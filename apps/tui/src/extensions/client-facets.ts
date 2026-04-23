@@ -29,6 +29,7 @@ import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.
 import type { ClientDeps, ClientEffect, ClientSetupError } from "./client-effect.js"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { JSX } from "@opentui/solid"
+import type { RGBA } from "@opentui/core"
 import type { ClientTransport } from "./client-transport"
 import type {
   ClientComposer,
@@ -161,13 +162,26 @@ export interface ComposerSurfaceContribution {
 }
 
 export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
+export type BorderLabelColor =
+  | RGBA
+  | "warning"
+  | "info"
+  | "success"
+  | "primary"
+  | "text"
+  | "textMuted"
+
+export interface BorderLabelItem {
+  readonly text: string
+  readonly color: BorderLabelColor
+}
 
 export interface BorderLabelContribution {
   readonly _tag: "border-label"
   readonly position: BorderLabelPosition
   /** Lower = earlier; default 100. */
   readonly priority?: number
-  readonly produce: () => ReadonlyArray<{ text: string; color: unknown }>
+  readonly produce: () => ReadonlyArray<BorderLabelItem>
 }
 
 export interface AutocompleteContribution {

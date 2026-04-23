@@ -43,7 +43,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 17,
+      "eslint:@typescript-eslint/no-explicit-any": 16,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 58,
       "ts:@ts-expect-error": 30,
     },
@@ -165,8 +165,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         file,
       ),
     counts: {
-      "eslint:@typescript-eslint/no-explicit-any": 7,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 29,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
     },
   },
   {

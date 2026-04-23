@@ -30,6 +30,171 @@ interface ThemeProviderProps {
   children: JSX.Element
 }
 
+const createThemeView = (values: () => Theme): Theme => ({
+  get primary() {
+    return values().primary
+  },
+  get secondary() {
+    return values().secondary
+  },
+  get accent() {
+    return values().accent
+  },
+  get error() {
+    return values().error
+  },
+  get warning() {
+    return values().warning
+  },
+  get success() {
+    return values().success
+  },
+  get info() {
+    return values().info
+  },
+  get text() {
+    return values().text
+  },
+  get textMuted() {
+    return values().textMuted
+  },
+  get selectedListItemText() {
+    return values().selectedListItemText
+  },
+  get background() {
+    return values().background
+  },
+  get backgroundPanel() {
+    return values().backgroundPanel
+  },
+  get backgroundElement() {
+    return values().backgroundElement
+  },
+  get backgroundMenu() {
+    return values().backgroundMenu
+  },
+  get border() {
+    return values().border
+  },
+  get borderActive() {
+    return values().borderActive
+  },
+  get borderSubtle() {
+    return values().borderSubtle
+  },
+  get diffAdded() {
+    return values().diffAdded
+  },
+  get diffRemoved() {
+    return values().diffRemoved
+  },
+  get diffContext() {
+    return values().diffContext
+  },
+  get diffHunkHeader() {
+    return values().diffHunkHeader
+  },
+  get diffHighlightAdded() {
+    return values().diffHighlightAdded
+  },
+  get diffHighlightRemoved() {
+    return values().diffHighlightRemoved
+  },
+  get diffAddedBg() {
+    return values().diffAddedBg
+  },
+  get diffRemovedBg() {
+    return values().diffRemovedBg
+  },
+  get diffContextBg() {
+    return values().diffContextBg
+  },
+  get diffLineNumber() {
+    return values().diffLineNumber
+  },
+  get diffAddedLineNumberBg() {
+    return values().diffAddedLineNumberBg
+  },
+  get diffRemovedLineNumberBg() {
+    return values().diffRemovedLineNumberBg
+  },
+  get markdownText() {
+    return values().markdownText
+  },
+  get markdownHeading() {
+    return values().markdownHeading
+  },
+  get markdownLink() {
+    return values().markdownLink
+  },
+  get markdownLinkText() {
+    return values().markdownLinkText
+  },
+  get markdownCode() {
+    return values().markdownCode
+  },
+  get markdownBlockQuote() {
+    return values().markdownBlockQuote
+  },
+  get markdownEmph() {
+    return values().markdownEmph
+  },
+  get markdownStrong() {
+    return values().markdownStrong
+  },
+  get markdownHorizontalRule() {
+    return values().markdownHorizontalRule
+  },
+  get markdownListItem() {
+    return values().markdownListItem
+  },
+  get markdownListEnumeration() {
+    return values().markdownListEnumeration
+  },
+  get markdownImage() {
+    return values().markdownImage
+  },
+  get markdownImageText() {
+    return values().markdownImageText
+  },
+  get markdownCodeBlock() {
+    return values().markdownCodeBlock
+  },
+  get syntaxComment() {
+    return values().syntaxComment
+  },
+  get syntaxKeyword() {
+    return values().syntaxKeyword
+  },
+  get syntaxFunction() {
+    return values().syntaxFunction
+  },
+  get syntaxVariable() {
+    return values().syntaxVariable
+  },
+  get syntaxString() {
+    return values().syntaxString
+  },
+  get syntaxNumber() {
+    return values().syntaxNumber
+  },
+  get syntaxType() {
+    return values().syntaxType
+  },
+  get syntaxOperator() {
+    return values().syntaxOperator
+  },
+  get syntaxPunctuation() {
+    return values().syntaxPunctuation
+  },
+  get _hasSelectedListItemText() {
+    return values()._hasSelectedListItemText
+  },
+  get thinkingOpacity() {
+    return values().thinkingOpacity
+  },
+})
+
 export function ThemeProvider(props: ThemeProviderProps) {
   const renderer = useRenderer()
 
@@ -109,17 +274,10 @@ export function ThemeProvider(props: ThemeProviderProps) {
     return resolveTheme(activeTheme, store.mode)
   })
 
-  // Create a reactive proxy for the theme
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const themeProxy = new Proxy({} as Theme, {
-    get(_, prop) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      return (values() as unknown as Record<string, unknown>)[prop as string]
-    },
-  })
+  const theme = createThemeView(values)
 
   const value: ThemeContextValue = {
-    theme: themeProxy,
+    theme,
     selected: () => store.active,
     all: () => store.themes,
     mode: () => store.mode,

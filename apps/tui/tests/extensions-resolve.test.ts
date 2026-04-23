@@ -182,12 +182,12 @@ describe("resolveTuiExtensions", () => {
         borderLabelContribution({
           position: "bottom-left",
           priority: 20,
-          produce: () => [{ text: "20", color: "ok" }],
+          produce: () => [{ text: "20", color: "success" }],
         }),
         borderLabelContribution({
           position: "top-right",
           priority: 10,
-          produce: () => [{ text: "10", color: "warn" }],
+          produce: () => [{ text: "10", color: "warning" }],
         }),
       ]),
     ])
