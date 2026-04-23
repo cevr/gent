@@ -109,7 +109,7 @@ const makeExecutorExtension = (overrides?: {
 
   const extension: LoadedExtension = {
     manifest: { id: EXECUTOR_EXTENSION_ID },
-    kind: "builtin",
+    scope: "builtin",
     sourcePath: "builtin",
     contributions: {
       resources: [

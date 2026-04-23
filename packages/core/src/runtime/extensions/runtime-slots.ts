@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect"
 import type {
   ContextMessagesInput,
-  ExtensionKind,
+  ExtensionScope,
   LoadedExtension,
   MessageInputInput,
   MessageOutputInput,
@@ -86,11 +86,11 @@ interface RegisteredToolResultTransform {
   readonly handler: NonNullable<ResourceRuntimeSlots<unknown, unknown>["toolResult"]>
 }
 
-const SCOPE_ORDER: Record<ExtensionKind, number> = { builtin: 0, user: 1, project: 2 }
+const SCOPE_ORDER: Record<ExtensionScope, number> = { builtin: 0, user: 1, project: 2 }
 
 const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
   [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_ORDER[a.kind] - SCOPE_ORDER[b.kind]
+    const scopeDiff = SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })

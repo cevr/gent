@@ -36,7 +36,7 @@ describe("SessionToolsExtension", () => {
     const compiled = compileRuntimeSlots([
       {
         manifest: SessionToolsExtension.manifest,
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "test",
         contributions,
       },
@@ -58,7 +58,7 @@ describe("SessionToolsExtension", () => {
     const compiled = compileRuntimeSlots([
       {
         manifest: SessionToolsExtension.manifest,
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "test",
         contributions,
       },

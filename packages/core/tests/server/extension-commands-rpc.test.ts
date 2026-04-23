@@ -55,7 +55,7 @@ describe("extension command RPCs", () => {
 
   const setupCommandsExt = Effect.provide(
     setupExtension(
-      { extension: TestCommandsExtension, kind: "builtin", sourcePath: "builtin" },
+      { extension: TestCommandsExtension, scope: "builtin", sourcePath: "builtin" },
       "/test/cwd",
       "/test/home",
     ),
@@ -117,7 +117,7 @@ describe("extension command RPCs", () => {
   test("listCommands resolves through the active session profile", async () => {
     const alphaExtension: LoadedExtension = {
       manifest: { id: "@test/alpha" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         capabilities: [
@@ -136,7 +136,7 @@ describe("extension command RPCs", () => {
 
     const betaExtension: LoadedExtension = {
       manifest: { id: "@test/beta" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         capabilities: [
@@ -185,7 +185,7 @@ describe("extension command RPCs", () => {
               extensions: [
                 {
                   manifest: { id: "@test/public-filter" },
-                  kind: "builtin",
+                  scope: "builtin",
                   sourcePath: "test",
                   contributions: {
                     capabilities: [

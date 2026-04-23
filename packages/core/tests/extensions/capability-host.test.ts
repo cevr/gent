@@ -42,11 +42,11 @@ const ctx = {
 
 const extWith = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   caps: ReadonlyArray<CapabilityContribution<unknown, unknown, never>>,
 ): LoadedExtension => ({
   manifest: { id },
-  kind,
+  scope,
   sourcePath: `/test/${id}`,
   contributions: {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion

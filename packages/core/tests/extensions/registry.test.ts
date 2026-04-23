@@ -50,7 +50,7 @@ const promptSectionAsToolContribution = (section: PromptSection): AnyCapabilityC
 
 const makeExt = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   opts?: {
     tools?: AnyCapabilityContribution[]
     agents?: AgentDefinition[]
@@ -60,7 +60,7 @@ const makeExt = (
   },
 ): LoadedExtension => ({
   manifest: { id },
-  kind,
+  scope,
   sourcePath: `/test/${id}`,
   contributions: {
     capabilities: [
@@ -161,7 +161,7 @@ describe("resolveExtensions", () => {
     expect(resolved.extensionStatuses).toEqual([
       {
         manifest: { id: "@gent/memory" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "/test/@gent/memory",
         status: "active",
         scheduledJobFailures: [{ jobId: "reflect", error: "launchd registration failed" }],
@@ -175,7 +175,7 @@ describe("resolveExtensions", () => {
       [
         {
           manifest: { id: "broken" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           phase: "validation",
           error: "duplicate tool read",
@@ -187,7 +187,7 @@ describe("resolveExtensions", () => {
     expect(resolved.failedExtensions).toEqual([
       {
         manifest: { id: "broken" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         phase: "validation",
         error: "duplicate tool read",
@@ -196,13 +196,13 @@ describe("resolveExtensions", () => {
     expect(resolved.extensionStatuses).toEqual([
       {
         manifest: { id: "healthy" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "/test/healthy",
         status: "active",
       },
       {
         manifest: { id: "broken" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         phase: "validation",
         error: "duplicate tool read",
@@ -331,7 +331,7 @@ describe("ExtensionRegistry", () => {
       [
         {
           manifest: { id: "broken" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           phase: "startup",
           error: "startup boom",
@@ -347,7 +347,7 @@ describe("ExtensionRegistry", () => {
     expect(failed).toEqual([
       {
         manifest: { id: "broken" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         phase: "startup",
         error: "startup boom",
@@ -356,13 +356,13 @@ describe("ExtensionRegistry", () => {
     expect(statuses).toEqual([
       {
         manifest: { id: "healthy" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "/test/healthy",
         status: "active",
       },
       {
         manifest: { id: "broken" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         status: "failed",
         phase: "startup",

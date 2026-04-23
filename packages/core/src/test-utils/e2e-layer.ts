@@ -96,7 +96,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         ? [
             {
               manifest: { id: "test-agents" },
-              kind: "builtin" as const,
+              scope: "builtin" as const,
               sourcePath: "test",
               contributions: builtinContributions,
             },

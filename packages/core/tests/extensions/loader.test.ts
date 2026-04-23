@@ -23,7 +23,7 @@ describe("setupExtension", () => {
         setupExtension(
           {
             extension,
-            kind: "user",
+            scope: "user",
             sourcePath: "/tmp/test-loader.ts",
           },
           "/tmp/project",

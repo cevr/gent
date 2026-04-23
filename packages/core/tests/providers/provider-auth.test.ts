@@ -52,7 +52,7 @@ const noopProvider: ModelDriverContribution = {
 const testResolved = resolveExtensions([
   {
     manifest: { id: "test" },
-    kind: "builtin",
+    scope: "builtin",
     sourcePath: "test",
     contributions: { modelDrivers: [oauthProvider, noopProvider] },
   } satisfies LoadedExtension,

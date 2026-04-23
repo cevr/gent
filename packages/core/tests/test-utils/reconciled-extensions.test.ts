@@ -12,7 +12,7 @@ describe("reconcileTestExtensions", () => {
           testExtensionRegistryLayer([
             {
               manifest: { id: "ext-a" },
-              kind: "builtin",
+              scope: "builtin",
               sourcePath: "test-a",
               contributions: {
                 capabilities: [
@@ -27,7 +27,7 @@ describe("reconcileTestExtensions", () => {
             },
             {
               manifest: { id: "ext-b" },
-              kind: "builtin",
+              scope: "builtin",
               sourcePath: "test-b",
               contributions: {
                 capabilities: [

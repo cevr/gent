@@ -24,11 +24,11 @@ import { compileProjections } from "@gent/core/runtime/extensions/projection-reg
 
 const ext = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   projections: ReadonlyArray<AnyProjectionContribution>,
 ): LoadedExtension => ({
   manifest: { id },
-  kind,
+  scope,
   sourcePath: `/test/${id}`,
   contributions: { projections },
 })

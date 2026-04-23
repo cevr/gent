@@ -66,7 +66,7 @@ const counterActorWithProtocol = { ...counterActor, protocols: CounterProtocol }
 
 const counterExtension: LoadedExtension = {
   manifest: { id: EXTENSION_ID },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "builtin",
   contributions: {
     resources: [

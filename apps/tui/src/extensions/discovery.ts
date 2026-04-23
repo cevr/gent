@@ -12,7 +12,7 @@ import { Effect, FileSystem, Path } from "effect"
 
 export interface DiscoveredTuiExtension {
   readonly filePath: string
-  readonly kind: "user" | "project"
+  readonly scope: "user" | "project"
 }
 
 /** Match *.client.{tsx,ts,js,jsx,mjs} */
@@ -26,7 +26,7 @@ const isClientFile = (entry: string): boolean =>
 
 const discoverDir = (
   dir: string,
-  kind: DiscoveredTuiExtension["kind"],
+  scope: DiscoveredTuiExtension["scope"],
 ): Effect.Effect<DiscoveredTuiExtension[], never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -56,7 +56,7 @@ const discoverDir = (
       if (info._tag === "None") continue
 
       if (info.value.type === "File" && isClientFile(entry)) {
-        results.push({ filePath, kind })
+        results.push({ filePath, scope })
       } else if (info.value.type === "Directory") {
         // oxlint-disable-next-line no-await-in-loop
         const subEntries = yield* fs
@@ -77,7 +77,7 @@ const discoverDir = (
         }
         const firstClient = clientFiles[0]
         if (firstClient !== undefined) {
-          results.push({ filePath: path.join(filePath, firstClient), kind })
+          results.push({ filePath: path.join(filePath, firstClient), scope })
         }
       }
     }

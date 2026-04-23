@@ -7,7 +7,7 @@ describe("buildExtensionHealthSnapshot", () => {
       [
         {
           manifest: { id: "@gent/memory" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           status: "failed",
           phase: "startup",
@@ -15,7 +15,7 @@ describe("buildExtensionHealthSnapshot", () => {
         },
         {
           manifest: { id: "@gent/plan" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           status: "active",
           scheduledJobFailures: [{ jobId: "reflect", error: "launchd boom" }],
@@ -42,7 +42,7 @@ describe("buildExtensionHealthSnapshot", () => {
     expect(snapshot.extensions).toEqual([
       {
         manifest: { id: "@gent/memory" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         status: "degraded",
         activation: {
@@ -57,7 +57,7 @@ describe("buildExtensionHealthSnapshot", () => {
       },
       {
         manifest: { id: "@gent/plan" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         status: "degraded",
         activation: {

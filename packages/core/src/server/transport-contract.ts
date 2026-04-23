@@ -419,7 +419,7 @@ export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
 
 export const ExtensionHealth = Schema.Struct({
   manifest: ExtensionManifestInfo,
-  kind: Schema.Literals(["builtin", "user", "project"]),
+  scope: Schema.Literals(["builtin", "user", "project"]),
   sourcePath: Schema.String,
   status: Schema.Literals(["healthy", "degraded"]),
   activation: ExtensionActivationHealth,

@@ -27,9 +27,9 @@ const stubEvent: TurnAfterInput = {
 
 const ext = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
-): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
+): LoadedExtension => ({ manifest: { id }, scope, sourcePath: `/test/${id}`, contributions })
 
 class BoomError extends Data.TaggedError("@gent/core/tests/runtime-reactions/BoomError")<{
   readonly reason: string

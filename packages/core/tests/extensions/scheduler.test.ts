@@ -16,7 +16,7 @@ const fsLayer = Layer.merge(BunFileSystem.layer, Path.layer)
 
 const makeLoaded = (id: string, jobs: ReadonlyArray<ResourceSchedule>): LoadedExtension => ({
   manifest: { id },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "builtin",
   contributions: {
     resources: [

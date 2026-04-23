@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test"
 import {
   GENT_MESSAGE_METADATA_FIELDS,
   EFFECT_AI_CONTENT_FIELDS,
+  normalizeResponseParts,
+  promptFromResponseParts,
+  responsePartsFromMessages,
   responsePartsToMessageParts,
   toPrompt,
   toPromptMessages,
@@ -209,6 +212,108 @@ describe("AI transcript bridge", () => {
         toolName: "read",
         output: { type: "json", value: { ok: true } },
       }),
+    )
+  })
+
+  test("normalizes streaming deltas and round-trips assistant/tool replay with images", () => {
+    const responseParts = normalizeResponseParts([
+      Response.makePart("text-delta", { id: "text-1", delta: "hel" }),
+      Response.makePart("text-delta", { id: "text-2", delta: "lo" }),
+      Response.makePart("reasoning-delta", { id: "reason-1", delta: "thin" }),
+      Response.makePart("reasoning-delta", { id: "reason-2", delta: "king" }),
+      Response.makePart("tool-call", {
+        id: "tc-3",
+        name: "inspect",
+        params: { deep: true },
+        providerExecuted: false,
+      }),
+      Response.makePart("tool-approval-request", {
+        approvalId: "approval-1",
+        toolCallId: "tc-3",
+      }),
+      Response.makePart("file", {
+        mediaType: "image/png",
+        data: new Uint8Array([104, 105]),
+      }),
+      Response.makePart("tool-result", {
+        id: "tc-3",
+        name: "inspect",
+        isFailure: false,
+        result: { ok: true },
+        encodedResult: { ok: true },
+        providerExecuted: false,
+        preliminary: false,
+      }),
+    ])
+
+    expect(responseParts.map((part) => part.type)).toEqual([
+      "text",
+      "reasoning",
+      "tool-call",
+      "tool-approval-request",
+      "file",
+      "tool-result",
+    ])
+
+    const replayPrompt = promptFromResponseParts(responseParts)
+    expect(replayPrompt.content.map((message) => message.role)).toEqual(["assistant", "tool"])
+    const assistant = replayPrompt.content[0]
+    expect(assistant?.role).toBe("assistant")
+    if (assistant?.role === "assistant") {
+      expect(assistant.content.map((part) => part.type)).toEqual([
+        "text",
+        "reasoning",
+        "tool-call",
+        "tool-approval-request",
+        "file",
+      ])
+    }
+
+    const replayMessages = [
+      baseMessage({
+        id: "assistant-replay",
+        sessionId: "session",
+        branchId: "branch",
+        role: "assistant",
+        parts: responsePartsToMessageParts(responseParts).assistant,
+      }),
+      baseMessage({
+        id: "tool-replay",
+        sessionId: "session",
+        branchId: "branch",
+        role: "tool",
+        parts: responsePartsToMessageParts(responseParts).tool,
+      }),
+    ]
+
+    expect(responsePartsFromMessages(replayMessages).map((part) => part.type)).toEqual([
+      "text",
+      "reasoning",
+      "tool-call",
+      "file",
+      "tool-result",
+    ])
+  })
+
+  test("response replay rejects URL-backed images instead of silently dropping them", () => {
+    const replayMessages = [
+      baseMessage({
+        id: "assistant-url-image",
+        sessionId: "session",
+        branchId: "branch",
+        role: "assistant",
+        parts: [
+          new ImagePart({
+            type: "image",
+            image: "https://example.com/image.png",
+            mediaType: "image/png",
+          }),
+        ],
+      }),
+    ]
+
+    expect(() => responsePartsFromMessages(replayMessages)).toThrow(
+      'responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "https://example.com/image.png"',
     )
   })
 })

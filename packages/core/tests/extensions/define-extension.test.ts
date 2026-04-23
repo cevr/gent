@@ -140,7 +140,7 @@ describe("defineExtension", () => {
         const contributions = yield* setupOf(ext)
         const loaded = {
           manifest: { id: ext.manifest.id },
-          kind: "builtin" as const,
+          scope: "builtin" as const,
           sourcePath: "builtin",
           contributions,
         }
@@ -239,7 +239,7 @@ describe("defineExtension", () => {
       const contributions = yield* setupOf(ext)
       const loaded = {
         manifest: { id: "wired" },
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         sourcePath: "/test/wired",
         contributions,
       }

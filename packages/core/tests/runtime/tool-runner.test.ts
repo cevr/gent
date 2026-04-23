@@ -23,7 +23,7 @@ describe("ToolRunner", () => {
         resolveExtensions([
           {
             manifest: { id: "test" },
-            kind: "builtin",
+            scope: "builtin",
             sourcePath: "test",
             contributions: { capabilities: [EchoTool] },
           },
@@ -69,7 +69,7 @@ describe("ToolRunner", () => {
         resolveExtensions([
           {
             manifest: { id: "test" },
-            kind: "builtin",
+            scope: "builtin",
             sourcePath: "test",
             contributions: { capabilities: [FailTool] },
           },
@@ -116,7 +116,7 @@ describe("ToolRunner", () => {
         resolveExtensions([
           {
             manifest: { id: "test" },
-            kind: "builtin",
+            scope: "builtin",
             sourcePath: "test",
             contributions: { capabilities: [StrictTool] },
           },
@@ -169,7 +169,7 @@ describe("ToolRunner", () => {
         resolveExtensions([
           {
             manifest: { id: "test" },
-            kind: "builtin",
+            scope: "builtin",
             sourcePath: "test",
             contributions: { capabilities: [SafeTool] },
           },
@@ -223,7 +223,7 @@ describe("ToolRunner", () => {
         resolveExtensions([
           {
             manifest: { id: "test" },
-            kind: "builtin",
+            scope: "builtin",
             sourcePath: "test",
             contributions: { capabilities: [InspectTool] },
           },

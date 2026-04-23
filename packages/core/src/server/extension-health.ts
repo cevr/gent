@@ -25,7 +25,7 @@ export const buildExtensionHealthSnapshot = (
 
     return {
       manifest: status.manifest,
-      kind: status.kind,
+      scope: status.scope,
       sourcePath: status.sourcePath,
       status: degraded ? ("degraded" as const) : ("healthy" as const),
       activation,

@@ -16,15 +16,18 @@ import type {
   OverlayComponent,
   WidgetComponent,
 } from "./client-facets.js"
-import { SCOPE_PRECEDENCE, type ExtensionScope } from "@gent/core/runtime/extensions/disabled"
+import {
+  SCOPE_PRECEDENCE,
+  type ExtensionScope as CoreExtensionScope,
+} from "@gent/core/runtime/extensions/disabled"
 import type { ToolRenderer } from "../components/tool-renderers/types"
 import type { Command } from "../command/types"
 
-export type ExtensionKind = ExtensionScope
+export type ExtensionScope = CoreExtensionScope
 
 export interface LoadedTuiExtension {
   readonly id: string
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly filePath: string
   readonly contributions: ReadonlyArray<ClientContribution>
 }
@@ -54,7 +57,7 @@ export interface ResolvedTuiExtensions {
 }
 
 interface ScopeEntry {
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly source: string
 }
 
@@ -65,9 +68,9 @@ const checkCollision = (
   label: string,
   key: string,
 ): void => {
-  if (prev !== undefined && prev.kind === ext.kind && prev.source !== ext.filePath) {
+  if (prev !== undefined && prev.scope === ext.scope && prev.source !== ext.filePath) {
     throw new Error(
-      `Same-scope TUI ${label} collision: "${key}" from "${prev.source}" and "${ext.filePath}" in scope "${ext.kind}"`,
+      `Same-scope TUI ${label} collision: "${key}" from "${prev.source}" and "${ext.filePath}" in scope "${ext.scope}"`,
     )
   }
 }
@@ -99,7 +102,7 @@ const resolveRenderers = (flat: ReadonlyArray<SortedExtension>): Map<string, Too
       const key = name.toLowerCase()
       checkCollision(scopes.get(key), ext, "renderer", name)
       renderers.set(key, contribution.component)
-      scopes.set(key, { kind: ext.kind, source: ext.filePath })
+      scopes.set(key, { scope: ext.scope, source: ext.filePath })
     }
   }
 
@@ -119,7 +122,7 @@ const resolveWidgets = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Res
       priority: contribution.priority ?? 100,
       component: contribution.component,
     })
-    scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
+    scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
   }
 
   return [...widgetMap.values()].sort((a, b) => a.priority - b.priority)
@@ -150,7 +153,7 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
           commandMap.set(prevOwnerId, { ...prevCmd, keybind: undefined })
         }
       }
-      keybindScopes.set(kb, { kind: ext.kind, source: ext.filePath })
+      keybindScopes.set(kb, { scope: ext.scope, source: ext.filePath })
       keybindOwner.set(kb, entry.id)
     }
 
@@ -165,7 +168,7 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
           commandMap.set(prevOwnerId, { ...prevCmd, slash: undefined })
         }
       }
-      slashScopes.set(sl, { kind: ext.kind, source: ext.filePath })
+      slashScopes.set(sl, { scope: ext.scope, source: ext.filePath })
       slashOwner.set(sl, entry.id)
     }
 
@@ -182,7 +185,7 @@ const resolveCommands = (flat: ReadonlyArray<SortedExtension>): ReadonlyArray<Co
       onSlash: entry.onSlash,
       paletteLevel: entry.paletteLevel,
     })
-    idScopes.set(entry.id, { kind: ext.kind, source: ext.filePath })
+    idScopes.set(entry.id, { scope: ext.scope, source: ext.filePath })
   }
 
   return [...commandMap.values()]
@@ -196,7 +199,7 @@ const resolveOverlays = (flat: ReadonlyArray<SortedExtension>): Map<string, Over
     if (contribution._tag !== "overlay") continue
     checkCollision(scopes.get(contribution.id), ext, "overlay", contribution.id)
     overlays.set(contribution.id, contribution.component)
-    scopes.set(contribution.id, { kind: ext.kind, source: ext.filePath })
+    scopes.set(contribution.id, { scope: ext.scope, source: ext.filePath })
   }
 
   return overlays
@@ -214,7 +217,7 @@ const resolveInteractionRenderers = (
     const label = key ?? "(default)"
     checkCollision(scopes.get(key), ext, "interaction renderer", label)
     renderers.set(key, contribution.component)
-    scopes.set(key, { kind: ext.kind, source: ext.filePath })
+    scopes.set(key, { scope: ext.scope, source: ext.filePath })
   }
 
   return renderers
@@ -232,7 +235,7 @@ const resolveComposerSurface = (
       checkCollision(winnerScope, ext, "composer surface", "composerSurface")
     }
     winner = contribution.component
-    winnerScope = { kind: ext.kind, source: ext.filePath }
+    winnerScope = { scope: ext.scope, source: ext.filePath }
   }
 
   return winner
@@ -294,7 +297,7 @@ export const resolveTuiExtensions = (
 ): ResolvedTuiExtensions => {
   // Sort by scope precedence, then by id for deterministic same-scope order (matches server)
   const sorted = [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
+    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
     return a.id.localeCompare(b.id)
   })

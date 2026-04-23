@@ -28,7 +28,7 @@ const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
     resolveExtensions([
       {
         manifest: { id: "agents" },
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         sourcePath: "test",
         contributions: { agents: Object.values(Agents) } satisfies ExtensionContributions,
       },
@@ -36,7 +36,7 @@ const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
         ? [
             {
               manifest: { id: "tools" },
-              kind: "builtin" as const,
+              scope: "builtin" as const,
               sourcePath: "test",
               contributions: { capabilities: tools } satisfies ExtensionContributions,
             },

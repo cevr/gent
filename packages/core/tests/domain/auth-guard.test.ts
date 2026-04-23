@@ -36,7 +36,7 @@ const testAgents = [
 const testResolved = resolveExtensions([
   {
     manifest: { id: "test-providers" },
-    kind: "builtin",
+    scope: "builtin",
     sourcePath: "test",
     contributions: {
       modelDrivers: testProviders,
@@ -55,7 +55,7 @@ const testRegistryLayer = Layer.merge(
 const helperResolved = resolveExtensions([
   {
     manifest: { id: "test-providers" },
-    kind: "builtin",
+    scope: "builtin",
     sourcePath: "test",
     contributions: {
       modelDrivers: testProviders,

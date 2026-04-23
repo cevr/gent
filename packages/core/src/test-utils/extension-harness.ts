@@ -247,7 +247,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       const allExtensions: LoadedExtension[] = [
         {
           manifest: { id: "test-agents" },
-          kind: "builtin" as const,
+          scope: "builtin" as const,
           sourcePath: "test",
           contributions: builtinContributions,
         },

@@ -52,7 +52,7 @@ const getRuntimeSlots = async () => {
   return compileRuntimeSlots([
     {
       manifest: AcpAgentsExtension.manifest,
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "test",
       contributions,
     },

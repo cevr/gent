@@ -82,7 +82,7 @@ const sortExtensionsByScope = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<LoadedExtension> =>
   [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
+    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })
@@ -161,7 +161,7 @@ export const resolveExtensions = (
   const extensionStatuses: ExtensionStatusInfo[] = [
     ...sorted.map((ext) => ({
       manifest: ext.manifest,
-      kind: ext.kind,
+      scope: ext.scope,
       sourcePath: ext.sourcePath,
       status: "active" as const,
       ...(scheduledJobFailures.has(ext.manifest.id)

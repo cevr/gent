@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import * as Response from "effect/unstable/ai/Response"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -26,7 +27,14 @@ import {
   toolCallPart,
   type ProviderStreamPart,
 } from "@gent/core/debug/provider"
-import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
+import {
+  Branch,
+  ImagePart,
+  Message,
+  Session,
+  TextPart,
+  ToolResultPart,
+} from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
 import {
@@ -73,7 +81,7 @@ const makeExtRegistry = (
   const resolved = resolveExtensions([
     {
       manifest: { id: "agents" },
-      kind: "builtin" as const,
+      scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
@@ -240,7 +248,7 @@ const makeExternalLayerWithEvents = (
   const resolved = resolveExtensions([
     {
       manifest: { id: "agents" },
-      kind: "builtin" as const,
+      scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
@@ -248,7 +256,7 @@ const makeExternalLayerWithEvents = (
     },
     {
       manifest: { id: "external-parity" },
-      kind: "builtin" as const,
+      scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
         agents: [parityExternalAgent],
@@ -590,6 +598,40 @@ describe("streaming", () => {
       ),
     )
   })
+
+  test("persists assistant image parts from provider response streams", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const agentLoop = yield* AgentLoop
+      const message = makeMessage("image-session", "image-branch", "show image")
+
+      yield* agentLoop.run(message)
+
+      const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+      expect(assistant).toBeDefined()
+      expect(assistant?.parts).toEqual([
+        new ImagePart({
+          type: "image",
+          image: "data:image/png;base64,aGk=",
+          mediaType: "image/png",
+        }),
+      ])
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          scriptedProvider([
+            [
+              Response.makePart("file", {
+                mediaType: "image/png",
+                data: new Uint8Array([104, 105]),
+              }),
+              finishPart({ finishReason: "stop" }),
+            ],
+          ]),
+        ),
+      ),
+      Effect.runPromise,
+    ))
 
   test("interjection runs before queued follow-up with scoped agent override", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())
@@ -1675,7 +1717,7 @@ describe("recovery", () => {
     const recoveryResolved = resolveExtensions([
       {
         manifest: { id: "test-recovery" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "test",
         contributions: {
           agents: Object.values(Agents),

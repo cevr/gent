@@ -37,14 +37,14 @@ export interface ExtensionReconciliationResult {
 const toFailedExtension = (
   ext: {
     manifest: LoadedExtension["manifest"]
-    kind: LoadedExtension["kind"]
+    scope: LoadedExtension["scope"]
     sourcePath: string
   },
   phase: FailedExtensionPhase,
   error: string,
 ): FailedExtension => ({
   manifest: ext.manifest,
-  kind: ext.kind,
+  scope: ext.scope,
   sourcePath: ext.sourcePath,
   phase,
   error,
@@ -73,14 +73,14 @@ export const setupBuiltinExtensions = (params: {
       const extension = input
       if (params.disabled.has(extension.manifest.id)) {
         yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
-          Effect.annotateLogs({ extensionId: extension.manifest.id, kind: "builtin" }),
+          Effect.annotateLogs({ extensionId: extension.manifest.id, scope: "builtin" }),
         )
         continue
       }
 
       const discovered = {
         extension,
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         sourcePath: "builtin",
       }
 
@@ -90,7 +90,7 @@ export const setupBuiltinExtensions = (params: {
         yield* Effect.logDebug("extension.setup.ok").pipe(
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
-            kind: "builtin",
+            scope: "builtin",
             hasMachine: hasMachine(exit.value.contributions),
             tools: modelToolCount(exit.value.contributions),
           }),
@@ -99,7 +99,7 @@ export const setupBuiltinExtensions = (params: {
         const error = formatFailure(Cause.squash(exit.cause))
         failed.push(
           toFailedExtension(
-            { manifest: extension.manifest, kind: "builtin", sourcePath: "builtin" },
+            { manifest: extension.manifest, scope: "builtin", sourcePath: "builtin" },
             "setup",
             error,
           ),
@@ -107,7 +107,7 @@ export const setupBuiltinExtensions = (params: {
         yield* Effect.logWarning("extension.setup.failed").pipe(
           Effect.annotateLogs({
             extensionId: extension.manifest.id,
-            kind: "builtin",
+            scope: "builtin",
             error,
           }),
         )
@@ -136,7 +136,7 @@ export const setupDiscoveredExtensions = (params: {
         yield* Effect.logDebug("extension.setup.skipped.disabled").pipe(
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
-            kind: discovered.kind,
+            scope: discovered.scope,
           }),
         )
         continue
@@ -148,7 +148,7 @@ export const setupDiscoveredExtensions = (params: {
         yield* Effect.logDebug("extension.setup.ok").pipe(
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
-            kind: discovered.kind,
+            scope: discovered.scope,
             hasMachine: hasMachine(exit.value.contributions),
             tools: modelToolCount(exit.value.contributions),
           }),
@@ -159,7 +159,7 @@ export const setupDiscoveredExtensions = (params: {
           toFailedExtension(
             {
               manifest: discovered.extension.manifest,
-              kind: discovered.kind,
+              scope: discovered.scope,
               sourcePath: discovered.sourcePath,
             },
             "setup",
@@ -169,7 +169,7 @@ export const setupDiscoveredExtensions = (params: {
         yield* Effect.logWarning("extension.setup.failed").pipe(
           Effect.annotateLogs({
             extensionId: discovered.extension.manifest.id,
-            kind: discovered.kind,
+            scope: discovered.scope,
             sourcePath: discovered.sourcePath,
             error,
           }),
@@ -180,12 +180,12 @@ export const setupDiscoveredExtensions = (params: {
     return { active, failed }
   })
 
-const extensionKey = (ext: Pick<LoadedExtension, "kind" | "manifest" | "sourcePath">) =>
-  `${ext.kind}:${ext.manifest.id}:${ext.sourcePath}`
+const extensionKey = (ext: Pick<LoadedExtension, "scope" | "manifest" | "sourcePath">) =>
+  `${ext.scope}:${ext.manifest.id}:${ext.sourcePath}`
 
 const formatConflicts = (
   label: string,
-  scope: LoadedExtension["kind"],
+  scope: LoadedExtension["scope"],
   key: string,
   extensions: ReadonlyArray<LoadedExtension>,
 ) =>
@@ -208,13 +208,13 @@ export const collectValidationFailures = (
     if (!current.errors.includes(error)) current.errors.push(error)
   }
 
-  const idsByScope = new Map<LoadedExtension["kind"], Map<string, LoadedExtension[]>>()
+  const idsByScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
   for (const ext of extensions) {
-    const scopeMap = idsByScope.get(ext.kind) ?? new Map<string, LoadedExtension[]>()
+    const scopeMap = idsByScope.get(ext.scope) ?? new Map<string, LoadedExtension[]>()
     const sameId = scopeMap.get(ext.manifest.id) ?? []
     sameId.push(ext)
     scopeMap.set(ext.manifest.id, sameId)
-    idsByScope.set(ext.kind, scopeMap)
+    idsByScope.set(ext.scope, scopeMap)
   }
   for (const [scope, scopeMap] of idsByScope) {
     for (const [id, sameId] of scopeMap) {
@@ -229,9 +229,9 @@ export const collectValidationFailures = (
     getKey: (item: T) => string,
     label: string,
   ) => {
-    const byScope = new Map<LoadedExtension["kind"], Map<string, LoadedExtension[]>>()
+    const byScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
     for (const ext of extensions) {
-      const scopeMap = byScope.get(ext.kind) ?? new Map<string, LoadedExtension[]>()
+      const scopeMap = byScope.get(ext.scope) ?? new Map<string, LoadedExtension[]>()
       const seen = new Set<string>()
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
@@ -241,7 +241,7 @@ export const collectValidationFailures = (
         existing.push(ext)
         scopeMap.set(key, existing)
       }
-      byScope.set(ext.kind, scopeMap)
+      byScope.set(ext.scope, scopeMap)
     }
 
     for (const [scope, scopeMap] of byScope) {

@@ -42,7 +42,7 @@ const makeExecutor = (label: string): TurnExecutor => ({
 
 const makeExt = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   opts: {
     readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
     readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
@@ -54,7 +54,7 @@ const makeExt = (
   }
   return {
     manifest: { id },
-    kind,
+    scope,
     sourcePath: `/test/${id}`,
     contributions,
   }

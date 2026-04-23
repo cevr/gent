@@ -39,11 +39,11 @@ const stubProjectionCtx = {
 
 const makeExt = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
 ): LoadedExtension => ({
   manifest: { id },
-  kind,
+  scope,
   sourcePath: `/test/${id}`,
   contributions,
 })

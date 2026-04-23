@@ -126,7 +126,7 @@ const sortedExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): ReadonlyArray<LoadedExtension> =>
   [...extensions].sort((a, b) => {
-    const scopeDiff = SCOPE_PRECEDENCE[a.kind] - SCOPE_PRECEDENCE[b.kind]
+    const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
     return a.manifest.id.localeCompare(b.manifest.id)
   })

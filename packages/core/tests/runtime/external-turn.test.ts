@@ -74,7 +74,7 @@ const makeResolved = (executor: TurnExecutor) =>
   resolveExtensions([
     {
       manifest: { id: "test-ext" },
-      kind: "builtin" as const,
+      scope: "builtin" as const,
       sourcePath: "test",
       contributions: {
         agents: [externalAgent],
@@ -286,7 +286,7 @@ describe("external turn execution", () => {
     const agentsResolved = resolveExtensions([
       {
         manifest: { id: "agents" },
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         sourcePath: "test",
         contributions: { agents: Object.values(Agents) },
       },
@@ -418,7 +418,7 @@ describe("ExternalDriverContribution end-to-end", () => {
     const e2eResolved = resolveExtensions([
       {
         manifest: { id: "e2e-ext" },
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         sourcePath: "test",
         contributions: {
           agents: [e2eAgent],

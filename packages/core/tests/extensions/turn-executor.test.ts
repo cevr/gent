@@ -30,7 +30,7 @@ const makeExt = (
   const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: () => Effect.void }))
   return {
     manifest: { id },
-    kind: "builtin" as const,
+    scope: "builtin" as const,
     sourcePath: `/test/${id}`,
     contributions: (drivers !== undefined && drivers.length > 0
       ? { externalDrivers: drivers }

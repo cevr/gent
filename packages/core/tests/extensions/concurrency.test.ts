@@ -106,7 +106,7 @@ describe("extension concurrency", () => {
         const extensions = [
           {
             manifest: { id: "ordered-restart", version: "1.0.0" },
-            kind: "builtin" as const,
+            scope: "builtin" as const,
             sourcePath: "builtin",
             contributions: {
               resources: [
@@ -186,7 +186,7 @@ describe("extension concurrency", () => {
         const extensions = [
           {
             manifest: { id: "nested-publisher", version: "1.0.0" },
-            kind: "builtin" as const,
+            scope: "builtin" as const,
             sourcePath: "builtin",
             contributions: {
               resources: [
@@ -263,7 +263,7 @@ describe("extension concurrency", () => {
         const extensions = [
           {
             manifest: { id: "nested-sender", version: "1.0.0" },
-            kind: "builtin" as const,
+            scope: "builtin" as const,
             sourcePath: "builtin",
             contributions: {
               resources: [
@@ -308,7 +308,7 @@ describe("extension concurrency", () => {
           },
           {
             manifest: { id: "nested-receiver", version: "1.0.0" },
-            kind: "builtin" as const,
+            scope: "builtin" as const,
             sourcePath: "builtin",
             contributions: {
               resources: [

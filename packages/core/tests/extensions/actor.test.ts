@@ -189,7 +189,7 @@ describe("MachineEngine", () => {
     const layer = makeRuntimeLayer([
       {
         manifest: { id: "flaky-request" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         contributions: {
           resources: [
@@ -232,7 +232,7 @@ describe("MachineEngine", () => {
     const layer = makeRuntimeLayer([
       {
         manifest: { id: "counter" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         contributions: {
           resources: [
@@ -291,7 +291,7 @@ describe("MachineEngine", () => {
     const layer = makeRuntimeLayer([
       {
         manifest: { id: "concurrent-counter" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         contributions: {
           resources: [
@@ -397,7 +397,7 @@ describe("Resource.machine end-to-end", () => {
     const layer = makeRuntimeLayer([
       {
         manifest: { id: "resource-counter" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "builtin",
         contributions: {
           resources: [
@@ -440,7 +440,7 @@ describe("Resource.machine end-to-end", () => {
       const layer = makeRuntimeLayer([
         {
           manifest: { id: "session-counter" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           contributions: {
             resources: [

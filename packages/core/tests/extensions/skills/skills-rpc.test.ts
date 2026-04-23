@@ -39,7 +39,7 @@ const testSkills = [
 const setupSkillsExtension = Effect.provide(
   Effect.gen(function* () {
     const loaded = yield* setupExtension(
-      { extension: SkillsExtension, kind: "builtin", sourcePath: "builtin" },
+      { extension: SkillsExtension, scope: "builtin", sourcePath: "builtin" },
       "/test/cwd",
       "/test/home",
     )

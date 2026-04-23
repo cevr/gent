@@ -64,14 +64,14 @@ const permissionSentinel = tool({
 
 const bashExtension: LoadedExtension = {
   manifest: { id: "test-bash-ext" },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "test",
   contributions: { capabilities: [bashTool] },
 }
 
 const permissionRulesExtension: LoadedExtension = {
   manifest: { id: "test-perm-rules-ext" },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "test",
   contributions: { capabilities: [permissionSentinel] },
 }

@@ -41,7 +41,7 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
   })
   return {
     manifest: { id },
-    kind: "builtin",
+    scope: "builtin",
     sourcePath: "builtin",
     contributions: { resources: [machineResource(actor)] },
   }
@@ -124,7 +124,7 @@ describe("Extension state persistence", () => {
     })
     const nonPersistent: LoadedExtension = {
       manifest: { id: "ephemeral" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "builtin",
       contributions: { resources: [machineResource(actor)] },
     }
@@ -225,7 +225,7 @@ describe("Persistence edge cases", () => {
 
     const ext: LoadedExtension = {
       manifest: { id: "corrupt-test" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "builtin",
       contributions: { resources: [machineResource(actor)] },
     }
@@ -276,7 +276,7 @@ describe("Persistence edge cases", () => {
 
     const ext: LoadedExtension = {
       manifest: { id: "resilient" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "builtin",
       contributions: { resources: [machineResource(actor)] },
     }

@@ -154,7 +154,7 @@ const makeStubExtension = (
 ): LoadedExtension =>
   ({
     manifest: stubManifest(id),
-    kind: "builtin" as const,
+    scope: "builtin" as const,
     sourcePath: "builtin",
     contributions: { resources },
   }) as LoadedExtension

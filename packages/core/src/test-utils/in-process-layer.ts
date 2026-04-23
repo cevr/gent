@@ -40,7 +40,7 @@ const sharedInfra = (agents: ReadonlyArray<AgentDefinition>) => {
   const extensionRegistryLive = testExtensionRegistryLayer([
     {
       manifest: { id: "test-agents" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "test",
       contributions: { agents },
     },

@@ -27,7 +27,7 @@ import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 const testExtensions = resolveExtensions([
   {
     manifest: { id: "agents" },
-    kind: "builtin" as const,
+    scope: "builtin" as const,
     sourcePath: "test",
     contributions: { agents: Object.values(Agents) },
   },

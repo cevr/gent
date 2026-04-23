@@ -68,7 +68,7 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
   resolveExtensions([
     {
       manifest: { id: "agents" },
-      kind: "builtin",
+      scope: "builtin",
       sourcePath: "test",
       contributions: {
         agents: Object.values(Agents),
@@ -122,7 +122,7 @@ describe("RunSpec", () => {
     const registry = resolveExtensions([
       {
         manifest: { id: "agents" },
-        kind: "builtin",
+        scope: "builtin",
         sourcePath: "test",
         contributions: { agents: Object.values(Agents) },
       },
@@ -1092,7 +1092,7 @@ describe("ephemeral service propagation", () => {
         resolveExtensions([
           {
             manifest: { id: "agents" },
-            kind: "builtin" as const,
+            scope: "builtin" as const,
             sourcePath: "test",
             contributions: {
               agents: Object.values(Agents),

@@ -71,7 +71,7 @@ const echoCapability: AnyCapabilityContribution = {
 
 const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({
   manifest: { id: extId },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "test",
   contributions: { modelDrivers },
 })

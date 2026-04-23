@@ -214,7 +214,7 @@ describe("TUI renderer surfaces", () => {
               extensions: [
                 {
                   manifest: { id: "@gent/memory" },
-                  kind: "builtin" as const,
+                  scope: "builtin" as const,
                   sourcePath: "builtin",
                   status: "degraded" as const,
                   activation: {
@@ -254,7 +254,7 @@ describe("TUI renderer surfaces", () => {
               extensions: [
                 {
                   manifest: { id: "@gent/plan" },
-                  kind: "builtin" as const,
+                  scope: "builtin" as const,
                   sourcePath: "builtin",
                   status: "degraded" as const,
                   activation: { status: "active" as const },
@@ -296,7 +296,7 @@ describe("TUI renderer surfaces", () => {
               extensions: [
                 {
                   manifest: { id: "@gent/memory" },
-                  kind: "builtin" as const,
+                  scope: "builtin" as const,
                   sourcePath: "builtin",
                   status: "degraded" as const,
                   activation: { status: "active" as const },
@@ -331,7 +331,7 @@ describe("TUI renderer surfaces", () => {
       extensions: [
         {
           manifest: { id: "@gent/plan" },
-          kind: "builtin" as const,
+          scope: "builtin" as const,
           sourcePath: "builtin",
           status: "degraded" as const,
           activation: { status: "active" as const },
@@ -415,7 +415,7 @@ describe("TUI renderer surfaces", () => {
                       extensions: [
                         {
                           manifest: { id: "@gent/plan" },
-                          kind: "builtin" as const,
+                          scope: "builtin" as const,
                           sourcePath: "builtin",
                           status: "degraded" as const,
                           activation: { status: "active" as const },
@@ -492,7 +492,7 @@ describe("TUI renderer surfaces", () => {
                       extensions: [
                         {
                           manifest: { id: "@gent/plan" },
-                          kind: "builtin" as const,
+                          scope: "builtin" as const,
                           sourcePath: "builtin",
                           status: "degraded" as const,
                           activation: { status: "active" as const },

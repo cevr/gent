@@ -1,7 +1,7 @@
 import type { PlatformError } from "effect"
 import { Effect, FileSystem, Path } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { ExtensionKind, GentExtension, LoadedExtension } from "../../domain/extension.js"
+import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domain/extension.js"
 import { ExtensionLoadError } from "../../domain/extension.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
@@ -158,13 +158,13 @@ const resolveToGentExtension = (value: unknown): GentExtension | undefined => {
 
 export interface DiscoveredExtension {
   readonly extension: GentExtension
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly sourcePath: string
 }
 
 export interface SkippedExtension {
   readonly path: string
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly error: string
 }
 
@@ -195,11 +195,11 @@ export const discoverExtensions = (opts: {
         Effect.catchEager((error) => Effect.succeed({ ok: false as const, error: error.message })),
       )
       if (result.ok) {
-        loaded.push({ extension: result.ext, kind: "user", sourcePath: filePath })
+        loaded.push({ extension: result.ext, scope: "user", sourcePath: filePath })
       } else {
-        skipped.push({ path: filePath, kind: "user", error: result.error })
+        skipped.push({ path: filePath, scope: "user", error: result.error })
         yield* Effect.logWarning("extension.load.skipped").pipe(
-          Effect.annotateLogs({ path: filePath, kind: "user", error: result.error }),
+          Effect.annotateLogs({ path: filePath, scope: "user", error: result.error }),
         )
       }
     }
@@ -210,11 +210,11 @@ export const discoverExtensions = (opts: {
         Effect.catchEager((error) => Effect.succeed({ ok: false as const, error: error.message })),
       )
       if (result.ok) {
-        loaded.push({ extension: result.ext, kind: "project", sourcePath: filePath })
+        loaded.push({ extension: result.ext, scope: "project", sourcePath: filePath })
       } else {
-        skipped.push({ path: filePath, kind: "project", error: result.error })
+        skipped.push({ path: filePath, scope: "project", error: result.error })
         yield* Effect.logWarning("extension.load.skipped").pipe(
-          Effect.annotateLogs({ path: filePath, kind: "project", error: result.error }),
+          Effect.annotateLogs({ path: filePath, scope: "project", error: result.error }),
         )
       }
     }
@@ -233,7 +233,7 @@ export const setupExtension = (
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner
 > =>
   Effect.gen(function* () {
-    const { extension, kind, sourcePath } = discovered
+    const { extension, scope, sourcePath } = discovered
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const spawner = yield* ChildProcessSpawner
@@ -254,7 +254,7 @@ export const setupExtension = (
 
     return {
       manifest: extension.manifest,
-      kind,
+      scope,
       sourcePath,
       contributions,
     }
@@ -270,7 +270,7 @@ const checkScopedCollision = <T>(
   const byScope = new Map<string, Map<string, string>>()
   for (const ext of extensions) {
     const items = pickItems(ext.contributions)
-    const scope = ext.kind
+    const scope = ext.scope
     const scopeMap = byScope.get(scope) ?? new Map<string, string>()
     for (const item of items) {
       const key = getKey(item)
@@ -296,15 +296,15 @@ export const validateExtensions = (
     // Check duplicate manifest ids within same scope
     const idsByScope = new Map<string, Set<string>>()
     for (const ext of extensions) {
-      const ids = idsByScope.get(ext.kind) ?? new Set()
+      const ids = idsByScope.get(ext.scope) ?? new Set()
       if (ids.has(ext.manifest.id)) {
         return yield* new ExtensionLoadError({
           extensionId: ext.manifest.id,
-          message: `Duplicate extension id "${ext.manifest.id}" in scope "${ext.kind}"`,
+          message: `Duplicate extension id "${ext.manifest.id}" in scope "${ext.scope}"`,
         })
       }
       ids.add(ext.manifest.id)
-      idsByScope.set(ext.kind, ids)
+      idsByScope.set(ext.scope, ids)
     }
 
     // Check keyed contributions — same key in same scope from different extensions is ambiguous.

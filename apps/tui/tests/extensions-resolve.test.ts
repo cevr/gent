@@ -17,9 +17,9 @@ import type { ToolRenderer } from "../src/components/tool-renderers/types"
 
 const make = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   contributions: ReadonlyArray<ClientContribution>,
-): LoadedTuiExtension => ({ id, kind, filePath: `/test/${id}`, contributions })
+): LoadedTuiExtension => ({ id, scope, filePath: `/test/${id}`, contributions })
 
 const renderer = (label: string): ToolRenderer => (() => label) as unknown as ToolRenderer
 

@@ -25,7 +25,7 @@ const branchId = BranchId.of("auto-branch")
 
 const autoExtension: LoadedExtension = {
   manifest: AutoExtension.manifest,
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "builtin",
   contributions: Effect.runSync(AutoExtension.setup(testSetupCtx())),
 }

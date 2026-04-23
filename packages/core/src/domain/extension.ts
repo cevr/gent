@@ -28,7 +28,7 @@ export interface ExtensionManifest {
 
 export interface LoadedExtension {
   readonly manifest: ExtensionManifest
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly sourcePath: string
   /**
    * Typed contribution buckets produced by the extension's setup function.
@@ -44,7 +44,7 @@ export type FailedExtensionPhase = "setup" | "validation" | "startup"
 
 export interface FailedExtension {
   readonly manifest: ExtensionManifest
-  readonly kind: ExtensionKind
+  readonly scope: ExtensionScope
   readonly sourcePath: string
   readonly phase: FailedExtensionPhase
   readonly error: string
@@ -58,7 +58,7 @@ export interface ScheduledJobFailureInfo {
 export type ExtensionStatusInfo =
   | {
       readonly manifest: ExtensionManifest
-      readonly kind: ExtensionKind
+      readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "active"
       readonly actor?: ExtensionActorStatusInfo
@@ -66,7 +66,7 @@ export type ExtensionStatusInfo =
     }
   | ({
       readonly manifest: ExtensionManifest
-      readonly kind: ExtensionKind
+      readonly scope: ExtensionScope
       readonly sourcePath: string
       readonly status: "failed"
       readonly actor?: ExtensionActorStatusInfo
@@ -87,7 +87,7 @@ export interface ExtensionActorStatusInfo {
   readonly failurePhase?: ExtensionActorFailurePhase
 }
 
-export type ExtensionKind = "builtin" | "user" | "project"
+export type ExtensionScope = "builtin" | "user" | "project"
 
 // Extension Load Error
 

@@ -27,7 +27,7 @@ import { e2ePreset } from "../helpers/test-preset"
 
 const setupTaskExt = Effect.provide(
   setupExtension(
-    { extension: TaskExtension, kind: "builtin", sourcePath: "builtin" },
+    { extension: TaskExtension, scope: "builtin", sourcePath: "builtin" },
     "/test/cwd",
     "/test/home",
   ),

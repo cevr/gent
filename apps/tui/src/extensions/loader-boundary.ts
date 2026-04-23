@@ -57,7 +57,7 @@ const discoverExtensionsWithRuntime = (
 
 interface ImportedExtension {
   readonly module: AnyExtensionClientModule
-  readonly kind: DiscoveredTuiExtension["kind"]
+  readonly scope: DiscoveredTuiExtension["scope"]
   readonly filePath: string
 }
 
@@ -75,7 +75,7 @@ const importExtension = async (
       return undefined
     }
 
-    return { module: candidate, kind: entry.kind, filePath: entry.filePath }
+    return { module: candidate, scope: entry.scope, filePath: entry.filePath }
   } catch (err) {
     console.log(`[tui-ext] Failed to load ${entry.filePath}: ${err}`)
     return undefined
@@ -125,7 +125,7 @@ export const loadTuiExtensions = async (opts: {
       .filter((ext) => !disabledSet.has(ext.id))
       .map(async (ext) => ({
         id: ext.id,
-        kind: "builtin" as const,
+        scope: "builtin" as const,
         filePath: `builtin:${ext.id}`,
         contributions: await invokeSetup(ext, opts.runtime),
       })),
@@ -134,7 +134,7 @@ export const loadTuiExtensions = async (opts: {
   const externalLoaded: LoadedTuiExtension[] = await Promise.all(
     enabled.map(async (ext) => ({
       id: ext.module.id,
-      kind: ext.kind,
+      scope: ext.scope,
       filePath: ext.filePath,
       contributions: await invokeSetup(ext.module, opts.runtime),
     })),

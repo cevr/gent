@@ -1,5 +1,5 @@
 import * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
+import * as Response from "effect/unstable/ai/Response"
 import { ToolCallId } from "../domain/ids.js"
 import {
   ImagePart,
@@ -34,6 +34,176 @@ export interface ResponseMessageParts {
   readonly tool: ReadonlyArray<ToolResultPart>
 }
 
+const toPromptFileData = (value: string): string | URL => {
+  if (value.startsWith("data:")) return value
+  try {
+    return new URL(value)
+  } catch {
+    return value
+  }
+}
+
+const appendNormalizedTextPart = (parts: Array<Response.AnyPart>, text: string): void => {
+  if (text === "") return
+  const last = parts.at(-1)
+  if (last?.type === "text") {
+    parts[parts.length - 1] = Response.makePart("text", { text: `${last.text}${text}` })
+    return
+  }
+  parts.push(Response.makePart("text", { text }))
+}
+
+const appendNormalizedReasoningPart = (parts: Array<Response.AnyPart>, text: string): void => {
+  if (text === "") return
+  const last = parts.at(-1)
+  if (last?.type === "reasoning") {
+    parts[parts.length - 1] = Response.makePart("reasoning", {
+      text: `${last.text}${text}`,
+    })
+    return
+  }
+  parts.push(Response.makePart("reasoning", { text }))
+}
+
+interface NormalizedResponseState {
+  readonly normalized: Array<Response.AnyPart>
+  readonly activeTextDeltas: Map<string, string>
+  readonly activeReasoningDeltas: Map<string, string>
+}
+
+type TextResponsePart = Extract<
+  Response.AnyPart,
+  { readonly type: "text" | "text-start" | "text-delta" | "text-end" }
+>
+
+type ReasoningResponsePart = Extract<
+  Response.AnyPart,
+  { readonly type: "reasoning" | "reasoning-start" | "reasoning-delta" | "reasoning-end" }
+>
+
+const normalizeTextResponsePart = (
+  state: NormalizedResponseState,
+  part: TextResponsePart,
+): void => {
+  switch (part.type) {
+    case "text":
+      appendNormalizedTextPart(state.normalized, part.text)
+      return
+    case "text-start":
+      state.activeTextDeltas.set(part.id, "")
+      return
+    case "text-delta":
+      if (state.activeTextDeltas.has(part.id)) {
+        state.activeTextDeltas.set(
+          part.id,
+          `${state.activeTextDeltas.get(part.id) ?? ""}${part.delta}`,
+        )
+      } else {
+        appendNormalizedTextPart(state.normalized, part.delta)
+      }
+      return
+    case "text-end":
+      appendNormalizedTextPart(state.normalized, state.activeTextDeltas.get(part.id) ?? "")
+      state.activeTextDeltas.delete(part.id)
+      return
+  }
+}
+
+const normalizeReasoningResponsePart = (
+  state: NormalizedResponseState,
+  part: ReasoningResponsePart,
+): void => {
+  switch (part.type) {
+    case "reasoning":
+      appendNormalizedReasoningPart(state.normalized, part.text)
+      return
+    case "reasoning-start":
+      state.activeReasoningDeltas.set(part.id, "")
+      return
+    case "reasoning-delta":
+      if (state.activeReasoningDeltas.has(part.id)) {
+        state.activeReasoningDeltas.set(
+          part.id,
+          `${state.activeReasoningDeltas.get(part.id) ?? ""}${part.delta}`,
+        )
+      } else {
+        appendNormalizedReasoningPart(state.normalized, part.delta)
+      }
+      return
+    case "reasoning-end":
+      appendNormalizedReasoningPart(
+        state.normalized,
+        state.activeReasoningDeltas.get(part.id) ?? "",
+      )
+      state.activeReasoningDeltas.delete(part.id)
+      return
+  }
+}
+
+const normalizePassthroughResponsePart = (
+  state: NormalizedResponseState,
+  part: Response.AnyPart,
+): void => {
+  switch (part.type) {
+    case "tool-result":
+      if (part.preliminary !== true) state.normalized.push(part)
+      return
+    case "file":
+    case "tool-call":
+    case "tool-approval-request":
+    case "source":
+    case "response-metadata":
+    case "finish":
+      state.normalized.push(part)
+      return
+    default:
+      return
+  }
+}
+
+export const normalizeResponseParts = (
+  parts: ReadonlyArray<Response.AnyPart>,
+): ReadonlyArray<Response.AnyPart> => {
+  const state: NormalizedResponseState = {
+    normalized: [],
+    activeTextDeltas: new Map<string, string>(),
+    activeReasoningDeltas: new Map<string, string>(),
+  }
+
+  for (const part of parts) {
+    if (
+      part.type === "text" ||
+      part.type === "text-start" ||
+      part.type === "text-delta" ||
+      part.type === "text-end"
+    ) {
+      normalizeTextResponsePart(state, part)
+      continue
+    }
+
+    if (
+      part.type === "reasoning" ||
+      part.type === "reasoning-start" ||
+      part.type === "reasoning-delta" ||
+      part.type === "reasoning-end"
+    ) {
+      normalizeReasoningResponsePart(state, part)
+      continue
+    }
+
+    normalizePassthroughResponsePart(state, part)
+  }
+
+  for (const text of state.activeTextDeltas.values()) {
+    appendNormalizedTextPart(state.normalized, text)
+  }
+  for (const text of state.activeReasoningDeltas.values()) {
+    appendNormalizedReasoningPart(state.normalized, text)
+  }
+
+  return state.normalized
+}
+
 export const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
 
 const toSystemMessage = (message: Message): Prompt.SystemMessage | undefined => {
@@ -56,7 +226,7 @@ const toUserMessage = (message: Message): Prompt.UserMessage | undefined => {
       case "image":
         content.push(
           Prompt.filePart({
-            data: part.image,
+            data: toPromptFileData(part.image),
             mediaType: part.mediaType ?? "image/png",
           }),
         )
@@ -166,6 +336,79 @@ export const toPrompt = (
 
   return Prompt.fromMessages(promptMessages)
 }
+
+const dataUrlToBytes = (value: string): Uint8Array | undefined => {
+  const match = /^data:([^;,]+);base64,(.+)$/u.exec(value)
+  if (match === null) return undefined
+  const data = match[2]
+  if (data === undefined) return undefined
+  return Uint8Array.from(Buffer.from(data, "base64"))
+}
+
+const imagePartToResponseFilePart = (part: ImagePart): Response.FilePart => {
+  const data = dataUrlToBytes(part.image)
+  if (data === undefined) {
+    throw new Error(
+      `responsePartsFromMessages only supports data URL images; cannot encode URL-backed image "${part.image}"`,
+    )
+  }
+  return Response.makePart("file", {
+    data,
+    mediaType: part.mediaType ?? "image/png",
+  })
+}
+
+export const responsePartsFromMessages = (
+  messages: ReadonlyArray<Message>,
+): ReadonlyArray<Response.AnyPart> =>
+  normalizeResponseParts(
+    messages.flatMap((message): ReadonlyArray<Response.AnyPart> => {
+      switch (message.role) {
+        case "assistant":
+          return message.parts.flatMap((part): ReadonlyArray<Response.AnyPart> => {
+            switch (part.type) {
+              case "text":
+                return [Response.makePart("text", { text: part.text })]
+              case "reasoning":
+                return [Response.makePart("reasoning", { text: part.text })]
+              case "tool-call":
+                return [
+                  Response.makePart("tool-call", {
+                    id: part.toolCallId,
+                    name: part.toolName,
+                    params: part.input,
+                    providerExecuted: false,
+                  }),
+                ]
+              case "image": {
+                return [imagePartToResponseFilePart(part)]
+              }
+              default:
+                return []
+            }
+          })
+        case "tool":
+          return message.parts.flatMap(
+            (part): ReadonlyArray<Response.AnyPart> =>
+              part.type === "tool-result"
+                ? [
+                    Response.makePart("tool-result", {
+                      id: part.toolCallId,
+                      name: part.toolName,
+                      isFailure: part.output.type === "error-json",
+                      result: part.output.value,
+                      encodedResult: part.output.value,
+                      providerExecuted: false,
+                      preliminary: false,
+                    }),
+                  ]
+                : [],
+          )
+        default:
+          return []
+      }
+    }),
+  )
 
 const responseFilePartToImagePart = (part: Response.FilePart): ImagePart | undefined =>
   part.mediaType.startsWith("image/")
@@ -296,6 +539,7 @@ const appendToolResponsePart = (
 export const responsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
 ): ResponseMessageParts => {
+  const normalized = normalizeResponseParts(parts)
   const state: ResponsePartsAccumulator = {
     assistant: [],
     tool: [],
@@ -303,7 +547,7 @@ export const responsePartsToMessageParts = (
     activeReasoningDeltas: new Map(),
   }
 
-  for (const part of parts) {
+  for (const part of normalized) {
     if (appendTextResponsePart(part, state)) continue
     if (appendReasoningResponsePart(part, state)) continue
     if (appendAssistantResponsePart(part, state)) continue
@@ -311,4 +555,75 @@ export const responsePartsToMessageParts = (
   }
 
   return { assistant: state.assistant, tool: state.tool }
+}
+
+const toPromptFromToolParts = (
+  parts: ReadonlyArray<ToolResultPart>,
+): Prompt.ToolMessage | undefined => {
+  const content = parts.map((part) =>
+    Prompt.toolResultPart({
+      id: part.toolCallId,
+      name: part.toolName,
+      isFailure: part.output.type === "error-json",
+      result: part.output.value,
+    }),
+  )
+
+  return content.length > 0 ? Prompt.toolMessage({ content }) : undefined
+}
+
+const toPromptFromResponseAssistantParts = (
+  parts: ReadonlyArray<Response.AnyPart>,
+): Prompt.AssistantMessage | undefined => {
+  const content: Prompt.AssistantMessagePart[] = []
+
+  for (const part of parts) {
+    switch (part.type) {
+      case "text":
+        content.push(Prompt.textPart({ text: part.text }))
+        break
+      case "reasoning":
+        content.push(Prompt.reasoningPart({ text: part.text }))
+        break
+      case "file":
+        content.push(Prompt.filePart({ data: part.data, mediaType: part.mediaType }))
+        break
+      case "tool-call":
+        content.push(
+          Prompt.toolCallPart({
+            id: part.id,
+            name: part.name,
+            params: part.params,
+            providerExecuted: false,
+          }),
+        )
+        break
+      case "tool-approval-request":
+        content.push(
+          Prompt.toolApprovalRequestPart({
+            approvalId: part.approvalId,
+            toolCallId: part.toolCallId,
+          }),
+        )
+        break
+      default:
+        break
+    }
+  }
+
+  return content.length > 0 ? Prompt.assistantMessage({ content }) : undefined
+}
+
+export const promptFromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Prompt.Prompt => {
+  const normalized = normalizeResponseParts(parts)
+  if (!normalized.some((part) => part.type === "file")) {
+    return Prompt.fromResponseParts(normalized)
+  }
+
+  const promptMessages: Prompt.Message[] = []
+  const assistant = toPromptFromResponseAssistantParts(normalized)
+  const tool = toPromptFromToolParts(responsePartsToMessageParts(normalized).tool)
+  if (assistant !== undefined) promptMessages.push(assistant)
+  if (tool !== undefined) promptMessages.push(tool)
+  return Prompt.fromMessages(promptMessages)
 }

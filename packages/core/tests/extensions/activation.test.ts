@@ -35,7 +35,7 @@ const makeBuiltin = (
 
 const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedExtension => ({
   manifest: { id },
-  kind: "builtin",
+  scope: "builtin",
   sourcePath: "builtin",
   contributions,
 })
@@ -82,7 +82,7 @@ describe("extension activation isolation", () => {
         extensions: [
           {
             extension: makeBuiltin("good-ext", () => Effect.succeed({})),
-            kind: "user",
+            scope: "user",
             sourcePath: "/tmp/good.ts",
           },
           {
@@ -91,7 +91,7 @@ describe("extension activation isolation", () => {
                 throw new Error("setup boom")
               }),
             ),
-            kind: "project",
+            scope: "project",
             sourcePath: "/tmp/bad.ts",
           },
         ],
@@ -104,7 +104,7 @@ describe("extension activation isolation", () => {
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]).toMatchObject({
         manifest: { id: "bad-ext" },
-        kind: "project",
+        scope: "project",
         sourcePath: "/tmp/bad.ts",
         phase: "setup",
       })
@@ -390,7 +390,7 @@ describe("extension activation isolation", () => {
         failedExtensions: [
           {
             manifest: { id: "broken-setup" },
-            kind: "user",
+            scope: "user",
             sourcePath: "/tmp/broken.ts",
             phase: "setup",
             error: "setup boom",
@@ -413,7 +413,7 @@ describe("extension activation isolation", () => {
       expect(result.resolved.failedExtensions).toEqual([
         {
           manifest: { id: "broken-setup" },
-          kind: "user",
+          scope: "user",
           sourcePath: "/tmp/broken.ts",
           phase: "setup",
           error: "setup boom",
@@ -428,14 +428,14 @@ describe("extension activation isolation", () => {
       expect(result.resolved.extensionStatuses).toEqual([
         {
           manifest: { id: "healthy-ext" },
-          kind: "builtin",
+          scope: "builtin",
           sourcePath: "builtin",
           status: "active",
           scheduledJobFailures: [{ jobId: "reflect", error: "Error: cron install boom" }],
         },
         {
           manifest: { id: "broken-setup" },
-          kind: "user",
+          scope: "user",
           sourcePath: "/tmp/broken.ts",
           phase: "setup",
           error: "setup boom",

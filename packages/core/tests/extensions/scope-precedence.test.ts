@@ -51,9 +51,9 @@ const toolReturning = (name: string, label: string) =>
 
 const ext = (
   id: string,
-  kind: "builtin" | "user" | "project",
+  scope: "builtin" | "user" | "project",
   contributions: ExtensionContributions,
-): LoadedExtension => ({ manifest: { id }, kind, sourcePath: `/test/${id}`, contributions })
+): LoadedExtension => ({ manifest: { id }, scope, sourcePath: `/test/${id}`, contributions })
 
 describe("scope precedence", () => {
   describe("keyed contributions — later scope wins", () => {
@@ -183,12 +183,12 @@ describe("scope precedence", () => {
 
   describe("explicit prompt slots — project applies after user after builtin", () => {
     it.live("systemPrompt rewrite order follows scope precedence", () => {
-      const make = (id: string, kind: "builtin" | "user" | "project") =>
-        ext(id, kind, {
+      const make = (id: string, scope: "builtin" | "user" | "project") =>
+        ext(id, scope, {
           projections: [
             {
               id: `prompt-${id}`,
-              query: () => Effect.succeed(`[${kind}]`),
+              query: () => Effect.succeed(`[${scope}]`),
               systemPrompt: (suffix, input) => Effect.succeed(`${input.basePrompt}${suffix}`),
             },
           ],
