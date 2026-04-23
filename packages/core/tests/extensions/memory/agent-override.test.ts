@@ -50,8 +50,6 @@ const makeTestLayer = (logs: {
     steer: logs.steerLog
       ? (command: SteerCommand) => Ref.update(logs.steerLog!, (log) => [...log, command])
       : () => Effect.void,
-    followUp: () => Effect.void,
-    isRunning: () => Effect.succeed(false),
     respondInteraction: () => Effect.void,
     watchState: () => Effect.succeed(Stream.empty),
     getState: () =>

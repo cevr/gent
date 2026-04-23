@@ -107,12 +107,9 @@ const agentLoopStub = (runOnce: AgentLoopService["runOnce"] = () => Effect.void)
     submit: () => Effect.void,
     run: () => Effect.void,
     steer: () => Effect.void,
-    followUp: () => Effect.void,
     drainQueue: () => Effect.succeed(emptyQueueSnapshot()),
     getQueue: () => Effect.succeed(emptyQueueSnapshot()),
-    isRunning: () => Effect.succeed(false),
     respondInteraction: () => Effect.void,
-    getActor: () => Effect.die("AgentLoop.getActor not used in AgentRunner tests"),
     getState: () => Effect.die("AgentLoop.getState not used in AgentRunner tests"),
     watchState: () => Effect.die("AgentLoop.watchState not used in AgentRunner tests"),
   })
@@ -137,7 +134,7 @@ describe("RunSpec", () => {
     }).pipe(Effect.provide(impl), Effect.runPromise)
   })
 
-  test("runSpec reaches the agent loop", async () => {
+  test("runSpec reaches agent loop", async () => {
     let capturedInput:
       | {
           sessionId: SessionId
@@ -673,7 +670,7 @@ describe("AgentRunner", () => {
     const eventStoreLayer = EventStore.Memory
     const eventPublisherLayer = withEventPublisher(eventStoreLayer)
 
-    // Mock AgentLoop that writes a reasoning-only assistant message
+    // Mock agent loop that writes a reasoning-only assistant message
     const mockRuntime = agentLoopStub((input) =>
       Effect.gen(function* () {
         const storage = yield* Storage

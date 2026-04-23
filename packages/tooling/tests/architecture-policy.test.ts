@@ -100,6 +100,23 @@ describe("architecture policy", () => {
     expect(body).not.toMatch(/\brunOnce\b/)
   })
 
+  test("runtime/agent barrel does not re-export the loop control plane", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/agent/index.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).not.toMatch(/\bAgentLoop\b/)
+    expect(source).not.toMatch(/\bAgentLoopError\b/)
+    expect(source).not.toMatch(/\bSteerCommand\b/)
+  })
+
+  test("agent runner does not depend on AgentLoop directly", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/agent/agent-runner.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).not.toMatch(/yield\*\s+AgentLoop\b/)
+    expect(source).not.toMatch(/\bagentLoop\.runOnce\b/)
+  })
+
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/session-profile.ts")
     const source = readFileSync(file, "utf8")

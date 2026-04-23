@@ -74,7 +74,7 @@ export interface E2ELayerConfig {
  * - MachineEngine.Live(extensions) — spawns real actors
  * - EventPublisherLive — appends events, then delivers them through the queued extension runtime
  * - ToolRunner.Live — executes tools for real
- * - ExtensionTurnControl.Live — QueueFollowUp calls agentLoop.followUp()
+ * - ExtensionTurnControl.Live — QueueFollowUp enqueues directly into the live loop
  */
 export const createE2ELayer = (config: E2ELayerConfig) => {
   // Resolve extensions — the test-agents pseudo-extension carries the test

@@ -1,5 +1,5 @@
 import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
-import { RunSpecSchema, AgentName } from "../domain/agent.js"
+import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
 import {
@@ -15,6 +15,7 @@ import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
+import type { AgentLoopService } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
@@ -48,9 +49,19 @@ export const SendUserMessagePayload = Schema.Struct({
   branchId: BranchId,
   content: Schema.String,
   agentOverride: Schema.optional(AgentName),
+  interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
+
+export interface RunPromptInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly agentName: AgentName
+  readonly prompt: string
+  readonly interactive?: boolean
+  readonly runSpec?: RunSpec
+}
 
 export const SendToolResultPayload = Schema.Struct({
   commandId: Schema.optional(ActorCommandId),
@@ -117,6 +128,7 @@ const RuntimeTurnFields = {
 
 const RuntimeTurnOptionFields = {
   agentOverride: Schema.optional(AgentName),
+  interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
 }
 
@@ -256,6 +268,28 @@ export const respondInteractionCommand = (
   ...input,
 })
 
+const runPromptWithLoop = (agentLoop: AgentLoopService) =>
+  Effect.fn("SessionRuntime.runPromptWithLoop")(function* (input: RunPromptInput) {
+    return yield* agentLoop.runOnce(input).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentRunError({
+            message: cause.message,
+            cause,
+          }),
+      ),
+    )
+  })
+
+export const makeRunPrompt: Effect.Effect<
+  (input: RunPromptInput) => Effect.Effect<void, AgentRunError>,
+  never,
+  AgentLoop
+> = Effect.gen(function* () {
+  const agentLoop = yield* AgentLoop
+  return runPromptWithLoop(agentLoop)
+})
+
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session-runtime/SessionRuntime",
 ) {
@@ -326,6 +360,7 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
                 ...(command.agentOverride !== undefined
                   ? { agentOverride: command.agentOverride }
                   : {}),
+                ...(command.interactive !== undefined ? { interactive: command.interactive } : {}),
                 ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
               })
               .pipe(

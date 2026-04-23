@@ -43,6 +43,7 @@ import type { ToolCallId } from "../../domain/ids.js"
 import { Storage, type StorageService } from "../../storage/sqlite-storage.js"
 import { AgentLoop } from "./agent-loop"
 import { ExtensionRegistry, type ExtensionRegistryService } from "../extensions/registry.js"
+import { makeRunPrompt } from "../session-runtime.js"
 import { ToolRunner } from "./tool-runner.js"
 import { Provider } from "../../providers/provider.js"
 import { SubscriptionEngine } from "../extensions/resource-host/subscription-engine.js"
@@ -521,7 +522,6 @@ const buildEphemeralLayer = (params: {
       ),
     ),
   )
-
   // withOverrides maps each named field to ALL Tags that should be omitted
   // from the parent (e.g., storage → Storage + 6 sub-Tags). This makes
   // the sub-Tag problem structural — adding a new sub-Tag updates one
@@ -589,7 +589,7 @@ const runEphemeralAgent = (params: {
     extensionRegistry: params.extensionRegistry,
   })
 
-  const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
+  const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) =>
     params.runnerConfig.timeoutMs === undefined
       ? effect
       : effect.pipe(
@@ -618,7 +618,7 @@ const runEphemeralAgent = (params: {
     const localStorage = yield* Storage
     const localEventStore = yield* EventStore
     const localEventPublisher = yield* EventPublisher
-    const localLoop = yield* AgentLoop
+    const runPrompt = yield* makeRunPrompt
     const now = yield* DateTime.nowAsDate
 
     yield* localStorage.createSession(
@@ -666,7 +666,7 @@ const runEphemeralAgent = (params: {
           ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
           : normalizedRunSpec
       yield* runWithTimeout(
-        localLoop.runOnce({
+        runPrompt({
           sessionId,
           branchId,
           agentName: params.agentName,
@@ -774,7 +774,7 @@ export const InProcessRunner = (
       const storage = yield* Storage
       const baseEventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
-      const agentLoop = yield* AgentLoop
+      const runPrompt = yield* makeRunPrompt
       const extensionRegistry = yield* ExtensionRegistry
       const busOpt = yield* Effect.serviceOption(SubscriptionEngine)
       // Server-scoped parent profile — type-level proof of origin for the
@@ -816,7 +816,7 @@ export const InProcessRunner = (
           }),
         )
 
-      const runWithTimeout = (effect: Effect.Effect<void, AgentRunError>) =>
+      const runWithTimeout = <R>(effect: Effect.Effect<void, AgentRunError, R>) =>
         runnerConfig.timeoutMs === undefined
           ? effect
           : effect.pipe(
@@ -892,7 +892,7 @@ export const InProcessRunner = (
                     ? { ...(normalizedRunSpec ?? {}), parentToolCallId: toolCallId }
                     : normalizedRunSpec
                 yield* runWithTimeout(
-                  agentLoop.runOnce({
+                  runPrompt({
                     sessionId,
                     branchId,
                     agentName: params.agent.name,

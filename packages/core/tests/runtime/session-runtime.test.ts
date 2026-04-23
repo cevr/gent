@@ -83,8 +83,6 @@ describe("SessionRuntime", () => {
         Effect.sync(() => {
           steered = true
         }),
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
       getState: () => Effect.succeed(idleLoopState),
@@ -125,8 +123,6 @@ describe("SessionRuntime", () => {
         Effect.sync(() => {
           commandSeen = command as typeof commandSeen
         }),
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
       getState: () => Effect.succeed(idleLoopState),
@@ -157,13 +153,65 @@ describe("SessionRuntime", () => {
     )
   })
 
+  test("sendUserMessage forwards interactive and runSpec through to the loop", async () => {
+    let submitSeen:
+      | {
+          interactive?: boolean
+          agentOverride?: string
+          runSpec?: { tags?: ReadonlyArray<string> }
+        }
+      | undefined
+
+    const agentLoopLayer = Layer.succeed(AgentLoop, {
+      submit: (_message, options) =>
+        Effect.sync(() => {
+          submitSeen = options
+        }),
+      run: () => Effect.void,
+      steer: () => Effect.void,
+      respondInteraction: () => Effect.void,
+      watchState: () => Effect.succeed(Stream.empty),
+      getState: () => Effect.succeed(idleLoopState),
+    })
+
+    const layer = makeSessionRuntimeLayer(agentLoopLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sessionRuntime = yield* SessionRuntime
+
+        const now = new Date()
+        yield* storage.createSession(
+          new Session({ id: "s1", name: "S", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(new Branch({ id: "b1", sessionId: "s1", createdAt: now }))
+
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({
+            sessionId: "s1" as never,
+            branchId: "b1" as never,
+            content: "test",
+            agentOverride: "deepwork",
+            interactive: false,
+            runSpec: { tags: ["background"] },
+          }),
+        )
+
+        expect(submitSeen).toEqual({
+          agentOverride: "deepwork",
+          interactive: false,
+          runSpec: { tags: ["background"] },
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   test("sendUserMessage publishes AgentRestarted on defect", async () => {
     const agentLoopLayer = Layer.succeed(AgentLoop, {
       submit: () => Effect.die("boom"),
       run: () => Effect.die("boom"),
       steer: () => Effect.void,
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
       getState: () => Effect.succeed(idleLoopState),
@@ -231,8 +279,6 @@ describe("SessionRuntime", () => {
           submitCount += 1
         }),
       steer: () => Effect.void,
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
       respondInteraction: () => Effect.void,
       watchState: () => Effect.succeed(Stream.empty),
       getState: () => Effect.succeed(idleLoopState),
@@ -335,8 +381,6 @@ describe("SessionRuntime", () => {
       submit: () => Effect.void,
       run: () => Effect.void,
       steer: () => Effect.void,
-      followUp: () => Effect.void,
-      isRunning: () => Effect.succeed(false),
       respondInteraction: (input) =>
         Effect.sync(() => {
           responseSeen = input as typeof responseSeen
