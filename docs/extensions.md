@@ -176,14 +176,14 @@ export default defineExtension({
 Use projections for prompt shaping, policy derivation, and read-only state views.
 
 ```ts
-import { defineExtension, projection } from "@gent/core/extensions/api"
+import { defineExtension, type ProjectionContribution } from "@gent/core/extensions/api"
 import { Effect, Schema } from "effect"
 
-const StatusProjection = projection({
+const StatusProjection: ProjectionContribution<string> = {
   id: "status",
-  output: Schema.String,
   query: () => Effect.succeed("ready"),
-})
+  prompt: (value) => [{ id: "status", title: "Status", content: value, priority: 0 }],
+}
 
 export default defineExtension({
   id: "status-ext",
@@ -302,6 +302,7 @@ builtin).
 
 - `query(...)` / `mutation(...)` -> `request(...)`
 - `command(...)` -> `action(...)`
+- projection constructor folklore -> typed `ProjectionContribution` object literals in `projections: [...]`
 - generic middleware APIs are gone from the authoring model
 - `_kind` contribution unions are gone; the bucket name is the discriminator
 
