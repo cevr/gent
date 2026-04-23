@@ -5,7 +5,7 @@
  *   - SubscriptionEngine: pub/sub semantics (exact, wildcard, unsubscribe,
  *     handler error isolation, withSubscriptions pre-registration).
  *   - Resource shape: defineResource produces a contribution with
- *     `_kind: "resource"` and the typed scope literal flows through.
+ *     the typed scope literal flowing through the shape.
  *   - Helpers: collectSubscriptions, collectProcessLayers iterate the
  *     LoadedExtension surface correctly.
  *
@@ -160,7 +160,7 @@ const makeStubExtension = (
   }) as LoadedExtension
 
 describe("defineResource", () => {
-  test("emits a contribution with _kind: resource", () => {
+  test("emits a contribution with the declared scope", () => {
     const r = defineResource({
       tag: TestServiceA,
       scope: "process",
