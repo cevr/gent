@@ -1,31 +1,26 @@
 /**
  * MachineEngine — substrate that drives `Resource.machine` actors.
  *
- * Owns per-session actor spawn, mailbox queues, supervised restart, and
- * the `send` / `execute` / `publish` / `getActorStatuses` / `terminateAll`
- * operations. Producers yield this Tag; read-only consumers (projections)
- * yield `MachineExecute` instead — the read-only call surface that
- * gains the `ReadOnly` brand in B11.4.
+ * Public surface:
+ *   - `publish`: broadcast an `AgentEvent` to all session actors
+ *   - `send`: cast a typed command message
+ *   - `execute`: request/reply against the actor protocol
+ *   - `getActorStatuses`: debug snapshot of actor lifecycle state
+ *   - `terminateAll`: stop all actors + close the session mailbox
  *
- * Method semantics:
- *   - `send`: cast (fire-and-forget) of a typed command message
- *   - `execute`: typed call/await-reply (formerly `ask` pre-B11.3d)
- *   - `publish`: broadcast an `AgentEvent` to all session actors;
- *     returns the extensionIds whose machine actually transitioned
- *   - `getActorStatuses`: snapshot of per-actor status (debug surface)
- *   - `terminateAll`: stop every actor + close mailboxes for a session
- *
- * Internal mailbox-tag uses `_tag: "execute"` for typed-reply items.
+ * Internals are split by ownership:
+ *   - `machine-protocol.ts`: protocol registry + decode/reply validation
+ *   - `machine-lifecycle.ts`: actor spawn / restart / termination / status
+ *   - `machine-mailbox.ts`: per-session serialization and same-fiber reentrancy
  *
  * @module
  */
 
-import { Cause, Context, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Semaphore } from "effect"
+import { Context, Effect, Exit, Layer, Scope } from "effect"
 import type { AgentEvent } from "../../../domain/event.js"
 import type {
   ExtensionActorStatusInfo,
   ExtensionReduceContext,
-  ExtensionRef,
   LoadedExtension,
 } from "../../../domain/extension.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
@@ -36,62 +31,12 @@ import type {
   ExtensionProtocolError,
 } from "../../../domain/extension-protocol.js"
 import { CurrentExtensionSession } from "../extension-actor-shared.js"
-import { spawnMachineExtensionRef } from "../spawn-machine-ref.js"
 import { ExtensionTurnControl } from "../turn-control.js"
-import {
-  collectMachineProtocol,
-  extractMachine,
-  getProtocolFailure,
-  protocolError,
-  type ActorEntry,
-  type ActorSpawnSpec,
-} from "./machine-protocol.js"
-
-const CurrentMailboxSession = Context.Reference<SessionId | undefined>(
-  "@gent/core/src/runtime/extensions/resource-host/machine-engine/CurrentMailboxSession",
-  { defaultValue: () => undefined },
-)
-
-interface PublishMailboxItem {
-  readonly _tag: "publish"
-  readonly sessionId: SessionId
-  readonly ctx: ExtensionReduceContext
-  readonly event: AgentEvent
-  readonly done: Deferred.Deferred<ReadonlyArray<string>>
-}
-
-interface SendMailboxItem {
-  readonly _tag: "send"
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-  readonly message: AnyExtensionCommandMessage
-  readonly done: Deferred.Deferred<ExtensionProtocolError | undefined>
-}
-
-interface ExecuteMailboxItem {
-  readonly _tag: "execute"
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-  readonly message: AnyExtensionRequestMessage
-  readonly done: Deferred.Deferred<unknown | ExtensionProtocolError>
-}
-
-type MailboxItem = PublishMailboxItem | SendMailboxItem | ExecuteMailboxItem
-
-interface MailboxSlot {
-  readonly queue: Queue.Queue<MailboxItem>
-}
-
-const ACTOR_RESTART_LIMIT = 1
+import { makeMachineLifecycle } from "./machine-lifecycle.js"
+import { makeSessionMailbox } from "./machine-mailbox.js"
+import { collectMachineProtocol, extractMachine, protocolError } from "./machine-protocol.js"
 
 export interface MachineEngineService {
-  /**
-   * Publish an event to all workflow actors for the session.
-   *
-   * Returns the list of extensionIds whose machine actually transitioned.
-   * EventPublisher uses this to emit `ExtensionStateChanged` pulses ONLY
-   * for extensions with real news — not blanket per-event broadcasts.
-   */
   readonly publish: (
     event: AgentEvent,
     ctx: ExtensionReduceContext,
@@ -101,9 +46,6 @@ export interface MachineEngineService {
     message: AnyExtensionCommandMessage,
     branchId?: BranchId,
   ) => Effect.Effect<void, ExtensionProtocolError>
-  /**
-   * Typed call/await-reply against an actor's request protocol.
-   */
   readonly execute: <M extends AnyExtensionRequestMessage>(
     sessionId: SessionId,
     message: M,
@@ -129,350 +71,40 @@ export const makeMachineEngine = (
       Effect.annotateLogs({
         totalExtensions: extensions.length,
         extensionsWithActors: spawnSpecs.length,
-        actorIds: spawnSpecs.map((s) => s.extensionId).join(", "),
+        actorIds: spawnSpecs.map((spec) => spec.extensionId).join(", "),
         extensionsWithoutActors: extensions
-          .filter((ext) => extractMachine(ext) === undefined)
-          .map((ext) => ext.manifest.id)
+          .filter((extension) => extractMachine(extension) === undefined)
+          .map((extension) => extension.manifest.id)
           .join(", "),
       }),
     )
 
-    type ActorSlot =
-      | { readonly _tag: "ready"; readonly entries: ActorEntry[] }
-      | { readonly _tag: "pending"; readonly gate: Deferred.Deferred<ActorEntry[]> }
-
-    const actorsRef = yield* Ref.make<Map<SessionId, ActorSlot>>(new Map())
-    const actorStatusesRef = yield* Ref.make<Map<SessionId, Map<string, ExtensionActorStatusInfo>>>(
-      new Map(),
-    )
-    const mailboxSlotsRef = yield* Ref.make<Map<SessionId, MailboxSlot>>(new Map())
     const runtimeScope = yield* Scope.make()
-    const spawnSemaphore = yield* Semaphore.make(1)
-    const mailboxSemaphore = yield* Semaphore.make(1)
     const turnControl = yield* ExtensionTurnControl
+    const lifecycle = yield* makeMachineLifecycle({
+      runtimeScope,
+      spawnSpecs,
+      spawnByExtension,
+      turnControl,
+    })
+    const mailbox = yield* makeSessionMailbox(runtimeScope)
 
-    const setActorStatus = (status: ExtensionActorStatusInfo) =>
-      Ref.update(actorStatusesRef, (current) => {
-        const next = new Map(current)
-        const byExtension = new Map(next.get(status.sessionId) ?? new Map())
-        byExtension.set(status.extensionId, status)
-        next.set(status.sessionId, byExtension)
-        return next
-      })
-
-    const formatCause = (cause: Cause.Cause<unknown>) => String(Cause.squash(cause))
-    const logIsolatedFailure = (message: string, fields: Record<string, unknown>) =>
-      Effect.logWarning(message).pipe(Effect.annotateLogs(fields))
-    const stopActor = (entry: ActorEntry) => Effect.exit(entry.ref.stop).pipe(Effect.asVoid)
-    const getActorStatus = (sessionId: SessionId, extensionId: string) =>
-      Ref.get(actorStatusesRef).pipe(
-        Effect.map((current) => current.get(sessionId)?.get(extensionId)),
+    const findEntry = (extensionId: string, sessionId: SessionId, branchId?: BranchId) =>
+      lifecycle.getOrSpawnActors(sessionId, branchId).pipe(
+        Effect.map((entries) => ({
+          entry: entries.find((candidate) => candidate.ref.id === extensionId),
+          entries,
+        })),
       )
-    const replaceReadyEntry = (
-      sessionId: SessionId,
-      extensionId: string,
-      nextEntry: ActorEntry | undefined,
-    ) =>
-      Ref.update(actorsRef, (current) => {
-        const slot = current.get(sessionId)
-        if (slot === undefined || slot._tag !== "ready") return current
-        const existingIndex = slot.entries.findIndex((entry) => entry.ref.id === extensionId)
-        let entries = slot.entries
-        if (existingIndex === -1) {
-          if (nextEntry !== undefined) {
-            entries = [...slot.entries, nextEntry]
-          }
-        } else if (nextEntry === undefined) {
-          entries = slot.entries.filter((entry) => entry.ref.id !== extensionId)
-        } else {
-          entries = slot.entries.map((entry, index) =>
-            index === existingIndex ? nextEntry : entry,
-          )
-        }
-        const next = new Map(current)
-        next.set(sessionId, { _tag: "ready", entries })
-        return next
-      })
-    const markActorFailed = (
-      extensionId: string,
-      sessionId: SessionId,
-      branchId: BranchId | undefined,
-      error: string,
-      failurePhase: "start" | "runtime",
-      restartCount: number,
-    ) =>
-      setActorStatus({
-        extensionId,
-        sessionId,
-        branchId,
-        status: "failed",
-        error,
-        failurePhase,
-        ...(restartCount > 0 ? { restartCount } : {}),
-      })
-
-    const spawnActorEntry = (
-      spec: ActorSpawnSpec,
-      sessionId: SessionId,
-      branchId: BranchId | undefined,
-      lifecycleStatus: "starting" | "restarting",
-      failurePhase: "start" | "runtime",
-      restartCount: number,
-    ): Effect.Effect<ActorEntry | undefined> =>
-      Effect.gen(function* () {
-        yield* setActorStatus({
-          extensionId: spec.extensionId,
-          sessionId,
-          branchId,
-          status: lifecycleStatus,
-          ...(restartCount > 0 ? { restartCount } : {}),
-        })
-
-        /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- actor R is erased at registration */
-        const spawnExit = yield* Effect.exit(
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-          spawnMachineExtensionRef(spec.extensionId, spec.actor, {
-            sessionId,
-            branchId,
-          }).pipe(Effect.provideService(ExtensionTurnControl, turnControl)) as Effect.Effect<
-            ExtensionRef,
-            never,
-            never
-          >,
-        )
-        /* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
-
-        if (spawnExit._tag === "Failure") {
-          const error = formatCause(spawnExit.cause)
-          yield* markActorFailed(
-            spec.extensionId,
-            sessionId,
-            branchId,
-            error,
-            failurePhase,
-            restartCount,
-          )
-          yield* Effect.logWarning("extension.start.failed").pipe(
-            Effect.annotateLogs({ extensionId: spec.extensionId, error }),
-          )
-          return undefined
-        }
-
-        const startExit = yield* Effect.exit(spawnExit.value.start)
-        if (startExit._tag === "Failure") {
-          const error = formatCause(startExit.cause)
-          yield* stopActor({ ref: spawnExit.value, actor: spec.actor })
-          yield* markActorFailed(
-            spec.extensionId,
-            sessionId,
-            branchId,
-            error,
-            failurePhase,
-            restartCount,
-          )
-          yield* Effect.logWarning("extension.start.failed").pipe(
-            Effect.annotateLogs({ extensionId: spec.extensionId, error }),
-          )
-          return undefined
-        }
-
-        yield* setActorStatus({
-          extensionId: spec.extensionId,
-          sessionId,
-          branchId,
-          status: "running",
-          ...(restartCount > 0 ? { restartCount } : {}),
-        })
-        yield* Effect.logDebug("extension.actor.spawned").pipe(
-          Effect.annotateLogs({
-            extensionId: spec.extensionId,
-            sessionId,
-            lifecycleStatus,
-            restartCount,
-          }),
-        )
-        return { ref: spawnExit.value, actor: spec.actor }
-      })
-
-    const restartActor = (
-      sessionId: SessionId,
-      branchId: BranchId | undefined,
-      entry: ActorEntry,
-      error: string,
-    ): Effect.Effect<ActorEntry | undefined> =>
-      Effect.gen(function* () {
-        const currentStatus = yield* getActorStatus(sessionId, entry.ref.id)
-        const currentRestartCount = currentStatus?.restartCount ?? 0
-        const actorBranchId = branchId ?? currentStatus?.branchId
-        yield* stopActor(entry)
-
-        if (currentRestartCount >= ACTOR_RESTART_LIMIT) {
-          yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
-          yield* markActorFailed(
-            entry.ref.id,
-            sessionId,
-            actorBranchId,
-            error,
-            "runtime",
-            currentRestartCount,
-          )
-          return undefined
-        }
-
-        const spec = spawnByExtension.get(entry.ref.id)
-        if (spec === undefined) {
-          yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
-          yield* markActorFailed(
-            entry.ref.id,
-            sessionId,
-            actorBranchId,
-            `extension "${entry.ref.id}" cannot be restarted: spawn spec missing`,
-            "runtime",
-            currentRestartCount,
-          )
-          return undefined
-        }
-
-        const restarted = yield* spawnActorEntry(
-          spec,
-          sessionId,
-          actorBranchId,
-          "restarting",
-          "runtime",
-          currentRestartCount + 1,
-        )
-        yield* replaceReadyEntry(sessionId, entry.ref.id, restarted)
-        return restarted
-      })
-
-    const runSupervised = <A>(
-      sessionId: SessionId,
-      branchId: BranchId | undefined,
-      entry: ActorEntry,
-      operation: string,
-      run: (ref: ExtensionRef) => Effect.Effect<A, ExtensionProtocolError>,
-    ): Effect.Effect<
-      | { readonly _tag: "success"; readonly value: A }
-      | { readonly _tag: "protocol"; readonly error: ExtensionProtocolError }
-      | { readonly _tag: "terminal"; readonly error: string }
-    > =>
-      Effect.gen(function* () {
-        let current = entry
-        while (true) {
-          const exit = yield* Effect.exit(run(current.ref))
-          if (exit._tag === "Success") {
-            return { _tag: "success", value: exit.value } as const
-          }
-
-          const protocol = getProtocolFailure(exit.cause)
-          if (protocol !== undefined) {
-            return { _tag: "protocol", error: protocol } as const
-          }
-
-          const error = formatCause(exit.cause)
-          yield* Effect.logWarning("extension.actor.runtime.failed").pipe(
-            Effect.annotateLogs({
-              extensionId: current.ref.id,
-              sessionId,
-              branchId,
-              operation,
-              error,
-            }),
-          )
-          const restarted = yield* restartActor(sessionId, branchId, current, error)
-          if (restarted === undefined) {
-            return { _tag: "terminal", error } as const
-          }
-          current = restarted
-        }
-      })
-
-    const getOrSpawnActors = (
-      sessionId: SessionId,
-      branchId?: BranchId,
-    ): Effect.Effect<ActorEntry[]> =>
-      Effect.withSpan("MachineEngine.spawnWorkflows")(
-        Effect.gen(function* () {
-          const result = yield* spawnSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const existing = (yield* Ref.get(actorsRef)).get(sessionId)
-              if (existing !== undefined) return existing
-              const gate = yield* Deferred.make<ActorEntry[]>()
-              const slot: ActorSlot = { _tag: "pending", gate }
-              yield* Ref.update(actorsRef, (current) => {
-                const next = new Map(current)
-                next.set(sessionId, slot)
-                return next
-              })
-              return { _tag: "owner" as const, gate }
-            }),
-          )
-
-          if ("entries" in result && result._tag === "ready") return result.entries
-          if ("gate" in result && result._tag === "pending") {
-            return yield* Deferred.await(result.gate)
-          }
-
-          const gate = result.gate
-          const exit = yield* Effect.exit(
-            Effect.gen(function* () {
-              const entries: ActorEntry[] = []
-              for (const spec of spawnSpecs) {
-                const entry = yield* spawnActorEntry(
-                  spec,
-                  sessionId,
-                  branchId,
-                  "starting",
-                  "start",
-                  0,
-                )
-                if (entry !== undefined) {
-                  entries.push(entry)
-                }
-              }
-              return entries
-            }),
-          )
-
-          const entries =
-            exit._tag === "Success"
-              ? exit.value
-              : yield* logIsolatedFailure("extension.spawn.session.failed", {
-                  sessionId,
-                  error: formatCause(exit.cause),
-                }).pipe(Effect.as([] as ActorEntry[]))
-
-          yield* Ref.update(actorsRef, (current) => {
-            const next = new Map(current)
-            next.set(sessionId, { _tag: "ready", entries })
-            return next
-          })
-          yield* Effect.logDebug("extension.actors.session.ready").pipe(
-            Effect.annotateLogs({
-              sessionId,
-              requested: spawnSpecs.length,
-              spawned: entries.length,
-              spawnedIds: entries.map((e) => e.ref.id).join(", "),
-              failedIds: spawnSpecs
-                .filter((s) => !entries.some((e) => e.ref.id === s.extensionId))
-                .map((s) => s.extensionId)
-                .join(", "),
-            }),
-          )
-          yield* Deferred.succeed(gate, entries)
-          return entries
-        }),
-      ) as Effect.Effect<ActorEntry[]>
-
-    const findEntry = (entries: ReadonlyArray<ActorEntry>, extensionId: string) =>
-      entries.find((entry) => entry.ref.id === extensionId)
+    const withSession = <A, E>(sessionId: SessionId, effect: Effect.Effect<A, E>) =>
+      effect.pipe(Effect.provideService(CurrentExtensionSession, { sessionId }))
 
     const publishImmediate = (event: AgentEvent, ctx: ExtensionReduceContext) =>
       Effect.gen(function* () {
         const transitioned: string[] = []
-        const entries = yield* getOrSpawnActors(ctx.sessionId, ctx.branchId)
+        const entries = yield* lifecycle.getOrSpawnActors(ctx.sessionId, ctx.branchId)
         for (const entry of entries) {
-          const publishResult = yield* runSupervised(
+          const result = yield* lifecycle.runSupervised(
             ctx.sessionId,
             ctx.branchId,
             entry,
@@ -480,13 +112,16 @@ export const makeMachineEngine = (
             (ref) => ref.publish(event, ctx),
           )
           let actorChanged = false
-          if (publishResult._tag === "success") {
-            actorChanged = publishResult.value
-          } else if (publishResult._tag === "protocol") {
-            actorChanged = yield* logIsolatedFailure("extension.publish.failed", {
-              actorId: entry.ref.id,
-              error: publishResult.error.message,
-            }).pipe(Effect.as(false))
+          if (result._tag === "success") {
+            actorChanged = result.value
+          } else if (result._tag === "protocol") {
+            actorChanged = yield* Effect.logWarning("extension.publish.failed").pipe(
+              Effect.annotateLogs({
+                actorId: entry.ref.id,
+                error: result.error.message,
+              }),
+              Effect.as(false),
+            )
           }
           if (actorChanged) transitioned.push(entry.ref.id)
         }
@@ -499,16 +134,15 @@ export const makeMachineEngine = (
       branchId?: BranchId,
     ): Effect.Effect<void, ExtensionProtocolError> =>
       Effect.gen(function* () {
-        const entries = yield* getOrSpawnActors(sessionId, branchId)
         const decoded = yield* protocols.decodeCommand(message)
-        const entry = findEntry(entries, decoded.extensionId)
+        const { entry, entries } = yield* findEntry(decoded.extensionId, sessionId, branchId)
         if (entry === undefined) {
           yield* Effect.logWarning("extension.send.not-loaded").pipe(
             Effect.annotateLogs({
               extensionId: decoded.extensionId,
               tag: decoded._tag,
               sessionId,
-              loadedActors: entries.map((e) => e.ref.id).join(", "),
+              loadedActors: entries.map((candidate) => candidate.ref.id).join(", "),
             }),
           )
           return yield* protocolError(
@@ -518,19 +152,15 @@ export const makeMachineEngine = (
             `extension "${decoded.extensionId}" is not loaded`,
           )
         }
-        const sendResult = yield* runSupervised(sessionId, branchId, entry, "send", (ref) =>
+
+        const result = yield* lifecycle.runSupervised(sessionId, branchId, entry, "send", (ref) =>
           ref.send(decoded, branchId),
         )
-        if (sendResult._tag === "protocol") {
-          return yield* sendResult.error
+        if (result._tag === "protocol") {
+          return yield* result.error
         }
-        if (sendResult._tag === "terminal") {
-          return yield* protocolError(
-            decoded.extensionId,
-            decoded._tag,
-            "command",
-            sendResult.error,
-          )
+        if (result._tag === "terminal") {
+          return yield* protocolError(decoded.extensionId, decoded._tag, "command", result.error)
         }
       })
 
@@ -540,21 +170,19 @@ export const makeMachineEngine = (
       branchId?: BranchId,
     ): Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError> =>
       Effect.gen(function* () {
-        const entries = yield* getOrSpawnActors(sessionId, branchId)
         const decoded = yield* protocols.decodeRequest(message)
         const definition = yield* protocols.requireRequestDefinition(
           decoded.extensionId,
           decoded._tag,
         )
-        const entry = findEntry(entries, decoded.extensionId)
+        const { entry, entries } = yield* findEntry(decoded.extensionId, sessionId, branchId)
         if (entry === undefined) {
           yield* Effect.logWarning("extension.execute.not-loaded").pipe(
             Effect.annotateLogs({
               extensionId: decoded.extensionId,
               tag: decoded._tag,
               sessionId,
-              loadedActors: entries.map((e) => e.ref.id).join(", "),
-              registeredSpawnSpecs: spawnSpecs.map((s) => s.extensionId).join(", "),
+              loadedActors: entries.map((candidate) => candidate.ref.id).join(", "),
             }),
           )
           return yield* protocolError(
@@ -564,169 +192,28 @@ export const makeMachineEngine = (
             `extension "${decoded.extensionId}" is not loaded`,
           )
         }
-        const replyResult = yield* runSupervised(sessionId, branchId, entry, "execute", (ref) =>
-          ref.execute(decoded, branchId),
+
+        const result = yield* lifecycle.runSupervised(
+          sessionId,
+          branchId,
+          entry,
+          "execute",
+          (ref) => ref.execute(decoded, branchId),
         )
-        if (replyResult._tag === "protocol") {
-          return yield* replyResult.error
+        if (result._tag === "protocol") {
+          return yield* result.error
         }
-        if (replyResult._tag === "terminal") {
-          return yield* protocolError(decoded.extensionId, decoded._tag, "reply", replyResult.error)
+        if (result._tag === "terminal") {
+          return yield* protocolError(decoded.extensionId, decoded._tag, "reply", result.error)
         }
-        return yield* protocols.decodeRequestReply(
-          decoded,
-          definition.replySchema,
-          replyResult.value,
-        )
+        return yield* protocols.decodeRequestReply(decoded, definition.replySchema, result.value)
       })
-
-    const processMailboxItem = (item: MailboxItem) =>
-      Effect.gen(function* () {
-        const currentSession = { sessionId: item.sessionId }
-        switch (item._tag) {
-          case "publish": {
-            const changed = yield* publishImmediate(item.event, item.ctx).pipe(
-              Effect.provideService(CurrentExtensionSession, currentSession),
-              Effect.provideService(CurrentMailboxSession, item.sessionId),
-            )
-            yield* Deferred.succeed(item.done, changed)
-            return
-          }
-          case "send": {
-            const exit = yield* Effect.exit(
-              sendImmediate(item.sessionId, item.message, item.branchId).pipe(
-                Effect.provideService(CurrentExtensionSession, currentSession),
-                Effect.provideService(CurrentMailboxSession, item.sessionId),
-              ),
-            )
-            if (exit._tag === "Success") {
-              yield* Deferred.succeed(item.done, void 0)
-              return
-            }
-            const protocol = getProtocolFailure(exit.cause)
-            yield* Deferred.succeed(
-              item.done,
-              protocol ??
-                protocolError(
-                  item.message.extensionId,
-                  item.message._tag,
-                  "command",
-                  formatCause(exit.cause),
-                ),
-            )
-            return
-          }
-          case "execute": {
-            const exit = yield* Effect.exit(
-              executeImmediate(item.sessionId, item.message, item.branchId).pipe(
-                Effect.provideService(CurrentExtensionSession, currentSession),
-                Effect.provideService(CurrentMailboxSession, item.sessionId),
-              ),
-            )
-            if (exit._tag === "Success") {
-              yield* Deferred.succeed(item.done, exit.value)
-              return
-            }
-            const protocol = getProtocolFailure(exit.cause)
-            yield* Deferred.succeed(
-              item.done,
-              protocol ??
-                protocolError(
-                  item.message.extensionId,
-                  item.message._tag,
-                  "reply",
-                  formatCause(exit.cause),
-                ),
-            )
-          }
-        }
-      }).pipe(
-        Effect.catchCause((cause) => {
-          const error = formatCause(cause)
-          const complete = (() => {
-            switch (item._tag) {
-              case "publish":
-                return Deferred.succeed(item.done, [] as ReadonlyArray<string>)
-              case "send":
-                return Deferred.succeed(
-                  item.done,
-                  protocolError(item.message.extensionId, item.message._tag, "command", error),
-                )
-              case "execute":
-                return Deferred.succeed(
-                  item.done,
-                  protocolError(item.message.extensionId, item.message._tag, "reply", error),
-                )
-            }
-          })()
-          return Effect.logWarning("extension.mailbox.failed").pipe(
-            Effect.annotateLogs({
-              sessionId: item.sessionId,
-              operation: item._tag,
-              error,
-            }),
-            Effect.andThen(complete),
-          )
-        }),
-      )
-
-    const mailboxWorker = (sessionId: SessionId, queue: Queue.Queue<MailboxItem>) =>
-      Effect.forever(Queue.take(queue).pipe(Effect.flatMap(processMailboxItem))).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.void
-          return Effect.logWarning("extension.mailbox.worker.failed").pipe(
-            Effect.annotateLogs({ sessionId, error: formatCause(cause) }),
-          )
-        }),
-      )
-
-    const ensureMailboxSlot = (sessionId: SessionId): Effect.Effect<MailboxSlot> => {
-      const createSlot: Effect.Effect<MailboxSlot> = Effect.gen(function* () {
-        const existing = (yield* Ref.get(mailboxSlotsRef)).get(sessionId)
-        if (existing !== undefined) return existing
-
-        const queue = yield* Queue.unbounded<MailboxItem>()
-        yield* Effect.forkIn(mailboxWorker(sessionId, queue), runtimeScope)
-
-        const slot: MailboxSlot = { queue }
-        yield* Ref.update(mailboxSlotsRef, (current) => {
-          const next = new Map(current)
-          next.set(sessionId, slot)
-          return next
-        })
-        return slot
-      })
-
-      return mailboxSemaphore.withPermits(1)(createSlot)
-    }
 
     const service = {
       publish: (event, ctx) =>
         Effect.withSpan("MachineEngine.publish", {
           attributes: { "extension.event": event._tag },
-        })(
-          Effect.gen(function* () {
-            const slot = yield* ensureMailboxSlot(ctx.sessionId)
-            const done = yield* Deferred.make<ReadonlyArray<string>>()
-            yield* Queue.offer(slot.queue, {
-              _tag: "publish",
-              sessionId: ctx.sessionId,
-              ctx,
-              event,
-              done,
-            })
-            const currentSession = yield* CurrentMailboxSession
-            if (currentSession === ctx.sessionId) {
-              // Re-entrant publish from inside the same mailbox: cannot
-              // wait on `done` (would deadlock). The caller is itself an
-              // effect inside the mailbox loop and will be told via the
-              // outer publish's deferred. Treat as "no transitions
-              // observed by this nested call".
-              return [] as ReadonlyArray<string>
-            }
-            return yield* Deferred.await(done)
-          }),
-        ),
+        })(mailbox.submit(ctx.sessionId, withSession(ctx.sessionId, publishImmediate(event, ctx)))),
 
       send: (sessionId, message, branchId) =>
         Effect.withSpan("MachineEngine.send", {
@@ -735,23 +222,10 @@ export const makeMachineEngine = (
             "extension.message": message._tag,
           },
         })(
-          Effect.gen(function* () {
-            const currentSession = yield* CurrentMailboxSession
-            if (currentSession === sessionId) {
-              return yield* sendImmediate(sessionId, message, branchId)
-            }
-            const slot = yield* ensureMailboxSlot(sessionId)
-            const done = yield* Deferred.make<ExtensionProtocolError | undefined>()
-            yield* Queue.offer(slot.queue, {
-              _tag: "send",
-              sessionId,
-              branchId,
-              message,
-              done,
-            })
-            const result = yield* Deferred.await(done)
-            if (result !== undefined) return yield* result
-          }),
+          mailbox.submit(
+            sessionId,
+            withSession(sessionId, sendImmediate(sessionId, message, branchId)),
+          ),
         ),
 
       execute: <M extends AnyExtensionRequestMessage>(
@@ -765,77 +239,29 @@ export const makeMachineEngine = (
             "extension.message": message._tag,
           },
         })(
-          Effect.gen(function* () {
-            const slot = yield* ensureMailboxSlot(sessionId)
-            const done = yield* Deferred.make<unknown | ExtensionProtocolError>()
-            yield* Queue.offer(slot.queue, {
-              _tag: "execute",
-              sessionId,
-              branchId,
-              message,
-              done,
-            })
-            const result = yield* Deferred.await(done)
-            return yield* protocols.decodeMailboxReply<M>(result)
-          }),
+          mailbox.submit(
+            sessionId,
+            withSession(sessionId, executeImmediate(sessionId, message, branchId)),
+          ),
         ),
 
-      getActorStatuses: (sessionId) =>
-        Effect.gen(function* () {
-          return [...((yield* Ref.get(actorStatusesRef)).get(sessionId) ?? new Map()).values()]
-        }),
+      getActorStatuses: lifecycle.getActorStatuses,
 
       terminateAll: (sessionId) =>
         Effect.withSpan("MachineEngine.terminateAll")(
           Effect.gen(function* () {
-            const slot = (yield* Ref.get(actorsRef)).get(sessionId)
-            if (slot !== undefined && slot._tag === "ready") {
-              for (const { ref } of slot.entries) {
-                yield* Effect.exit(ref.stop).pipe(Effect.asVoid)
-              }
-            }
-            yield* Ref.update(actorsRef, (current) => {
-              const next = new Map(current)
-              next.delete(sessionId)
-              return next
-            })
-            yield* Ref.update(actorStatusesRef, (current) => {
-              const next = new Map(current)
-              next.delete(sessionId)
-              return next
-            })
-            const mailbox = (yield* Ref.get(mailboxSlotsRef)).get(sessionId)
-            if (mailbox !== undefined) {
-              yield* Queue.shutdown(mailbox.queue)
-              yield* Ref.update(mailboxSlotsRef, (current) => {
-                const next = new Map(current)
-                next.delete(sessionId)
-                return next
-              })
-            }
+            yield* lifecycle.terminateActors(sessionId)
+            yield* mailbox.shutdown(sessionId)
           }),
         ),
-    } as MachineEngineService
+    } satisfies MachineEngineService
+
     return { runtimeScope, service }
   })
-
-// ── Public Tag ──
-//
-// `MachineEngine` is the substrate-wide call surface for the machine engine:
-// `publish` / `send` / `execute` / `getActorStatuses` / `terminateAll`.
-// Producers yield this Tag (event-publisher, agent-loop, session-runtime,
-// rpc-handlers). Read-only consumers (projections) yield `MachineExecute`
-// instead.
 
 export class MachineEngine extends Context.Service<MachineEngine, MachineEngineService>()(
   "@gent/core/src/runtime/extensions/resource-host/machine-engine/MachineEngine",
 ) {
-  /**
-   * Build the layer for a fixed extension set. The returned layer owns a
-   * `runtimeScope` whose lifetime equals the layer's scope — when the layer
-   * is torn down, all spawned actors are stopped and mailbox queues are
-   * shut down.
-   */
   static fromExtensions = (
     extensions: ReadonlyArray<LoadedExtension>,
   ): Layer.Layer<MachineEngine, never, ExtensionTurnControl> =>

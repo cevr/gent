@@ -61,6 +61,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "packages/core/src/runtime/extensions/effect-membrane.ts",
         "packages/core/src/runtime/extensions/resource-host/index.ts",
         "packages/core/src/runtime/extensions/resource-host/machine-engine.ts",
+        "packages/core/src/runtime/extensions/resource-host/machine-lifecycle.ts",
         "packages/core/src/runtime/extensions/resource-host/resource-layer.ts",
         "packages/core/src/domain/extension-load-boundary.ts",
         "packages/core/src/extensions/api.ts",
