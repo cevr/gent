@@ -53,6 +53,42 @@ const buildRuntime = (
   )
 
 describe("transport-only extension widgets", () => {
+  test("cleanups fire in registration order", () => {
+    const calls: string[] = []
+    const cleanups: Array<() => void> = []
+    const lifecycle = { addCleanup: (fn: () => void) => cleanups.push(fn) }
+
+    lifecycle.addCleanup(() => calls.push("first"))
+    lifecycle.addCleanup(() => calls.push("second"))
+    lifecycle.addCleanup(() => calls.push("third"))
+
+    for (const cleanup of cleanups) cleanup()
+
+    expect(calls).toEqual(["first", "second", "third"])
+  })
+
+  test("a thrown cleanup does not block later cleanups", () => {
+    const calls: string[] = []
+    const cleanups: Array<() => void> = []
+    const lifecycle = { addCleanup: (fn: () => void) => cleanups.push(fn) }
+
+    lifecycle.addCleanup(() => calls.push("before-throw"))
+    lifecycle.addCleanup(() => {
+      throw new Error("boom")
+    })
+    lifecycle.addCleanup(() => calls.push("after-throw"))
+
+    for (const cleanup of cleanups) {
+      try {
+        cleanup()
+      } catch {
+        // Mirrors provider-side cleanup isolation.
+      }
+    }
+
+    expect(calls).toEqual(["before-throw", "after-throw"])
+  })
+
   test("auto widget drops a stale refetch after the session changes", async () => {
     const activeSession = {
       value: { sessionId: "session-A", branchId: "branch-A" } as

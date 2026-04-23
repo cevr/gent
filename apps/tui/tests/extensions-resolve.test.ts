@@ -3,7 +3,9 @@ import {
   autocompleteContribution,
   borderLabelContribution,
   clientCommandContribution,
+  composerSurfaceContribution,
   interactionRendererContribution,
+  overlayContribution,
   rendererContribution,
   widgetContribution,
   type ClientContribution,
@@ -107,6 +109,42 @@ describe("resolveTuiExtensions", () => {
     expect((resolved.interactionRenderers.get("ask-user") as () => string)()).toBe("project-ask")
   })
 
+  test("overlay surfaces use scope precedence and same-scope collisions still fail loudly", () => {
+    const resolved = resolveTuiExtensions([
+      make("builtin-overlay", "builtin", [
+        overlayContribution({ id: "modal", component: widget("builtin") }),
+      ]),
+      make("project-overlay", "project", [
+        overlayContribution({ id: "modal", component: widget("project") }),
+      ]),
+    ])
+
+    expect((resolved.overlays.get("modal") as () => string)()).toBe("project")
+
+    expect(() =>
+      resolveTuiExtensions([
+        make("a", "user", [overlayContribution({ id: "dup", component: widget("a") })]),
+        make("b", "user", [overlayContribution({ id: "dup", component: widget("b") })]),
+      ]),
+    ).toThrow(/Same-scope TUI overlay collision/)
+  })
+
+  test("composer surfaces stay single-winner by scope and still fail on same-scope collisions", () => {
+    const resolved = resolveTuiExtensions([
+      make("builtin-composer", "builtin", [composerSurfaceContribution(widget("builtin"))]),
+      make("project-composer", "project", [composerSurfaceContribution(widget("project"))]),
+    ])
+
+    expect((resolved.composerSurface as () => string)()).toBe("project")
+
+    expect(() =>
+      resolveTuiExtensions([
+        make("a", "builtin", [composerSurfaceContribution(widget("a"))]),
+        make("b", "builtin", [composerSurfaceContribution(widget("b"))]),
+      ]),
+    ).toThrow(/Same-scope TUI composer surface collision/)
+  })
+
   test("border labels remain collected and priority sorted", () => {
     const resolved = resolveTuiExtensions([
       make("builtin-label", "builtin", [
@@ -160,5 +198,12 @@ describe("resolveTuiExtensions", () => {
         ]),
       ]),
     ).toThrow(/Same-scope TUI command collision/)
+  })
+
+  test("unknown contribution tags still fail loudly", () => {
+    const bogus = { _tag: "bogus-kind", payload: "ignored" } as unknown as ClientContribution
+    expect(() => resolveTuiExtensions([make("a", "user", [bogus])])).toThrow(
+      /Unknown TUI client contribution tag/,
+    )
   })
 })
