@@ -246,16 +246,20 @@ export interface TurnProjection {
 
 // Extension Actor — OTP-inspired unified state model
 
-/** Typed effect union interpreted by the framework after actor transitions */
+/** Public effect union available to extension authors. */
 export type ExtensionEffect =
+  | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
+  | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
+
+/** Internal runtime-only effects interpreted by the framework after transitions. */
+export type RuntimeExtensionEffect =
   | {
       readonly _tag: "QueueFollowUp"
       readonly content: string
       readonly metadata?: MessageMetadata
     }
   | { readonly _tag: "Interject"; readonly content: string }
-  | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
-  | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
+  | ExtensionEffect
 
 /** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {

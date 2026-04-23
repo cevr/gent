@@ -6,6 +6,7 @@ import {
   stripBackground,
   BashTool,
 } from "@gent/extensions/exec-tools/bash"
+import { ExecToolsProtocol } from "@gent/extensions/exec-tools/protocol"
 import { SessionId, BranchId, ToolCallId } from "@gent/core/domain/ids"
 import type { ToolContext } from "@gent/core/domain/tool"
 
@@ -136,5 +137,38 @@ describe("BashTool execution", () => {
     const result = await Effect.runPromise(BashTool.effect({ command: "cd /tmp && pwd" }, stubCtx))
     expect(result.stdout.trim()).toMatch(/\/tmp$/)
     expect(result.exitCode).toBe(0)
+  })
+
+  test("background mode notifies through the extension protocol on completion", async () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let resolveSent: ((value: unknown) => void) | undefined
+    const sent = new Promise<unknown>((resolve, reject) => {
+      resolveSent = resolve
+      timeout = setTimeout(() => reject(new Error("background notification timed out")), 2_000)
+    })
+    const ctx: ToolContext = {
+      ...stubCtx,
+      extension: {
+        ...stubCtx.extension,
+        send: (message) =>
+          Effect.sync(() => {
+            if (timeout !== undefined) clearTimeout(timeout)
+            resolveSent?.(message)
+          }),
+      },
+    }
+    const result = await Effect.runPromise(
+      BashTool.effect({ command: "printf background-finished", run_in_background: true }, ctx),
+    )
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("Command started in background")
+
+    const message = await sent
+    expect(ExecToolsProtocol.BackgroundCompleted.is(message)).toBe(true)
+    if (!ExecToolsProtocol.BackgroundCompleted.is(message)) {
+      throw new Error("expected BackgroundCompleted protocol message")
+    }
+    expect(message.content).toContain("Background command completed (exit code 0)")
+    expect(message.content).toContain("$ printf background-finished")
   })
 })

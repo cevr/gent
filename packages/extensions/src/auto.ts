@@ -20,12 +20,13 @@ import {
   defineResource,
   isRecord,
   type ResourceMachine,
-  type ExtensionEffect,
   type ToolResultInput,
   type TurnAfterInput,
   type AgentEvent,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
+// oxlint-disable-next-line gent/no-extension-internal-imports -- runtime-only effect union is intentionally withheld from the public authoring api
+import type { RuntimeExtensionEffect } from "@gent/core/domain/extension"
 import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
@@ -374,8 +375,8 @@ const projectSnapshot = (state: MachineState): AutoSnapshotReply => {
 const afterTransition = (
   before: MachineState,
   after: MachineState,
-): ReadonlyArray<ExtensionEffect> => {
-  const effects: ExtensionEffect[] = []
+): ReadonlyArray<RuntimeExtensionEffect> => {
+  const effects: RuntimeExtensionEffect[] = []
 
   // Emit queued follow-ups only after the turn boundary. That prevents
   // transient mid-turn states (continue → review → complete) from leaving

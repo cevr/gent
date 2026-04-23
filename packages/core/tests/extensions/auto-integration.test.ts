@@ -391,12 +391,13 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-      const { layer: providerLayer } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* createSequenceProvider([
         textStep("Working on it."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
           summary: "All done",
         }),
+        textStep("Acknowledged handoff request."),
       ])
 
       const e2eLayer = createE2ELayer({
@@ -422,6 +423,8 @@ describe("Auto extension E2E", () => {
         yield* agentLoop.run(makeMessage("begin"))
 
         expect(yield* Ref.get(presentCalled)).toBe(false)
+        expect(yield* controls.callCount).toBe(3)
+        yield* controls.assertDone()
       }).pipe(Effect.provide(e2eLayer))
     }),
   )
@@ -432,7 +435,7 @@ describe("Auto extension E2E", () => {
         Effect.gen(function* () {
           const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-          const { layer: providerLayer } = yield* createSequenceProvider([
+          const { layer: providerLayer, controls } = yield* createSequenceProvider([
             textStep("x".repeat(2000)), // ~500 tokens — context over 85%
             toolCallStep("auto_checkpoint", {
               status: "complete",
@@ -466,6 +469,8 @@ describe("Auto extension E2E", () => {
 
             // Auto's interceptor queued a follow-up, NOT a direct HandoffPresented
             expect(yield* Ref.get(presentCalled)).toBe(false)
+            expect(yield* controls.callCount).toBe(3)
+            yield* controls.assertDone()
           }).pipe(Effect.provide(e2eLayer))
         }),
       )

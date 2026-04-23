@@ -87,7 +87,6 @@ export {
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type TurnProjection,
-  type ExtensionEffect,
   type ReduceResult,
   type ExtensionReduceContext,
   type ExtensionTurnContext,
@@ -227,7 +226,6 @@ export type {
   ResourceSchedule,
   ResourceMachine,
   AnyResourceMachine,
-  ResourceMachineEffect,
   ResourceMachineInitContext,
 } from "../domain/resource.js"
 export type {

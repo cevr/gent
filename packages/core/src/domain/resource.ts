@@ -37,7 +37,7 @@ import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentName } from "./agent.js"
 import type { AgentEvent } from "./event.js"
 import type {
-  ExtensionEffect,
+  RuntimeExtensionEffect,
   MessageOutputInput,
   ToolResultInput,
   TurnAfterInput,
@@ -162,8 +162,8 @@ export interface ResourceRuntimeSlots<E = never, R = never> {
 // ── The Resource machine sub-shape (C3.5) ──
 
 /** Effects a Resource machine may declare in `afterTransition`. Same shape
- *  as `ExtensionEffect` so the host runtime can dispatch them unchanged. */
-export type ResourceMachineEffect = ExtensionEffect
+ *  as the runtime-owned effect union so the host runtime can dispatch them unchanged. */
+export type ResourceMachineEffect = RuntimeExtensionEffect
 
 /** Lifecycle context handed to `onInit`. */
 export interface ResourceMachineInitContext<State, Event, SD extends SlotsDef> {

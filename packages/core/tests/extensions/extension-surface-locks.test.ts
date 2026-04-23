@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
+import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
   action,
   defineExtension,
@@ -229,6 +230,16 @@ describe("Effect-purity locks (compile-time)", () => {
       _ctx.session.queueFollowUp({ content: "x" })
 
     void bad
+    expect(true).toBe(true)
+  })
+
+  test("public extension api does not export runtime-only effect union", () => {
+    // @ts-expect-error — runtime-only effect union is intentionally not part of the authoring api
+    type _Bad = PublicExtensionApi.ExtensionEffect
+
+    // @ts-expect-error — resource-machine runtime effects are likewise internal-only
+    type _BadResource = PublicExtensionApi.ResourceMachineEffect
+
     expect(true).toBe(true)
   })
 

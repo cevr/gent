@@ -1,7 +1,7 @@
 /** Shared logic for extension actors. */
 
 import { Effect, Schema, Context } from "effect"
-import type { ExtensionEffect } from "../../domain/extension.js"
+import type { RuntimeExtensionEffect } from "../../domain/extension.js"
 import type { AnyExtensionCommandMessage } from "../../domain/extension-protocol.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
 import type { ExtensionTurnControlService } from "./turn-control.js"
@@ -43,7 +43,7 @@ export interface InterpretEffectsServices {
 }
 
 export const interpretEffects = (
-  effects: ReadonlyArray<ExtensionEffect>,
+  effects: ReadonlyArray<RuntimeExtensionEffect>,
   sessionId: SessionId,
   branchId: BranchId | undefined,
   services: InterpretEffectsServices,

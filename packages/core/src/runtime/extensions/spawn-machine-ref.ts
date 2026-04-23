@@ -2,7 +2,7 @@ import { Effect, Exit, Option, Ref, Scope } from "effect"
 import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
 import type {
   ExtensionActorDefinition,
-  ExtensionEffect,
+  RuntimeExtensionEffect,
   ExtensionRef,
 } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
@@ -136,7 +136,7 @@ export const spawnMachineExtensionRef = <
       }).pipe(Effect.provideService(ActorScope, actorScope))
 
       const runEffects = (
-        effects: ReadonlyArray<ExtensionEffect>,
+        effects: ReadonlyArray<RuntimeExtensionEffect>,
         branchId: BranchId | undefined,
       ) =>
         interpretEffects(effects, ctx.sessionId, branchId, {
