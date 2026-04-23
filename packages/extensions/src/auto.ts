@@ -17,14 +17,16 @@ import { Effect, Schema } from "effect"
 import { Machine, Slot, State as MState, Event as MEvent } from "effect-machine"
 import {
   defineExtension,
-  defineResource,
   isRecord,
-  type ResourceMachine,
   type ToolResultInput,
   type TurnAfterInput,
   type AgentEvent,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
+import {
+  defineInternalResource,
+  type InternalResourceMachine,
+} from "../../core/src/runtime/extensions/internal-resource-machine.js"
 import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"
@@ -510,7 +512,7 @@ const mapMessage = (message: AutoIntent, state: MachineState): MachineEvent | un
 // `AutoProtocol.GetSnapshot` (typed `ctx.ask`), and per-turn prompt comes
 // from a separate `ProjectionContribution` (auto-projection.ts).
 
-const autoWorkflow: ResourceMachine<
+const autoWorkflow: InternalResourceMachine<
   MachineState,
   MachineEvent,
   AutoJournal,
@@ -741,7 +743,7 @@ export const AutoExtension = defineExtension({
   // requirements; the `layer` here provides it. C3.5b merge per the
   // "Resource = layer + lifecycle + machine" design intent.
   resources: ({ ctx }) => [
-    defineResource({
+    defineInternalResource({
       tag: AutoJournal,
       scope: "process",
       layer: AutoJournal.Live({ cwd: ctx.cwd }),

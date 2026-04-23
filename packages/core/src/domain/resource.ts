@@ -37,6 +37,7 @@ import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentName } from "./agent.js"
 import type { AgentEvent } from "./event.js"
 import type {
+  ExtensionEffect,
   MessageOutputInput,
   ToolResultInput,
   TurnAfterInput,
@@ -49,7 +50,6 @@ import type {
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { CwdScope, EphemeralScope, ServerScope } from "../runtime/scope-brands.js"
-import type { RuntimeExtensionEffect } from "../runtime/extensions/runtime-effect.js"
 
 // ── Bus envelope (shared with subscription handlers) ──
 
@@ -195,7 +195,7 @@ export interface ResourceMachine<
   readonly mapEvent?: (event: AgentEvent) => Event | undefined
   readonly mapCommand?: (message: AnyExtensionCommandMessage, state: State) => Event | undefined
   readonly mapRequest?: (message: AnyExtensionRequestMessage, state: State) => Event | undefined
-  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<RuntimeExtensionEffect>
+  readonly afterTransition?: (before: State, after: State) => ReadonlyArray<ExtensionEffect>
   readonly stateSchema?: Schema.Schema<State>
   readonly protocols?: Readonly<Record<string, unknown>>
   readonly onInit?: (ctx: ResourceMachineInitContext<State, Event, SD>) => Effect.Effect<void>

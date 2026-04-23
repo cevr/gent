@@ -56,6 +56,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       [
         "packages/core/src/runtime/composer.ts",
         "packages/core/src/runtime/extensions/runtime-slots.ts",
+        "packages/core/src/runtime/extensions/internal-resource-machine.ts",
         "packages/core/src/runtime/extensions/capability-host.ts",
         "packages/core/src/runtime/extensions/effect-membrane.ts",
         "packages/core/src/runtime/extensions/resource-host/index.ts",
@@ -67,8 +68,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       ].includes(file),
     counts: {
       "effect:anyUnknownInErrorContext:off": 21,
-      "eslint:@typescript-eslint/no-explicit-any": 12,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 34,
+      "eslint:@typescript-eslint/no-explicit-any": 13,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 35,
     },
   },
   {
