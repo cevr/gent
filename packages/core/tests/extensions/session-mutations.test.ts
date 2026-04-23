@@ -108,11 +108,6 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       getAgent: die("ExtensionRegistry"),
       resolveDualModelPair: die("ExtensionRegistry"),
     } as unknown as MakeExtensionHostContextDeps["extensionRegistry"],
-    turnControl: {
-      queueFollowUp: die("TurnControl"),
-      interject: die("TurnControl"),
-      bind: die("TurnControl"),
-    } as MakeExtensionHostContextDeps["turnControl"],
     storage: testStorage.storage,
     searchStorage: {
       searchMessages: () => Effect.succeed([]),

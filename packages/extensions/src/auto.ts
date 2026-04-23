@@ -105,6 +105,8 @@ const MachineState = MState({
     turnsSinceCheckpoint: Schema.Number,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
+    handoffRequestSeq: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
+    handoffContent: Schema.optional(Schema.String),
   },
   AwaitingReview: {
     iteration: Schema.Number,
@@ -115,6 +117,8 @@ const MachineState = MState({
     promptPending: Schema.Boolean,
     lastSummary: Schema.optional(Schema.String),
     nextIdea: Schema.optional(Schema.String),
+    handoffRequestSeq: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
+    handoffContent: Schema.optional(Schema.String),
   },
 })
 type MachineState = typeof MachineState.Type
@@ -136,6 +140,9 @@ const MachineEvent = MEvent({
     learnings: Schema.optional(Schema.String),
     metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
     nextIdea: Schema.optional(Schema.String),
+  },
+  RequestHandoff: {
+    content: Schema.String,
   },
   ReviewSignal: {},
   TurnCompleted: {},
@@ -212,6 +219,7 @@ const autoMachine = Machine.make({
       metrics: [],
       promptPending: true,
       turnsSinceCheckpoint: 0,
+      handoffRequestSeq: 0,
     }),
   )
   // Working + AutoSignal → AwaitingReview or Inactive (complete/abandon)
@@ -250,6 +258,8 @@ const autoMachine = Machine.make({
       promptPending: true,
       lastSummary: event.summary,
       nextIdea: event.nextIdea,
+      handoffRequestSeq: state.handoffRequestSeq,
+      handoffContent: state.handoffContent,
     })
   })
   // AwaitingReview + ReviewSignal → Working (next iteration) or Inactive (max reached)
@@ -271,8 +281,24 @@ const autoMachine = Machine.make({
       turnsSinceCheckpoint: 0,
       lastSummary: state.lastSummary,
       nextIdea: state.nextIdea,
+      handoffRequestSeq: state.handoffRequestSeq,
+      handoffContent: state.handoffContent,
     })
   })
+  .on(MachineState.Working, MachineEvent.RequestHandoff, ({ state, event }) =>
+    MachineState.Working({
+      ...state,
+      handoffRequestSeq: state.handoffRequestSeq + 1,
+      handoffContent: event.content,
+    }),
+  )
+  .on(MachineState.AwaitingReview, MachineEvent.RequestHandoff, ({ state, event }) =>
+    MachineState.AwaitingReview({
+      ...state,
+      handoffRequestSeq: state.handoffRequestSeq + 1,
+      handoffContent: event.content,
+    }),
+  )
   // Working + TurnCompleted → Working (increment) or Inactive (wedge threshold)
   .on(MachineState.Working, MachineEvent.TurnCompleted, ({ state }) => {
     const next = state.turnsSinceCheckpoint + 1
@@ -390,6 +416,32 @@ const afterTransition = (
     })
   }
 
+  if (
+    before._tag === "Working" &&
+    after._tag === "Working" &&
+    after.handoffRequestSeq !== before.handoffRequestSeq &&
+    after.handoffContent !== undefined
+  ) {
+    effects.push({
+      _tag: "QueueFollowUp",
+      content: after.handoffContent,
+      metadata: { extensionId: "auto", hidden: true },
+    })
+  }
+
+  if (
+    before._tag === "AwaitingReview" &&
+    after._tag === "AwaitingReview" &&
+    after.handoffRequestSeq !== before.handoffRequestSeq &&
+    after.handoffContent !== undefined
+  ) {
+    effects.push({
+      _tag: "QueueFollowUp",
+      content: after.handoffContent,
+      metadata: { extensionId: "auto", hidden: true },
+    })
+  }
+
   return effects
 }
 
@@ -496,8 +548,15 @@ const autoWorkflow: ResourceMachine<
       }
     }),
   mapEvent,
-  mapCommand: (message, state) =>
-    Schema.is(AutoIntent)(message) ? mapMessage(message, state) : undefined,
+  mapCommand: (message, state) => {
+    if (Schema.is(AutoIntent)(message)) {
+      return mapMessage(message, state)
+    }
+    if (AutoProtocol.RequestHandoff.is(message)) {
+      return MachineEvent.RequestHandoff({ content: message.content })
+    }
+    return undefined
+  },
   mapRequest: (message) => {
     if (message.extensionId !== AUTO_EXTENSION_ID) return undefined
     if (message._tag === "IsActive") return MachineEvent.IsActive
@@ -656,18 +715,19 @@ const autoHandoffImpl = (input: TurnAfterInput, ctx: ExtensionHostContext) =>
 
     // Queue follow-up telling model to call the handoff tool.
     // @gent/handoff owns presentation — auto just requests the handoff.
-    yield* ctx.session.queueFollowUp({
-      content: [
-        `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
-        `Include this context:`,
-        `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
-        `- Goal: ${snapshot.goal}`,
-        journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      metadata: { extensionId: "auto", hidden: true },
-    })
+    yield* ctx.extension.send(
+      AutoProtocol.RequestHandoff({
+        content: [
+          `Context is at ${contextPercent}%. Call the \`handoff\` tool to transfer to a new session.`,
+          `Include this context:`,
+          `- Auto loop iteration ${snapshot.iteration}/${snapshot.maxIterations}`,
+          `- Goal: ${snapshot.goal}`,
+          journalPath !== undefined ? `- Journal: ${journalPath}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      }),
+    )
   }).pipe(Effect.catchEager(() => Effect.void))
 
 // ── Extension ──

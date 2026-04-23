@@ -31,6 +31,9 @@ export const AutoProtocol = {
     goal: Schema.String,
     maxIterations: Schema.optional(Schema.Number),
   }),
+  RequestHandoff: ExtensionMessage(AUTO_EXTENSION_ID, "RequestHandoff", {
+    content: Schema.String,
+  }),
   CancelAuto: ExtensionMessage(AUTO_EXTENSION_ID, "CancelAuto", {}),
   ToggleAuto: ExtensionMessage(AUTO_EXTENSION_ID, "ToggleAuto", {
     goal: Schema.optional(Schema.String),

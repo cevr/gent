@@ -22,6 +22,7 @@ import {
   ReadOnlyBrand,
   type ReadOnlyTag,
   type ReadRequestInput,
+  type ExtensionHostContext,
   request,
   resource,
   tool,
@@ -219,6 +220,15 @@ describe("Effect-purity locks (compile-time)", () => {
       // @ts-expect-error — async handler must not be assignable to Effect-returning execute
       execute: async () => "result",
     })
+    expect(true).toBe(true)
+  })
+
+  test("tool context does not expose follow-up queue mutation", () => {
+    const bad = (_ctx: ExtensionHostContext) =>
+      // @ts-expect-error — follow-up queueing is internal runtime state, not author surface
+      _ctx.session.queueFollowUp({ content: "x" })
+
+    void bad
     expect(true).toBe(true)
   })
 

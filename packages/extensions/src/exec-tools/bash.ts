@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { tool, OutputBuffer, PermissionRule, saveFullOutput } from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
+import { ExecToolsProtocol } from "./protocol.js"
 
 // Bash Tool Error
 
@@ -202,9 +203,11 @@ export const BashTool = tool({
           }
         }
 
-        yield* ctx.session.queueFollowUp({
-          content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
-        })
+        yield* ctx.extension.send(
+          ExecToolsProtocol.BackgroundCompleted({
+            content: `Background command completed (exit code ${bgResult.exitCode}):\n\`\`\`\n$ ${command}\n${outputText}\n\`\`\``,
+          }),
+        )
       }).pipe(Effect.catchEager(() => Effect.void))
 
       yield* bgEffect.pipe(Effect.forkDetach)

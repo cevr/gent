@@ -14,7 +14,7 @@ import type {
   ApprovalRequest,
   InteractionPendingError,
 } from "./interaction-request"
-import type { Branch, Message, MessageMetadata, Session } from "./message"
+import type { Branch, Message, Session } from "./message"
 import type { ModelId } from "./model"
 import type { SearchResult } from "../storage/search-storage"
 import type { StorageError } from "../storage/sqlite-storage"
@@ -160,11 +160,6 @@ export declare namespace ExtensionHostContext {
     readonly deleteMessages: (params: {
       afterMessageId?: MessageId
     }) => Effect.Effect<void, StorageError>
-
-    readonly queueFollowUp: (params: {
-      content: string
-      metadata?: MessageMetadata
-    }) => Effect.Effect<void>
   }
 
   interface Interaction {

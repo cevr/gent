@@ -1608,7 +1608,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               extensionRegistry,
               storage,
               overrides: {
-                turnControl: extensionTurnControl,
                 eventPublisher,
               },
             })

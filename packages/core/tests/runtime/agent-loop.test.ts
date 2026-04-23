@@ -28,7 +28,11 @@ import {
 import { Branch, Message, Session, TextPart, ToolResultPart } from "@gent/core/domain/message"
 import { Agents } from "@gent/extensions/all-agents"
 import { type ToolContext } from "@gent/core/domain/tool"
-import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
+import {
+  tool,
+  type AnyCapabilityContribution,
+  type AnyResourceContribution,
+} from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
 import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
@@ -61,7 +65,10 @@ import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 // Shared helpers
 // ============================================================================
 
-const makeExtRegistry = (tools: AnyCapabilityContribution[] = []) => {
+const makeExtRegistry = (
+  tools: AnyCapabilityContribution[] = [],
+  resources: AnyResourceContribution[] = [],
+) => {
   const resolved = resolveExtensions([
     {
       manifest: { id: "agents" },
@@ -70,6 +77,7 @@ const makeExtRegistry = (tools: AnyCapabilityContribution[] = []) => {
       contributions: {
         agents: Object.values(Agents),
         capabilities: tools,
+        resources,
       },
     },
   ])
@@ -95,11 +103,12 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
 const makeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: AnyCapabilityContribution[] = [],
+  resources: AnyResourceContribution[] = [],
 ) => {
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
-    makeExtRegistry(tools),
+    makeExtRegistry(tools, resources),
     MachineEngine.Test(),
     ExtensionTurnControl.Test(),
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
@@ -157,9 +166,10 @@ const scriptedProvider = (
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: AnyCapabilityContribution[] = [],
+  resources: AnyResourceContribution[] = [],
 ) => {
   const turnControlLayer = ExtensionTurnControl.Live
-  const extRegistry = makeExtRegistry(tools)
+  const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
@@ -546,59 +556,6 @@ describe("streaming", () => {
             )
 
           expect(userTexts).toEqual(["first", "second\nthird"])
-        }).pipe(Effect.provide(layer)),
-      ),
-    )
-  })
-
-  test("tool execution uses the runtime host context to queue follow-ups", async () => {
-    const QueueTool = tool({
-      id: "queue-tool",
-      description: "Queues a follow-up from tool context",
-      params: Schema.Struct({ content: Schema.String }),
-      execute: ({ content }, ctx) =>
-        Effect.gen(function* () {
-          yield* ctx.session.queueFollowUp({ content })
-          return { queued: content }
-        }),
-    })
-
-    const providerLayer = scriptedProvider([
-      [
-        toolCallPart(
-          "queue-tool",
-          { content: "queued from tool" },
-          {
-            toolCallId: ToolCallId.of("tc-queue"),
-          },
-        ),
-        finishPart({ finishReason: "tool-calls" }),
-      ],
-      [finishPart({ finishReason: "stop" })],
-      [finishPart({ finishReason: "stop" })],
-    ])
-
-    const layer = makeLiveToolLayer(providerLayer, [QueueTool])
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* AgentLoop
-          const storage = yield* Storage
-
-          yield* agentLoop.run(makeMessage("s1", "b1", "first"))
-
-          const messages = yield* storage.listMessages("b1")
-          const userTexts = messages
-            .filter((message) => message.role === "user")
-            .map((message) =>
-              message.parts
-                .filter((part): part is TextPart => part.type === "text")
-                .map((part) => part.text)
-                .join("\n"),
-            )
-
-          expect(userTexts).toEqual(["first", "queued from tool"])
         }).pipe(Effect.provide(layer)),
       ),
     )

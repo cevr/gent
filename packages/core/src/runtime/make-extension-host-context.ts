@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Context, DateTime, Effect, Stream } from "effect"
+import { Context, DateTime, Effect } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -19,10 +19,6 @@ import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.j
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
 import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-presenter.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
-import {
-  ExtensionTurnControl,
-  type ExtensionTurnControlService,
-} from "./extensions/turn-control.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
 import { Message, Session, Branch } from "../domain/message.js"
@@ -43,7 +39,6 @@ export interface MakeExtensionHostContextDeps {
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
-  readonly turnControl: ExtensionTurnControlService
   readonly storage: StorageService
   readonly searchStorage: SearchStorageService
   readonly agentRunner: AgentRunner
@@ -63,7 +58,6 @@ type AmbientHostContextDefaults = Pick<
   | "platform"
   | "approvalService"
   | "promptPresenter"
-  | "turnControl"
   | "searchStorage"
   | "agentRunner"
   | "eventPublisher"
@@ -101,17 +95,6 @@ export const HostPromptPresenterRef = Context.Reference<PromptPresenterService>(
   },
 )
 
-export const HostTurnControlRef = Context.Reference<ExtensionTurnControlService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostTurnControlRef",
-  {
-    defaultValue: () => ({
-      queueFollowUp: unavailable("TurnControl"),
-      interject: unavailable("TurnControl"),
-      commands: Stream.empty,
-    }),
-  },
-)
-
 export const HostSearchStorageRef = Context.Reference<SearchStorageService>(
   "@gent/core/src/runtime/make-extension-host-context/HostSearchStorageRef",
   {
@@ -144,7 +127,6 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   platform: Effect.service(HostPlatformRef),
   approvalService: Effect.service(HostApprovalServiceRef),
   promptPresenter: Effect.service(HostPromptPresenterRef),
-  turnControl: Effect.service(HostTurnControlRef),
   searchStorage: Effect.service(HostSearchStorageRef),
   agentRunner: Effect.service(HostAgentRunnerRef),
   eventPublisher: Effect.service(HostEventPublisherRef),
@@ -158,7 +140,6 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       platform: Effect.serviceOption(RuntimePlatform),
       approvalService: Effect.serviceOption(ApprovalService),
       promptPresenter: Effect.serviceOption(PromptPresenter),
-      turnControl: Effect.serviceOption(ExtensionTurnControl),
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
     })
@@ -170,9 +151,6 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
         : {}),
       ...(available.promptPresenter._tag === "Some"
         ? { promptPresenter: available.promptPresenter.value }
-        : {}),
-      ...(available.turnControl._tag === "Some"
-        ? { turnControl: available.turnControl.value }
         : {}),
       ...(available.searchStorage._tag === "Some"
         ? { searchStorage: available.searchStorage.value }
@@ -197,9 +175,6 @@ const withAmbientHostContextOverrides = <A, E, R>(
   }
   if (overrides.promptPresenter !== undefined) {
     next = next.pipe(Effect.provideService(HostPromptPresenterRef, overrides.promptPresenter))
-  }
-  if (overrides.turnControl !== undefined) {
-    next = next.pipe(Effect.provideService(HostTurnControlRef, overrides.turnControl))
   }
   if (overrides.searchStorage !== undefined) {
     next = next.pipe(Effect.provideService(HostSearchStorageRef, overrides.searchStorage))
@@ -234,7 +209,6 @@ export const makeAmbientExtensionHostContextDeps = (
       approvalService: defaults.approvalService,
       promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,
-      turnControl: defaults.turnControl,
       storage: input.storage,
       searchStorage: defaults.searchStorage,
       agentRunner: defaults.agentRunner,
@@ -472,13 +446,6 @@ export const makeExtensionHostContext = (
 
     deleteMessages: (params) =>
       deps.storage.deleteMessages(runInfo.branchId, params.afterMessageId),
-
-    queueFollowUp: (params) =>
-      deps.turnControl.queueFollowUp({
-        sessionId: runInfo.sessionId,
-        branchId: runInfo.branchId,
-        ...params,
-      }),
   },
 
   interaction: {
