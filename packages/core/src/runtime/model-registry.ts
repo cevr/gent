@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Ref, Schema, FileSystem, Path } from "effect"
+import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { AuthStore } from "../domain/auth-store.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
@@ -9,7 +9,9 @@ import { RuntimePlatform } from "./runtime-platform.js"
 
 const MODELS_URL = "https://models.dev"
 const CACHE_RELATIVE = ".gent/models.json"
+const JsonSchema = Schema.fromJsonString(Schema.Unknown)
 const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
+const decodeJson = Schema.decodeUnknownOption(JsonSchema)
 const decodeCachedModels = Schema.decodeUnknownOption(CachedModelsJson)
 const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
 const ModelsDevCost = Schema.Struct({
@@ -24,23 +26,36 @@ const ModelsDevModel = Schema.Struct({
   cost: Schema.optional(ModelsDevCost),
   limit: Schema.optional(ModelsDevLimit),
 })
-const ModelsDevProvider = Schema.Struct({
-  models: Schema.Record(Schema.String, ModelsDevModel),
-})
-const ModelsDevCatalog = Schema.Record(Schema.String, ModelsDevProvider)
-type ModelsDevCatalog = typeof ModelsDevCatalog.Type
 type ModelsDevModel = typeof ModelsDevModel.Type
-const decodeModelsDevCatalog = Schema.decodeUnknownOption(Schema.fromJsonString(ModelsDevCatalog))
+const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
+
+type JsonRecord = Record<string, unknown>
+type CacheLoad =
+  | { readonly _tag: "Missing" }
+  | { readonly _tag: "Canonical"; readonly models: readonly Model[] }
+  | { readonly _tag: "Legacy"; readonly models: readonly Model[] }
+
+const isRecord = (value: unknown): value is JsonRecord =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
 
 const parsePricing = (value: ModelsDevModel["cost"]): ModelPricing | undefined =>
   value === undefined ? undefined : { input: value.input, output: value.output }
 
 const parseContextLength = (value: ModelsDevModel["limit"]): number | undefined => value?.context
 
-const parseModelsDev = (data: ModelsDevCatalog): readonly Model[] => {
+const parseModelsDev = (data: unknown): readonly Model[] => {
+  if (!isRecord(data)) return []
+
   const models: Model[] = []
   for (const [providerId, providerValue] of Object.entries(data)) {
-    for (const [modelKey, modelValue] of Object.entries(providerValue.models)) {
+    if (!isRecord(providerValue)) continue
+    const modelsValue = providerValue["models"]
+    if (!isRecord(modelsValue)) continue
+
+    for (const [modelKey, rawModelValue] of Object.entries(modelsValue)) {
+      const decoded = decodeModelsDevModel(rawModelValue)
+      if (decoded._tag === "None") continue
+      const modelValue = decoded.value
       const name = modelValue.name ?? modelKey
       const pricing = parsePricing(modelValue.cost)
       const contextLength = parseContextLength(modelValue.limit)
@@ -64,14 +79,24 @@ const parseModelsDev = (data: ModelsDevCatalog): readonly Model[] => {
 const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
   function* (fs: FileSystem.FileSystem, cachePath: string) {
     const exists = yield* fs.exists(cachePath)
-    if (!exists) return [] as readonly Model[]
+    if (!exists) return { _tag: "Missing" } as CacheLoad
     const content = yield* fs
       .readFileString(cachePath)
       .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return [] as readonly Model[]
-    return Option.getOrElse(decodeCachedModels(content), () => [] as readonly Model[])
+    if (content.trim().length === 0) return { _tag: "Missing" } as CacheLoad
+
+    const canonical = decodeCachedModels(content)
+    if (canonical._tag === "Some") {
+      return { _tag: "Canonical", models: canonical.value } as CacheLoad
+    }
+
+    const json = decodeJson(content)
+    if (json._tag === "None") return { _tag: "Missing" } as CacheLoad
+    const legacyModels = parseModelsDev(json.value)
+    if (legacyModels.length === 0) return { _tag: "Missing" } as CacheLoad
+    return { _tag: "Legacy", models: legacyModels } as CacheLoad
   },
-  Effect.catchEager(() => Effect.succeed([] as readonly Model[])),
+  Effect.catchEager(() => Effect.succeed({ _tag: "Missing" } as CacheLoad)),
 )
 
 const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
@@ -128,7 +153,16 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       const cachePath = path.join(runtimePlatform.home, CACHE_RELATIVE)
       const cacheRef = yield* Ref.make<readonly Model[] | null>(null)
 
-      const loadFromDisk = readCachedModels(fs, cachePath)
+      const loadFromDisk = Effect.gen(function* () {
+        const cache = yield* readCachedModels(fs, cachePath)
+        if (cache._tag === "Legacy") {
+          yield* writeCachedModels(fs, path, cachePath, cache.models)
+        }
+        if (cache._tag === "Canonical" || cache._tag === "Legacy") {
+          return cache.models
+        }
+        return [] as readonly Model[]
+      }).pipe(Effect.withSpan("ModelRegistry.loadFromDisk"))
 
       const fetchRemote = Effect.gen(function* () {
         const res = yield* http
@@ -137,7 +171,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         if (res._tag === "None" || res.value.status >= 400) return [] as readonly Model[]
         const text = yield* res.value.text.pipe(Effect.catchEager(() => Effect.succeed("")))
         if (text.length === 0) return [] as readonly Model[]
-        const decoded = decodeModelsDevCatalog(text)
+        const decoded = decodeJson(text)
         if (decoded._tag === "None") return [] as readonly Model[]
         const parsed = parseModelsDev(decoded.value)
         if (parsed.length > 0) {
