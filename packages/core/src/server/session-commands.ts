@@ -100,7 +100,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         if (conversation === "") return ""
 
-        const summaryMessage = new Message({
+        const summaryMessage = new Message.regular({
           id: MessageId.of(Bun.randomUUIDv7()),
           sessionId: firstMessage.sessionId,
           branchId,
@@ -302,7 +302,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
         for (const message of messages.slice(0, targetIndex + 1)) {
           yield* messageStorage.createMessage(
-            new Message({
+            new Message.regular({
               id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: message.sessionId,
               branchId: branch.id,

@@ -62,17 +62,16 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   yield* sessions.createSession(session)
   yield* branches.createBranch(branch)
 
-  const user1 = new Message({
+  const user1 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
-    kind: "regular",
     parts: [makeText("Review the TUI renderer cleanup and inspect the current implementation.")],
     createdAt: nowPlus(-50_000),
   })
 
-  const assistant1 = new Message({
+  const assistant1 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -127,7 +126,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-47_000),
   })
 
-  const toolResults1 = new Message({
+  const toolResults1 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -176,7 +175,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-46_000),
   })
 
-  const assistant2 = new Message({
+  const assistant2 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -187,17 +186,16 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-45_000),
   })
 
-  const user2 = new Message({
+  const user2 = new Message.interjection({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
-    kind: "interjection",
     parts: [makeText("Actually check queue vs steer too.")],
     createdAt: nowPlus(-38_000),
   })
 
-  const assistant3 = new Message({
+  const assistant3 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -210,17 +208,16 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-36_000),
   })
 
-  const user3 = new Message({
+  const user3 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
-    kind: "regular",
     parts: [makeText("Search related sessions and review the audit output.")],
     createdAt: nowPlus(-28_000),
   })
 
-  const assistant4 = new Message({
+  const assistant4 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -276,7 +273,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-25_000),
   })
 
-  const toolResults2 = new Message({
+  const toolResults2 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,
@@ -311,7 +308,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
     createdAt: nowPlus(-23_000),
   })
 
-  const assistant5 = new Message({
+  const assistant5 = new Message.regular({
     id: MessageId.of(Bun.randomUUIDv7()),
     sessionId,
     branchId,

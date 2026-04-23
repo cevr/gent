@@ -13,6 +13,7 @@ import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
+import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
 export const CreateSessionInput = Schema.Struct({
@@ -191,17 +192,25 @@ export const SendMessageInput = Schema.Struct({
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 
-export class MessageInfo extends Schema.Class<MessageInfo>("MessageInfo")({
+const MessageInfoFields = {
   id: MessageId,
   sessionId: SessionId,
   branchId: BranchId,
-  kind: Schema.optional(Schema.Literals(["regular", "interjection"])),
   role: Schema.Literals(["user", "assistant", "system", "tool"]),
   parts: Schema.Array(MessagePart),
   createdAt: Schema.Number,
   turnDurationMs: Schema.optional(Schema.Number),
   metadata: Schema.optional(MessageMetadata),
-}) {}
+}
+
+export const MessageInfo = TaggedEnumClass("MessageInfo", {
+  regular: MessageInfoFields,
+  interjection: {
+    ...MessageInfoFields,
+    role: Schema.Literal("user"),
+  },
+})
+export type MessageInfo = typeof MessageInfo.Type
 export type MessageInfoReadonly = MessageInfo
 
 export const ListMessagesInput = Schema.Struct({

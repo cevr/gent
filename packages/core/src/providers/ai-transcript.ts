@@ -11,10 +11,10 @@ import {
 } from "../domain/message.js"
 
 export const GENT_MESSAGE_METADATA_FIELDS = [
+  "_tag",
   "id",
   "sessionId",
   "branchId",
-  "kind",
   "createdAt",
   "turnDurationMs",
   "metadata",

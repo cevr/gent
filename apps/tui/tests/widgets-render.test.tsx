@@ -100,10 +100,9 @@ describe("TUI renderer surfaces", () => {
   test("MessageList renders user labels and assistant reasoning", async () => {
     const items: SessionItem[] = [
       {
-        _tag: "message",
+        _tag: "interjection-message",
         id: "user-1",
         role: "user",
-        kind: "interjection",
         pendingMode: "steer",
         content: "Stop and switch agent",
         reasoning: "",
@@ -112,10 +111,9 @@ describe("TUI renderer surfaces", () => {
         toolCalls: undefined,
       } satisfies Message,
       {
-        _tag: "message",
+        _tag: "regular-message",
         id: "assistant-1",
         role: "assistant",
-        kind: "regular",
         content: "Switching now",
         reasoning: "Considering current task state",
         images: [],

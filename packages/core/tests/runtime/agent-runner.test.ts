@@ -701,7 +701,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message({
+          new Message.regular({
             id: MessageId.of(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,
@@ -772,7 +772,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message({
+          new Message.regular({
             id: MessageId.of(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,
@@ -841,7 +841,7 @@ describe("AgentRunner", () => {
         const storage = yield* Storage
         const now = new Date()
         yield* storage.createMessage(
-          new Message({
+          new Message.regular({
             id: MessageId.of(`${input.sessionId}:assistant:1`),
             sessionId: input.sessionId,
             branchId: input.branchId,

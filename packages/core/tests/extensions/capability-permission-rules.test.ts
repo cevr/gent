@@ -28,11 +28,10 @@ const sessionId = SessionId.of("perm-rules-e2e-session")
 const branchId = BranchId.of("perm-rules-e2e-branch")
 
 const makeMessage = (text: string) =>
-  new Message({
+  new Message.regular({
     id: MessageId.of(`msg-perm-${Date.now()}`),
     sessionId,
     branchId,
-    kind: "regular",
     role: "user",
     parts: [new TextPart({ type: "text", text })],
     createdAt: new Date(),

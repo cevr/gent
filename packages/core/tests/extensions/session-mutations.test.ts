@@ -154,7 +154,7 @@ const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
 const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: number) => {
   const msgs: Message[] = []
   for (let i = 0; i < count; i++) {
-    const msg = new Message({
+    const msg = new Message.regular({
       id: MessageId.of(`msg-${i}`),
       sessionId: SESSION_ID,
       branchId: BRANCH_ID,

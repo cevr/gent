@@ -102,7 +102,7 @@ describe("runtime slots", () => {
   })
 
   it.live("contextMessages applies explicit projection rewrites in sequence", () => {
-    const baseMessage = new Message({
+    const baseMessage = new Message.regular({
       id: "m1",
       sessionId: SessionId.of("test-session"),
       branchId: BranchId.of("test-branch"),
@@ -110,7 +110,7 @@ describe("runtime slots", () => {
       parts: [new TextPart({ type: "text", text: "hello" })],
       createdAt: new Date(),
     })
-    const injectedMessage = new Message({
+    const injectedMessage = new Message.regular({
       id: "m2",
       sessionId: SessionId.of("test-session"),
       branchId: BranchId.of("test-branch"),

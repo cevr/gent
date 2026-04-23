@@ -337,11 +337,10 @@ const makeLiveSessionRuntime: Effect.Effect<
           environment.hostCtx,
         )
 
-        const message = new Message({
+        const message = new Message.regular({
           id: userMessageIdForCommand(commandId),
           sessionId: command.sessionId,
           branchId: command.branchId,
-          kind: "regular",
           role: "user",
           parts: [new TextPart({ type: "text", text: content })],
           createdAt: yield* DateTime.nowAsDate,
@@ -400,7 +399,7 @@ const makeLiveSessionRuntime: Effect.Effect<
           output: { type: outputType, value: command.output },
         })
 
-        const message = new Message({
+        const message = new Message.regular({
           id: toolResultMessageIdForCommand(commandId),
           sessionId: command.sessionId,
           branchId: command.branchId,

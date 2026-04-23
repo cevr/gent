@@ -35,7 +35,7 @@ const sessionId = "test-session"
 const branchId = "test-branch"
 
 const makeMessage = (text: string) =>
-  new Message({
+  new Message.regular({
     id: `${sessionId}-${branchId}-msg`,
     sessionId,
     branchId,

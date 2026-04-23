@@ -1,6 +1,7 @@
 import { Schema, SchemaGetter as Getter } from "effect"
 import { SessionId, BranchId, MessageId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
+import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
 // v4: DateFromNumber was removed — define locally
 export const DateFromNumber = Schema.Number.pipe(
@@ -77,17 +78,27 @@ export type MessageMetadata = typeof MessageMetadata.Type
 
 // Message
 
-export class Message extends Schema.Class<Message>("Message")({
+const MessageFields = {
   id: MessageId,
   sessionId: SessionId,
   branchId: BranchId,
-  kind: Schema.optional(Schema.Literals(["regular", "interjection"])),
   role: MessageRole,
   parts: Schema.Array(MessagePart),
   createdAt: DateFromNumber,
   turnDurationMs: Schema.optional(Schema.Number),
   metadata: Schema.optional(MessageMetadata),
-}) {}
+}
+
+export const Message = TaggedEnumClass("Message", {
+  regular: MessageFields,
+  interjection: {
+    ...MessageFields,
+    role: Schema.Literal("user"),
+  },
+})
+export type Message = typeof Message.Type
+export type RegularMessage = Extract<Message, { _tag: "regular" }>
+export type InterjectionMessage = Extract<Message, { _tag: "interjection" }>
 
 // Session
 

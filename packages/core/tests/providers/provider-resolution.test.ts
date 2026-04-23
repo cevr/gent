@@ -369,7 +369,7 @@ describe("Provider model resolution", () => {
           model: "prompt-live/gpt-5",
           prompt: toPrompt(
             [
-              new Message({
+              new Message.regular({
                 id: "user-image",
                 sessionId: "prompt-session",
                 branchId: "prompt-branch",
@@ -384,7 +384,7 @@ describe("Provider model resolution", () => {
                 ],
                 createdAt: new Date(0),
               }),
-              new Message({
+              new Message.regular({
                 id: "assistant-reasoning",
                 sessionId: "prompt-session",
                 branchId: "prompt-branch",
@@ -392,7 +392,7 @@ describe("Provider model resolution", () => {
                 parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
                 createdAt: new Date(0),
               }),
-              new Message({
+              new Message.regular({
                 id: "hidden",
                 sessionId: "prompt-session",
                 branchId: "prompt-branch",

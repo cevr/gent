@@ -20,8 +20,18 @@ import {
 } from "@gent/core/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 
-const baseMessage = (message: Omit<ConstructorParameters<typeof Message>[0], "createdAt">) =>
-  new Message({
+const baseMessage = (
+  message: Omit<ConstructorParameters<typeof Message.regular>[0], "createdAt">,
+) =>
+  new Message.regular({
+    ...message,
+    createdAt: new Date(0),
+  })
+
+const baseInterjectionMessage = (
+  message: Omit<ConstructorParameters<typeof Message.interjection>[0], "createdAt">,
+) =>
+  new Message.interjection({
     ...message,
     createdAt: new Date(0),
   })
@@ -37,12 +47,11 @@ describe("AI transcript bridge", () => {
           role: "system",
           parts: [new TextPart({ type: "text", text: "Be precise." })],
         }),
-        baseMessage({
+        baseInterjectionMessage({
           id: "user-msg",
           sessionId: "session",
           branchId: "branch",
           role: "user",
-          kind: "interjection",
           metadata: { hidden: false, extensionId: "inline-image" },
           parts: [
             new TextPart({ type: "text", text: "What is this?" }),
@@ -134,10 +143,10 @@ describe("AI transcript bridge", () => {
     }
 
     expect(GENT_MESSAGE_METADATA_FIELDS).toEqual([
+      "_tag",
       "id",
       "sessionId",
       "branchId",
-      "kind",
       "createdAt",
       "turnDurationMs",
       "metadata",

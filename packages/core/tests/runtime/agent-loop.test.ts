@@ -100,7 +100,7 @@ const makeExtRegistry = (
 }
 
 const makeMessage = (sessionId: string, branchId: string, text: string) =>
-  new Message({
+  new Message.regular({
     id: `${sessionId}-${branchId}-${text}`,
     sessionId,
     branchId,
@@ -1068,7 +1068,7 @@ describe("continuation", () => {
   const contBranchId = BranchId.of("cont-test-branch")
 
   const makeContMessage = (text: string) =>
-    new Message({
+    new Message.regular({
       id: MessageId.of(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
       sessionId: contSessionId,
       branchId: contBranchId,
@@ -1408,7 +1408,7 @@ describe("interaction", () => {
   const intBranchId = BranchId.of("b-interaction")
 
   const makeIntMessage = (text: string) =>
-    new Message({
+    new Message.regular({
       id: `msg-${text}`,
       sessionId: intSessionId,
       branchId: intBranchId,
@@ -1715,7 +1715,7 @@ describe("recovery", () => {
   const createSessionState = () => {
     const sessionId = SessionId.of("session-loop-recovery")
     const branchId = BranchId.of("branch-loop-recovery")
-    const message = new Message({
+    const message = new Message.regular({
       id: MessageId.of("message-loop-recovery"),
       sessionId,
       branchId,
@@ -1905,7 +1905,7 @@ describe("recovery", () => {
 
     try {
       const { message } = createSessionState()
-      const queuedMessage = new Message({
+      const queuedMessage = new Message.regular({
         id: MessageId.of("queued-msg"),
         sessionId: message.sessionId,
         branchId: message.branchId,

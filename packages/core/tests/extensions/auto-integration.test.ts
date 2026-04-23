@@ -25,11 +25,10 @@ const sessionId = SessionId.of("auto-e2e-session")
 const branchId = BranchId.of("auto-e2e-branch")
 
 const makeMessage = (text: string) =>
-  new Message({
+  new Message.regular({
     id: MessageId.of(`msg-${Date.now()}`),
     sessionId,
     branchId,
-    kind: "regular",
     role: "user",
     parts: [new TextPart({ type: "text", text })],
     createdAt: new Date(),

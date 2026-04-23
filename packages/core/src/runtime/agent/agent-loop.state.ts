@@ -46,7 +46,7 @@ const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnIt
   }
   if (existing.interactive !== undefined || incoming.interactive !== undefined) return false
   if (existing.message.role !== "user" || incoming.message.role !== "user") return false
-  if (existing.message.kind === "interjection" || incoming.message.kind === "interjection") {
+  if (existing.message._tag === "interjection" || incoming.message._tag === "interjection") {
     return false
   }
   return (
@@ -64,9 +64,15 @@ const mergeQueuedFollowUp = (
 
   return {
     ...existing,
-    message: new Message({
-      ...existing.message,
+    message: new Message.regular({
+      id: existing.message.id,
+      sessionId: existing.message.sessionId,
+      branchId: existing.message.branchId,
+      role: existing.message.role,
       parts: [new TextPart({ type: "text", text: `${existingText}\n${incomingText}` })],
+      createdAt: existing.message.createdAt,
+      turnDurationMs: existing.message.turnDurationMs,
+      metadata: existing.message.metadata,
     }),
   }
 }
@@ -135,11 +141,21 @@ export const appendFollowUpQueueState = (
 
 export const clearQueueState = (_queue: LoopQueueState): LoopQueueState => emptyLoopQueueState()
 
-const restampQueuedMessage = (message: Message): Message =>
-  new Message({
-    ...message,
+const restampQueuedMessage = (message: Message): Message => {
+  const fields = {
+    id: message.id,
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    role: message.role,
+    parts: message.parts,
     createdAt: new Date(),
-  })
+    turnDurationMs: message.turnDurationMs,
+    metadata: message.metadata,
+  }
+  return message._tag === "interjection"
+    ? new Message.interjection({ ...fields, role: "user" })
+    : new Message.regular(fields)
+}
 
 const restampQueuedTurnItem = (item: QueuedTurnItem): QueuedTurnItem => ({
   ...item,

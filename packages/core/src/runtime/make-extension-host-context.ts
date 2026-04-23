@@ -341,7 +341,7 @@ export const makeExtensionHostContext = (
 
         for (const msg of messages.slice(0, targetIndex + 1)) {
           yield* deps.storage.createMessage(
-            new Message({
+            new Message.regular({
               id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: msg.sessionId,
               branchId: branch.id,

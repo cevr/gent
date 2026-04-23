@@ -222,7 +222,7 @@ const persistMessageParts = (params: {
   Effect.gen(function* () {
     if (params.parts.length === 0) return undefined
 
-    const message = new Message({
+    const message = new Message.regular({
       id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -2398,11 +2398,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   }
                   return
                 case "Interject": {
-                  const interjectMessage = new Message({
+                  const interjectMessage = new Message.interjection({
                     id: MessageId.of(Bun.randomUUIDv7()),
                     sessionId: command.command.sessionId,
                     branchId: command.command.branchId,
-                    kind: "interjection",
                     role: "user",
                     parts: [new TextPart({ type: "text", text: command.command.message })],
                     createdAt: yield* DateTime.nowAsDate,
@@ -2469,7 +2468,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         const service: AgentLoopService = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
-            const userMessage = new Message({
+            const userMessage = new Message.regular({
               id: MessageId.of(Bun.randomUUIDv7()),
               sessionId: input.sessionId,
               branchId: input.branchId,
@@ -2624,11 +2623,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           Effect.gen(function* () {
             switch (command._tag) {
               case "QueueFollowUp": {
-                const message = new Message({
+                const message = new Message.regular({
                   id: MessageId.of(Bun.randomUUIDv7()),
                   sessionId: command.sessionId,
                   branchId: command.branchId,
-                  kind: "regular",
                   role: "user",
                   parts: [new TextPart({ type: "text", text: command.content })],
                   createdAt: yield* DateTime.nowAsDate,

@@ -257,12 +257,11 @@ const branchFromRow = (row: BranchRow) =>
 const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) =>
   Effect.map(
     Effect.forEach(partJsons, (partJson) => decodeMessagePart(partJson)),
-    (parts) =>
-      new Message({
+    (parts) => {
+      const fields = {
         id: row.id,
         sessionId: row.session_id,
         branchId: row.branch_id,
-        kind: row.kind ?? undefined,
         role: row.role,
         parts,
         createdAt: new Date(row.created_at),
@@ -271,7 +270,11 @@ const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) 
           row.metadata === null
             ? undefined
             : Option.getOrUndefined(decodeMessageMetadata(row.metadata)),
-      }),
+      }
+      return row.kind === "interjection"
+        ? new Message.interjection({ ...fields, role: "user" })
+        : new Message.regular(fields)
+    },
   )
 
 const encodeStoredMessage = (message: Message) =>
@@ -791,7 +794,7 @@ const makeStorage = Effect.gen(function* () {
         const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* sql`INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
             yield* insertContent(message.id, partJsons)
             yield* indexSearch(message)
             yield* sql`UPDATE sessions SET updated_at = ${message.createdAt.getTime()} WHERE id = ${message.sessionId}`
@@ -807,7 +810,7 @@ const makeStorage = Effect.gen(function* () {
         const { legacyPartsJson, partJsons, metadataJson } = yield* encodeStoredMessage(message)
         yield* sql.withTransaction(
           Effect.gen(function* () {
-            yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message.kind ?? null}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
+            yield* sql`INSERT OR IGNORE INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms, metadata) VALUES (${message.id}, ${message.sessionId}, ${message.branchId}, ${message._tag}, ${message.role}, ${legacyPartsJson}, ${message.createdAt.getTime()}, ${message.turnDurationMs ?? null}, ${metadataJson})`
             const rows = yield* sql<{
               changed: number
             }>`SELECT changes() as changed`

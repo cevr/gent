@@ -31,18 +31,21 @@ export const branchToInfo = (branch: Branch): BranchInfo =>
     createdAt: branch.createdAt.getTime(),
   })
 
-export const messageToInfo = (message: Message): MessageInfoReadonly =>
-  new MessageInfo({
+export const messageToInfo = (message: Message): MessageInfoReadonly => {
+  const fields = {
     id: message.id,
     sessionId: message.sessionId,
     branchId: message.branchId,
-    kind: message.kind,
     role: message.role,
     parts: message.parts,
     createdAt: message.createdAt.getTime(),
     turnDurationMs: message.turnDurationMs,
     metadata: message.metadata,
-  })
+  }
+  return message._tag === "interjection"
+    ? new MessageInfo.interjection({ ...fields, role: "user" })
+    : new MessageInfo.regular(fields)
+}
 
 export const buildBranchTree = (
   branches: ReadonlyArray<Branch>,

@@ -24,11 +24,9 @@ export type AssistantSegment =
   | { _tag: "tool-call"; toolCall: ToolCall }
   | { _tag: "image"; image: ImageInfo }
 
-export interface Message {
-  _tag: "message"
+export interface MessageBase {
   id: string
   role: "user" | "assistant" | "system" | "tool"
-  kind: "regular" | "interjection"
   pendingMode?: "queued" | "steer"
   /** Concatenated text content (derived — used by picker, mermaid, search) */
   content: string
@@ -42,20 +40,32 @@ export interface Message {
   metadata?: MessageMetadataInfo
 }
 
+export interface RegularMessage extends MessageBase {
+  _tag: "regular-message"
+}
+
+export interface InterjectionMessage extends MessageBase {
+  _tag: "interjection-message"
+  role: "user"
+}
+
+export type Message = RegularMessage | InterjectionMessage
 export type SessionItem = Message | SessionEvent
+
+const isMessageItem = (item: SessionItem): item is Message =>
+  item._tag === "regular-message" || item._tag === "interjection-message"
 
 function UserMessage(props: {
   content: string
   images: ImageInfo[]
-  kind: "regular" | "interjection"
+  interjection: boolean
   pendingMode?: "queued" | "steer"
 }) {
   const { theme } = useTheme()
-  const isInterjection = () => props.kind === "interjection"
-  const background = () => (isInterjection() ? theme.backgroundPanel : theme.backgroundElement)
-  const textColor = () => (isInterjection() ? theme.warning : theme.text)
+  const background = () => (props.interjection ? theme.backgroundPanel : theme.backgroundElement)
+  const textColor = () => (props.interjection ? theme.warning : theme.text)
   const label = () => props.pendingMode
-  const labelColor = () => (isInterjection() ? theme.warning : theme.textMuted)
+  const labelColor = () => (props.interjection ? theme.warning : theme.textMuted)
   const hasContent = () => props.content.length > 0 || props.images.length > 0
 
   return (
@@ -285,14 +295,14 @@ interface MessageListProps {
 
 export function MessageList(props: MessageListProps) {
   const visibleItems = createMemo(() =>
-    props.items.filter((item) => item._tag !== "message" || item.metadata?.hidden !== true),
+    props.items.filter((item) => !isMessageItem(item) || item.metadata?.hidden !== true),
   )
 
   return (
     <box flexDirection="column">
       <For each={visibleItems()}>
         {(item, index) =>
-          item._tag !== "message" ? (
+          !isMessageItem(item) ? (
             <SessionEventIndicator event={item} />
           ) : (
             <Show
@@ -314,7 +324,7 @@ export function MessageList(props: MessageListProps) {
               <UserMessage
                 content={item.content}
                 images={item.images}
-                kind={item.kind}
+                interjection={item._tag === "interjection-message"}
                 pendingMode={item.pendingMode}
               />
             </Show>

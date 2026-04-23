@@ -56,6 +56,9 @@ type SessionFeedStore = {
   events: SessionEvent[]
 }
 
+const isMessage = (item: SessionItem): item is Message =>
+  item._tag === "regular-message" || item._tag === "interjection-message"
+
 // ── Build messages from raw ──
 
 const buildSegments = (
@@ -108,11 +111,9 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
   return filteredMsgs.map((m) => {
     const toolCalls = extractToolCallsWithResults(m.parts, resultMap)
     const segments = m.role === "assistant" ? buildSegments(m.parts, resultMap) : undefined
-    return {
-      _tag: "message" as const,
+    const message = {
       id: m.id,
       role: m.role,
-      kind: (m.kind ?? "regular") as "regular" | "interjection",
       content: extractText(m.parts),
       reasoning: extractReasoning(m.parts),
       images: extractImages(m.parts),
@@ -121,14 +122,16 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       segments,
       metadata: m.metadata,
     }
+    return m._tag === "interjection"
+      ? { ...message, _tag: "interjection-message", role: "user" }
+      : { ...message, _tag: "regular-message" }
   })
 }
 
 const createAssistantMessage = (content: string): Message => ({
-  _tag: "message",
+  _tag: "regular-message",
   id: crypto.randomUUID(),
   role: "assistant",
-  kind: "regular",
   content,
   reasoning: "",
   images: [],
@@ -286,9 +289,9 @@ export function useSessionFeed(
     const combined: SessionItem[] = [...store.messages, ...store.events]
     return combined.sort((a, b) => {
       if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-      if (a._tag !== "message" && b._tag !== "message") return a.seq - b.seq
+      if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
       if (a._tag === b._tag) return 0
-      return a._tag === "message" ? -1 : 1
+      return isMessage(a) ? -1 : 1
     })
   })
 
