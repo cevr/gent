@@ -45,10 +45,12 @@ describe("ReviewTool", () => {
   it.live("passes description to runner", () => {
     let capturedPrompt = ""
     const capturedOverrides: Array<Record<string, unknown> | undefined> = []
+    const capturedParentToolCallIds: Array<unknown> = []
     const ctx = makeCtx({
       agentRun: (params) => {
         capturedPrompt = params.prompt
         capturedOverrides.push(params.runSpec?.overrides as Record<string, unknown> | undefined)
+        capturedParentToolCallIds.push(params.runSpec?.parentToolCallId)
         return Effect.succeed({
           _tag: "success" as const,
           text: "[]",
@@ -68,6 +70,7 @@ describe("ReviewTool", () => {
         const reviewOverrides = capturedOverrides.find(
           (overrides) => overrides?.["deniedTools"] !== undefined,
         )
+        expect(capturedParentToolCallIds.every((id) => id === "test-call")).toBe(true)
         expect(reviewOverrides?.["allowedTools"]).toEqual(["grep", "glob", "read", "memory_search"])
         expect(reviewOverrides?.["deniedTools"]).toEqual(["bash"])
       }),

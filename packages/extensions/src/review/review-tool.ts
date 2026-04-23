@@ -3,10 +3,12 @@ import {
   DEFAULT_AGENT_NAME,
   defineAgent,
   getDurableAgentRunSessionId,
+  makeRunSpec,
   tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
+  type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand as runCommandBase } from "../workflow-helpers.js"
 import { ArtifactProtocol } from "../artifacts-protocol.js"
@@ -224,7 +226,7 @@ const buildExecutePrompt = (comments: ReadonlyArray<ReviewComment>, description?
 const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
   ctx: ExtensionHostContext
   worker: AgentDefinition
-  toolCallId?: string
+  toolCallId?: ToolCallId
   reviewInput: string
   description?: string
 }) {
@@ -240,12 +242,11 @@ const runReviewCycle = Effect.fn("runReviewCycle")(function* (params: {
     ctx.agent.run({
       agent: params.worker,
       prompt,
-      runSpec: {
+      runSpec: makeRunSpec({
         persistence: "ephemeral",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        parentToolCallId: params.toolCallId as never,
+        parentToolCallId: params.toolCallId,
         overrides: { ...reviewOverrides, modelId },
-      },
+      }),
     })
 
   const [reviewResultA, reviewResultB] = yield* Effect.all(
@@ -358,7 +359,7 @@ export const ReviewTool = tool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(report.comments, params.description),
-      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
+      runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

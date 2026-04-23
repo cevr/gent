@@ -183,6 +183,20 @@ export const RunSpecSchema = Schema.Struct({
 })
 export type RunSpec = typeof RunSpecSchema.Type
 
+export interface RunSpecInput {
+  readonly persistence?: AgentPersistence | undefined
+  readonly overrides?: AgentRunOverrides | undefined
+  readonly tags?: ReadonlyArray<string> | undefined
+  readonly parentToolCallId?: ToolCallId | undefined
+}
+
+export const makeRunSpec = (input: RunSpecInput = {}): RunSpec => ({
+  ...(input.persistence !== undefined ? { persistence: input.persistence } : {}),
+  ...(input.overrides !== undefined ? { overrides: input.overrides } : {}),
+  ...(input.tags !== undefined ? { tags: input.tags } : {}),
+  ...(input.parentToolCallId !== undefined ? { parentToolCallId: input.parentToolCallId } : {}),
+})
+
 /** Resolve persistence for a run — explicit RunSpec wins; default `durable`. */
 export const resolveRunPersistence = (runSpec?: RunSpec): AgentPersistence =>
   runSpec?.persistence ?? "durable"

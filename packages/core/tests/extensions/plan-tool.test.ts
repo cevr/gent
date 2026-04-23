@@ -5,6 +5,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
+import { ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -18,7 +19,7 @@ const makeCtx = (overrides: {
   const base = testToolContext({
     sessionId: "test-session",
     branchId: "test-branch",
-    toolCallId: "test-call",
+    toolCallId: ToolCallId.of("test-call"),
     cwd: "/tmp",
     home: "/tmp",
   })
@@ -73,11 +74,13 @@ const makeCtx = (overrides: {
 describe("Plan Tool", () => {
   it.live("runs all 5 phases and returns approved plan", () => {
     const calls: Array<{ prompt: string }> = []
+    const parentToolCallIds: Array<unknown> = []
     let callIdx = 0
 
     const ctx = makeCtx({
       agentRun: (params) => {
         calls.push({ prompt: params.prompt })
+        parentToolCallIds.push(params.runSpec?.parentToolCallId)
         callIdx++
         return Effect.succeed({
           _tag: "success" as const,
@@ -92,6 +95,7 @@ describe("Plan Tool", () => {
       Effect.map((result) => {
         // 2 parallel plans + 2 cross-reviews + 2 incorporations + 1 synthesis = 7 subagent calls
         expect(calls.length).toBe(7)
+        expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
 
         // First two calls are parallel planning
         expect(calls[0]!.prompt).toContain("implement caching")

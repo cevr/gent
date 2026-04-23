@@ -73,14 +73,15 @@ export {
   ModelDriverRef,
   ExternalDriverRef,
   AgentSpec,
+  makeRunSpec,
   RunSpecSchema,
   AgentRunOverridesSchema,
-  type RunSpec,
   type AgentRunOverrides,
   resolveRunPersistence,
   getDurableAgentRunSessionId,
   AgentRunError,
   type AgentRunResult,
+  type RunSpec,
 } from "../domain/agent.js"
 export {
   type GentExtension,

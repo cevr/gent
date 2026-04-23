@@ -45,7 +45,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:strictEffectProvide:off": 2,
       "eslint:@typescript-eslint/no-explicit-any": 20,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 59,
-      "ts:@ts-expect-error": 22,
+      "ts:@ts-expect-error": 23,
     },
   },
   {
@@ -177,7 +177,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     matches: (file) =>
       /packages\/extensions\/src\//.test(file) || file === "apps/server/src/debug/scenario.ts",
     counts: {
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 44,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 41,
     },
   },
 ]

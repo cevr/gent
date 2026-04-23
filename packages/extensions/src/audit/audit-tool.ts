@@ -1,10 +1,12 @@
 import { Effect, Schema } from "effect"
 import {
   DEFAULT_AGENT_NAME,
+  makeRunSpec,
   tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
+  type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText, runCommand } from "../workflow-helpers.js"
 import { ArtifactProtocol } from "../artifacts-protocol.js"
@@ -206,7 +208,7 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
   ctx: ExtensionHostContext
   architect: AgentDefinition
   auditor: AgentDefinition
-  toolCallId?: string
+  toolCallId?: ToolCallId
   paths: ReadonlyArray<string>
   prompt?: string
   maxConcerns: number
@@ -223,12 +225,11 @@ const runAuditCycle = Effect.fn("runAuditCycle")(function* (params: {
     ctx.agent.run({
       agent,
       prompt,
-      runSpec: {
+      runSpec: makeRunSpec({
         persistence: "ephemeral",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        parentToolCallId: params.toolCallId as never,
+        parentToolCallId: params.toolCallId,
         overrides: { ...auditOverrides, modelId },
-      },
+      }),
     })
 
   const detectResult = yield* runAgent(
@@ -339,7 +340,7 @@ export const AuditTool = tool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutionPrompt(report.findings, params.prompt),
-      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
+      runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 

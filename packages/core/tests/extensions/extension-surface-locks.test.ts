@@ -24,9 +24,11 @@ import {
   type ReadOnlyTag,
   type ReadRequestInput,
   type ExtensionHostContext,
+  makeRunSpec,
   request,
   resource,
   tool,
+  ToolCallId,
   type ToolInput,
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
@@ -52,6 +54,17 @@ const NoInput = Schema.Struct({})
 const StringOutput = Schema.String
 
 describe("Capability factory-shape locks (compile-time)", () => {
+  test("makeRunSpec requires branded tool-call provenance", () => {
+    const ok = makeRunSpec({ parentToolCallId: ToolCallId.of("tc-ok") })
+
+    // @ts-expect-error — raw strings are not valid tool-call provenance
+    const bad = makeRunSpec({ parentToolCallId: "tc-raw" })
+
+    void ok
+    void bad
+    expect(true).toBe(true)
+  })
+
   test("tool({...}) — happy path compiles", () => {
     const ok = tool({
       id: "ok-tool",

@@ -59,12 +59,14 @@ describe("Audit Tool", () => {
     "fix mode detects concerns, audits each concern with both models, synthesizes, and executes",
     () => {
       const calls: Array<{ agentName: string; prompt: string }> = []
+      const parentToolCallIds: Array<unknown> = []
 
       const ctx = makeCtx({
         agentRun: (params) =>
           Effect.sync(() => {
             const prompt = params.prompt
             calls.push({ agentName: params.agent.name, prompt })
+            parentToolCallIds.push(params.runSpec?.parentToolCallId)
 
             if (prompt.includes("Identify audit concerns")) {
               return makeSuccess(
@@ -111,6 +113,7 @@ describe("Audit Tool", () => {
           expect(executeCalls.length).toBe(1)
           expect(result.findings.length).toBe(2)
           expect(result.output).toBe("Applied all fixes.")
+          expect(parentToolCallIds.every((id) => id === "test-call")).toBe(true)
           expect(auditCalls.every((c) => c.agentName === "auditor")).toBe(true)
         }),
         Effect.provide(runtimePlatformLayer),

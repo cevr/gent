@@ -1,10 +1,12 @@
 import { Effect, Schema } from "effect"
 import {
   DEFAULT_AGENT_NAME,
+  makeRunSpec,
   tool,
   type AgentDefinition,
   type ToolContext,
   type ExtensionHostContext,
+  type ToolCallId,
 } from "@gent/core/extensions/api"
 import { requireText } from "./workflow-helpers.js"
 import { ArtifactProtocol } from "./artifacts-protocol.js"
@@ -115,7 +117,7 @@ const buildExecutePrompt = (plan: string) =>
 const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
   ctx: ExtensionHostContext
   architect: AgentDefinition
-  toolCallId?: string
+  toolCallId?: ToolCallId
   mode: "plan-only" | "fix"
   prompt: string
   context?: string
@@ -129,12 +131,11 @@ const runPlanningCycle = Effect.fn("runPlanningCycle")(function* (params: {
     ctx.agent.run({
       agent: params.architect,
       prompt,
-      runSpec: {
+      runSpec: makeRunSpec({
         persistence: "ephemeral",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        parentToolCallId: params.toolCallId as never,
+        parentToolCallId: params.toolCallId,
         overrides: { modelId },
-      },
+      }),
     })
 
   const planPrompt = buildPlanPrompt(
@@ -245,7 +246,7 @@ export const PlanTool = tool({
     const execResult = yield* ctx.agent.run({
       agent: executor,
       prompt: buildExecutePrompt(synthesizedPlan),
-      runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
+      runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
     })
     const execOutput = execResult._tag === "success" ? execResult.text : "Execution failed."
 
