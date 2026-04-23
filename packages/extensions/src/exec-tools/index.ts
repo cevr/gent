@@ -4,7 +4,7 @@ import { defineExtension, resource } from "@gent/core/extensions/api"
 import {
   defineInternalResource,
   type InternalResourceMachine,
-} from "../../../core/src/runtime/extensions/internal-resource-machine.js"
+} from "../internal-resource-machine.js"
 import { BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID, ExecToolsProtocol } from "./protocol.js"
 

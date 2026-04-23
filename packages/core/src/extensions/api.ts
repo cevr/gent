@@ -86,6 +86,7 @@ export {
   type GentExtension,
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
+  type ExtensionEffect,
   type TurnProjection,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -219,6 +220,7 @@ export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.j
 export type {
   ResourceContribution,
   AnyResourceContribution,
+  ResourceSpec,
   ResourceScope,
   ScopeOf,
   ResourceBusEnvelope,

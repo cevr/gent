@@ -4,6 +4,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./internal-resource-machine": null,
+    "./internal-resource-machine.js": null,
+    "./internal-resource-machine.ts": null,
     "./*": "./src/*"
   },
   "scripts": {

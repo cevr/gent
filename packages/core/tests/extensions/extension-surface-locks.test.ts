@@ -233,13 +233,20 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("public extension api does not export runtime-only effect union", () => {
-    // @ts-expect-error — runtime-only effect union is intentionally not part of the authoring api
-    type _Bad = PublicExtensionApi.ExtensionEffect
-
+  test("public extension api rejects runtime-only resource machine effects", () => {
     // @ts-expect-error — resource-machine runtime effects are likewise internal-only
     type _BadResource = PublicExtensionApi.ResourceMachineEffect
 
+    type PublicMachine = PublicExtensionApi.ResourceMachine<
+      { readonly _tag: "Idle" },
+      { readonly _tag: "Ping" }
+    >
+    type PublicAfterTransition = NonNullable<PublicMachine["afterTransition"]>
+    type PublicAfterTransitionEffect = ReturnType<PublicAfterTransition>[number]
+    // @ts-expect-error — QueueFollowUp is runtime-only and must not type-check for public machines
+    const badEffect: PublicAfterTransitionEffect = { _tag: "QueueFollowUp", content: "x" }
+
+    void badEffect
     expect(true).toBe(true)
   })
 
