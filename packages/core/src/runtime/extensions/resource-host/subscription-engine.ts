@@ -11,7 +11,12 @@
  */
 
 import { Effect, Context, Layer } from "effect"
-import type { ResourceBusEnvelope, ResourceSubscription } from "../../../domain/resource.js"
+import type { LoadedExtension } from "../../../domain/extension.js"
+import type {
+  ResourceBusEnvelope,
+  ResourceScope,
+  ResourceSubscription,
+} from "../../../domain/resource.js"
 
 // ── Public service ──
 
@@ -60,6 +65,18 @@ export class SubscriptionEngine extends Context.Service<
   }
 
   static Test = (): Layer.Layer<SubscriptionEngine> => SubscriptionEngine.Live
+}
+
+export const collectSubscriptions = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  scopes: ReadonlyArray<ResourceScope> = ["process"],
+): ReadonlyArray<ResourceSubscription> => {
+  const allowed = new Set(scopes)
+  return extensions.flatMap((ext) =>
+    (ext.contributions.resources ?? [])
+      .filter((resource) => allowed.has(resource.scope))
+      .flatMap((resource) => resource.subscriptions ?? []),
+  )
 }
 
 // ── Internals ──

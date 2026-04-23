@@ -1,7 +1,8 @@
 import { Effect, Exit, Option, Ref, Scope } from "effect"
 import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
-import type { ExtensionActorDefinition, ExtensionRef } from "../../domain/extension.js"
+import type { ExtensionRef } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
+import type { ResourceMachine } from "../../domain/resource.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -25,7 +26,7 @@ export const spawnMachineExtensionRef = <
   SD extends SlotsDef = Record<string, never>,
 >(
   extensionId: string,
-  actor: ExtensionActorDefinition<State, Event, SlotsR, SD>,
+  actor: ResourceMachine<State, Event, SlotsR, SD>,
   ctx: {
     readonly sessionId: SessionId
     readonly branchId?: BranchId

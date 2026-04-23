@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import type { Exit } from "effect"
 
 export interface ErasedEffectHandlers<A, E> {
@@ -38,3 +38,26 @@ export const exitErasedEffect = <A>(
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit erased-effect membrane
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
   Effect.exit(Effect.suspend(effect)) as Effect.Effect<Exit.Exit<A, unknown>>
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type ErasedResourceLayer = Layer.Layer<any>
+
+/**
+ * Membrane for heterogeneous extension Resource layers.
+ *
+ * Resource layers can provide different service tags, fail with extension-owned
+ * errors, and require scope-branded host services. ResourceHost intentionally
+ * erases those channels only at assembly time so the composition root can merge
+ * an unknown extension set.
+ */
+export const eraseResourceLayer = (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  layer: Layer.Layer<any, any, any>,
+): ErasedResourceLayer =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit resource-layer membrane
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  layer as ErasedResourceLayer
+
+export const emptyErasedResourceLayer: ErasedResourceLayer =
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  Layer.empty as ErasedResourceLayer

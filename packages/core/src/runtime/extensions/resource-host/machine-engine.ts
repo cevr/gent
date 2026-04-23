@@ -36,7 +36,6 @@ import {
 import type { AgentEvent } from "../../../domain/event.js"
 import type { AnyResourceMachine } from "../../../domain/resource.js"
 import type {
-  AnyExtensionActorDefinition,
   ExtensionActorStatusInfo,
   ExtensionReduceContext,
   ExtensionRef,
@@ -77,12 +76,12 @@ interface ExtensionProtocolRegistry {
 
 interface ActorEntry {
   readonly ref: ExtensionRef
-  readonly actor?: AnyExtensionActorDefinition
+  readonly actor?: AnyResourceMachine
 }
 
 interface ActorSpawnSpec {
   readonly extensionId: string
-  readonly actor: AnyExtensionActorDefinition
+  readonly actor: AnyResourceMachine
 }
 
 interface PublishMailboxItem {
@@ -160,11 +159,7 @@ export const makeMachineEngine = (
     const spawnByExtension = new Map<string, ActorSpawnSpec>()
     const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
     for (const ext of extensions) {
-      // `Resource.machine` is structurally identical to
-      // `ExtensionActorDefinition` — see resource.ts. Cast to the
-      // runtime shape so existing actor-named code paths stay intact.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const actor = extractMachine(ext) as AnyExtensionActorDefinition | undefined
+      const actor = extractMachine(ext)
       if (actor !== undefined) {
         const spec = {
           extensionId: ext.manifest.id,
