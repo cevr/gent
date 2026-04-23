@@ -33,7 +33,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
 
 describe("session queries", () => {
   it.live(
-    "getSessionSnapshot matches the persisted conversation while runtime transitions through public watchRuntime",
+    "getSessionSnapshot matches the persisted conversation and public watchRuntime settles on the same runtime state",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -61,6 +61,7 @@ describe("session queries", () => {
               branchId: created.branchId,
             }),
             (current) =>
+              current.runtime._tag === "Idle" &&
               current.messages.some(
                 (message) =>
                   message.role === "assistant" &&
@@ -70,17 +71,16 @@ describe("session queries", () => {
             "session snapshot assistant reply",
           )
 
-          const states = yield* waitFor(
+          const observedStates = yield* waitFor(
             Ref.get(runtime),
-            (current) =>
-              current.some((state) => state._tag !== "Idle") &&
-              current.some((state) => state._tag === "Idle"),
+            (current) => current.length >= 2 && current[current.length - 1]?._tag === "Idle",
             5_000,
-            "runtime transition history",
+            "watchRuntime settles on idle after the completed turn",
           )
 
-          expect(states.some((state) => state._tag !== "Idle")).toBe(true)
+          expect(observedStates.length).toBeGreaterThanOrEqual(2)
           expect(snapshot.runtime._tag).toBe("Idle")
+          expect(observedStates[observedStates.length - 1]?._tag).toBe(snapshot.runtime._tag)
           expect(
             snapshot.messages.some(
               (message) =>

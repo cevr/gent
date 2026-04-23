@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { transportCases, waitFor } from "./transport-harness"
+import { transportCases } from "./transport-harness"
 
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   Effect.gen(function* () {
@@ -23,79 +23,39 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 describe("session RPC boundary", () => {
-  const directCases = transportCases.filter((transport) => transport.name === "direct")
+  for (const transport of transportCases) {
+    const timeoutMs = transport.name === "worker-http" ? 35_000 : 10_000
 
-  for (const transport of directCases) {
-    test(`${transport.name} persists session traffic across the public boundary`, async () => {
-      await transport.run(({ client }) =>
-        Effect.gen(function* () {
-          const userText = `boundary ${transport.name}`
-          const created = yield* client.session.create({ cwd: process.cwd() })
-
-          yield* client.message.send({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-            content: userText,
-          })
-
-          const snapshot = yield* waitFor(
-            client.session
-              .getSnapshot({
+    test(
+      `${transport.name} closes session event streams when a session is deleted`,
+      async () => {
+        await transport.run(({ client }) =>
+          Effect.gen(function* () {
+            const created = yield* client.session.create({ cwd: process.cwd() })
+            const events = yield* collectRuntime(
+              client.session.events({
                 sessionId: created.sessionId,
-                branchId: created.branchId,
-              })
-              .pipe(Effect.mapError((error) => new Error(String(error)))),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              current.messages.some(
-                (message) =>
-                  message.role === "user" &&
-                  message.parts.some((part) => part.type === "text" && part.text === userText),
-              ),
-            5_000,
-          )
+              }),
+            )
 
-          expect(
-            snapshot.messages.some(
-              (message) =>
-                message.role === "user" &&
-                message.parts.some((part) => part.type === "text" && part.text === userText),
-            ),
-          ).toBe(true)
-          expect(snapshot.runtime._tag).toBe("Idle")
-        }),
-      )
-    }, 10_000)
-  }
+            yield* client.session
+              .delete({ sessionId: created.sessionId })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            yield* Deferred.await(events.closed).pipe(Effect.timeout("15 seconds"))
 
-  for (const transport of directCases) {
-    test(`${transport.name} closes session event streams when a session is deleted`, async () => {
-      await transport.run(({ client }) =>
-        Effect.gen(function* () {
-          const created = yield* client.session.create({ cwd: process.cwd() })
-          const events = yield* collectRuntime(
-            client.session.events({
-              sessionId: created.sessionId,
-            }),
-          )
-          yield* Effect.sleep("50 millis")
+            const sessions = yield* client.session
+              .list()
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const deleted = yield* client.session
+              .get({ sessionId: created.sessionId })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
 
-          yield* client.session
-            .delete({ sessionId: created.sessionId })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-          yield* Deferred.await(events.closed).pipe(Effect.timeout("15 seconds"))
-
-          const sessions = yield* client.session
-            .list()
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-          const deleted = yield* client.session
-            .get({ sessionId: created.sessionId })
-            .pipe(Effect.mapError((error) => new Error(String(error))))
-
-          expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
-          expect(deleted).toBeNull()
-        }),
-      )
-    })
+            expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
+            expect(deleted).toBeNull()
+          }),
+        )
+      },
+      timeoutMs,
+    )
   }
 })

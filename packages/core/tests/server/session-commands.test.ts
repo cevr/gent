@@ -12,25 +12,33 @@ const makeClient = (reply = "ok") =>
     return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
   })
 
+const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>()
+    const closed = yield* Deferred.make<void>()
+
+    yield* stream.pipe(
+      Stream.runForEach(() => Deferred.succeed(ready, undefined).pipe(Effect.ignore)),
+      Effect.ensuring(Deferred.succeed(closed, undefined).pipe(Effect.ignore)),
+      Effect.forkScoped,
+    )
+
+    yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+    return closed
+  })
+
 describe("session.delete", () => {
   it.live("closes session event streams and removes the session from public queries", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
         const created = yield* client.session.create({ cwd: process.cwd() })
-        const closed = yield* Deferred.make<void>()
-
-        yield* client.session
-          .events({
+        const closed = yield* collectSessionEvents(
+          client.session.events({
             sessionId: created.sessionId,
-          })
-          .pipe(
-            Stream.runForEach(() => Effect.void),
-            Effect.ensuring(Deferred.succeed(closed, undefined).pipe(Effect.ignore)),
-            Effect.forkScoped,
-          )
+          }),
+        )
 
-        yield* Effect.sleep("50 millis")
         yield* client.session.delete({ sessionId: created.sessionId })
         yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
 
