@@ -1,11 +1,17 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
+import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
-import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
+import {
+  Provider,
+  finishPart,
+  toolCallPart,
+  type ProviderResolution,
+} from "@gent/core/providers/provider"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
 
@@ -52,6 +58,17 @@ const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
   name: name ?? id,
   resolveModel: () => fakeResolution(),
 })
+
+const EchoParams = Schema.Struct({ text: Schema.String })
+const echoCapability: AnyCapabilityContribution = {
+  id: "echo",
+  description: "Echo input",
+  audiences: ["model"],
+  intent: "write",
+  input: EchoParams,
+  output: Schema.Unknown,
+  effect: () => Effect.succeed("echoed"),
+}
 
 const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): LoadedExtension => ({
   manifest: { id: extId },
@@ -220,5 +237,93 @@ describe("Provider model resolution", () => {
     )
 
     expect(chosenDriver).toBe("alt")
+  })
+
+  test("request.tools advertises capabilities through the live stream path", async () => {
+    let captured:
+      | {
+          disableToolCallResolution: boolean | undefined
+          toolkit: unknown
+        }
+      | undefined
+
+    const streamingProvider: ModelDriverContribution = {
+      id: "tools-live",
+      name: "ToolsLive",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, {
+          generateText: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateText",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          generateObject: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateObject",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          streamText: (options) => {
+            captured = {
+              disableToolCallResolution: options.disableToolCallResolution,
+              toolkit: options.toolkit,
+            }
+            return Stream.fromIterable([
+              toolCallPart("echo", { text: "hi" }, { toolCallId: "tc-1" }),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 10, outputTokens: 20 },
+              }),
+            ])
+          },
+        } as LanguageModel.Service),
+      }),
+    }
+
+    const layer = buildProviderLayer([makeExt("tools-live-ext", [streamingProvider])])
+
+    const parts = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "tools-live/gpt-5",
+          messages: [],
+          tools: [echoCapability],
+          systemPrompt: "",
+        })
+        return yield* Stream.runCollect(stream)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(captured?.disableToolCallResolution).toBe(true)
+    const toolkit = captured?.toolkit as
+      | {
+          tools: Record<string, { name: string }>
+        }
+      | undefined
+    expect(toolkit).toBeDefined()
+    expect(Object.keys(toolkit?.tools ?? {})).toEqual(["echo"])
+    expect(toolkit?.tools["echo"]?.name).toBe("echo")
+
+    const collected = Array.from(parts)
+    expect(collected).toHaveLength(2)
+    expect(collected[0]).toEqual(
+      expect.objectContaining({
+        type: "tool-call",
+        name: "echo",
+        params: { text: "hi" },
+      }),
+    )
+    expect(collected[1]).toEqual(
+      expect.objectContaining({
+        type: "finish",
+        reason: "tool-calls",
+      }),
+    )
   })
 })
