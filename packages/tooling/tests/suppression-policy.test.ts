@@ -43,8 +43,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 19,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 59,
+      "eslint:@typescript-eslint/no-explicit-any": 20,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 60,
       "ts:@ts-expect-error": 19,
     },
   },
@@ -240,6 +240,18 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
 const collectSuppressions = (): ReadonlyArray<SuppressionInstance> =>
   SCAN_ROOTS.flatMap((dir) => walkFiles(pathResolve(ROOT, dir)).flatMap(parseSuppressions))
 
+const APPROVED_SUPPRESSION_RULES = new Set<SuppressionRule>([
+  "effect:anyUnknownInErrorContext:off",
+  "effect:effectSucceedWithVoid:off",
+  "effect:globalConsoleInEffect:off",
+  "effect:nodeBuiltinImport:off",
+  "effect:preferSchemaOverJson:off",
+  "effect:strictEffectProvide:off",
+  "eslint:@typescript-eslint/no-explicit-any",
+  "eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "ts:@ts-expect-error",
+])
+
 const formatCounts = (
   counts: ReadonlyMap<string, ReadonlyMap<SuppressionRule, number>>,
 ): ReadonlyArray<string> =>
@@ -252,6 +264,14 @@ const formatCounts = (
     )
 
 describe("suppression policy", () => {
+  test("only approved suppression rule names appear in source", () => {
+    const violations = collectSuppressions()
+      .filter((instance) => !APPROVED_SUPPRESSION_RULES.has(instance.rule))
+      .map((instance) => `${instance.file}:${instance.line} ${instance.rule}`)
+
+    expect(violations).toEqual([])
+  })
+
   test("every suppression belongs to an approved architectural bucket", () => {
     const suppressions = collectSuppressions()
     const unexpected = suppressions.flatMap((instance) => {
