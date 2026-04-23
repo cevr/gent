@@ -43,8 +43,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 29,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 63,
+      "eslint:@typescript-eslint/no-explicit-any": 19,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 59,
       "ts:@ts-expect-error": 19,
     },
   },

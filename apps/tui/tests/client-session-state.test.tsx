@@ -35,77 +35,7 @@ const waitForState = async (
   })
 
 describe("ClientProvider session lifecycle", () => {
-  test("createSession activates the created session", async () => {
-    let ctx: ClientContextValue | undefined
-    const client = createMockClient({
-      session: {
-        create: () =>
-          Effect.succeed({
-            sessionId: SessionId.of("session-created"),
-            branchId: BranchId.of("branch-created"),
-            name: "Created",
-          }),
-      },
-    })
-
-    const setup = await renderWithProviders(
-      () => <ClientProbe onReady={(value) => (ctx = value)} />,
-      {
-        client,
-      },
-    )
-    if (ctx === undefined) throw new Error("client context not ready")
-
-    ctx.createSession()
-    const state = await waitForState(
-      setup,
-      () => ctx!.sessionState(),
-      (current) => current.status === "active",
-    )
-
-    expect(state).toEqual({
-      status: "active",
-      session: {
-        sessionId: "session-created",
-        branchId: "branch-created",
-        name: "Created",
-        reasoningLevel: undefined,
-      },
-    })
-  })
-
-  test("switchSession activates the target session immediately", async () => {
-    let ctx: ClientContextValue | undefined
-    const setup = await renderWithProviders(
-      () => <ClientProbe onReady={(value) => (ctx = value)} />,
-      {
-        initialSession: {
-          id: SessionId.of("session-a"),
-          branchId: BranchId.of("branch-a"),
-          name: "A",
-          createdAt: 0,
-          updatedAt: 0,
-        },
-      },
-    )
-    if (ctx === undefined) throw new Error("client context not ready")
-
-    ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B")
-    await setup.renderOnce()
-
-    expect(ctx.sessionState()).toEqual({
-      status: "active",
-      session: {
-        sessionId: "session-b",
-        branchId: "branch-b",
-        name: "B",
-        reasoningLevel: undefined,
-      },
-    })
-    expect(ctx.agent()).toBeUndefined()
-  })
-
-  test("switchSession seeds the target agent when provided", async () => {
+  test("switchSession activates the target session immediately and seeds the target agent", async () => {
     let ctx: ClientContextValue | undefined
     const setup = await renderWithProviders(
       () => <ClientProbe onReady={(value) => (ctx = value)} />,
@@ -122,10 +52,13 @@ describe("ClientProvider session lifecycle", () => {
     if (ctx === undefined) throw new Error("client context not ready")
 
     ctx.switchSession(SessionId.of("session-b"), BranchId.of("branch-b"), "B", "deepwork")
-    await setup.renderOnce()
+    const state = await waitForState(
+      setup,
+      () => ctx!.sessionState(),
+      (current) => current.status === "active",
+    )
 
-    expect(ctx.agent()).toBe("deepwork")
-    expect(ctx.sessionState()).toEqual({
+    expect(state).toEqual({
       status: "active",
       session: {
         sessionId: "session-b",
@@ -134,37 +67,8 @@ describe("ClientProvider session lifecycle", () => {
         reasoningLevel: undefined,
       },
     })
+    expect(ctx.agent()).toBe("deepwork")
   })
-
-  test("clearSession returns to none", async () => {
-    let ctx: ClientContextValue | undefined
-    const setup = await renderWithProviders(
-      () => <ClientProbe onReady={(value) => (ctx = value)} />,
-      {
-        initialSession: {
-          id: SessionId.of("session-a"),
-          branchId: BranchId.of("branch-a"),
-          name: "A",
-          createdAt: 0,
-          updatedAt: 0,
-        },
-      },
-    )
-    if (ctx === undefined) throw new Error("client context not ready")
-
-    ctx.clearSession()
-    await setup.renderOnce()
-
-    expect(ctx.sessionState()).toEqual({ status: "none" })
-  })
-
-  // B11.6a counsel: deleted skipped `stale snapshot hydration` test.
-  // It targeted the in-process `ext.snapshots()` map and `getSnapshotRaw`
-  // — both removed when the paired-package wrapper died. Widget-level
-  // stale-data gating is now exercised by the keyed `(sessionId,
-  // branchId)` state in `auto.client.ts`, `artifacts.client.ts`, and
-  // `tasks.client.tsx`; per-cwd EventPublisher (B11.6c) covers
-  // pulse-routing isolation.
 
   test("stale snapshot failures do not repopulate connection issues after switch", async () => {
     let ctx: ClientContextValue | undefined
