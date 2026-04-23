@@ -1,4 +1,4 @@
-import type { ExtensionClientModule } from "../client-facets.js"
+import type { AnyExtensionClientModule } from "../client-facets.js"
 
 import builtinArtifacts from "./artifacts.client"
 import builtinAuto from "./auto.client"
@@ -12,15 +12,9 @@ import builtinSkills from "./skills.client"
 import builtinTasks from "./tasks.client"
 import builtinTools from "./tools.client"
 
-// Effect-typed setups widen `R` beyond `ClientDeps`: yielding TUI services
-// (`ClientWorkspace`, `ClientTransport`, etc.) requires `R = those services`.
-// The loader's runtime provides every TUI service; the `any` here is the
-// dynamic boundary where each module's specific R union is erased and
-// `runtime.runPromise` enforces dependency satisfaction at runtime.
-export const builtinClientModules: ReadonlyArray<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ExtensionClientModule<unknown, any>
-> = [
+// Builtins keep their precise `R` locally; the load membrane erases them in
+// one place when `loader-boundary.ts` runs `runtime.runPromise(...)`.
+export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinArtifacts,
   builtinAuto,
   builtinConnection,

@@ -267,6 +267,8 @@ export interface ExtensionClientModule<TComponent = unknown, R = ClientDeps> {
   readonly setup: ExtensionClientSetup<TComponent, R>
 }
 
+export type AnyExtensionClientModule = ExtensionClientModule<unknown, unknown>
+
 /**
  * Standalone factory for TUI client modules. Server extensions and TUI
  * client modules share an id by convention — the TUI loader looks up the

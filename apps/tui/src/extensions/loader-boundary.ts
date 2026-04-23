@@ -12,7 +12,7 @@
  */
 
 import { Effect, type FileSystem, type ManagedRuntime, type Path } from "effect"
-import type { ExtensionClientModule, ClientContribution } from "./client-facets.js"
+import type { AnyExtensionClientModule, ClientContribution } from "./client-facets.js"
 import { discoverTuiExtensions, type DiscoveredTuiExtension } from "./discovery"
 import {
   resolveTuiExtensions,
@@ -22,8 +22,6 @@ import {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- TUI runtime membrane: discovered modules may require any subset of the provider runtime's services
 type AnyClientRuntime = ManagedRuntime.ManagedRuntime<any, never>
-
-type AnyExtensionClientModule = ExtensionClientModule<unknown, unknown>
 
 const getClientModuleError = (value: unknown): string | undefined => {
   if (typeof value !== "object" || value === null) return "module must export an object"
