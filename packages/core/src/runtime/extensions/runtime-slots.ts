@@ -17,6 +17,7 @@ import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
 import type { AnyProjectionContribution, ProjectionTurnContext } from "../../domain/projection.js"
 import type { ResourceReaction, ResourceRuntimeSlots } from "../../domain/resource.js"
+import { exitErasedEffect, sealErasedEffect } from "./effect-membrane.js"
 
 export interface RuntimeSlotContext {
   readonly projection: ProjectionTurnContext
@@ -101,22 +102,19 @@ const runProjectionQuery = (
   query: (ctx: ProjectionTurnContext) => Effect.Effect<any, any, any>,
   ctx: ProjectionTurnContext,
 ) =>
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — projection R/E erased at runtime-slot boundary
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  (query(ctx) as Effect.Effect<unknown, unknown>).pipe(
-    Effect.catchEager((error) =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential ProjectionContribution
+  sealErasedEffect(() => query(ctx), {
+    onFailure: (error) =>
       Effect.logWarning("extension.runtime-slot.query.failed").pipe(
         Effect.annotateLogs({ extensionId, projectionId, error: String(error) }),
         Effect.as(undefined),
       ),
-    ),
-    Effect.catchDefect((defect) =>
+    onDefect: (defect) =>
       Effect.logWarning("extension.runtime-slot.query.defect").pipe(
         Effect.annotateLogs({ extensionId, projectionId, defect: String(defect) }),
         Effect.as(undefined),
       ),
-    ),
-  )
+  })
 
 const runReaction = <Input>(
   input: Input,
@@ -124,14 +122,8 @@ const runReaction = <Input>(
   reaction: RegisteredReaction<Input>,
 ) =>
   Effect.gen(function* () {
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — reaction R/E erased at runtime-slot boundary
-    const exit = yield* Effect.exit(
-      Effect.suspend(
-        () =>
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          reaction.slot.handler(input, ctx) as Effect.Effect<void>,
-      ),
-    )
+    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous ResourceReaction
+    const exit = yield* exitErasedEffect(() => reaction.slot.handler(input, ctx))
     if (exit._tag === "Success") return
     const cause = exit.cause
     switch (reaction.slot.failureMode) {
@@ -299,11 +291,11 @@ export const compileRuntimeSlots = (
       Effect.gen(function* () {
         let current: unknown = input.result
         for (const slot of toolResultSlots) {
-          const next = yield* (
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — resource runtime slot R/E erased at runtime-slot boundary
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            (slot.handler({ ...input, result: current }, ctx) as Effect.Effect<unknown>).pipe(
-              Effect.catchEager((error) =>
+          const next = yield* sealErasedEffect(
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for heterogeneous tool-result slot
+            () => slot.handler({ ...input, result: current }, ctx),
+            {
+              onFailure: (error) =>
                 Effect.logWarning("extension.runtime-slot.tool-result.failed").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
@@ -311,8 +303,7 @@ export const compileRuntimeSlots = (
                   }),
                   Effect.as(current),
                 ),
-              ),
-              Effect.catchDefect((defect) =>
+              onDefect: (defect) =>
                 Effect.logWarning("extension.runtime-slot.tool-result.defect").pipe(
                   Effect.annotateLogs({
                     extensionId: slot.extensionId,
@@ -320,8 +311,7 @@ export const compileRuntimeSlots = (
                   }),
                   Effect.as(current),
                 ),
-              ),
-            )
+            },
           )
           current = next
         }

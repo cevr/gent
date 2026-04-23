@@ -17,6 +17,7 @@ import type {
   ResourceScope,
   ResourceSubscription,
 } from "../../../domain/resource.js"
+import { exitErasedEffect } from "../effect-membrane.js"
 // Inline reader — `LoadedExtension.contributions.resources` is the source of
 // truth after C8. Returns the raw bucket (or empty array for narrow consumers).
 const extractResources = (ext: LoadedExtension): ReadonlyArray<AnyResourceContribution> =>
@@ -143,9 +144,9 @@ export const buildResourceLayer = (
       }> = []
       for (const entry of resources) {
         const { resource, extensionId } = entry
-        if (resource.start !== undefined) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource start may carry any E; failure is converted to a log + skip below.
-          const exit = yield* Effect.exit(resource.start as Effect.Effect<void, unknown, unknown>)
+        const start = resource.start
+        if (start !== undefined) {
+          const exit = yield* exitErasedEffect(() => start)
           if (Exit.isFailure(exit)) {
             yield* Effect.logError("resource.start.failed").pipe(
               Effect.annotateLogs({ extensionId, cause: String(exit.cause) }),
@@ -159,20 +160,14 @@ export const buildResourceLayer = (
       // yielding reverse-of-successful-start order — the property stateful
       // teardown needs.
       for (const { resource } of successfullyStarted) {
-        if (resource.stop !== undefined) {
-          yield* Effect.addFinalizer(() =>
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource stop A is heterogeneous; provided by serviceLayers via provideMerge.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            (resource.stop as Effect.Effect<void, never, unknown>).pipe(
-              Effect.catchCause(() => Effect.void),
-            ),
-          )
+        const stop = resource.stop
+        if (stop !== undefined) {
+          yield* Effect.addFinalizer(() => exitErasedEffect(() => stop).pipe(Effect.asVoid))
         }
       }
     }),
   )
 
-  // @effect-diagnostics-next-line anyUnknownInErrorContext:off — lifecycleLayer's `unknown` requirements are satisfied by serviceLayers via provideMerge.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
   return Layer.provideMerge(lifecycleLayer, serviceLayers) as Layer.Layer<any>
 }

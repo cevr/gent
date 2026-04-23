@@ -27,6 +27,7 @@ import type {
 } from "../../domain/projection.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
+import { sealErasedEffect } from "./effect-membrane.js"
 
 interface RegisteredProjection {
   readonly extensionId: string
@@ -89,10 +90,8 @@ export const compileProjections = (
     entry: RegisteredProjection,
     ctx: ProjectionContext,
   ): Effect.Effect<unknown | undefined> =>
-    // @effect-diagnostics-next-line anyUnknownInErrorContext:off — projection R/E erased at registry boundary
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    (entry.projection.query(ctx) as Effect.Effect<unknown, unknown>).pipe(
-      Effect.catchEager((error) =>
+    sealErasedEffect(() => entry.projection.query(ctx), {
+      onFailure: (error) =>
         Effect.logWarning("extension.projection.query.failed").pipe(
           Effect.annotateLogs({
             extensionId: entry.extensionId,
@@ -101,8 +100,7 @@ export const compileProjections = (
           }),
           Effect.as(undefined),
         ),
-      ),
-      Effect.catchDefect((defect) =>
+      onDefect: (defect) =>
         Effect.logWarning("extension.projection.query.defect").pipe(
           Effect.annotateLogs({
             extensionId: entry.extensionId,
@@ -111,8 +109,7 @@ export const compileProjections = (
           }),
           Effect.as(undefined),
         ),
-      ),
-    )
+    })
 
   // Pre-partition entries by surface to avoid running queries for projections
   // that won't contribute to the requested context.

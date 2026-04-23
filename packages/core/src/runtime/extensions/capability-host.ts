@@ -38,6 +38,7 @@ import {
   type Intent,
 } from "../../domain/capability.js"
 import { SCOPE_PRECEDENCE } from "./disabled.js"
+import { sealErasedEffect } from "./effect-membrane.js"
 
 interface RegisteredCapability {
   readonly extensionId: string
@@ -255,36 +256,29 @@ export const compileCapabilities = (
       // handler authored against the wide shape reaches for `ctx.extension`
       // etc.); type-level enforcement is deferred to the C7/C8 capability
       // surface reorganization.
-      //
-      // The handler-construction call itself can throw (the proxy guard
-      // throws synchronously when a property access happens during effect
-      // construction; `catchDefect` only sees runtime-side failures, not
-      // synchronous construction throws). Wrap the call in `Effect.try` to
-      // funnel both paths through the same `CapabilityError` translation.
-      // @effect-diagnostics-next-line anyUnknownInErrorContext:off — capability R/E erased at registry boundary
-      const handlerEffect = yield* Effect.try({
-        try: () => {
-          const e = entry.capability.effect(decodedInput, handlerCtx)
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          return e as Effect.Effect<unknown, CapabilityError>
+      const output = yield* sealErasedEffect(
+        // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit membrane entrypoint for existential CapabilityContribution
+        () => entry.capability.effect(decodedInput, handlerCtx),
+        {
+          onFailure: (error) =>
+            Schema.is(CapabilityError)(error)
+              ? Effect.fail(error)
+              : Effect.fail(
+                  new CapabilityError({
+                    extensionId,
+                    capabilityId,
+                    reason: `handler failure: ${String(error)}`,
+                  }),
+                ),
+          onDefect: (defect) =>
+            Effect.fail(
+              new CapabilityError({
+                extensionId,
+                capabilityId,
+                reason: `handler defect: ${String(defect)}`,
+              }),
+            ),
         },
-        catch: (e) =>
-          new CapabilityError({
-            extensionId,
-            capabilityId,
-            reason: `handler defect: ${String(e)}`,
-          }),
-      })
-      const output = yield* handlerEffect.pipe(
-        Effect.catchDefect((defect) =>
-          Effect.fail(
-            new CapabilityError({
-              extensionId,
-              capabilityId,
-              reason: `handler defect: ${String(defect)}`,
-            }),
-          ),
-        ),
       )
       // Validate output shape — handler returns typed (decoded) form; encode
       // confirms it matches the schema contract. Misshape is a host bug.
