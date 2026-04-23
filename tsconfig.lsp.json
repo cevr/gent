@@ -20,7 +20,7 @@
           "catchAllToMapError": "error",
           "catchUnfailableEffect": "error",
           "effectFnOpportunity": "error",
-          "effectMapVoid": "error",
+          "effectMapVoid": "off",
           "effectSucceedWithVoid": "off",
           "leakingRequirements": "error",
           "preferSchemaOverJson": "error",
