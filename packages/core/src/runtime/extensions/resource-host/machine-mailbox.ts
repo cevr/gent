@@ -9,6 +9,8 @@ interface SessionMailboxSlot {
 
 export interface SessionMailbox {
   readonly submit: <A, E>(sessionId: SessionId, task: Effect.Effect<A, E>) => Effect.Effect<A, E>
+  readonly post: (sessionId: SessionId, task: Effect.Effect<void>) => Effect.Effect<void>
+  readonly isWorkerFiber: (sessionId: SessionId) => Effect.Effect<boolean>
   readonly shutdown: (sessionId: SessionId) => Effect.Effect<void>
 }
 
@@ -76,6 +78,18 @@ export const makeSessionMailbox = (
         })
       })
 
+    const post: SessionMailbox["post"] = (sessionId, task) =>
+      Effect.gen(function* () {
+        const slot = yield* ensureSlot(sessionId)
+        yield* Queue.offer(slot.queue, task)
+      })
+
+    const isWorkerFiber: SessionMailbox["isWorkerFiber"] = (sessionId) =>
+      Effect.gen(function* () {
+        const slot = yield* ensureSlot(sessionId)
+        return (yield* Effect.fiberId) === slot.workerFiberId
+      })
+
     const shutdown: SessionMailbox["shutdown"] = (sessionId) =>
       Effect.gen(function* () {
         const slot = (yield* Ref.get(slotsRef)).get(sessionId)
@@ -88,5 +102,5 @@ export const makeSessionMailbox = (
         })
       })
 
-    return { submit, shutdown }
+    return { submit, post, isWorkerFiber, shutdown }
   })

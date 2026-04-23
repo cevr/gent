@@ -254,6 +254,113 @@ describe("extension concurrency", () => {
       }),
     )
 
+    it.live("nested publish preserves outer event ordering across actors", () =>
+      Effect.gen(function* () {
+        const completed = yield* Deferred.make<void>()
+        const observerEvents: string[] = []
+        let runtimeRef: MachineEngineService | undefined
+
+        const extensions = [
+          {
+            manifest: { id: "ordering-publisher", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  subscriptions: [
+                    {
+                      pattern: "nested:publish:ordered",
+                      handler: (envelope) =>
+                        Effect.gen(function* () {
+                          if (
+                            runtimeRef === undefined ||
+                            envelope.sessionId === undefined ||
+                            envelope.branchId === undefined
+                          ) {
+                            return yield* Effect.die("nested publish ordering test runtime missing")
+                          }
+                          const transitioned = yield* runtimeRef.publish(
+                            new TurnCompleted({
+                              sessionId: envelope.sessionId,
+                              branchId: envelope.branchId,
+                              durationMs: 1,
+                            }),
+                            { sessionId: envelope.sessionId, branchId: envelope.branchId },
+                          )
+                          expect(transitioned).toEqual([])
+                        }),
+                    },
+                  ],
+                  machine: reducerActor({
+                    id: "ordering-publisher",
+                    initial: { started: false },
+                    reduce: (state, event) =>
+                      event._tag === "SessionStarted" && !state.started
+                        ? { state: { started: true } }
+                        : { state },
+                    afterTransition: (before, after) =>
+                      !before.started && after.started
+                        ? [
+                            {
+                              _tag: "BusEmit",
+                              channel: "nested:publish:ordered",
+                              payload: undefined,
+                            },
+                          ]
+                        : [],
+                  }),
+                }),
+              ],
+            },
+          },
+          {
+            manifest: { id: "ordering-observer", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: reducerActor({
+                    id: "ordering-observer",
+                    initial: { seen: [] as string[] },
+                    reduce: (state, event) => {
+                      const nextSeen = [...state.seen, event._tag]
+                      observerEvents.push(event._tag)
+                      if (event._tag === "TurnCompleted") {
+                        Effect.runSync(Deferred.succeed(completed, void 0).pipe(Effect.ignore))
+                      }
+                      return { state: { seen: nextSeen } }
+                    },
+                  }),
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.gen(function* () {
+          const runtime = yield* MachineEngine
+          runtimeRef = runtime
+
+          const transitioned = yield* runtime
+            .publish(new SessionStarted({ sessionId, branchId }), { sessionId, branchId })
+            .pipe(Effect.timeout("1 second"))
+          expect(transitioned).toContain("ordering-publisher")
+          expect(transitioned).toContain("ordering-observer")
+
+          yield* Deferred.await(completed).pipe(Effect.timeout("1 second"))
+          expect(observerEvents).toEqual(["SessionStarted", "TurnCompleted"])
+        }).pipe(Effect.provide(layer))
+      }),
+    )
+
     it.live("nested send from a subscription handler is delivered without deadlocking", () =>
       Effect.gen(function* () {
         const received = yield* Deferred.make<void>()

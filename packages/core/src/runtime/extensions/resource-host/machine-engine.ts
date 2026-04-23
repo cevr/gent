@@ -213,7 +213,16 @@ export const makeMachineEngine = (
       publish: (event, ctx) =>
         Effect.withSpan("MachineEngine.publish", {
           attributes: { "extension.event": event._tag },
-        })(mailbox.submit(ctx.sessionId, withSession(ctx.sessionId, publishImmediate(event, ctx)))),
+        })(
+          Effect.gen(function* () {
+            const effect = withSession(ctx.sessionId, publishImmediate(event, ctx))
+            if (yield* mailbox.isWorkerFiber(ctx.sessionId)) {
+              yield* mailbox.post(ctx.sessionId, effect.pipe(Effect.asVoid))
+              return [] as ReadonlyArray<string>
+            }
+            return yield* mailbox.submit(ctx.sessionId, effect)
+          }),
+        ),
 
       send: (sessionId, message, branchId) =>
         Effect.withSpan("MachineEngine.send", {
