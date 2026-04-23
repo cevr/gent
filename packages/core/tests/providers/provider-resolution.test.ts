@@ -8,8 +8,10 @@ import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
 import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
 import { finishPart, toolCallPart } from "@gent/core/debug/provider"
+import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 
 const testAuthStorage = {
   get: () => Effect.sync(() => undefined as AuthInfo | undefined),
@@ -321,5 +323,126 @@ describe("Provider model resolution", () => {
         reason: "tool-calls",
       }),
     )
+  })
+
+  test("live stream path builds Effect Prompt with multimodal and reasoning parts", async () => {
+    let capturedPrompt: Prompt.Prompt | undefined
+
+    const streamingProvider: ModelDriverContribution = {
+      id: "prompt-live",
+      name: "PromptLive",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, {
+          generateText: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateText",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          generateObject: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateObject",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          streamText: (options) => {
+            capturedPrompt = options.prompt
+            return Stream.fromIterable([
+              finishPart({
+                finishReason: "stop",
+                usage: { inputTokens: 3, outputTokens: 1 },
+              }),
+            ])
+          },
+        } as LanguageModel.Service),
+      }),
+    }
+
+    const layer = buildProviderLayer([makeExt("prompt-live-ext", [streamingProvider])])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "prompt-live/gpt-5",
+          systemPrompt: "System policy.",
+          messages: [
+            new Message({
+              id: "user-image",
+              sessionId: "prompt-session",
+              branchId: "prompt-branch",
+              role: "user",
+              parts: [
+                new TextPart({ type: "text", text: "inspect" }),
+                new ImagePart({
+                  type: "image",
+                  image: "data:image/jpeg;base64,abc",
+                  mediaType: "image/jpeg",
+                }),
+              ],
+              createdAt: new Date(0),
+            }),
+            new Message({
+              id: "assistant-reasoning",
+              sessionId: "prompt-session",
+              branchId: "prompt-branch",
+              role: "assistant",
+              parts: [new ReasoningPart({ type: "reasoning", text: "look at image metadata" })],
+              createdAt: new Date(0),
+            }),
+            new Message({
+              id: "hidden",
+              sessionId: "prompt-session",
+              branchId: "prompt-branch",
+              role: "user",
+              parts: [new TextPart({ type: "text", text: "should not reach model" })],
+              createdAt: new Date(0),
+              metadata: { hidden: true },
+            }),
+          ],
+        })
+        yield* Stream.runCollect(stream)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(capturedPrompt?.content.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+    ])
+    const userMessage = capturedPrompt?.content[1]
+    expect(userMessage?.role).toBe("user")
+    if (userMessage?.role === "user") {
+      expect(userMessage.content[1]).toEqual(
+        expect.objectContaining({
+          type: "file",
+          mediaType: "image/jpeg",
+          data: "data:image/jpeg;base64,abc",
+        }),
+      )
+    }
+    const assistantMessage = capturedPrompt?.content[2]
+    expect(assistantMessage?.role).toBe("assistant")
+    if (assistantMessage?.role === "assistant") {
+      expect(assistantMessage.content[0]).toEqual(
+        expect.objectContaining({
+          type: "reasoning",
+          text: "look at image metadata",
+        }),
+      )
+    }
+    expect(
+      capturedPrompt?.content.some((message) =>
+        message.role === "user"
+          ? message.content.some(
+              (part) => part.type === "text" && part.text === "should not reach model",
+            )
+          : false,
+      ),
+    ).toBe(false)
   })
 })

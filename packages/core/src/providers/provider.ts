@@ -1,6 +1,6 @@
 import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
-import type { Message, TextPart, ToolResultPart } from "../domain/message.js"
+import type { Message, TextPart } from "../domain/message.js"
 import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
 import {
@@ -22,6 +22,7 @@ import * as Response from "effect/unstable/ai/Response"
 import * as AiTool from "effect/unstable/ai/Tool"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
+import { toPrompt } from "./ai-transcript.js"
 
 // ── Provider Resolution ──
 
@@ -260,83 +261,6 @@ export interface ProviderService {
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
 
-// ── Message Conversion (our MessagePart → Prompt.Message) ──
-
-/** @internal — exported for testing */
-function convertMessages(messages: ReadonlyArray<Message>): Prompt.Message[] {
-  const result: Prompt.Message[] = []
-
-  for (const msg of messages) {
-    const parts = msg.parts
-
-    if (msg.role === "system") {
-      const textParts = parts.filter((p): p is TextPart => p.type === "text")
-      if (textParts.length > 0) {
-        const text = textParts.map((p) => p.text).join("\n")
-        result.push(Prompt.systemMessage({ content: text }))
-      }
-      continue
-    }
-
-    if (msg.role === "tool") {
-      const toolResults = parts.filter((p): p is ToolResultPart => p.type === "tool-result")
-      if (toolResults.length > 0) {
-        result.push(
-          Prompt.toolMessage({
-            content: toolResults.map((p) =>
-              Prompt.toolResultPart({
-                id: p.toolCallId,
-                name: p.toolName,
-                isFailure: p.output.type === "error-json",
-                result: p.output.value,
-              }),
-            ),
-          }),
-        )
-      }
-      continue
-    }
-
-    if (msg.role === "user") {
-      const content: Prompt.UserMessagePart[] = []
-      for (const part of parts) {
-        if (part.type === "text") {
-          content.push(Prompt.textPart({ text: part.text }))
-        } else if (part.type === "image") {
-          content.push(Prompt.filePart({ data: part.image, mediaType: "image/png" }))
-        }
-      }
-      if (content.length > 0) {
-        result.push(Prompt.userMessage({ content }))
-      }
-      continue
-    }
-
-    if (msg.role === "assistant") {
-      const content: Prompt.AssistantMessagePart[] = []
-      for (const part of parts) {
-        if (part.type === "text") {
-          content.push(Prompt.textPart({ text: part.text }))
-        } else if (part.type === "tool-call") {
-          content.push(
-            Prompt.toolCallPart({
-              id: part.toolCallId,
-              name: part.toolName,
-              params: part.input,
-              providerExecuted: false,
-            }),
-          )
-        }
-      }
-      if (content.length > 0) {
-        result.push(Prompt.assistantMessage({ content }))
-      }
-    }
-  }
-
-  return result
-}
-
 // ── Tool Conversion (Capability → canonical Tool / advertise-only Toolkit) ──
 
 // Tool JSON schema conversion — canonical implementation in domain/tool-schema.ts
@@ -525,12 +449,7 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           )
           const modelLayer = resolution.layer
 
-          // Build prompt
-          const msgs = convertMessages(request.messages)
-          const promptMessages: Prompt.Message[] =
-            request.systemPrompt !== undefined && request.systemPrompt !== ""
-              ? [Prompt.systemMessage({ content: request.systemPrompt }), ...msgs]
-              : msgs
+          const prompt = toPrompt(request.messages, { systemPrompt: request.systemPrompt })
 
           // Build tools
           const withHandler = request.tools !== undefined ? convertTools(request.tools) : undefined
@@ -539,12 +458,12 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           const rawStream =
             withHandler !== undefined
               ? LanguageModel.streamText({
-                  prompt: Prompt.make(promptMessages),
+                  prompt,
                   toolkit: withHandler,
                   disableToolCallResolution: true as const,
                 })
               : LanguageModel.streamText({
-                  prompt: Prompt.make(promptMessages),
+                  prompt,
                 })
 
           return rawStream.pipe(

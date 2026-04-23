@@ -3,10 +3,19 @@ import { test } from "bun:test"
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { Storage } from "@gent/core/storage/sqlite-storage"
-import { Session, Branch, Message, TextPart } from "@gent/core/domain/message"
+import {
+  Session,
+  Branch,
+  Message,
+  TextPart,
+  ImagePart,
+  ReasoningPart,
+  ToolCallPart,
+  ToolResultPart,
+} from "@gent/core/domain/message"
 
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
-import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
+import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { messageToInfo } from "@gent/core/server/session-utils"
 
 describe("Storage", () => {
@@ -316,6 +325,91 @@ describe("Storage", () => {
         expect(retrieved).toBeDefined()
         expect(retrieved?.role).toBe("user")
         expect(retrieved?.parts[0]?.type).toBe("text")
+      }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("round-trips all persisted transcript part types", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const toolCallId = ToolCallId.of("all-parts-tc")
+
+        yield* storage.createSession(
+          new Session({
+            id: "all-parts-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "all-parts-branch",
+            sessionId: "all-parts-session",
+            createdAt: new Date(),
+          }),
+        )
+
+        yield* storage.createMessage(
+          new Message({
+            id: "all-parts-msg",
+            sessionId: "all-parts-session",
+            branchId: "all-parts-branch",
+            role: "assistant",
+            parts: [
+              new TextPart({ type: "text", text: "hello" }),
+              new ReasoningPart({ type: "reasoning", text: "thinking" }),
+              new ImagePart({
+                type: "image",
+                image: "data:image/webp;base64,abc",
+                mediaType: "image/webp",
+              }),
+              new ToolCallPart({
+                type: "tool-call",
+                toolCallId,
+                toolName: "inspect",
+                input: { target: "image" },
+              }),
+              new ToolResultPart({
+                type: "tool-result",
+                toolCallId,
+                toolName: "inspect",
+                output: { type: "json", value: { ok: true } },
+              }),
+            ],
+            createdAt: new Date(),
+          }),
+        )
+
+        const retrieved = yield* storage.getMessage("all-parts-msg")
+        expect(retrieved?.parts.map((part) => part.type)).toEqual([
+          "text",
+          "reasoning",
+          "image",
+          "tool-call",
+          "tool-result",
+        ])
+        expect(retrieved?.parts[2]).toEqual(
+          expect.objectContaining({
+            type: "image",
+            image: "data:image/webp;base64,abc",
+            mediaType: "image/webp",
+          }),
+        )
+        expect(retrieved?.parts[3]).toEqual(
+          expect.objectContaining({
+            type: "tool-call",
+            toolCallId,
+            toolName: "inspect",
+            input: { target: "image" },
+          }),
+        )
+        expect(retrieved?.parts[4]).toEqual(
+          expect.objectContaining({
+            type: "tool-result",
+            toolCallId,
+            toolName: "inspect",
+            output: { type: "json", value: { ok: true } },
+          }),
+        )
       }).pipe(Effect.provide(Storage.Test())),
     )
 
