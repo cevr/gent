@@ -74,8 +74,8 @@ import { Storage, type StorageError, type StorageService } from "../../storage/s
 import { CheckpointStorage } from "../../storage/checkpoint-storage.js"
 import {
   Provider,
+  ProviderError,
   providerRequestFromMessages,
-  type ProviderError,
   type ProviderStreamPart,
   type ProviderService,
 } from "../../providers/provider.js"
@@ -555,6 +555,7 @@ const collectModelTurnResponse = (params: {
   publishEvent: PublishEvent
   sessionId: SessionId
   branchId: BranchId
+  modelId: string
   activeStream: ActiveStreamHandle
   formatStreamError: (streamError: ProviderError) => string
 }) =>
@@ -567,6 +568,13 @@ const collectModelTurnResponse = (params: {
       ),
       (part) =>
         Effect.gen(function* () {
+          if (part.type === "error") {
+            return yield* new ProviderError({
+              message: formatStreamErrorMessage(part.error),
+              model: params.modelId,
+              cause: part.error,
+            })
+          }
           responseParts.push(part)
           if (part.type === "text-delta") {
             yield* params
@@ -1093,6 +1101,7 @@ const runTurnStreamPhase = (params: {
             publishEvent: params.publishEvent,
             sessionId: params.sessionId,
             branchId: params.branchId,
+            modelId: params.resolved.modelId,
             activeStream: params.activeStream,
             formatStreamError: source.formatStreamError,
           })
@@ -1121,7 +1130,11 @@ const runTurnStreamPhase = (params: {
       return collected
     }
 
-    if (collected.streamFailed) return collected
+    if (collected.streamFailed) {
+      yield* persistAssistantPartsLocal(collected.messages.assistant)
+      yield* persistToolPartsLocal(collected.messages.tool)
+      return collected
+    }
 
     yield* params
       .publishEvent(

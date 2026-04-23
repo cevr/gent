@@ -846,6 +846,45 @@ describe("streaming", () => {
     )
   })
 
+  test("native response error parts fail the stream and preserve partial output", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.succeed(
+            Stream.fromIterable([
+              textDeltaPart("partial answer"),
+              Response.makePart("error", { error: new Error("native response part failed") }),
+              textDeltaPart("unreachable"),
+            ]),
+          ),
+        generate: () => Effect.succeed("test response"),
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("native-error-session", "native-error-branch", "fail natively")
+
+        yield* agentLoop.run(message)
+
+        const events = yield* Ref.get(eventsRef)
+        const tags = events.map((event) => event._tag)
+        expect(tags).toContain("StreamStarted")
+        expect(tags).toContain("StreamChunk")
+        expect(tags).toContain("StreamEnded")
+        expect(tags).toContain("ErrorOccurred")
+        expect(tags).toContain("TurnCompleted")
+
+        const error = events.find((event) => event._tag === "ErrorOccurred")
+        expect(error).toEqual(expect.objectContaining({ error: "native response part failed" }))
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant).toBeDefined()
+        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
+
   test("runOnce publishes machine inspection events", async () => {
     const recorderLayer = SequenceRecorder.Live
     const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
