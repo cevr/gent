@@ -21,12 +21,12 @@ import type { AgentName } from "@gent/core/domain/agent"
 import { BranchId, MessageId, SessionId } from "@gent/core/domain/ids"
 import { AutoProtocol } from "@gent/extensions/auto-protocol"
 
-const sessionId = SessionId.of("auto-e2e-session")
-const branchId = BranchId.of("auto-e2e-branch")
+const sessionId = SessionId.make("auto-e2e-session")
+const branchId = BranchId.make("auto-e2e-branch")
 
 const makeMessage = (text: string) =>
   new Message.regular({
-    id: MessageId.of(`msg-${Date.now()}`),
+    id: MessageId.make(`msg-${Date.now()}`),
     sessionId,
     branchId,
     role: "user",
@@ -44,7 +44,7 @@ const reviewCompatibleRunner = {
             { file: "test.ts", line: 1, severity: "low", type: "suggestion", text: "ok" },
           ])
         : "No issues found.",
-      sessionId: SessionId.of("test-subagent-session"),
+      sessionId: SessionId.make("test-subagent-session"),
       agentName: "cowork" as AgentName,
     }),
 }

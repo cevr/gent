@@ -13,8 +13,8 @@ describe("resolveStartupAuthState", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: SessionId.of("session-a"),
-            branchId: BranchId.of("branch-a"),
+            sessionId: SessionId.make("session-a"),
+            branchId: BranchId.make("branch-a"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -44,8 +44,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "session",
       session: {
-        id: SessionId.of("session-a"),
-        branchId: BranchId.of("branch-a"),
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -75,8 +75,8 @@ describe("resolveStartupAuthState", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: SessionId.of("session-a"),
-            branchId: BranchId.of("branch-a"),
+            sessionId: SessionId.make("session-a"),
+            branchId: BranchId.make("branch-a"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -98,8 +98,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "headless",
       session: {
-        id: SessionId.of("session-a"),
-        branchId: BranchId.of("branch-a"),
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -129,8 +129,8 @@ describe("resolveStartupAuthState", () => {
       session: {
         getSnapshot: () =>
           Effect.succeed({
-            sessionId: SessionId.of("session-a"),
-            branchId: BranchId.of("branch-a"),
+            sessionId: SessionId.make("session-a"),
+            branchId: BranchId.make("branch-a"),
             messages: [],
             lastEventId: null,
             reasoningLevel: undefined,
@@ -152,8 +152,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "session",
       session: {
-        id: SessionId.of("session-a"),
-        branchId: BranchId.of("branch-a"),
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -190,8 +190,8 @@ describe("resolveStartupAuthState", () => {
     const state: InitialState = {
       _tag: "branchPicker",
       session: {
-        id: SessionId.of("session-a"),
-        branchId: BranchId.of("branch-a"),
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
         name: "Session A",
         createdAt: 0,
         updatedAt: 0,
@@ -202,13 +202,13 @@ describe("resolveStartupAuthState", () => {
       },
       branches: [
         {
-          id: BranchId.of("branch-a"),
-          sessionId: SessionId.of("session-a"),
+          id: BranchId.make("branch-a"),
+          sessionId: SessionId.make("session-a"),
           createdAt: 0,
         },
         {
-          id: BranchId.of("branch-b"),
-          sessionId: SessionId.of("session-a"),
+          id: BranchId.make("branch-b"),
+          sessionId: SessionId.make("session-a"),
           createdAt: 1,
         },
       ],

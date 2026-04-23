@@ -131,7 +131,7 @@ describe("GentClient transport contract", () => {
               branchId,
               content: "overrides test",
               runSpec: {
-                parentToolCallId: ToolCallId.of("tc-e2e-test"),
+                parentToolCallId: ToolCallId.make("tc-e2e-test"),
                 tags: ["e2e-transport-test"],
               },
             })

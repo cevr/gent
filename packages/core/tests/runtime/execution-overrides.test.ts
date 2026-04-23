@@ -33,7 +33,7 @@ describe("RunSpec CLI serialization", () => {
         systemPromptAddendum: "Be concise.",
       },
       tags: ["subprocess-test"],
-      parentToolCallId: ToolCallId.of("tc-abc-123"),
+      parentToolCallId: ToolCallId.make("tc-abc-123"),
     }
 
     const json = Schema.encodeSync(codec)(runSpec)
@@ -44,7 +44,7 @@ describe("RunSpec CLI serialization", () => {
   })
 
   test("round-trips with minimal runSpec", () => {
-    const runSpec = { parentToolCallId: ToolCallId.of("tc-only") }
+    const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
     const json = Schema.encodeSync(codec)(runSpec)
     const decoded = Schema.decodeUnknownSync(codec)(json)
     expect(decoded.parentToolCallId).toBe("tc-only")

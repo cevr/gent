@@ -37,14 +37,14 @@ Summarizer agent. Summarize prior context. Focus decisions, open questions, curr
 const cowork = defineAgent({
   name: "cowork",
   description: "General purpose - full tool access, can execute code changes",
-  model: ModelId.of("anthropic/claude-opus-4-6"),
+  model: ModelId.make("anthropic/claude-opus-4-6"),
   systemPromptAddendum: COWORK_PROMPT,
 })
 
 const deepwork = defineAgent({
   name: "deepwork",
   description: "Deep analysis with thorough reasoning — alternative model perspective",
-  model: ModelId.of("openai/gpt-5.4"),
+  model: ModelId.make("openai/gpt-5.4"),
   systemPromptAddendum: DEEPWORK_PROMPT,
   reasoningEffort: "high",
 })
@@ -52,21 +52,21 @@ const deepwork = defineAgent({
 const explore = defineAgent({
   name: "explore",
   description: "Fast codebase exploration - finds files, searches patterns",
-  model: ModelId.of("openai/gpt-5.4-mini"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
   systemPromptAddendum: EXPLORE_PROMPT,
 })
 
 const summarizer = defineAgent({
   name: "summarizer",
-  model: ModelId.of("openai/gpt-5.4-mini"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: [],
   systemPromptAddendum: SUMMARIZER_PROMPT,
 })
 
 const title = defineAgent({
   name: "title",
-  model: ModelId.of("openai/gpt-5.4-mini"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: [],
   temperature: 0.5,
 })

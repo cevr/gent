@@ -15,11 +15,11 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 const syntaxStyle = () => SyntaxStyle.create()
 
 const testSession: SessionInfo = {
-  id: SessionId.of("session-test"),
+  id: SessionId.make("session-test"),
   name: "Test Session",
   cwd: "/tmp/gent-test",
   reasoningLevel: undefined,
-  branchId: BranchId.of("branch-test"),
+  branchId: BranchId.make("branch-test"),
   parentSessionId: undefined,
   parentBranchId: undefined,
   createdAt: Date.now(),
@@ -27,11 +27,11 @@ const testSession: SessionInfo = {
 }
 
 const nextSession: SessionInfo = {
-  id: SessionId.of("session-next"),
+  id: SessionId.make("session-next"),
   name: "Next Session",
   cwd: "/tmp/gent-next",
   reasoningLevel: undefined,
-  branchId: BranchId.of("branch-next"),
+  branchId: BranchId.make("branch-next"),
   parentSessionId: undefined,
   parentBranchId: undefined,
   createdAt: Date.now(),
@@ -50,13 +50,13 @@ const HealthControlsProbe = (props: {
     switchSession: () =>
       client.switchSession(
         nextSession.id,
-        BranchId.of(nextSession.branchId),
+        BranchId.make(nextSession.branchId),
         nextSession.name ?? "Next Session",
       ),
     switchBranchSameSession: () =>
       client.switchSession(
         testSession.id,
-        BranchId.of("branch-alt"),
+        BranchId.make("branch-alt"),
         testSession.name ?? "Test Session",
       ),
     clearSession: () => client.clearSession(),

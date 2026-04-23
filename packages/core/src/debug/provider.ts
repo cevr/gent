@@ -43,7 +43,7 @@ export const toolCallPart = (
   options?: { toolCallId?: ToolCallId },
 ): ProviderStreamPart =>
   Response.makePart("tool-call", {
-    id: options?.toolCallId ?? ToolCallId.of(makeStreamPartId("tool")),
+    id: options?.toolCallId ?? ToolCallId.make(makeStreamPartId("tool")),
     name: toolName,
     params: input,
     providerExecuted: false,
@@ -209,7 +209,7 @@ export const createSequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
   })
 
 let _stepCallIdCounter = 0
-const makeStepToolCallId = () => ToolCallId.of(`step-tc-${++_stepCallIdCounter}`)
+const makeStepToolCallId = () => ToolCallId.make(`step-tc-${++_stepCallIdCounter}`)
 
 export const textStep = (text: string): SequenceStep => ({
   parts: [

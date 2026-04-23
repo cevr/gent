@@ -87,8 +87,8 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           "transport-public",
           input,
           {
-            sessionId: SessionId.of(sessionId),
-            branchId: BranchId.of(branchId),
+            sessionId: SessionId.make(sessionId),
+            branchId: BranchId.make(branchId),
             cwd: deps.platform.cwd,
             home: deps.platform.home,
           },

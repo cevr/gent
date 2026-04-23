@@ -32,7 +32,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ model: "claude-4" }).pipe(
-          withWideEvent(turnBoundary(SessionId.of("sess-1"), BranchId.of("br-1"), "cowork")),
+          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -53,7 +53,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* Effect.void.pipe(
-          withWideEvent(toolBoundary("bash", ToolCallId.of("tc-123"))),
+          withWideEvent(toolBoundary("bash", ToolCallId.make("tc-123"))),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -103,7 +103,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* WideEvent.set({ childSessionId: "child-1" }).pipe(
-          withWideEvent(agentRunBoundary("researcher", SessionId.of("parent-1"))),
+          withWideEvent(agentRunBoundary("researcher", SessionId.make("parent-1"))),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 
@@ -123,7 +123,7 @@ describe("wide-event-boundary", () => {
         const ref = captured()
 
         yield* Effect.fail({ _tag: "AgentLoopError", message: "turn failed" }).pipe(
-          withWideEvent(turnBoundary(SessionId.of("sess-1"), BranchId.of("br-1"), "cowork")),
+          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
           Effect.catchIf(
             () => true,
             () => Effect.void,
@@ -147,10 +147,10 @@ describe("wide-event-boundary", () => {
           yield* WideEvent.set({ agent: "cowork" })
 
           yield* WideEvent.set({ toolResult: "ok" }).pipe(
-            withWideEvent(toolBoundary("read", ToolCallId.of("tc-1"))),
+            withWideEvent(toolBoundary("read", ToolCallId.make("tc-1"))),
           )
         }).pipe(
-          withWideEvent(turnBoundary(SessionId.of("sess-1"), BranchId.of("br-1"), "cowork")),
+          withWideEvent(turnBoundary(SessionId.make("sess-1"), BranchId.make("br-1"), "cowork")),
           Effect.provide(WideEventLogger.Capture(ref)),
         )
 

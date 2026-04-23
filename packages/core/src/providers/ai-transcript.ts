@@ -432,7 +432,7 @@ const responsePartToAssistantProjection = (
     case "tool-call":
       return new ToolCallPart({
         type: "tool-call",
-        toolCallId: ToolCallId.of(part.id),
+        toolCallId: ToolCallId.make(part.id),
         toolName: part.name,
         input: part.params,
       })
@@ -445,7 +445,7 @@ const responsePartToToolProjection = (part: Response.AnyPart): ToolResultPart | 
   part.type === "tool-result" && part.preliminary !== true
     ? new ToolResultPart({
         type: "tool-result",
-        toolCallId: ToolCallId.of(part.id),
+        toolCallId: ToolCallId.make(part.id),
         toolName: part.name,
         output: {
           type: part.isFailure ? "error-json" : "json",

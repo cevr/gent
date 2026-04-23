@@ -167,7 +167,7 @@ describe("session queries", () => {
           client.session.create({
             name: "Orphan",
             cwd: process.cwd(),
-            parentSessionId: SessionId.of("nonexistent"),
+            parentSessionId: SessionId.make("nonexistent"),
           }),
         )
 

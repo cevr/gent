@@ -32,13 +32,13 @@ const fakeTool: AnyCapabilityContribution = {
 
 const stubHostCtx = {} as ExtensionHostContext
 const stubProjectionCtx = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/home/x",
   turn: {
-    sessionId: SessionId.of("test-session"),
-    branchId: BranchId.of("test-branch"),
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
     agent: baseAgent,
     allTools: [],
     agentName: "cowork",

@@ -32,7 +32,7 @@ const mockRunnerSuccess = {
     Effect.succeed({
       _tag: "success" as const,
       text: `done: ${params.prompt}`,
-      sessionId: SessionId.of("child-session"),
+      sessionId: SessionId.make("child-session"),
       agentName: params.agent.name,
     }),
 }
@@ -40,7 +40,7 @@ const mockRunnerSuccess = {
 const makeCtx = Effect.gen(function* () {
   const runtime = yield* MachineEngine
   const registry = yield* ExtensionRegistry
-  const ctxBase = { sessionId: SessionId.of("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
+  const ctxBase = { sessionId: SessionId.make("s1"), branchId: "b1", cwd: "/tmp", home: "/tmp" }
   const request = <I, O>(ref: CapabilityRef<I, O>, input: I) => {
     const e = registry
       .getResolved()
@@ -51,7 +51,7 @@ const makeCtx = Effect.gen(function* () {
     return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
   }
   return testToolContext({
-    sessionId: SessionId.of("s1"),
+    sessionId: SessionId.make("s1"),
     branchId: "b1",
     toolCallId: "tc1",
     agent: {
@@ -64,14 +64,14 @@ const makeCtx = Effect.gen(function* () {
         Effect.succeed({
           _tag: "success" as const,
           text: `done: ${params.prompt}`,
-          sessionId: SessionId.of("child-session"),
+          sessionId: SessionId.make("child-session"),
           agentName: params.agent.name,
         }),
       resolveDualModelPair: dieStub("agent.resolveDualModelPair"),
     },
     extension: {
-      send: (message, branchId) => runtime.send(SessionId.of("s1"), message, branchId ?? "b1"),
-      ask: (message, branchId) => runtime.execute(SessionId.of("s1"), message, branchId ?? "b1"),
+      send: (message, branchId) => runtime.send(SessionId.make("s1"), message, branchId ?? "b1"),
+      ask: (message, branchId) => runtime.execute(SessionId.make("s1"), message, branchId ?? "b1"),
       request,
     },
   })
@@ -88,7 +88,7 @@ const setup = Effect.gen(function* () {
   const now = new Date()
   yield* storage.createSession(
     new Session({
-      id: SessionId.of("s1"),
+      id: SessionId.make("s1"),
       name: "Test",
       createdAt: now,
       updatedAt: now,
@@ -97,7 +97,7 @@ const setup = Effect.gen(function* () {
   yield* storage.createBranch(
     new Branch({
       id: "b1",
-      sessionId: SessionId.of("s1"),
+      sessionId: SessionId.make("s1"),
       createdAt: now,
     }),
   )
@@ -208,7 +208,7 @@ describe("TaskUpdateTool", () => {
       const ctx = yield* makeCtx
       const eventStore = yield* EventStore
       const eventsFiber = yield* Effect.forkChild(
-        eventStore.subscribe({ sessionId: SessionId.of("s1") }).pipe(
+        eventStore.subscribe({ sessionId: SessionId.make("s1") }).pipe(
           Stream.filter((envelope) => envelope.event._tag === "TaskCompleted"),
           Stream.take(1),
           Stream.runCollect,
@@ -233,7 +233,7 @@ describe("TaskService.remove", () => {
       const eventStore = yield* EventStore
       const taskService = yield* TaskService
       const eventsFiber = yield* Effect.forkChild(
-        eventStore.subscribe({ sessionId: SessionId.of("s1") }).pipe(
+        eventStore.subscribe({ sessionId: SessionId.make("s1") }).pipe(
           Stream.filter((envelope) => envelope.event._tag === "TaskDeleted"),
           Stream.take(1),
           Stream.runCollect,
@@ -241,7 +241,7 @@ describe("TaskService.remove", () => {
       )
       yield* Effect.yieldNow
       const created = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Ephemeral debug task",
       })
@@ -257,12 +257,12 @@ describe("TaskService.remove", () => {
       yield* setup
       const taskService = yield* TaskService
       const blocker = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Blocker",
       })
       const blocked = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Blocked",
       })
@@ -284,7 +284,7 @@ describe("TaskStorage metadata boundary", () => {
       const taskStorage = yield* TaskStorage
       const sql = yield* SqlClient.SqlClient
       const created = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Metadata decode",
         metadata: { ok: true },
@@ -293,7 +293,7 @@ describe("TaskStorage metadata boundary", () => {
       yield* sql`UPDATE tasks SET metadata = ${"{not-json"} WHERE id = ${created.id}`
 
       const loaded = yield* taskStorage.getTask(created.id)
-      const listed = yield* taskStorage.listTasks(SessionId.of("s1"))
+      const listed = yield* taskStorage.listTasks(SessionId.make("s1"))
 
       expect(loaded?.metadata).toBeUndefined()
       expect(listed[0]?.metadata).toBeUndefined()
@@ -305,7 +305,7 @@ describe("TaskStorage metadata boundary", () => {
       yield* setup
       const taskService = yield* TaskService
       const created = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Metadata clear",
         metadata: { keep: false },
@@ -329,8 +329,8 @@ describe("TaskStorage metadata boundary", () => {
       const result = yield* taskStorage
         .createTask(
           new Task({
-            id: TaskId.of("task-bad-metadata"),
-            sessionId: SessionId.of("s1"),
+            id: TaskId.make("task-bad-metadata"),
+            sessionId: SessionId.make("s1"),
             branchId: "b1",
             subject: "Bad metadata",
             status: "pending",
@@ -356,12 +356,12 @@ describe("TaskStorage.deleteTask", () => {
       const taskStorage = yield* TaskStorage
       const sql = yield* SqlClient.SqlClient
       const blocker = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Delete blocker",
       })
       const blocked = yield* taskService.create({
-        sessionId: SessionId.of("s1"),
+        sessionId: SessionId.make("s1"),
         branchId: "b1",
         subject: "Delete blocked",
       })

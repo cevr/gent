@@ -27,7 +27,7 @@ export interface DebugSessionInfo {
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const asToolCallId = (value: string) => ToolCallId.of(value)
+const asToolCallId = (value: string) => ToolCallId.make(value)
 
 const makeJsonResult = (toolCallId: ToolCallId, toolName: string, value: unknown) =>
   new ToolResultPart({
@@ -43,8 +43,8 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
   const messages = yield* MessageStorage
-  const sessionId = SessionId.of(Bun.randomUUIDv7())
-  const branchId = BranchId.of(Bun.randomUUIDv7())
+  const sessionId = SessionId.make(Bun.randomUUIDv7())
+  const branchId = BranchId.make(Bun.randomUUIDv7())
 
   const session = new Session({
     id: sessionId,
@@ -63,7 +63,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   yield* branches.createBranch(branch)
 
   const user1 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -72,7 +72,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant1 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -127,7 +127,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults1 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "tool",
@@ -176,7 +176,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant2 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -187,7 +187,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user2 = new Message.interjection({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -196,7 +196,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant3 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -209,7 +209,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const user3 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "user",
@@ -218,7 +218,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant4 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",
@@ -274,7 +274,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const toolResults2 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "tool",
@@ -309,7 +309,7 @@ export const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: s
   })
 
   const assistant5 = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId,
     branchId,
     role: "assistant",

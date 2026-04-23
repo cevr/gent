@@ -80,7 +80,7 @@ export const DelegateTool = tool({
 
     /** Check if task is still in a non-terminal state before writing completion */
     const isTaskStillActive = (taskId: string) =>
-      ctx.extension.request(TaskGetRef, { taskId: TaskId.of(taskId) }).pipe(
+      ctx.extension.request(TaskGetRef, { taskId: TaskId.make(taskId) }).pipe(
         Effect.map(
           (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
         ),

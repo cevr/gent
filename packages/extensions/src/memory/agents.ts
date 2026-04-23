@@ -45,7 +45,7 @@ After processing, summarize what you extracted and stored.
 
 export const MemoryReflectAgent = defineAgent({
   name: "memory:reflect" as AgentName,
-  model: ModelId.of("anthropic/claude-sonnet-4-6"),
+  model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Review recent sessions and extract project-level memories",
   systemPromptAddendum: REFLECT_PROMPT,
   allowedTools: ["memory_remember", "memory_recall", "memory_forget", "search_sessions"],
@@ -81,7 +81,7 @@ Summarize: how many entries reviewed, merged, promoted, pruned.
 
 export const MemoryMeditateAgent = defineAgent({
   name: "memory:meditate" as AgentName,
-  model: ModelId.of("anthropic/claude-sonnet-4-6"),
+  model: ModelId.make("anthropic/claude-sonnet-4-6"),
   description: "Consolidate project memories, prune duplicates, promote to global principles",
   systemPromptAddendum: MEDITATE_PROMPT,
   allowedTools: ["memory_remember", "memory_recall", "memory_forget"],

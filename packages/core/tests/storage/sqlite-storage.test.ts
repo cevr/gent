@@ -336,7 +336,7 @@ describe("Storage", () => {
     it.live("round-trips all persisted transcript part types", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-        const toolCallId = ToolCallId.of("all-parts-tc")
+        const toolCallId = ToolCallId.make("all-parts-tc")
 
         yield* storage.createSession(
           new Session({
@@ -567,7 +567,7 @@ describe("Storage", () => {
             const storage = yield* Storage
             const sql = yield* SqlClient.SqlClient
 
-            const message = yield* storage.getMessage(MessageId.of("legacy-m"))
+            const message = yield* storage.getMessage(MessageId.make("legacy-m"))
             expect(message?.parts).toEqual([
               new TextPart({ type: "text", text: "legacy searchable content" }),
               new TextPart({ type: "text", text: "second recovered content" }),
@@ -1032,10 +1032,10 @@ describe("Storage", () => {
         expect(messages).toHaveLength(1)
         expect(messages[0]!.metadata).toBeUndefined()
 
-        const message = yield* storage.getMessage(MessageId.of("bad-meta-msg"))
+        const message = yield* storage.getMessage(MessageId.make("bad-meta-msg"))
         expect(message?.metadata).toBeUndefined()
 
-        const detail = yield* storage.getSessionDetail(SessionId.of("bad-meta-s"))
+        const detail = yield* storage.getSessionDetail(SessionId.make("bad-meta-s"))
         expect(detail.branches).toHaveLength(1)
         expect(detail.branches[0]!.messages).toHaveLength(1)
         expect(detail.branches[0]!.messages[0]!.metadata).toBeUndefined()
@@ -1084,7 +1084,7 @@ describe("Storage", () => {
           }),
         )
 
-        const stored = yield* storage.getMessage(MessageId.of("interjection-msg"))
+        const stored = yield* storage.getMessage(MessageId.make("interjection-msg"))
         if (stored === undefined) throw new Error("expected interjection message")
         expect(stored._tag).toBe("interjection")
 
@@ -1117,8 +1117,8 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-session")
-        const branchId = BranchId.of("compat-branch")
+        const sessionId = SessionId.make("compat-session")
+        const branchId = BranchId.make("compat-branch")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -1146,8 +1146,8 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-latest")
-        const branchId = BranchId.of("compat-latest-b")
+        const sessionId = SessionId.make("compat-latest")
+        const branchId = BranchId.make("compat-latest-b")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -1173,9 +1173,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-agent-run")
-        const branchId = BranchId.of("compat-agent-run-b")
-        const childSessionId = SessionId.of("compat-agent-run-child")
+        const sessionId = SessionId.make("compat-agent-run")
+        const branchId = BranchId.make("compat-agent-run-b")
+        const childSessionId = SessionId.make("compat-agent-run-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -1198,9 +1198,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-agent-run-latest")
-        const branchId = BranchId.of("compat-agent-run-latest-b")
-        const childSessionId = SessionId.of("compat-agent-run-latest-child")
+        const sessionId = SessionId.make("compat-agent-run-latest")
+        const branchId = BranchId.make("compat-agent-run-latest-b")
+        const childSessionId = SessionId.make("compat-agent-run-latest-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -1226,9 +1226,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-agent-run-tagless")
-        const branchId = BranchId.of("compat-agent-run-tagless-b")
-        const childSessionId = SessionId.of("compat-agent-run-tagless-child")
+        const sessionId = SessionId.make("compat-agent-run-tagless")
+        const branchId = BranchId.make("compat-agent-run-tagless-b")
+        const childSessionId = SessionId.make("compat-agent-run-tagless-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,
@@ -1254,9 +1254,9 @@ describe("Storage", () => {
         const storage = yield* Storage
         const sql = yield* SqlClient.SqlClient
 
-        const sessionId = SessionId.of("compat-agent-run-branchless")
-        const branchId = BranchId.of("compat-agent-run-branchless-b")
-        const childSessionId = SessionId.of("compat-agent-run-branchless-child")
+        const sessionId = SessionId.make("compat-agent-run-branchless")
+        const branchId = BranchId.make("compat-agent-run-branchless-b")
+        const childSessionId = SessionId.make("compat-agent-run-branchless-child")
         yield* storage.createSession(
           new Session({
             id: sessionId,

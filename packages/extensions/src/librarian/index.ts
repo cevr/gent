@@ -14,7 +14,7 @@ Use read, grep, and glob tools to explore the code. Be precise — cite file pat
 export const librarian = defineAgent({
   name: "librarian",
   description: "Answers questions about external repos using local cached clones",
-  model: ModelId.of("openai/gpt-5.4-mini"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "repo"],
   systemPromptAddendum: LIBRARIAN_PROMPT,
 })

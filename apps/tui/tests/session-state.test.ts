@@ -3,8 +3,8 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { SessionState, transitionSessionState, type Session } from "../src/client/session-state"
 
 const session: Session = {
-  sessionId: SessionId.of("session-1"),
-  branchId: BranchId.of("branch-1"),
+  sessionId: SessionId.make("session-1"),
+  branchId: BranchId.make("branch-1"),
   name: "Session 1",
   reasoningLevel: undefined,
 }
@@ -21,14 +21,14 @@ describe("session-state", () => {
   test("activate replaces current session without ceremonial switching state", () => {
     const next = transitionSessionState(SessionState.active(session), {
       _tag: "Activated",
-      session: { ...session, sessionId: SessionId.of("session-2"), name: "Session 2" },
+      session: { ...session, sessionId: SessionId.make("session-2"), name: "Session 2" },
     })
 
     expect(next).toEqual({
       status: "active",
       session: {
         ...session,
-        sessionId: SessionId.of("session-2"),
+        sessionId: SessionId.make("session-2"),
         name: "Session 2",
       },
     })

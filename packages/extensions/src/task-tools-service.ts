@@ -108,7 +108,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
                 const eventPublisher = yield* EventPublisher
-                const id = TaskId.of(Bun.randomUUIDv7())
+                const id = TaskId.make(Bun.randomUUIDv7())
                 const now = yield* DateTime.nowAsDate
                 const task = new Task({
                   id,

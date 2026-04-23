@@ -25,9 +25,9 @@ const testLayer = Layer.merge(baseLayer, taskStorageLayer)
 
 const test = it.live.layer(testLayer)
 
-const sessionId = SessionId.of("s1")
-const branchId = BranchId.of("b1")
-const otherBranchId = BranchId.of("b2")
+const sessionId = SessionId.make("s1")
+const branchId = BranchId.make("b1")
+const otherBranchId = BranchId.make("b2")
 
 const setup = Effect.gen(function* () {
   const storage = yield* Storage
@@ -44,7 +44,7 @@ const setup = Effect.gen(function* () {
 const makeTask = (id: string, branch: BranchId, status: Task["status"] = "pending") => {
   const now = new Date()
   return new Task({
-    id: TaskId.of(id),
+    id: TaskId.make(id),
     sessionId,
     branchId: branch,
     subject: `Task ${id}`,
@@ -114,7 +114,7 @@ describe("TaskProjection", () => {
       yield* taskStorage.createTask(makeTask("t1", branchId))
       const before = yield* TaskProjection.query(ctx(branchId))
       expect(before.tasks[0]?.status).toBe("pending")
-      yield* taskStorage.updateTask(TaskId.of("t1"), { status: "completed" })
+      yield* taskStorage.updateTask(TaskId.make("t1"), { status: "completed" })
       const after = yield* TaskProjection.query(ctx(branchId))
       expect(after.tasks[0]?.status).toBe("completed")
     }))

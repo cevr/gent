@@ -24,8 +24,8 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 
-const sessionId = SessionId.of("test-session")
-const branchId = BranchId.of("test-branch")
+const sessionId = SessionId.make("test-session")
+const branchId = BranchId.make("test-branch")
 
 const makeRuntimeLayer = (
   extensions: Parameters<typeof MachineEngine.fromExtensions>[0],

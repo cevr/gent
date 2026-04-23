@@ -61,7 +61,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const loadSession = (sessionId: string) => {
       if (storage !== undefined) {
         return storage
-          .getSession(SessionId.of(sessionId))
+          .getSession(SessionId.make(sessionId))
           .pipe(Effect.orElseSucceed(() => undefined))
       }
       // @effect-diagnostics-next-line effectSucceedWithVoid:off -- this branch must preserve Effect<Session | undefined>, not collapse to Effect<void>

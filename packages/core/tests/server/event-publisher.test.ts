@@ -19,8 +19,8 @@ const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", p
 const makeEvent = (tag: string, sessionId: string, branchId?: string) =>
   ({
     _tag: tag,
-    sessionId: SessionId.of(sessionId),
-    ...(branchId !== undefined ? { branchId: BranchId.of(branchId) } : {}),
+    sessionId: SessionId.make(sessionId),
+    ...(branchId !== undefined ? { branchId: BranchId.make(branchId) } : {}),
   }) as unknown as AgentEvent
 
 describe("EventPublisher", () => {
@@ -81,7 +81,7 @@ describe("EventPublisher", () => {
           if (event._tag === "OuterEvent" && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
-                sessionId: SessionId.of("session-1"),
+                sessionId: SessionId.make("session-1"),
               }),
             )
           }
@@ -131,7 +131,7 @@ describe("EventPublisher", () => {
           if (event._tag === "OuterEvent" && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
-                sessionId: SessionId.of("session-1"),
+                sessionId: SessionId.make("session-1"),
               }),
             )
           }
@@ -282,7 +282,7 @@ describe("EventPublisher", () => {
             if (publishFn !== undefined) {
               yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
                 Effect.provideService(CurrentExtensionSession, {
-                  sessionId: SessionId.of("session-1"),
+                  sessionId: SessionId.make("session-1"),
                 }),
               )
             }
@@ -328,10 +328,10 @@ describe("EventPublisher per-cwd router", () => {
 
     const primaryCwd = "/primary"
     const secondaryCwd = "/secondary"
-    const sessionA = SessionId.of("session-primary")
-    const sessionB = SessionId.of("session-secondary")
-    const branchA = BranchId.of("branch-primary")
-    const branchB = BranchId.of("branch-secondary")
+    const sessionA = SessionId.make("session-primary")
+    const sessionB = SessionId.make("session-secondary")
+    const branchA = BranchId.make("branch-primary")
+    const branchB = BranchId.make("branch-secondary")
 
     const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
@@ -451,8 +451,8 @@ describe("EventPublisher per-cwd router", () => {
 
     const primaryCwd = "/primary"
     const secondaryCwd = "/secondary"
-    const sessionA = SessionId.of("session-primary")
-    const sessionB = SessionId.of("session-secondary")
+    const sessionA = SessionId.make("session-primary")
+    const sessionB = SessionId.make("session-secondary")
 
     const baseLayer = Layer.succeed(EventStore, {
       publish: () => Effect.void,
@@ -555,7 +555,7 @@ describe("EventPublisher per-cwd router", () => {
     const persisted: string[] = []
 
     const primaryCwd = "/primary"
-    const sessionB = SessionId.of("session-secondary")
+    const sessionB = SessionId.make("session-secondary")
 
     const baseLayer = Layer.succeed(EventStore, {
       publish: (event: AgentEvent) =>

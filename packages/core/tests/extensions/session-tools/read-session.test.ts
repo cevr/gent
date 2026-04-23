@@ -76,9 +76,9 @@ describe("renderMessageParts", () => {
 
 describe("renderSessionTree", () => {
   const now = new Date()
-  const sid = SessionId.of("s1")
-  const bid1 = BranchId.of("b1")
-  const bid2 = BranchId.of("b2")
+  const sid = SessionId.make("s1")
+  const bid1 = BranchId.make("b1")
+  const bid2 = BranchId.make("b2")
 
   const makeBranch = (id: BranchId, opts?: { parentBranchId?: BranchId; name?: string }) =>
     new Branch({
@@ -91,7 +91,7 @@ describe("renderSessionTree", () => {
 
   const makeMessage = (branchId: BranchId, role: "user" | "assistant", text: string) =>
     new Message.regular({
-      id: MessageId.of(`msg-${Math.random().toString(36).slice(2, 8)}`),
+      id: MessageId.make(`msg-${Math.random().toString(36).slice(2, 8)}`),
       sessionId: sid,
       branchId,
       role,

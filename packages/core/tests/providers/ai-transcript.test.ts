@@ -78,7 +78,7 @@ describe("AI transcript bridge", () => {
             }),
             new ToolCallPart({
               type: "tool-call",
-              toolCallId: ToolCallId.of("tc-1"),
+              toolCallId: ToolCallId.make("tc-1"),
               toolName: "describe",
               input: { image: true },
             }),
@@ -92,7 +92,7 @@ describe("AI transcript bridge", () => {
           parts: [
             new ToolResultPart({
               type: "tool-result",
-              toolCallId: ToolCallId.of("tc-1"),
+              toolCallId: ToolCallId.make("tc-1"),
               toolName: "describe",
               output: { type: "json", value: { label: "diagram" } },
             }),

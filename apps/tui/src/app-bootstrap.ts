@@ -212,7 +212,7 @@ export const resolveInitialState = (input: {
         return yield* Effect.die("fatal")
       }
       if (Option.isSome(session)) {
-        const sess = yield* client.session.get({ sessionId: SessionId.of(session.value) })
+        const sess = yield* client.session.get({ sessionId: SessionId.make(session.value) })
         if (sess === null) {
           yield* Console.error(`Error: session ${session.value} not found`)
           return yield* Effect.die("fatal")
@@ -225,7 +225,7 @@ export const resolveInitialState = (input: {
     }
 
     if (Option.isSome(session)) {
-      const sess = yield* client.session.get({ sessionId: SessionId.of(session.value) })
+      const sess = yield* client.session.get({ sessionId: SessionId.make(session.value) })
       if (sess === null) {
         yield* Console.error(`Error: session ${session.value} not found`)
         return yield* Effect.die("fatal")

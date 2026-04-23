@@ -148,10 +148,10 @@ export const messageText = (message: Message): string =>
     .join("\n")
 
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  MessageId.of(`${messageId}:assistant:${step}`)
+  MessageId.make(`${messageId}:assistant:${step}`)
 
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
-  MessageId.of(`${messageId}:tool-result:${step}`)
+  MessageId.make(`${messageId}:tool-result:${step}`)
 
 export const assistantDraftFromMessage = (message: Message): AssistantDraft => ({
   text: message.parts

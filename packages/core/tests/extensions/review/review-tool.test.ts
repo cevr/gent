@@ -54,7 +54,7 @@ describe("ReviewTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "[]",
-          sessionId: SessionId.of("child"),
+          sessionId: SessionId.make("child"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -93,7 +93,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
-          sessionId: SessionId.of("child"),
+          sessionId: SessionId.make("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
@@ -115,7 +115,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: "not valid json",
-          sessionId: SessionId.of("child"),
+          sessionId: SessionId.make("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),
@@ -148,7 +148,7 @@ describe("ReviewTool", () => {
                   text: "Missing null check",
                 },
               ]),
-              sessionId: SessionId.of("synth"),
+              sessionId: SessionId.make("synth"),
               agentName: params.agent.name,
               persistence: "ephemeral" as const,
             }
@@ -157,7 +157,7 @@ describe("ReviewTool", () => {
             return {
               _tag: "success" as const,
               text: "Applied fixes.",
-              sessionId: SessionId.of("exec"),
+              sessionId: SessionId.make("exec"),
               agentName: params.agent.name,
               persistence: "durable" as const,
             }
@@ -165,7 +165,7 @@ describe("ReviewTool", () => {
           return {
             _tag: "success" as const,
             text: "[]",
-            sessionId: SessionId.of("child"),
+            sessionId: SessionId.make("child"),
             agentName: params.agent.name,
             persistence: "ephemeral" as const,
           }
@@ -198,7 +198,7 @@ describe("ReviewTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: jsonOutput,
-          sessionId: SessionId.of("child"),
+          sessionId: SessionId.make("child"),
           agentName: "review-worker",
           persistence: "ephemeral" as const,
         }),

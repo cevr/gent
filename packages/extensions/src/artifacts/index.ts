@@ -35,7 +35,7 @@ export { ARTIFACTS_EXTENSION_ID } from "../artifacts-protocol.js"
 
 // ── Helpers ──
 
-const generateId = () => ArtifactId.of(crypto.randomUUID())
+const generateId = () => ArtifactId.make(crypto.randomUUID())
 
 const applyPatch = (content: string, patch: ContentPatch): string =>
   patch.replaceAll === true
@@ -233,7 +233,7 @@ const ArtifactReadTool = tool({
   execute: Effect.fn("ArtifactReadTool.execute")(function* (params, ctx: ToolContext) {
     const query =
       params.id !== undefined
-        ? { _tag: "ById" as const, id: ArtifactId.of(params.id) }
+        ? { _tag: "ById" as const, id: ArtifactId.make(params.id) }
         : { _tag: "BySource" as const, sourceTool: params.sourceTool ?? "", branchId: ctx.branchId }
     const artifact = yield* ctx.extension.ask(ArtifactProtocol.Read({ query }), ctx.branchId)
     if (artifact === null) return { found: false }
@@ -270,7 +270,7 @@ const ArtifactUpdateTool = tool({
         : undefined
     const artifact = yield* ctx.extension.ask(
       ArtifactProtocol.Update({
-        id: ArtifactId.of(params.id),
+        id: ArtifactId.make(params.id),
         patch,
         status: params.status,
         label: params.label,
@@ -290,7 +290,10 @@ const ArtifactClearTool = tool({
     id: Schema.String.annotate({ description: "Artifact ID to remove" }),
   }),
   execute: Effect.fn("ArtifactClearTool.execute")(function* (params, ctx: ToolContext) {
-    yield* ctx.extension.ask(ArtifactProtocol.Clear({ id: ArtifactId.of(params.id) }), ctx.branchId)
+    yield* ctx.extension.ask(
+      ArtifactProtocol.Clear({ id: ArtifactId.make(params.id) }),
+      ctx.branchId,
+    )
     return { cleared: true }
   }),
 })

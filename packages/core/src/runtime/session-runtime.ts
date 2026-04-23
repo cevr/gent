@@ -207,13 +207,13 @@ export interface SessionRuntimeService {
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new SessionRuntimeError({ message, cause })
 
-const makeCommandId = () => ActorCommandId.of(Bun.randomUUIDv7())
-const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.of(commandId)
-const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.of(commandId)
+const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
+const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
+const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
 const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.of(`${commandId}:assistant`)
+  MessageId.make(`${commandId}:assistant`)
 const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.of(`${commandId}:tool-result`)
+  MessageId.make(`${commandId}:tool-result`)
 
 export const sendUserMessageCommand = (input: SendUserMessagePayload): SendUserMessageCommand => ({
   _tag: "SendUserMessage",

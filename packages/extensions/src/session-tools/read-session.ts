@@ -110,7 +110,7 @@ export const ReadSessionTool = tool({
     "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
   params: ReadSessionParams,
   execute: Effect.fn("ReadSessionTool.execute")(function* (params, ctx) {
-    const tree = yield* ctx.session.getDetail(SessionId.of(params.sessionId)).pipe(
+    const tree = yield* ctx.session.getDetail(SessionId.make(params.sessionId)).pipe(
       Effect.mapError(
         (e) =>
           new ReadSessionError({

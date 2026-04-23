@@ -19,7 +19,7 @@ export const TaskUpdateTool = tool({
   params: TaskUpdateParams,
   execute: Effect.fn("TaskUpdateTool.execute")(function* (params, ctx) {
     const updated = yield* ctx.extension.request(TaskUpdateRef, {
-      taskId: TaskId.of(params.taskId),
+      taskId: TaskId.make(params.taskId),
       status: params.status as TaskStatus | undefined,
       description: params.description,
     })

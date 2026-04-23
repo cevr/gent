@@ -59,7 +59,7 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
       const name = modelValue.name ?? modelKey
       const pricing = parsePricing(modelValue.cost)
       const contextLength = parseContextLength(modelValue.limit)
-      const id = ModelId.of(`${providerId}/${modelKey}`)
+      const id = ModelId.make(`${providerId}/${modelKey}`)
 
       models.push(
         new Model({

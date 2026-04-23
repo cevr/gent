@@ -395,8 +395,8 @@ describe("external turn execution", () => {
 
 describe("ExternalDriverContribution end-to-end", () => {
   test("text from TurnExecutor appears in stored messages via DriverRegistry dispatch", async () => {
-    const e2eSessionId = SessionId.of("e2e-session")
-    const e2eBranchId = BranchId.of("e2e-branch")
+    const e2eSessionId = SessionId.make("e2e-session")
+    const e2eBranchId = BranchId.make("e2e-branch")
 
     // A simple TurnExecutor that emits a known text chunk then finishes.
     const expectedText = "hello from my-test-driver"

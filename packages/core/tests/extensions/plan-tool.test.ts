@@ -19,7 +19,7 @@ const makeCtx = (overrides: {
   const base = testToolContext({
     sessionId: "test-session",
     branchId: "test-branch",
-    toolCallId: ToolCallId.of("test-call"),
+    toolCallId: ToolCallId.make("test-call"),
     cwd: "/tmp",
     home: "/tmp",
   })

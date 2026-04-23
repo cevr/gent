@@ -16,7 +16,7 @@ Architect agent. Design implementation approach.
 export const architect = defineAgent({
   name: "architect",
   description: "Designs implementation approaches",
-  model: ModelId.of("anthropic/claude-opus-4-6"),
+  model: ModelId.make("anthropic/claude-opus-4-6"),
   allowedTools: ["grep", "glob", "read", "memory_search", "websearch", "webfetch"],
   systemPromptAddendum: ARCHITECT_PROMPT,
 })

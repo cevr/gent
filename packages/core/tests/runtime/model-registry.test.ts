@@ -208,7 +208,7 @@ describe("ModelRegistry", () => {
           cachePath,
           encodeCachedModels([
             new Model({
-              id: ModelId.of("openai/gpt-5.4"),
+              id: ModelId.make("openai/gpt-5.4"),
               name: "GPT-5.4",
               provider: "openai",
               contextLength: 400_000,
@@ -328,7 +328,7 @@ describe("ModelRegistry", () => {
         Effect.gen(function* () {
           const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
           const malformed = new Model({
-            id: ModelId.of("openai/broken"),
+            id: ModelId.make("openai/broken"),
             name: "Broken",
             provider: "openai",
           })

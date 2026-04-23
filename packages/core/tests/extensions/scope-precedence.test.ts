@@ -28,13 +28,13 @@ const stubCtx = {
 } as unknown as ExtensionHostContext
 
 const stubProjectionCtx = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
   turn: {
-    sessionId: SessionId.of("test-session"),
-    branchId: BranchId.of("test-branch"),
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
     agent: Agents.cowork,
     allTools: [],
     agentName: "cowork",

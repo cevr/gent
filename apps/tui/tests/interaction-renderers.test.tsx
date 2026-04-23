@@ -12,8 +12,8 @@ import { waitForRenderedFrame } from "./helpers"
 const interaction = (text: string, metadata?: unknown): ActiveInteraction =>
   ({
     _tag: "InteractionPresented",
-    sessionId: SessionId.of("s"),
-    branchId: BranchId.of("b"),
+    sessionId: SessionId.make("s"),
+    branchId: BranchId.make("b"),
     requestId: "req-1",
     text,
     metadata,

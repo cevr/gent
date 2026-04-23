@@ -9,8 +9,8 @@ import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machi
 import { SessionStarted } from "@gent/core/domain/event"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
 
-const sessionId = SessionId.of("art-test-session")
-const branchId = BranchId.of("art-test-branch")
+const sessionId = SessionId.make("art-test-session")
+const branchId = BranchId.make("art-test-branch")
 
 const withRuntime = (
   fn: (runtime: typeof MachineEngine.Type) => Effect.Effect<void, unknown, MachineEngine>,
@@ -196,7 +196,7 @@ describe("Artifacts extension", () => {
         const read = yield* runtime.execute(
           sessionId,
           ArtifactProtocol.Read({
-            query: { _tag: "ById" as const, id: ArtifactId.of("nonexistent") },
+            query: { _tag: "ById" as const, id: ArtifactId.make("nonexistent") },
           }),
           branchId,
         )
@@ -282,7 +282,7 @@ describe("Artifacts extension", () => {
       Effect.gen(function* () {
         const result = yield* runtime.execute(
           sessionId,
-          ArtifactProtocol.Update({ id: ArtifactId.of("nonexistent") }),
+          ArtifactProtocol.Update({ id: ArtifactId.make("nonexistent") }),
           branchId,
         )
         expect(result).toBeNull()
@@ -312,7 +312,7 @@ describe("Artifacts extension", () => {
   it.live("List filters by branchId", () =>
     withRuntime((runtime) =>
       Effect.gen(function* () {
-        const otherBranch = BranchId.of("other-branch")
+        const otherBranch = BranchId.make("other-branch")
         yield* runtime.execute(
           sessionId,
           ArtifactProtocol.Save({ label: "A", sourceTool: "plan", content: "a", branchId }),

@@ -78,7 +78,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     new ToolCallSucceeded({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
-      toolCallId: ToolCallId.of("tc-test"),
+      toolCallId: ToolCallId.make("tc-test"),
       toolName: "test",
       ...overrides,
     }),
@@ -87,7 +87,7 @@ export const createEventFactories = (ctx: EventFactoryContext) => ({
     new ToolCallFailed({
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
-      toolCallId: ToolCallId.of("tc-test"),
+      toolCallId: ToolCallId.make("tc-test"),
       toolName: "test",
       ...overrides,
     }),
@@ -148,20 +148,20 @@ export function createActorHarness<State, Message = void>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ActorHarnessResult<State, any> {
   const ctx: ExtensionReduceContext = {
-    sessionId: SessionId.of(options?.sessionId ?? "test-session"),
-    branchId: BranchId.of(options?.branchId ?? "test-branch"),
+    sessionId: SessionId.make(options?.sessionId ?? "test-session"),
+    branchId: BranchId.make(options?.branchId ?? "test-branch"),
   }
 
   const deriveCtx: ExtensionTurnContext = {
     sessionId: ctx.sessionId,
-    branchId: BranchId.of(ctx.branchId ?? "test-branch"),
+    branchId: BranchId.make(ctx.branchId ?? "test-branch"),
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     agent: options?.agent ?? new AgentDefinition({ name: "test" as never }),
     allTools: options?.allTools ?? [],
     interactive: true,
   }
 
-  const branchId = BranchId.of(options?.branchId ?? "test-branch")
+  const branchId = BranchId.make(options?.branchId ?? "test-branch")
   const events = createEventFactories({ sessionId: ctx.sessionId, branchId })
 
   const reduce = (
@@ -225,7 +225,7 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
       Effect.succeed({
         _tag: "success" as const,
         text: "",
-        sessionId: SessionId.of("test-subagent-session"),
+        sessionId: SessionId.make("test-subagent-session"),
         agentName: "cowork" as AgentName,
       }),
   }
@@ -312,9 +312,9 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 /** Default ToolContext for tests — overridable via spread */
 export const testToolContext = (overrides?: Partial<ToolContext>): ToolContext => ({
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
-  toolCallId: ToolCallId.of("test-call"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
+  toolCallId: ToolCallId.make("test-call"),
   cwd: "/tmp",
   home: "/tmp",
   extension: {

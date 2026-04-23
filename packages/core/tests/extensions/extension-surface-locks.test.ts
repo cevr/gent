@@ -55,7 +55,7 @@ const StringOutput = Schema.String
 
 describe("Capability factory-shape locks (compile-time)", () => {
   test("makeRunSpec requires branded tool-call provenance", () => {
-    const ok = makeRunSpec({ parentToolCallId: ToolCallId.of("tc-ok") })
+    const ok = makeRunSpec({ parentToolCallId: ToolCallId.make("tc-ok") })
 
     // @ts-expect-error — raw strings are not valid tool-call provenance
     const bad = makeRunSpec({ parentToolCallId: "tc-raw" })

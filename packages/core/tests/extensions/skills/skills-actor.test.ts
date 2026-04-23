@@ -16,8 +16,8 @@ import { Skill, Skills } from "@gent/extensions/skills/skills"
 import { defineResource } from "@gent/core/domain/contribution"
 import { makeActorRuntimeLayer } from "../helpers/actor-runtime-layer"
 
-const sessionId = SessionId.of("skills-test-session")
-const branchId = BranchId.of("skills-test-branch")
+const sessionId = SessionId.make("skills-test-session")
+const branchId = BranchId.make("skills-test-branch")
 
 const testSkills = [
   new Skill({

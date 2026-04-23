@@ -343,8 +343,8 @@ const makeSharedRunnerHelpers = (
         })
       }
 
-      const sessionId = SessionId.of(Bun.randomUUIDv7())
-      const branchId = BranchId.of(Bun.randomUUIDv7())
+      const sessionId = SessionId.make(Bun.randomUUIDv7())
+      const branchId = BranchId.make(Bun.randomUUIDv7())
       const now = yield* DateTime.nowAsDate
 
       yield* storage.createSession(
@@ -577,8 +577,8 @@ const runEphemeralAgent = (params: {
   parentBaseEventStore: EventStoreService
   notifyMirroredEventObservers: (event: AgentEvent) => Effect.Effect<void>
 }) => {
-  const sessionId = SessionId.of(Bun.randomUUIDv7())
-  const branchId = BranchId.of(Bun.randomUUIDv7())
+  const sessionId = SessionId.make(Bun.randomUUIDv7())
+  const branchId = BranchId.make(Bun.randomUUIDv7())
   const normalizedRunSpec = params.runSpec
   // The composer derives the parent-omit set from its `.own(...)`
   // declarations — the 14-item hand-maintained list is gone; adding a new

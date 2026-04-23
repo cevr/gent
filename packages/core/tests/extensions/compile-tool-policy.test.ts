@@ -30,7 +30,7 @@ describe("compileToolPolicy", () => {
     makeTool("search_skills"),
   ]
 
-  const emptyCtx = { sessionId: SessionId.of("s"), branchId: BranchId.of("b") }
+  const emptyCtx = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
 
   const names = (tools: ReadonlyArray<{ id: string }>) => tools.map((t) => t.id).sort()
 

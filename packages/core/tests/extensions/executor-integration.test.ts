@@ -71,8 +71,8 @@ const waitingResult: ExecutorMcpToolResult = {
 
 // ── Actor lifecycle helpers ──
 
-const sessionId = SessionId.of("test-session")
-const branchId = BranchId.of("test-branch")
+const sessionId = SessionId.make("test-session")
+const branchId = BranchId.make("test-branch")
 
 const mockEndpoint = {
   mode: "local" as const,

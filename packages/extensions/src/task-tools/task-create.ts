@@ -37,7 +37,7 @@ export const TaskCreateTool = tool({
       for (const depId of params.blockedBy) {
         yield* ctx.extension.request(TaskAddDepRef, {
           taskId: task.id,
-          blockedById: TaskId.of(depId),
+          blockedById: TaskId.make(depId),
         })
       }
     }

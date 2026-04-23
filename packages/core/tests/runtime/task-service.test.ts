@@ -10,8 +10,8 @@ import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensi
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
-const sessionId = SessionId.of("task-test-session")
-const branchId = BranchId.of("task-test-branch")
+const sessionId = SessionId.make("task-test-session")
+const branchId = BranchId.make("task-test-branch")
 
 const makeLayer = () => {
   const storageLayer = Storage.MemoryWithSql()

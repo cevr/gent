@@ -12,7 +12,7 @@ Use the principles tool for architectural concerns.
 export const auditor = defineAgent({
   name: "auditor",
   description: "Audits code for a specific concern category",
-  model: ModelId.of("openai/gpt-5.4-mini"),
+  model: ModelId.make("openai/gpt-5.4-mini"),
   allowedTools: ["grep", "glob", "read", "memory_search", "bash"],
   systemPromptAddendum: AUDITOR_PROMPT,
 })

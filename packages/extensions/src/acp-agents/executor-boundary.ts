@@ -37,7 +37,7 @@ export const makeAcpRunTool = (params: {
   const runOnRuntime = Effect.runPromiseWith(params.services)
 
   return (toolName, args) => {
-    const toolCallId = ToolCallId.of(crypto.randomUUID())
+    const toolCallId = ToolCallId.make(crypto.randomUUID())
     const toolCtx: ToolContext = makeToolContext(params.hostCtx, toolCallId)
     return runOnRuntime(toolRunner.run({ toolCallId, toolName, input: args }, toolCtx))
   }

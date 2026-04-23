@@ -92,7 +92,7 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
       let cwd: string | undefined
       if (sessionId !== undefined && deps.storage !== undefined) {
         const session = yield* deps.storage
-          .getSession(SessionId.of(sessionId))
+          .getSession(SessionId.make(sessionId))
           .pipe(Effect.orElseSucceed(() => undefined))
         cwd = session?.cwd
       }

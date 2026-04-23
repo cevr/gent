@@ -24,12 +24,12 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 
 // ── Session constants ──────────────────────────────────────────────────────
 
-const sessionId = SessionId.of("perm-rules-e2e-session")
-const branchId = BranchId.of("perm-rules-e2e-branch")
+const sessionId = SessionId.make("perm-rules-e2e-session")
+const branchId = BranchId.make("perm-rules-e2e-branch")
 
 const makeMessage = (text: string) =>
   new Message.regular({
-    id: MessageId.of(`msg-perm-${Date.now()}`),
+    id: MessageId.make(`msg-perm-${Date.now()}`),
     sessionId,
     branchId,
     role: "user",

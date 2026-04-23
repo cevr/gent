@@ -24,13 +24,13 @@ const stubHostCtx = {
 } as unknown as ExtensionHostContext
 
 const stubProjectionCtx = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
   cwd: "/tmp",
   home: "/tmp",
   turn: {
-    sessionId: SessionId.of("test-session"),
-    branchId: BranchId.of("test-branch"),
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
     agent: Agents.cowork,
     allTools: [],
     agentName: "cowork",
@@ -59,8 +59,8 @@ describe("runtime slots", () => {
       .normalizeMessageInput(
         {
           content: "hello",
-          sessionId: SessionId.of("test-session"),
-          branchId: BranchId.of("test-branch"),
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
         },
         stubHostCtx,
       )
@@ -104,16 +104,16 @@ describe("runtime slots", () => {
   it.live("contextMessages applies explicit projection rewrites in sequence", () => {
     const baseMessage = new Message.regular({
       id: "m1",
-      sessionId: SessionId.of("test-session"),
-      branchId: BranchId.of("test-branch"),
+      sessionId: SessionId.make("test-session"),
+      branchId: BranchId.make("test-branch"),
       role: "user",
       parts: [new TextPart({ type: "text", text: "hello" })],
       createdAt: new Date(),
     })
     const injectedMessage = new Message.regular({
       id: "m2",
-      sessionId: SessionId.of("test-session"),
-      branchId: BranchId.of("test-branch"),
+      sessionId: SessionId.make("test-session"),
+      branchId: BranchId.make("test-branch"),
       role: "system",
       parts: [new TextPart({ type: "text", text: "extra" })],
       createdAt: new Date(),
@@ -146,8 +146,8 @@ describe("runtime slots", () => {
         {
           messages: [baseMessage],
           agent: Agents.cowork,
-          sessionId: SessionId.of("test-session"),
-          branchId: BranchId.of("test-branch"),
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
         } satisfies ContextMessagesInput,
         { projection: stubProjectionCtx, host: stubHostCtx },
       )
@@ -195,8 +195,8 @@ describe("runtime slots", () => {
           toolName: "echo",
           input: { text: "hello" },
           result: "base",
-          sessionId: SessionId.of("test-session"),
-          branchId: BranchId.of("test-branch"),
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
           agentName: "cowork",
         },
         stubHostCtx,
@@ -266,8 +266,8 @@ describe("runtime slots", () => {
       const exit = yield* Effect.exit(
         slots.emitTurnAfter(
           {
-            sessionId: SessionId.of("test-session"),
-            branchId: BranchId.of("test-branch"),
+            sessionId: SessionId.make("test-session"),
+            branchId: BranchId.make("test-branch"),
             durationMs: 10,
             agentName: "cowork",
             interrupted: false,
@@ -325,8 +325,8 @@ describe("runtime slots", () => {
     return slots
       .emitTurnBefore(
         {
-          sessionId: SessionId.of("test-session"),
-          branchId: BranchId.of("test-branch"),
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
           agentName: "cowork",
           toolCount: 2,
           systemPromptLength: 42,
@@ -378,8 +378,8 @@ describe("runtime slots", () => {
     return slots
       .emitMessageOutput(
         {
-          sessionId: SessionId.of("test-session"),
-          branchId: BranchId.of("test-branch"),
+          sessionId: SessionId.make("test-session"),
+          branchId: BranchId.make("test-branch"),
           agentName: "cowork",
           parts: [new TextPart({ type: "text", text: "hello" })],
         } satisfies MessageOutputInput,

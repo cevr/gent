@@ -132,8 +132,8 @@ const makeLiveToolRuntimeLayer = (
 
 const createSessionBranch = Effect.gen(function* () {
   const storage = yield* Storage
-  const sessionId = SessionId.of("runtime-session")
-  const branchId = BranchId.of("runtime-branch")
+  const sessionId = SessionId.make("runtime-session")
+  const branchId = BranchId.make("runtime-branch")
   const now = new Date()
   yield* storage.createSession(
     new Session({
@@ -192,7 +192,7 @@ const makeInteractionProviderLayer = () => {
             toolCallPart(
               "interaction-tool",
               { value: "test" },
-              { toolCallId: ToolCallId.of("tc-1") },
+              { toolCallId: ToolCallId.make("tc-1") },
             ),
             finishPart({ finishReason: "tool-calls" }),
           ] satisfies ProviderStreamPart[]),

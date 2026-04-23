@@ -39,8 +39,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     session: {
       create: () =>
         noRpcError({
-          sessionId: SessionId.of("session-test"),
-          branchId: BranchId.of("branch-test"),
+          sessionId: SessionId.make("session-test"),
+          branchId: BranchId.make("branch-test"),
           name: "Test Session",
         }),
       list: () => noRpcError([]),
@@ -50,8 +50,8 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       getTree: () => noRpcError({ id: "session-test", name: "Test Session", children: [] }),
       getSnapshot: () =>
         noRpcError({
-          sessionId: SessionId.of("session-test"),
-          branchId: BranchId.of("branch-test"),
+          sessionId: SessionId.make("session-test"),
+          branchId: BranchId.make("branch-test"),
           messages: [],
           lastEventId: null,
           reasoningLevel: undefined,
@@ -62,10 +62,10 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
     },
     branch: {
       list: () => noRpcError([]),
-      create: () => noRpcError({ branchId: BranchId.of("branch-test") }),
+      create: () => noRpcError({ branchId: BranchId.make("branch-test") }),
       getTree: () => noRpcError([]),
       switch: () => noRpcError(undefined),
-      fork: () => noRpcError({ branchId: BranchId.of("branch-test") }),
+      fork: () => noRpcError({ branchId: BranchId.make("branch-test") }),
     },
     message: {
       send: () => noRpcError(undefined),
@@ -213,7 +213,7 @@ export const renderWithProviders = async (
                 <RouterProvider
                   initialRoute={
                     options?.initialRoute ??
-                    Route.session(SessionId.of("test-session"), BranchId.of("test-branch"))
+                    Route.session(SessionId.make("test-session"), BranchId.make("test-branch"))
                   }
                 >
                   <ClientProvider

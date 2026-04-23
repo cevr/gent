@@ -434,8 +434,8 @@ export interface EventStoreService {
 }
 
 export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
-  if ("sessionId" in event) return SessionId.of(event.sessionId)
-  if ("parentSessionId" in event) return SessionId.of(event.parentSessionId)
+  if ("sessionId" in event) return SessionId.make(event.sessionId)
+  if ("parentSessionId" in event) return SessionId.make(event.parentSessionId)
   return undefined
 }
 
@@ -487,7 +487,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
         Effect.orElseSucceed(() => undefined),
       )
       const envelope = new EventEnvelope({
-        id: EventId.of(id),
+        id: EventId.make(id),
         event,
         createdAt: yield* Clock.currentTimeMillis,
         ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
@@ -503,7 +503,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
-            const afterId = after ?? EventId.of(0)
+            const afterId = after ?? EventId.make(0)
             const ps = getOrCreateSessionPubSub(sessions, sessionId)
             const subscription = yield* PubSub.subscribe(ps)
             const latestId = yield* Ref.get(idRef)

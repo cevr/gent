@@ -146,7 +146,7 @@ export const make: Effect.Effect<ChildSessionTrackerService, never, EventStore |
       Effect.gen(function* () {
         const fiber = yield* FiberSet.run(fiberSet)(
           Stream.runForEach(
-            eventStore.subscribe({ sessionId: SessionId.of(childSessionId) }),
+            eventStore.subscribe({ sessionId: SessionId.make(childSessionId) }),
             (envelope: EventEnvelope) => handleChildEvent(childSessionId, envelope.event),
           ).pipe(Effect.catchEager(() => Effect.void)),
         )

@@ -27,10 +27,10 @@ import type { ProjectionUiContext } from "@gent/core/domain/projection"
 // `Storage.MemoryWithSql()` provides `InteractionStorage` AND
 // `InteractionPendingReader` (the read-only seam used by the projection).
 
-const sid1 = SessionId.of("019d97e0-0000-7000-aaaa-000000000001")
-const bid1 = BranchId.of("019d97e0-0000-7001-aaaa-000000000001")
-const sid2 = SessionId.of("019d97e0-0000-7000-bbbb-000000000002")
-const bid2 = BranchId.of("019d97e0-0000-7001-bbbb-000000000002")
+const sid1 = SessionId.make("019d97e0-0000-7000-aaaa-000000000001")
+const bid1 = BranchId.make("019d97e0-0000-7001-aaaa-000000000001")
+const sid2 = SessionId.make("019d97e0-0000-7000-bbbb-000000000002")
+const bid2 = BranchId.make("019d97e0-0000-7001-bbbb-000000000002")
 
 const ctx = (sessionId: SessionId, branchId?: BranchId): ProjectionUiContext => ({
   sessionId,

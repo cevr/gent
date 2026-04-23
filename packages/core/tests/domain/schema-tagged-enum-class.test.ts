@@ -338,8 +338,8 @@ describe("TaggedEnumClass — AgentEvent migration smoke", () => {
   // `tests/storage/sqlite-storage.test.ts`; this is a tighter check that
   // the migration preserved the documented wire shape.
   test("AgentEvent.SessionStarted JSON wire shape unchanged", () => {
-    const sessionId = SessionId.of("01234567-89ab-7cde-8123-456789abcdef")
-    const branchId = BranchId.of("01234567-89ab-7cde-8123-456789abcdee")
+    const sessionId = SessionId.make("01234567-89ab-7cde-8123-456789abcdef")
+    const branchId = BranchId.make("01234567-89ab-7cde-8123-456789abcdee")
     const evt = new AgentEvent.SessionStarted({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })

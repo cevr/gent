@@ -16,8 +16,8 @@ import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 // Shared fixtures
 // ============================================================================
 
-const sessionId = SessionId.of("test-session")
-const branchId = BranchId.of("test-branch")
+const sessionId = SessionId.make("test-session")
+const branchId = BranchId.make("test-branch")
 const testLayer = ExtensionTurnControl.Test()
 
 const makeCounterActor = (id: string) =>

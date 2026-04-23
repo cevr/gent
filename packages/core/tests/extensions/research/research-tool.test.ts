@@ -44,7 +44,7 @@ describe("ResearchTool", () => {
         Effect.succeed({
           _tag: "success" as const,
           text: "Effect uses fibers for concurrency. See src/Fiber.ts:42.",
-          sessionId: SessionId.of("research-1"),
+          sessionId: SessionId.make("research-1"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         }),
@@ -75,7 +75,7 @@ describe("ResearchTool", () => {
           return Effect.succeed({
             _tag: "success" as const,
             text: "Comparative analysis: both use fiber-based concurrency.",
-            sessionId: SessionId.of("synthesis"),
+            sessionId: SessionId.make("synthesis"),
             agentName: params.agent.name,
             persistence: "ephemeral" as const,
           })
@@ -83,7 +83,7 @@ describe("ResearchTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: `Findings for ${params.prompt.includes("effect-ts") ? "effect" : "zio"}.`,
-          sessionId: SessionId.of("worker"),
+          sessionId: SessionId.make("worker"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -115,7 +115,7 @@ describe("ResearchTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Found scheduler patterns.",
-          sessionId: SessionId.of("focus"),
+          sessionId: SessionId.make("focus"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })

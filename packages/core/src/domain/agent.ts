@@ -103,7 +103,7 @@ export const defineAgent = (input: AgentDefinitionInput): AgentDefinition => {
 // Agent collections are in extensions/all-agents.ts — import from there for test harnesses.
 
 // Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = ModelId.of("openai/gpt-5.4-mini")
+export const DEFAULT_MODEL_ID = ModelId.make("openai/gpt-5.4-mini")
 
 /** Resolve model for an agent definition */
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>

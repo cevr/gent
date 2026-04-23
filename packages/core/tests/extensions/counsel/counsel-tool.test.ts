@@ -32,7 +32,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Looks good, minor concern about error handling.",
-          sessionId: SessionId.of("counsel-session"),
+          sessionId: SessionId.make("counsel-session"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -65,7 +65,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "After thorough analysis...",
-          sessionId: SessionId.of("counsel-deep"),
+          sessionId: SessionId.make("counsel-deep"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -99,7 +99,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Noted.",
-          sessionId: SessionId.of("counsel-ctx"),
+          sessionId: SessionId.make("counsel-ctx"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })
@@ -144,7 +144,7 @@ describe("CounselTool", () => {
         return Effect.succeed({
           _tag: "success" as const,
           text: "Opinion here.",
-          sessionId: SessionId.of("ephemeral-session"),
+          sessionId: SessionId.make("ephemeral-session"),
           agentName: params.agent.name,
           persistence: "ephemeral" as const,
         })

@@ -76,7 +76,7 @@ const taskFromRow = (row: TaskRow) =>
     subject: row.subject,
     description: row.description ?? undefined,
     status: isTaskStatus(row.status) ? row.status : "pending",
-    owner: row.owner !== null ? SessionId.of(row.owner) : undefined,
+    owner: row.owner !== null ? SessionId.make(row.owner) : undefined,
     agentType: row.agent_type ?? undefined,
     prompt: row.prompt ?? undefined,
     cwd: row.cwd ?? undefined,

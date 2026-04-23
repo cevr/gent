@@ -39,7 +39,7 @@ describe("Interaction Request", () => {
         const error = yield* Effect.flip(
           interaction.present(
             { text: "Approve this?" },
-            { sessionId: SessionId.of("s1"), branchId: BranchId.of("b1") },
+            { sessionId: SessionId.make("s1"), branchId: BranchId.make("b1") },
           ),
         )
         expect(error._tag).toBe("InteractionPendingError")
@@ -66,8 +66,8 @@ describe("Interaction Request", () => {
         const record: InteractionRequestRecord = {
           requestId: "req-manual-1",
           type: "approval",
-          sessionId: SessionId.of("s2"),
-          branchId: BranchId.of("b2"),
+          sessionId: SessionId.make("s2"),
+          branchId: BranchId.make("b2"),
           paramsJson: "{}",
           status: "pending",
           createdAt: Date.now(),
@@ -97,8 +97,8 @@ describe("Interaction Request", () => {
         yield* is.persist({
           requestId: "req-del-1",
           type: "approval",
-          sessionId: SessionId.of("s3"),
-          branchId: BranchId.of("b3"),
+          sessionId: SessionId.make("s3"),
+          branchId: BranchId.make("b3"),
           paramsJson: "{}",
           status: "pending",
           createdAt: Date.now(),
@@ -106,15 +106,15 @@ describe("Interaction Request", () => {
         yield* is.persist({
           requestId: "req-del-2",
           type: "approval",
-          sessionId: SessionId.of("s3"),
-          branchId: BranchId.of("b4"),
+          sessionId: SessionId.make("s3"),
+          branchId: BranchId.make("b4"),
           paramsJson: "{}",
           status: "pending",
           createdAt: Date.now(),
         })
 
         // Delete only b3
-        yield* is.deletePending(SessionId.of("s3"), BranchId.of("b3"))
+        yield* is.deletePending(SessionId.make("s3"), BranchId.make("b3"))
 
         // Only b4 should remain
         const remaining = yield* is.listPending()
@@ -131,8 +131,8 @@ describe("Interaction Request", () => {
           onPresent: () => Effect.void,
         })
 
-        const sessionId = SessionId.of("s-cold")
-        const branchId = BranchId.of("b-cold")
+        const sessionId = SessionId.make("s-cold")
+        const branchId = BranchId.make("b-cold")
 
         // First present — fails with InteractionPendingError
         const error = yield* Effect.flip(
@@ -158,8 +158,8 @@ describe("Interaction Request", () => {
           onPresent: () => Effect.void,
         })
 
-        const sessionId = SessionId.of("s-restart")
-        const branchId = BranchId.of("b-restart")
+        const sessionId = SessionId.make("s-restart")
+        const branchId = BranchId.make("b-restart")
         const requestId = "req-restart-1"
 
         // Rehydrate rebuilds the pendingByContext reverse lookup
@@ -190,8 +190,8 @@ describe("Interaction Request", () => {
           resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
         }
 
-        const sessionId = SessionId.of("s-cold-resume")
-        const branchId = BranchId.of("b-cold-resume")
+        const sessionId = SessionId.make("s-cold-resume")
+        const branchId = BranchId.make("b-cold-resume")
 
         // Phase 1: original service — present() persists and throws
         const service1 = makeInteractionService({
@@ -261,7 +261,7 @@ describe("Interaction Request", () => {
         // Auto-resolved — should not persist and not throw
         const result = yield* interaction.present(
           { text: "Auto approve?" },
-          { sessionId: SessionId.of("s4"), branchId: BranchId.of("b5") },
+          { sessionId: SessionId.make("s4"), branchId: BranchId.make("b5") },
         )
         expect(result.approved).toBe(true)
         expect(result.notes).toBe("auto")

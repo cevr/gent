@@ -44,7 +44,7 @@ export interface DebugScenarioParams {
 
 const makeText = (text: string) => new TextPart({ type: "text", text })
 
-const asToolCallId = (value: string) => ToolCallId.of(value)
+const asToolCallId = (value: string) => ToolCallId.make(value)
 const DebugJson = Schema.fromJsonString(Schema.Unknown)
 const encodeDebugJson = Schema.encodeSync(DebugJson)
 
@@ -67,7 +67,7 @@ const createParentTurnMessages = (
   const now = new Date()
 
   const assistant = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "assistant",
@@ -110,7 +110,7 @@ const createParentTurnMessages = (
   })
 
   const tool = new Message.regular({
-    id: MessageId.of(Bun.randomUUIDv7()),
+    id: MessageId.make(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "tool",
@@ -186,7 +186,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
     const user = new Message.regular({
-      id: MessageId.of(Bun.randomUUIDv7()),
+      id: MessageId.make(Bun.randomUUIDv7()),
       sessionId: params.sessionId,
       branchId: params.branchId,
       role: "user",
@@ -209,8 +209,8 @@ const createChildSession = (parent: DebugScenarioParams, iteration: number) =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
     const branchStorage = yield* BranchStorage
-    const sessionId = SessionId.of(Bun.randomUUIDv7())
-    const branchId = BranchId.of(Bun.randomUUIDv7())
+    const sessionId = SessionId.make(Bun.randomUUIDv7())
+    const branchId = BranchId.make(Bun.randomUUIDv7())
     const now = yield* DateTime.nowAsDate
 
     yield* sessionStorage.createSession(

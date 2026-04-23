@@ -173,7 +173,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           Effect.succeed({
             _tag: "success" as const,
             text: "",
-            sessionId: SessionId.of("test-subagent-session"),
+            sessionId: SessionId.make("test-subagent-session"),
             agentName: "cowork" as AgentName,
           }),
       }

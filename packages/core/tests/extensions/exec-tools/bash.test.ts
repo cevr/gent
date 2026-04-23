@@ -70,9 +70,9 @@ describe("stripBackground", () => {
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
 const stubCtx: ToolContext = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
-  toolCallId: ToolCallId.of("tc-1"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
+  toolCallId: ToolCallId.make("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
   extension: {

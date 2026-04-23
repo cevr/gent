@@ -74,8 +74,8 @@ const makeExt = (
 })
 
 const runCtx: RunContext = {
-  sessionId: SessionId.of("test-session"),
-  branchId: BranchId.of("test-branch"),
+  sessionId: SessionId.make("test-session"),
+  branchId: BranchId.make("test-branch"),
 }
 
 describe("resolveExtensions", () => {

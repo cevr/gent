@@ -1066,12 +1066,12 @@ describe("concurrency", () => {
 // ============================================================================
 
 describe("continuation", () => {
-  const contSessionId = SessionId.of("cont-test-session")
-  const contBranchId = BranchId.of("cont-test-branch")
+  const contSessionId = SessionId.make("cont-test-session")
+  const contBranchId = BranchId.make("cont-test-branch")
 
   const makeContMessage = (text: string) =>
     new Message.regular({
-      id: MessageId.of(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+      id: MessageId.make(`msg-${Date.now()}-${Math.random().toString(36).slice(2)}`),
       sessionId: contSessionId,
       branchId: contBranchId,
       role: "user",
@@ -1406,8 +1406,8 @@ describe("turn stream parity", () => {
 // ============================================================================
 
 describe("interaction", () => {
-  const intSessionId = SessionId.of("s-interaction")
-  const intBranchId = BranchId.of("b-interaction")
+  const intSessionId = SessionId.make("s-interaction")
+  const intBranchId = BranchId.make("b-interaction")
 
   const makeIntMessage = (text: string) =>
     new Message.regular({
@@ -1455,7 +1455,7 @@ describe("interaction", () => {
                 "interaction-tool",
                 { value: "test" },
                 {
-                  toolCallId: ToolCallId.of("tc-1"),
+                  toolCallId: ToolCallId.make("tc-1"),
                 },
               ),
               finishPart({ finishReason: "tool-calls" }),
@@ -1654,7 +1654,7 @@ describe("interaction", () => {
                 tool.id,
                 { value: "guard-test" },
                 {
-                  toolCallId: ToolCallId.of("tc-guard"),
+                  toolCallId: ToolCallId.make("tc-guard"),
                 },
               ),
               finishPart({ finishReason: "tool-calls" }),
@@ -1715,10 +1715,10 @@ describe("recovery", () => {
   })
 
   const createSessionState = () => {
-    const sessionId = SessionId.of("session-loop-recovery")
-    const branchId = BranchId.of("branch-loop-recovery")
+    const sessionId = SessionId.make("session-loop-recovery")
+    const branchId = BranchId.make("branch-loop-recovery")
     const message = new Message.regular({
-      id: MessageId.of("message-loop-recovery"),
+      id: MessageId.make("message-loop-recovery"),
       sessionId,
       branchId,
       role: "user",
@@ -1889,7 +1889,7 @@ describe("recovery", () => {
   test("decodes v1 checkpoints with legacy message kind markers", async () => {
     const { message } = createSessionState()
     const interjection = new Message.interjection({
-      id: MessageId.of("legacy-interjection"),
+      id: MessageId.make("legacy-interjection"),
       sessionId: message.sessionId,
       branchId: message.branchId,
       role: "user",
@@ -1953,7 +1953,7 @@ describe("recovery", () => {
     try {
       const { message } = createSessionState()
       const queuedMessage = new Message.regular({
-        id: MessageId.of("queued-msg"),
+        id: MessageId.make("queued-msg"),
         sessionId: message.sessionId,
         branchId: message.branchId,
         role: "user",

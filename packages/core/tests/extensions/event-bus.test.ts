@@ -38,14 +38,14 @@ describe("BusEmit dispatch", () => {
           { _tag: "BusEmit", channel: "ext:test-emit", payload: { from: "hook" } },
         ]
 
-        yield* interpretEffects(effects, SessionId.of("s1"), BranchId.of("b1"), {
+        yield* interpretEffects(effects, SessionId.make("s1"), BranchId.make("b1"), {
           turnControl,
           busEmit: (channel, payload) =>
             bus.emit({
               channel,
               payload,
-              sessionId: SessionId.of("s1"),
-              branchId: BranchId.of("b1"),
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
             }),
         })
       }).pipe(Effect.provide(SubscriptionEngine.Live), Effect.provide(ExtensionTurnControl.Test())),

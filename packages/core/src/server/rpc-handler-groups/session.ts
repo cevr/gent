@@ -83,7 +83,7 @@ export const buildSessionRpcHandlers = (deps: RpcHandlerDeps) => ({
       .subscribe({
         sessionId,
         ...(branchId !== undefined ? { branchId } : {}),
-        ...(after !== undefined ? { after: EventId.of(after) } : {}),
+        ...(after !== undefined ? { after: EventId.make(after) } : {}),
       })
       .pipe(Stream.filter(isPublicTransportEvent)),
 

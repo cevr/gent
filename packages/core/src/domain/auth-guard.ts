@@ -132,11 +132,11 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
               .get(provider.id)
               .pipe(Effect.catchEager(() => Effect.void))
             const hasStored = storedInfo !== undefined
-            const required = requiredSet.has(ProviderId.of(provider.id))
+            const required = requiredSet.has(ProviderId.make(provider.id))
 
             if (hasStored) {
               providers.push({
-                provider: ProviderId.of(provider.id),
+                provider: ProviderId.make(provider.id),
                 hasKey: true,
                 source: "stored" as const,
                 authType: storedInfo?.type as AuthType | undefined,
@@ -144,7 +144,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
               })
               continue
             }
-            providers.push({ provider: ProviderId.of(provider.id), hasKey: false, required })
+            providers.push({ provider: ProviderId.make(provider.id), hasKey: false, required })
           }
 
           return providers

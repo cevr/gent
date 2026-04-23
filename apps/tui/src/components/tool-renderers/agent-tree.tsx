@@ -113,7 +113,7 @@ export function AgentTree(props: AgentTreeProps) {
   // Fetch structured messages (reasoning + text) on completion
   const childBranchId = () => {
     const id = completedChild()?.childBranchId
-    return id !== undefined ? BranchId.of(id) : undefined
+    return id !== undefined ? BranchId.make(id) : undefined
   }
   const fetchKey = () => {
     if (props.toolCall.status === "running") return undefined

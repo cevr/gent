@@ -63,7 +63,7 @@ export function MessagePicker(props: MessagePickerProps) {
       if (e.name === "return") {
         const item = list[selectedIndex()]
         // SAFETY: PickerItem.id originates from MessageInfoReadonly.id which is a MessageId
-        if (item !== undefined) props.onSelect(MessageId.of(item.id))
+        if (item !== undefined) props.onSelect(MessageId.make(item.id))
         return true
       }
 

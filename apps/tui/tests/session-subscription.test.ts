@@ -15,14 +15,14 @@ describe("runSessionSubscriptionAttempt", () => {
 
     const result = await Effect.runPromise(
       runSessionSubscriptionAttempt({
-        sessionId: SessionId.of("session-a"),
-        branchId: BranchId.of("branch-a"),
+        sessionId: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
         lastSeenEventId: null,
         log,
         isActiveSession: () => active,
         getSnapshot: Effect.succeed({
-          sessionId: SessionId.of("session-a"),
-          branchId: BranchId.of("branch-a"),
+          sessionId: SessionId.make("session-a"),
+          branchId: BranchId.make("branch-a"),
           messages: [],
           lastEventId: null,
           reasoningLevel: undefined,

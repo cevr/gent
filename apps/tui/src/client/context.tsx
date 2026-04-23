@@ -435,8 +435,8 @@ export function ClientProvider(props: ClientProviderProps) {
       }
 
       const sep = key.indexOf(":")
-      const sessionId = SessionId.of(key.slice(0, sep))
-      const branchId = BranchId.of(key.slice(sep + 1))
+      const sessionId = SessionId.make(key.slice(0, sep))
+      const branchId = BranchId.make(key.slice(sep + 1))
       let cancelled = false
       const isActiveSession = () => !cancelled && sessionKey() === key
 
@@ -658,7 +658,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   reasoningLevel: undefined,
                 },
               })
-              onCreated?.(SessionId.of(result.sessionId), BranchId.of(result.branchId))
+              onCreated?.(SessionId.make(result.sessionId), BranchId.make(result.branchId))
             }),
           ),
           Effect.catchEager((err) =>
@@ -727,7 +727,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     createBranch: (name) => {
       const s = session()
-      if (s === null) return Effect.succeed(BranchId.of(""))
+      if (s === null) return Effect.succeed(BranchId.make(""))
       return client.branch
         .create({ sessionId: s.sessionId, ...(name !== undefined ? { name } : {}) })
         .pipe(Effect.map((result) => result.branchId))
@@ -743,7 +743,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     forkBranch: (messageId, name) => {
       const s = session()
-      if (s === null) return Effect.succeed(BranchId.of(""))
+      if (s === null) return Effect.succeed(BranchId.make(""))
       return client.branch
         .fork({
           sessionId: s.sessionId,
@@ -751,7 +751,7 @@ export function ClientProvider(props: ClientProviderProps) {
           atMessageId: messageId,
           ...(name !== undefined ? { name } : {}),
         })
-        .pipe(Effect.map((result) => BranchId.of(result.branchId)))
+        .pipe(Effect.map((result) => BranchId.make(result.branchId)))
     },
 
     drainQueuedMessages: () => {

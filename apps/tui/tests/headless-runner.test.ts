@@ -8,8 +8,8 @@ import { createMockClient } from "./render-harness"
 
 describe("runHeadless", () => {
   test("stops after TurnCompleted even if the event stream stays open", async () => {
-    const sessionId = SessionId.of("session-test")
-    const branchId = BranchId.of("branch-test")
+    const sessionId = SessionId.make("session-test")
+    const branchId = BranchId.make("branch-test")
     let sent = false
 
     const completed = new EventEnvelope({
@@ -43,8 +43,8 @@ describe("runHeadless", () => {
   })
 
   test("fails when the event stream ends before turn completion", async () => {
-    const sessionId = SessionId.of("session-test")
-    const branchId = BranchId.of("branch-test")
+    const sessionId = SessionId.make("session-test")
+    const branchId = BranchId.make("branch-test")
 
     const client = createMockClient({
       session: {

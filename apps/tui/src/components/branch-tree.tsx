@@ -83,7 +83,7 @@ export function BranchTree(props: BranchTreeProps) {
         const item = list[selectedIndex()]
         if (item !== undefined) {
           // SAFETY: FlatNode.id originates from BranchTreeNode.id which is a BranchId
-          props.onSelect(BranchId.of(item.id))
+          props.onSelect(BranchId.make(item.id))
         }
         return true
       }

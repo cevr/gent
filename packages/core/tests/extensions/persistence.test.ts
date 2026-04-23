@@ -16,8 +16,8 @@ const machineResource = (machine: Parameters<typeof defineResource>[0]["machine"
     machine,
   })
 
-const sessionId = SessionId.of("persist-session")
-const branchId = BranchId.of("persist-branch")
+const sessionId = SessionId.make("persist-session")
+const branchId = BranchId.make("persist-branch")
 
 interface CounterState {
   readonly count: number

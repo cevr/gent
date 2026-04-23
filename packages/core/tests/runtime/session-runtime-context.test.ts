@@ -83,7 +83,7 @@ describe("resolveSessionEnvironment", () => {
 
           yield* storage.createSession(
             new Session({
-              id: SessionId.of("session-runtime-context-profile"),
+              id: SessionId.make("session-runtime-context-profile"),
               cwd: secondary,
               createdAt: now,
               updatedAt: now,
@@ -91,8 +91,8 @@ describe("resolveSessionEnvironment", () => {
           )
 
           const resolved = yield* resolveSessionEnvironment({
-            sessionId: SessionId.of("session-runtime-context-profile"),
-            branchId: BranchId.of("branch-runtime-context-profile"),
+            sessionId: SessionId.make("session-runtime-context-profile"),
+            branchId: BranchId.make("branch-runtime-context-profile"),
             storage,
             profileCache,
             hostDeps: yield* makeAmbientExtensionHostContextDeps({
@@ -171,8 +171,8 @@ describe("resolveSessionEnvironment", () => {
         const platform = yield* RuntimePlatform
 
         const resolved = yield* resolveSessionEnvironment({
-          sessionId: SessionId.of("missing-session"),
-          branchId: BranchId.of("missing-branch"),
+          sessionId: SessionId.make("missing-session"),
+          branchId: BranchId.make("missing-branch"),
           storage,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({
             storage,
@@ -244,7 +244,7 @@ describe("resolveSessionEnvironment", () => {
 
         yield* storage.createSession(
           new Session({
-            id: SessionId.of("session-runtime-context-driver"),
+            id: SessionId.make("session-runtime-context-driver"),
             cwd: "/tmp/profile-driver-scope",
             createdAt: now,
             updatedAt: now,
@@ -273,8 +273,8 @@ describe("resolveSessionEnvironment", () => {
         }
 
         const resolved = yield* resolveSessionEnvironment({
-          sessionId: SessionId.of("session-runtime-context-driver"),
-          branchId: BranchId.of("branch-runtime-context-driver"),
+          sessionId: SessionId.make("session-runtime-context-driver"),
+          branchId: BranchId.make("branch-runtime-context-driver"),
           storage,
           profileCache: fakeProfileCache,
           hostDeps: yield* makeAmbientExtensionHostContextDeps({

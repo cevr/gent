@@ -20,13 +20,13 @@ const setup = Effect.gen(function* () {
   const taskStorage = yield* TaskStorage
   const now = new Date()
   const session = new Session({
-    id: SessionId.of("s1"),
+    id: SessionId.make("s1"),
     name: "Test",
     createdAt: now,
     updatedAt: now,
   })
   const branch = new Branch({
-    id: BranchId.of("b1"),
+    id: BranchId.make("b1"),
     sessionId: session.id,
     createdAt: now,
   })
@@ -38,9 +38,9 @@ const setup = Effect.gen(function* () {
 const makeTask = (id: string, overrides?: Partial<ConstructorParameters<typeof Task>[0]>) => {
   const now = new Date()
   return new Task({
-    id: TaskId.of(id),
-    sessionId: SessionId.of("s1"),
-    branchId: BranchId.of("b1"),
+    id: TaskId.make(id),
+    sessionId: SessionId.make("s1"),
+    branchId: BranchId.make("b1"),
     subject: `Task ${id}`,
     status: "pending",
     createdAt: now,
@@ -55,7 +55,7 @@ describe("Task Storage", () => {
       const { storage } = yield* setup
       const task = makeTask("t1", { description: "Do something", cwd: "/tmp" })
       yield* storage.createTask(task)
-      const got = yield* storage.getTask(TaskId.of("t1"))
+      const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got).toBeDefined()
       expect(got!.id).toBe("t1")
       expect(got!.subject).toBe("Task t1")
@@ -67,7 +67,7 @@ describe("Task Storage", () => {
   test("getTask returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
-      const got = yield* storage.getTask(TaskId.of("nonexistent"))
+      const got = yield* storage.getTask(TaskId.make("nonexistent"))
       expect(got).toBeUndefined()
     }))
 
@@ -76,7 +76,7 @@ describe("Task Storage", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      const tasks = yield* storage.listTasks(SessionId.of("s1"))
+      const tasks = yield* storage.listTasks(SessionId.make("s1"))
       expect(tasks.length).toBe(2)
     }))
 
@@ -84,9 +84,9 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      const tasks = yield* storage.listTasks(SessionId.of("s1"), BranchId.of("b1"))
+      const tasks = yield* storage.listTasks(SessionId.make("s1"), BranchId.make("b1"))
       expect(tasks.length).toBe(1)
-      const empty = yield* storage.listTasks(SessionId.of("s1"), BranchId.of("other"))
+      const empty = yield* storage.listTasks(SessionId.make("s1"), BranchId.make("other"))
       expect(empty.length).toBe(0)
     }))
 
@@ -94,7 +94,7 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      const updated = yield* storage.updateTask(TaskId.of("t1"), { status: "in_progress" })
+      const updated = yield* storage.updateTask(TaskId.make("t1"), { status: "in_progress" })
       expect(updated).toBeDefined()
       expect(updated!.status).toBe("in_progress")
     }))
@@ -102,7 +102,7 @@ describe("Task Storage", () => {
   test("updateTask returns undefined for missing", () =>
     Effect.gen(function* () {
       const { storage } = yield* setup
-      const updated = yield* storage.updateTask(TaskId.of("nonexistent"), { status: "completed" })
+      const updated = yield* storage.updateTask(TaskId.make("nonexistent"), { status: "completed" })
       expect(updated).toBeUndefined()
     }))
 
@@ -110,8 +110,8 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
-      yield* storage.deleteTask(TaskId.of("t1"))
-      const got = yield* storage.getTask(TaskId.of("t1"))
+      yield* storage.deleteTask(TaskId.make("t1"))
+      const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got).toBeUndefined()
     }))
 
@@ -119,7 +119,7 @@ describe("Task Storage", () => {
     Effect.gen(function* () {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1", { metadata: { key: "value", count: 42 } }))
-      const got = yield* storage.getTask(TaskId.of("t1"))
+      const got = yield* storage.getTask(TaskId.make("t1"))
       expect(got).toBeDefined()
       const meta = got!.metadata as Record<string, unknown>
       expect(meta.key).toBe("value")
@@ -133,8 +133,8 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.make("t2"))
       expect(deps).toEqual(["t1"])
     }))
 
@@ -143,9 +143,9 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      yield* storage.removeTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      yield* storage.removeTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.make("t2"))
       expect(deps.length).toBe(0)
     }))
 
@@ -154,10 +154,10 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      yield* storage.deleteTask(TaskId.of("t2"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      yield* storage.deleteTask(TaskId.make("t2"))
       // After deleting t2, its dep entries should also be gone
-      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
+      const deps = yield* storage.getTaskDeps(TaskId.make("t2"))
       expect(deps.length).toBe(0)
     }))
 
@@ -167,7 +167,7 @@ describe("Task Dependencies", () => {
       const sql = yield* SqlClient.SqlClient
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
       yield* sql.unsafe(`
         CREATE TRIGGER fail_task_delete
         BEFORE DELETE ON tasks
@@ -177,11 +177,11 @@ describe("Task Dependencies", () => {
         END
       `)
 
-      const error = yield* Effect.flip(storage.deleteTask(TaskId.of("t1")))
+      const error = yield* Effect.flip(storage.deleteTask(TaskId.make("t1")))
 
       expect(error._tag).toBe("TaskStorageError")
-      expect(yield* storage.getTask(TaskId.of("t1"))).toBeDefined()
-      expect(yield* storage.getTaskDeps(TaskId.of("t2"))).toEqual(["t1"])
+      expect(yield* storage.getTask(TaskId.make("t1"))).toBeDefined()
+      expect(yield* storage.getTaskDeps(TaskId.make("t2"))).toEqual(["t1"])
     }))
 
   test("duplicate dep is idempotent", () =>
@@ -189,9 +189,9 @@ describe("Task Dependencies", () => {
       const { storage } = yield* setup
       yield* storage.createTask(makeTask("t1"))
       yield* storage.createTask(makeTask("t2"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      yield* storage.addTaskDep(TaskId.of("t2"), TaskId.of("t1"))
-      const deps = yield* storage.getTaskDeps(TaskId.of("t2"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      yield* storage.addTaskDep(TaskId.make("t2"), TaskId.make("t1"))
+      const deps = yield* storage.getTaskDeps(TaskId.make("t2"))
       expect(deps.length).toBe(1)
     }))
 })
@@ -206,15 +206,15 @@ describe("TaskStorageReadOnly", () => {
       yield* writer.createTask(makeTask("ro1", { description: "read-only proof" }))
 
       const reader = yield* TaskStorageReadOnly
-      const got = yield* reader.getTask(TaskId.of("ro1"))
+      const got = yield* reader.getTask(TaskId.make("ro1"))
       expect(got).toBeDefined()
       expect(got!.description).toBe("read-only proof")
 
-      const listed = yield* reader.listTasks(SessionId.of("s1"))
+      const listed = yield* reader.listTasks(SessionId.make("s1"))
       expect(listed.some((t) => t.id === "ro1")).toBe(true)
 
       // getTaskDeps reachable from the read-only surface
-      const deps = yield* reader.getTaskDeps(TaskId.of("ro1"))
+      const deps = yield* reader.getTaskDeps(TaskId.make("ro1"))
       expect(deps.length).toBe(0)
     }))
 })

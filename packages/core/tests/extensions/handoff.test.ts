@@ -100,8 +100,8 @@ describe("HandoffTool", () => {
 describe("Handoff cooldown workflow", () => {
   it.live("Suppress → GetCooldown → TurnCompleted decrement round-trips through the workflow", () =>
     Effect.gen(function* () {
-      const sessionId = SessionId.of("handoff-cooldown-session")
-      const branchId = BranchId.of("handoff-cooldown-branch")
+      const sessionId = SessionId.make("handoff-cooldown-session")
+      const branchId = BranchId.make("handoff-cooldown-branch")
 
       // The workflow is lowered into setup.actor by `defineExtension`, so we
       // can drive it through the same actor boundary used in production.

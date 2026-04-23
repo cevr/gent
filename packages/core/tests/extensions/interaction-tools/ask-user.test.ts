@@ -12,9 +12,9 @@ const makeCtx = (approvalService: {
   present: ToolContext["interaction"]["approve"]
 }): ToolContext =>
   testToolContext({
-    sessionId: SessionId.of("test-session"),
-    branchId: BranchId.of("test-branch"),
-    toolCallId: ToolCallId.of("test-call"),
+    sessionId: SessionId.make("test-session"),
+    branchId: BranchId.make("test-branch"),
+    toolCallId: ToolCallId.make("test-call"),
     cwd: "/tmp",
     home: "/tmp",
     interaction: {
@@ -46,8 +46,8 @@ describe("AskUser Tool", () => {
       const ctx = makeCtx({
         present: (params) =>
           approval.present(params, {
-            sessionId: SessionId.of("test-session"),
-            branchId: BranchId.of("test-branch"),
+            sessionId: SessionId.make("test-session"),
+            branchId: BranchId.make("test-branch"),
           }),
       })
 
@@ -81,8 +81,8 @@ describe("AskUser Tool", () => {
       const ctx = makeCtx({
         present: (params) =>
           approval.present(params, {
-            sessionId: SessionId.of("test-session"),
-            branchId: BranchId.of("test-branch"),
+            sessionId: SessionId.make("test-session"),
+            branchId: BranchId.make("test-branch"),
           }),
       })
 

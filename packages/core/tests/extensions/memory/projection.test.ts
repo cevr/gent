@@ -48,8 +48,8 @@ const writeFile = (rel: string, body: string, scope: "global" | "project" = "glo
   Fs.writeFileSync(full, fmText, "utf-8")
 }
 
-const sid = SessionId.of("019d97c0-0000-7000-0000-000000000000")
-const bid = BranchId.of("019d97c0-0000-7001-0000-000000000000")
+const sid = SessionId.make("019d97c0-0000-7000-0000-000000000000")
+const bid = BranchId.make("019d97c0-0000-7001-0000-000000000000")
 
 const turnCtx = (cwd: string): ProjectionTurnContext =>
   ({

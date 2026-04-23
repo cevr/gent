@@ -27,7 +27,7 @@ interface AskCall {
 }
 
 const fakeArtifact = (sourceTool: string): Artifact => ({
-  id: ArtifactId.of("fake-id"),
+  id: ArtifactId.make("fake-id"),
   label: "test",
   sourceTool,
   content: "test content",

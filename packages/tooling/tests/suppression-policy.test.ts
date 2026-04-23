@@ -122,8 +122,8 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         file,
       ),
     counts: {
-      "eslint:@typescript-eslint/no-explicit-any": 18,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 23,
+      "eslint:@typescript-eslint/no-explicit-any": 17,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 21,
     },
   },
   {

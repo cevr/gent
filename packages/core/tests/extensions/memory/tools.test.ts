@@ -31,9 +31,9 @@ const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`
 
 const makeCtx = (cwd: string): ToolContext =>
   testToolContext({
-    sessionId: SessionId.of("019d97c0-0000-7000-0000-000000000000"),
-    branchId: BranchId.of("019d97c0-0000-7001-0000-000000000000"),
-    toolCallId: ToolCallId.of("tc1"),
+    sessionId: SessionId.make("019d97c0-0000-7000-0000-000000000000"),
+    branchId: BranchId.make("019d97c0-0000-7001-0000-000000000000"),
+    toolCallId: ToolCallId.make("tc1"),
     cwd,
     home: tmpDir,
     extension: {

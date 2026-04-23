@@ -12,7 +12,7 @@ export const TaskGetTool = tool({
   description: "Get full details of a task including description, dependencies, and owner session.",
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
-    const taskId = TaskId.of(params.taskId)
+    const taskId = TaskId.make(params.taskId)
     const task = yield* ctx.extension.request(TaskGetRef, { taskId })
     if (task == null) {
       return { error: `Task not found: ${params.taskId}` }

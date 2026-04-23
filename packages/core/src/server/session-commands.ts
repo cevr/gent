@@ -101,7 +101,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         if (conversation === "") return ""
 
         const summaryMessage = new Message.regular({
-          id: MessageId.of(Bun.randomUUIDv7()),
+          id: MessageId.make(Bun.randomUUIDv7()),
           sessionId: firstMessage.sessionId,
           branchId,
           role: "user",
@@ -134,7 +134,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createSession = Effect.fn("SessionCommands.createSession")(function* (
         input: CreateSessionInput,
       ) {
-        const sessionId = SessionId.of(Bun.randomUUIDv7())
+        const sessionId = SessionId.make(Bun.randomUUIDv7())
         if (input.parentSessionId !== undefined) {
           const parent = yield* sessionStorage.getSession(input.parentSessionId)
           if (parent === undefined) {
@@ -145,7 +145,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        const branchId = BranchId.of(Bun.randomUUIDv7())
+        const branchId = BranchId.make(Bun.randomUUIDv7())
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
         const session = new Session({
@@ -203,7 +203,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         input: CreateBranchInput,
       ) {
         const branch = new Branch({
-          id: BranchId.of(Bun.randomUUIDv7()),
+          id: BranchId.make(Bun.randomUUIDv7()),
           sessionId: input.sessionId,
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
@@ -291,7 +291,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         const branch = new Branch({
-          id: BranchId.of(Bun.randomUUIDv7()),
+          id: BranchId.make(Bun.randomUUIDv7()),
           sessionId: input.sessionId,
           parentBranchId: input.fromBranchId,
           parentMessageId: input.atMessageId,
@@ -303,7 +303,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         for (const message of messages.slice(0, targetIndex + 1)) {
           yield* messageStorage.createMessage(
             copyMessageToBranch(message, {
-              id: MessageId.of(Bun.randomUUIDv7()),
+              id: MessageId.make(Bun.randomUUIDv7()),
               branchId: branch.id,
             }),
           )

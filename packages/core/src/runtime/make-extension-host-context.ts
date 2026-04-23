@@ -306,7 +306,7 @@ export const makeExtensionHostContext = (
     createBranch: (params) =>
       Effect.gen(function* () {
         const branch = new Branch({
-          id: BranchId.of(Bun.randomUUIDv7()),
+          id: BranchId.make(Bun.randomUUIDv7()),
           sessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           name: params.name,
@@ -330,7 +330,7 @@ export const makeExtensionHostContext = (
         if (targetIndex === -1) return yield* Effect.die("Message not found in current branch")
 
         const branch = new Branch({
-          id: BranchId.of(Bun.randomUUIDv7()),
+          id: BranchId.make(Bun.randomUUIDv7()),
           sessionId: runInfo.sessionId,
           parentBranchId: runInfo.branchId,
           parentMessageId: params.atMessageId,
@@ -342,7 +342,7 @@ export const makeExtensionHostContext = (
         for (const msg of messages.slice(0, targetIndex + 1)) {
           yield* deps.storage.createMessage(
             copyMessageToBranch(msg, {
-              id: MessageId.of(Bun.randomUUIDv7()),
+              id: MessageId.make(Bun.randomUUIDv7()),
               branchId: branch.id,
             }),
           )
@@ -387,8 +387,8 @@ export const makeExtensionHostContext = (
     createChildSession: (params) =>
       Effect.gen(function* () {
         const now = yield* DateTime.nowAsDate
-        const sessionId = SessionId.of(Bun.randomUUIDv7())
-        const branchId = BranchId.of(Bun.randomUUIDv7())
+        const sessionId = SessionId.make(Bun.randomUUIDv7())
+        const branchId = BranchId.make(Bun.randomUUIDv7())
         const session = new Session({
           id: sessionId,
           name: params.name ?? "child session",

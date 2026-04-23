@@ -939,7 +939,7 @@ const makeStorage = Effect.gen(function* () {
           }),
         )
         return new EventEnvelope({
-          id: EventId.of(id),
+          id: EventId.make(id),
           event,
           createdAt,
           ...(traceId !== undefined ? { traceId } : {}),
@@ -960,7 +960,7 @@ const makeStorage = Effect.gen(function* () {
           if (decoded._tag === "Some") {
             envelopes.push(
               new EventEnvelope({
-                id: EventId.of(row.id),
+                id: EventId.make(row.id),
                 event: decoded.value,
                 createdAt: row.created_at,
                 ...(row.trace_id !== null ? { traceId: row.trace_id } : {}),
