@@ -224,11 +224,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         )
 
       const applyFilters = (models: readonly Model[]) =>
-        driverRegistry.filterModelCatalog(models, resolveAuth).pipe(
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          Effect.map((filtered) => filtered as readonly Model[]),
-          Effect.catchEager(() => Effect.succeed(models)),
-        )
+        driverRegistry
+          .filterModelCatalog(models, resolveAuth)
+          .pipe(Effect.catchEager(() => Effect.succeed(models)))
 
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote

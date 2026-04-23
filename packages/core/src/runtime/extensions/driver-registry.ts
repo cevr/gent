@@ -25,6 +25,7 @@ import type {
   TurnExecutor,
 } from "../../domain/driver.js"
 import { DriverError } from "../../domain/driver.js"
+import type { Model } from "../../domain/model.js"
 
 // ── Resolved driver state (one map per kind, lookup by id) ──
 
@@ -48,9 +49,9 @@ export interface DriverRegistryService {
   readonly listExternal: () => Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
   /** Run a base catalog through every model driver's `listModels` filter. */
   readonly filterModelCatalog: (
-    baseCatalog: ReadonlyArray<unknown>,
+    baseCatalog: ReadonlyArray<Model>,
     resolveAuth?: (driverId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
-  ) => Effect.Effect<ReadonlyArray<unknown>>
+  ) => Effect.Effect<ReadonlyArray<Model>>
   /** Require a model driver — fail with `DriverError` when missing. */
   readonly requireModel: (id: string) => Effect.Effect<ModelDriverContribution, DriverError>
   /** Require an external driver — fail with `DriverError` when missing. */

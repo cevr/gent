@@ -33,13 +33,13 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
   return [modelId.slice(0, slash), modelId.slice(slash + 1)]
 }
 
+const missingAuthInfo: AuthInfo | undefined = undefined
+
 // ── Model Resolver ──
 
 const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) => {
   const resolveAuthFromStore = (providerName: string) =>
-    authStore
-      .get(providerName)
-      .pipe(Effect.catchEager(() => Effect.sync(() => undefined as AuthInfo | undefined)))
+    authStore.get(providerName).pipe(Effect.catchEager(() => Effect.succeed(missingAuthInfo)))
 
   return Effect.fn("Provider.resolveModel")(function* (
     modelId: string,
@@ -354,8 +354,7 @@ const _DebugProvider = (options?: { delayMs?: number; retries?: boolean }) =>
   )
 
 // Lazy — `Provider` class is defined below; this is only evaluated when accessed.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _debugFailingProviderCache: any
+let _debugFailingProviderCache: Layer.Layer<Provider> | undefined
 const _DebugFailingProvider = () => {
   if (_debugFailingProviderCache === undefined) {
     _debugFailingProviderCache = Layer.succeed(Provider, {
@@ -369,7 +368,6 @@ const _DebugFailingProvider = () => {
       generate: () => Effect.succeed("debug failure"),
     } satisfies ProviderService)
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
   return _debugFailingProviderCache
 }
 

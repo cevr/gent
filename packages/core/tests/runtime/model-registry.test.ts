@@ -1,13 +1,16 @@
 import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
-import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { AuthStore } from "../../src/domain/auth-store.js"
+import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
 import { ModelRegistry } from "../../src/runtime/model-registry.js"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
 import { waitFor } from "../../src/test-utils/fixtures.js"
+import { LanguageModel } from "effect/unstable/ai"
+import * as AiError from "effect/unstable/ai/AiError"
 
 const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
 const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
@@ -59,6 +62,37 @@ const passThroughDrivers = DriverRegistry.fromResolved({
   externalDrivers: new Map(),
 })
 
+const unusedLanguageModel: LanguageModel.Service = {
+  generateText: () =>
+    Effect.fail(
+      AiError.make({
+        module: "Test",
+        method: "generateText",
+        reason: new AiError.UnknownError({ description: "unused" }),
+      }),
+    ),
+  generateObject: () =>
+    Effect.fail(
+      AiError.make({
+        module: "Test",
+        method: "generateObject",
+        reason: new AiError.UnknownError({ description: "unused" }),
+      }),
+    ),
+  streamText: () =>
+    Stream.fail(
+      AiError.make({
+        module: "Test",
+        method: "streamText",
+        reason: new AiError.UnknownError({ description: "unused" }),
+      }),
+    ),
+}
+
+const unusedResolution = (): ProviderResolution => ({
+  layer: Layer.succeed(LanguageModel.LanguageModel, unusedLanguageModel),
+})
+
 const authLayer = Layer.succeed(AuthStore, {
   get: () => Effect.succeed(undefined),
   set: () => Effect.void,
@@ -100,6 +134,27 @@ const makeRegistryLayer = (home: string, responseText: string) =>
         Path.layer,
         RuntimePlatform.Test({ cwd: home, home, platform: "test" }),
         passThroughDrivers,
+        authLayer,
+        makeHttpLayer(responseText),
+      ),
+    ),
+  )
+
+const makeRegistryLayerWithDrivers = (
+  home: string,
+  responseText: string,
+  modelDrivers: ReadonlyArray<ModelDriverContribution>,
+) =>
+  ModelRegistry.Live.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        BunFileSystem.layer,
+        Path.layer,
+        RuntimePlatform.Test({ cwd: home, home, platform: "test" }),
+        DriverRegistry.fromResolved({
+          modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
+          externalDrivers: new Map(),
+        }),
         authLayer,
         makeHttpLayer(responseText),
       ),
@@ -230,6 +285,38 @@ describe("ModelRegistry", () => {
 
         expect(models).toHaveLength(1)
         expect(models[0]?.id).toBe("openai/gpt-5.4")
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
+  it.live("applies typed model-driver catalog filters", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        const registry = yield* Effect.gen(function* () {
+          const context = yield* Layer.build(
+            makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
+              {
+                id: "typed-filter",
+                name: "Typed filter",
+                resolveModel: unusedResolution,
+                listModels: (models) =>
+                  models.map((model) =>
+                    model.provider === "openai"
+                      ? new Model({ ...model, name: `${model.name} filtered` })
+                      : model,
+                  ),
+              },
+            ]),
+          )
+          return Context.get(context, ModelRegistry)
+        })
+
+        yield* registry.refresh()
+        const models = yield* registry.list()
+
+        expect(models[0]?.id).toBe("openai/gpt-5.4")
+        expect(models[0]?.name).toBe("GPT-5.4 filtered")
       }),
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )

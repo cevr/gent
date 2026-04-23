@@ -15,12 +15,14 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
+  ProviderAuthInfo,
   ProviderResolution,
   TurnError,
   TurnEvent,
   TurnExecutor,
 } from "@gent/core/domain/driver"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
+import { Model, ModelId } from "@gent/core/domain/model"
 
 const noopInvalidate = (): Effect.Effect<void> => Effect.void
 
@@ -31,6 +33,14 @@ const makeModel = (id: string, name?: string): ModelDriverContribution => ({
   name: name ?? id,
   resolveModel: stubResolution,
 })
+
+const makeCatalogModel = (id: string, keep = true): Model =>
+  new Model({
+    id: ModelId.of(id),
+    name: id,
+    provider: id.split("/", 1)[0] ?? id,
+    contextLength: keep ? 1 : 0,
+  })
 
 const makeExecutor = (label: string): TurnExecutor => ({
   executeTurn: () =>
@@ -160,31 +170,34 @@ describe("DriverRegistry", () => {
       id: "dropper",
       name: "Dropper",
       resolveModel: stubResolution,
-      listModels: (catalog) => catalog.filter((m) => (m as { keep?: boolean }).keep === true),
+      listModels: (catalog) => catalog.filter((model) => model.contextLength !== 0),
     }
     const adder: ModelDriverContribution = {
       id: "adder",
       name: "Adder",
       resolveModel: stubResolution,
-      listModels: (catalog) => [...catalog, { id: "added", keep: true }],
+      listModels: (catalog) => [...catalog, makeCatalogModel("adder/added")],
     }
     const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [dropper, adder] })])
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([{ id: "kept", keep: true }, { id: "dropped" }])
+        return yield* reg.filterModelCatalog([
+          makeCatalogModel("test/kept"),
+          makeCatalogModel("test/dropped", false),
+        ])
       }).pipe(Effect.provide(layer)),
     )
 
     // dropper removes the unkept entry; adder appends one — two remain
     expect(result.length).toBe(2)
-    expect(result.some((m) => (m as { id: string }).id === "added")).toBe(true)
-    expect(result.some((m) => (m as { id: string }).id === "dropped")).toBe(false)
+    expect(result.some((model) => model.id === "adder/added")).toBe(true)
+    expect(result.some((model) => model.id === "test/dropped")).toBe(false)
   })
 
   test("filterModelCatalog passes resolveAuth(driverId) into each driver's listModels", async () => {
-    const seenAuth: Array<{ driverId: string; auth: unknown }> = []
+    const seenAuth: Array<{ driverId: string; auth: ProviderAuthInfo | undefined }> = []
     const driverA: ModelDriverContribution = {
       id: "auth-a",
       name: "AuthA",
@@ -210,7 +223,7 @@ describe("DriverRegistry", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const reg = yield* DriverRegistry
-        return yield* reg.filterModelCatalog([{ id: "x" }], (driverId) =>
+        return yield* reg.filterModelCatalog([makeCatalogModel("test/x")], (driverId) =>
           Effect.succeed(
             driverId === "auth-a" ? { type: "api" as const, key: "secret-a" } : undefined,
           ),
@@ -219,9 +232,7 @@ describe("DriverRegistry", () => {
     )
 
     // Each driver's listModels should have been called with the auth from resolveAuth(its id)
-    const authA = seenAuth.find((s) => s.driverId === "auth-a")?.auth as
-      | { type: string; key?: string }
-      | undefined
+    const authA = seenAuth.find((s) => s.driverId === "auth-a")?.auth
     const authB = seenAuth.find((s) => s.driverId === "auth-b")?.auth
     expect(authA?.key).toBe("secret-a")
     expect(authB).toBeUndefined()

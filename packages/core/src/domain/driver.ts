@@ -36,6 +36,7 @@ import type { AnyCapabilityContribution } from "./capability.js"
 import type { ExtensionHostContext } from "./extension-host-context.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { Message } from "./message.js"
+import type { Model } from "./model.js"
 import type { ProviderError } from "../providers/provider.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
@@ -157,9 +158,9 @@ export interface ModelDriverContribution {
   ) => ProviderResolution
   /** Filter or extend the model catalog. */
   readonly listModels?: (
-    baseCatalog: ReadonlyArray<unknown>,
+    baseCatalog: ReadonlyArray<Model>,
     authInfo?: ProviderAuthInfo,
-  ) => ReadonlyArray<unknown>
+  ) => ReadonlyArray<Model>
   /** Auth configuration — OAuth + API key methods + handlers. */
   readonly auth?: ProviderAuthContribution
 }

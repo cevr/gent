@@ -12,44 +12,51 @@ import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
+import type * as AiTool from "effect/unstable/ai/Tool"
+import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
+const emptyAuthInfo: Record<string, AuthInfo> = {}
+const missingAuthInfo: AuthInfo | undefined = undefined
+
 const testAuthStorage = {
-  get: () => Effect.sync(() => undefined as AuthInfo | undefined),
+  get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
   list: () => Effect.succeed([] as ReadonlyArray<string>),
-  listInfo: () => Effect.succeed({} as Record<string, AuthInfo>),
+  listInfo: () => Effect.succeed(emptyAuthInfo),
+}
+
+const failingLanguageModel: LanguageModel.Service = {
+  generateText: () =>
+    Effect.fail(
+      AiError.make({
+        module: "Test",
+        method: "generateText",
+        reason: new AiError.UnknownError({ description: "stub" }),
+      }),
+    ),
+  generateObject: () =>
+    Effect.fail(
+      AiError.make({
+        module: "Test",
+        method: "generateObject",
+        reason: new AiError.UnknownError({ description: "stub" }),
+      }),
+    ),
+  streamText: () =>
+    Stream.fail(
+      AiError.make({
+        module: "Test",
+        method: "streamText",
+        reason: new AiError.UnknownError({ description: "stub" }),
+      }),
+    ),
 }
 
 /** Create a fake ProviderResolution with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution => ({
-  layer: Layer.succeed(LanguageModel.LanguageModel, {
-    generateText: () =>
-      Effect.fail(
-        AiError.make({
-          module: "Test",
-          method: "generateText",
-          reason: new AiError.UnknownError({ description: "stub" }),
-        }),
-      ),
-    generateObject: () =>
-      Effect.fail(
-        AiError.make({
-          module: "Test",
-          method: "generateObject",
-          reason: new AiError.UnknownError({ description: "stub" }),
-        }),
-      ),
-    streamText: () =>
-      Stream.fail(
-        AiError.make({
-          module: "Test",
-          method: "streamText",
-          reason: new AiError.UnknownError({ description: "stub" }),
-        }),
-      ),
-  } as LanguageModel.Service),
+  layer: Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel),
 })
 
 const makeProvider = (id: string, name?: string): ModelDriverContribution => ({
@@ -237,7 +244,7 @@ describe("Provider model resolution", () => {
     let captured:
       | {
           disableToolCallResolution: boolean | undefined
-          toolkit: unknown
+          toolkit: AiToolkit.WithHandler<Record<string, AiTool.Any>> | undefined
         }
       | undefined
 
@@ -275,7 +282,7 @@ describe("Provider model resolution", () => {
               }),
             ])
           },
-        } as LanguageModel.Service),
+        } satisfies LanguageModel.Service),
       }),
     }
 
@@ -294,11 +301,7 @@ describe("Provider model resolution", () => {
     )
 
     expect(captured?.disableToolCallResolution).toBe(true)
-    const toolkit = captured?.toolkit as
-      | {
-          tools: Record<string, { name: string }>
-        }
-      | undefined
+    const toolkit = captured?.toolkit
     expect(toolkit).toBeDefined()
     expect(Object.keys(toolkit?.tools ?? {})).toEqual(["echo"])
     expect(toolkit?.tools["echo"]?.name).toBe("echo")
@@ -353,7 +356,7 @@ describe("Provider model resolution", () => {
               }),
             ])
           },
-        } as LanguageModel.Service),
+        } satisfies LanguageModel.Service),
       }),
     }
 

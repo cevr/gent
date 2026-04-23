@@ -43,7 +43,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:anyUnknownInErrorContext:off": 4,
       "effect:strictEffectProvide:off": 2,
-      "eslint:@typescript-eslint/no-explicit-any": 18,
+      "eslint:@typescript-eslint/no-explicit-any": 17,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 58,
       "ts:@ts-expect-error": 30,
     },
@@ -97,7 +97,6 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:globalConsoleInEffect:off": 2,
       "effect:nodeBuiltinImport:off": 4,
       "effect:strictEffectProvide:off": 8,
-      "eslint:@typescript-eslint/no-explicit-any": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 7,
     },
   },
@@ -154,7 +153,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         file,
       ),
     counts: {
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 19,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 18,
     },
   },
   {
@@ -177,7 +176,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     matches: (file) =>
       /packages\/extensions\/src\//.test(file) || file === "apps/server/src/debug/scenario.ts",
     counts: {
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 42,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 40,
     },
   },
 ]

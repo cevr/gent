@@ -165,7 +165,7 @@ export {
   TaskDeleted,
 } from "../domain/event.js"
 export { SessionId, BranchId, TaskId, ArtifactId, MessageId, ToolCallId } from "../domain/ids.js"
-export { ModelId } from "../domain/model.js"
+export { Model, ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
 export { AuthMethod } from "../domain/auth-method.js"
 export { AuthOauth } from "../domain/auth-store.js"
