@@ -504,6 +504,21 @@ describe("Storage", () => {
             turn_duration_ms INTEGER
           )
         `)
+        db.run(`
+          CREATE TABLE content_chunks (
+            id TEXT PRIMARY KEY,
+            part_type TEXT NOT NULL,
+            part_json TEXT NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE message_chunks (
+            message_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            PRIMARY KEY (message_id, ordinal)
+          )
+        `)
         db.run(`INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, [
           "legacy-s",
           "legacy",
@@ -516,6 +531,8 @@ describe("Storage", () => {
           "main",
           0,
         ])
+        const firstLegacyPart = { type: "text", text: "legacy searchable content" }
+        const secondLegacyPart = { type: "text", text: "second recovered content" }
         db.run(
           `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -523,11 +540,21 @@ describe("Storage", () => {
             "legacy-s",
             "legacy-b",
             "user",
-            JSON.stringify([{ type: "text", text: "legacy searchable content" }]),
+            JSON.stringify([firstLegacyPart, secondLegacyPart]),
             1000,
             null,
           ],
         )
+        db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
+          "partial-chunk",
+          "text",
+          JSON.stringify(firstLegacyPart),
+        ])
+        db.run(`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`, [
+          "legacy-m",
+          0,
+          "partial-chunk",
+        ])
         db.close()
 
         const layer = Storage.LiveWithSql(dbPath).pipe(
@@ -543,15 +570,20 @@ describe("Storage", () => {
             const message = yield* storage.getMessage(MessageId.of("legacy-m"))
             expect(message?.parts).toEqual([
               new TextPart({ type: "text", text: "legacy searchable content" }),
+              new TextPart({ type: "text", text: "second recovered content" }),
             ])
             const chunkRows = yield* sql<{
               count: number
             }>`SELECT COUNT(*) as count FROM content_chunks`
             const ftsRows = yield* sql<{
               count: number
-            }>`SELECT COUNT(*) as count FROM messages_fts WHERE messages_fts MATCH ${"searchable"}`
-            expect(chunkRows[0]?.count).toBe(1)
+            }>`SELECT COUNT(*) as count FROM messages_fts WHERE messages_fts MATCH ${"recovered"}`
+            const legacyRows = yield* sql<{
+              parts: string
+            }>`SELECT parts FROM messages WHERE id = ${"legacy-m"}`
+            expect(chunkRows[0]?.count).toBe(2)
             expect(ftsRows[0]?.count).toBe(1)
+            expect(legacyRows[0]?.parts).toBe("[]")
           }).pipe(Effect.provide(layer)),
         )
       } finally {
@@ -649,6 +681,59 @@ describe("Storage", () => {
         expect(messages[0]?.role).toBe("user")
         expect(messages[1]?.role).toBe("assistant")
       }).pipe(Effect.provide(Storage.Test())),
+    )
+
+    it.live("deletes message chunk refs and search projection rows", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        yield* storage.createSession(
+          new Session({
+            id: "delete-projection-session",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "delete-projection-branch",
+            sessionId: "delete-projection-session",
+            createdAt: new Date(),
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "delete-projection-a",
+            sessionId: "delete-projection-session",
+            branchId: "delete-projection-branch",
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "delete projection alpha" })],
+            createdAt: new Date(1000),
+          }),
+        )
+        yield* storage.createMessage(
+          new Message({
+            id: "delete-projection-b",
+            sessionId: "delete-projection-session",
+            branchId: "delete-projection-branch",
+            role: "assistant",
+            parts: [new TextPart({ type: "text", text: "delete projection beta" })],
+            createdAt: new Date(2000),
+          }),
+        )
+
+        yield* storage.deleteMessages("delete-projection-branch")
+
+        const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
+        const refs = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
+        const chunks = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM content_chunks`
+        const fts = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages_fts`
+        expect(messages[0]?.count).toBe(0)
+        expect(refs[0]?.count).toBe(0)
+        expect(chunks[0]?.count).toBe(0)
+        expect(fts[0]?.count).toBe(0)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
     it.live("updates session updatedAt when creating message", () =>

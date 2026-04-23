@@ -361,6 +361,7 @@ const insertMessageContent = Effect.fn("Storage.insertMessageContent")(function*
       }),
     { discard: true },
   )
+  yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
 })
 
 const indexMessageSearch = Effect.fn("Storage.indexMessageSearch")(function* (
@@ -376,16 +377,20 @@ const backfillMessageContentChunks = Effect.fn("Storage.backfillMessageContentCh
     const sql = yield* SqlClient.SqlClient
     const rows = yield* sql<
       Pick<MessageRow, "id" | "parts">
-    >`SELECT id, parts FROM messages WHERE NOT EXISTS (SELECT 1 FROM message_chunks mc WHERE mc.message_id = messages.id)`
-    yield* Effect.forEach(
-      rows,
-      (row) =>
-        Effect.gen(function* () {
-          const parts = yield* decodeMessageParts(row.parts)
-          const partJsons = yield* Effect.forEach(parts, (part) => encodeMessagePart(part))
-          yield* insertMessageContent(row.id, partJsons)
-        }),
-      { discard: true },
+    >`SELECT id, parts FROM messages WHERE parts != ${"[]"}`
+    yield* sql.withTransaction(
+      Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const parts = yield* decodeMessageParts(row.parts)
+            const partJsons = yield* Effect.forEach(parts, (part) => encodeMessagePart(part))
+            const emptyPartsJson = yield* encodeMessageParts([])
+            yield* insertMessageContent(row.id, partJsons)
+            yield* sql`UPDATE messages SET parts = ${emptyPartsJson} WHERE id = ${row.id}`
+          }),
+        { discard: true },
+      ),
     )
   },
 )
@@ -875,18 +880,30 @@ const makeStorage = Effect.gen(function* () {
       function* (branchId, afterMessageId) {
         yield* sql.withTransaction(
           Effect.gen(function* () {
+            const messageIds: MessageId[] = []
             if (afterMessageId !== undefined) {
               const msgs = yield* sql<{
-                id: string
+                id: MessageId
                 created_at: number
               }>`SELECT id, created_at FROM messages WHERE id = ${afterMessageId}`
               const msg = msgs[0]
               if (msg !== undefined) {
-                yield* sql`DELETE FROM messages WHERE branch_id = ${branchId} AND (created_at > ${msg.created_at} OR (created_at = ${msg.created_at} AND id > ${msg.id}))`
+                const rows = yield* sql<{
+                  id: MessageId
+                }>`SELECT id FROM messages WHERE branch_id = ${branchId} AND (created_at > ${msg.created_at} OR (created_at = ${msg.created_at} AND id > ${msg.id}))`
+                messageIds.push(...rows.map((row) => row.id))
               }
             } else {
-              yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
+              const rows = yield* sql<{
+                id: MessageId
+              }>`SELECT id FROM messages WHERE branch_id = ${branchId}`
+              messageIds.push(...rows.map((row) => row.id))
             }
+            if (messageIds.length === 0) return
+            yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
+            yield* sql`DELETE FROM message_chunks WHERE message_id IN ${sql.in(messageIds)}`
+            yield* sql`DELETE FROM messages WHERE id IN ${sql.in(messageIds)}`
+            yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
           }),
         )
       },
