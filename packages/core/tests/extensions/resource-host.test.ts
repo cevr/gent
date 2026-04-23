@@ -104,6 +104,29 @@ describe("SubscriptionEngine", () => {
     expect(received).toEqual(["hello"])
   })
 
+  test("matching handlers run sequentially in registration order", async () => {
+    const received: string[] = []
+    await run(
+      Effect.gen(function* () {
+        const engine = yield* SubscriptionEngine
+        yield* engine.on("test:ordered", () =>
+          Effect.gen(function* () {
+            received.push("first:start")
+            yield* Effect.yieldNow
+            received.push("first:end")
+          }),
+        )
+        yield* engine.on("test:ordered", () =>
+          Effect.sync(() => {
+            received.push("second")
+          }),
+        )
+        yield* engine.emit({ channel: "test:ordered", payload: undefined })
+      }),
+    )
+    expect(received).toEqual(["first:start", "first:end", "second"])
+  })
+
   test("withSubscriptions pre-registers handlers", async () => {
     const received: ResourceBusEnvelope[] = []
     await Effect.runPromise(

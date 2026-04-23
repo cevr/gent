@@ -28,7 +28,13 @@ import type {
 export type SubscriptionHandler = (envelope: ResourceBusEnvelope) => Effect.Effect<void>
 
 export interface SubscriptionEngineService {
-  /** Emit an envelope to all matching subscribers. Fire-and-forget — errors caught per handler. */
+  /**
+   * Emit an envelope to all matching subscribers.
+   *
+   * Delivery is sequential in registration order. Shared session state lives
+   * behind `MachineEngine`, so handlers must not be forked by default.
+   * Errors remain isolated per handler.
+   */
   readonly emit: (envelope: ResourceBusEnvelope) => Effect.Effect<void>
   /** Subscribe to a channel pattern. Returns unsubscribe function.
    *  Pattern: exact match or `"<prefix>:*"` wildcard. */
@@ -129,7 +135,7 @@ const makeEngine = (): SubscriptionEngineService => {
                 ),
               ),
             ),
-          { concurrency: "unbounded", discard: true },
+          { discard: true },
         )
       }),
 
