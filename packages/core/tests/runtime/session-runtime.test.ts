@@ -1,415 +1,217 @@
+import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Stream } from "effect"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+import { Effect, Layer } from "effect"
+import { AgentDefinition } from "@gent/core/domain/agent"
+import { Branch, Session } from "@gent/core/domain/message"
+import type { QueueSnapshot } from "@gent/core/domain/queue"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
-import type { ExtensionContributions } from "../../src/domain/extension.js"
+import type { Provider } from "@gent/core/providers/provider"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { waitFor } from "@gent/core/test-utils/fixtures"
+import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
+import { ConfigService } from "@gent/core/runtime/config-service"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
 import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import { Session, Branch, ToolResultPart } from "@gent/core/domain/message"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { Agents } from "@gent/extensions/all-agents"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   SessionRuntime,
-  applySteerCommand,
-  interruptPayloadToSteerCommand,
   invokeToolCommand,
-  respondInteractionCommand,
   sendUserMessageCommand,
 } from "@gent/core/runtime/session-runtime"
+import type { ExtensionContributions } from "../../src/domain/extension.js"
 
-const makeTestExtRegistry = (tools: AnyCapabilityContribution[] = []) =>
-  resolveExtensions([
+const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
+  const cowork = new AgentDefinition({
+    name: "cowork" as never,
+    model: "test/default" as never,
+  })
+  const reflect = new AgentDefinition({
+    name: "memory:reflect" as never,
+    model: "test/override" as never,
+  })
+
+  return resolveExtensions([
     {
       manifest: { id: "agents" },
       scope: "builtin" as const,
       sourcePath: "test",
-      contributions: { agents: Object.values(Agents) } satisfies ExtensionContributions,
+      contributions: {
+        agents: [cowork, reflect],
+        ...(tools.length > 0 ? { capabilities: tools } : {}),
+      } satisfies ExtensionContributions,
     },
-    ...(tools.length > 0
-      ? [
-          {
-            manifest: { id: "tools" },
-            scope: "builtin" as const,
-            sourcePath: "test",
-            contributions: { capabilities: tools } satisfies ExtensionContributions,
-          },
-        ]
-      : []),
   ])
-
-const idleLoopState = {
-  _tag: "Idle" as const,
-  agent: "cowork" as const,
-  queue: emptyQueueSnapshot(),
 }
 
+const makeRuntimeLayer = (
+  providerLayer: Layer.Layer<Provider>,
+  tools: AnyCapabilityContribution[] = [],
+) => {
+  const resolvedExtensions = makeTestExtensions(tools)
+  const recorderLayer = SequenceRecorder.Live
+  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const baseDeps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    ExtensionRegistry.fromResolved(resolvedExtensions),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolvedExtensions.modelDrivers,
+      externalDrivers: resolvedExtensions.externalDrivers,
+    }),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    eventStoreLayer,
+    recorderLayer,
+    ToolRunner.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  return Layer.provideMerge(
+    SessionRuntime.Live({ baseSections: [] }),
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
+}
+
+const createSessionBranch = Effect.gen(function* () {
+  const storage = yield* Storage
+  const sessionId = SessionId.of("runtime-session")
+  const branchId = BranchId.of("runtime-branch")
+  const now = new Date()
+  yield* storage.createSession(
+    new Session({
+      id: sessionId,
+      name: "Runtime Test",
+      createdAt: now,
+      updatedAt: now,
+    }),
+  )
+  yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+  return { sessionId, branchId }
+})
+
+const eventTags = (calls: ReadonlyArray<CallRecord>) =>
+  calls
+    .filter((call) => call.service === "EventStore" && call.method === "publish")
+    .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
+
 describe("SessionRuntime", () => {
-  const makeSessionRuntimeLayer = (agentLoopLayer: Layer.Layer<AgentLoop>) => {
-    const resolvedExtensions = makeTestExtRegistry()
-    const recorderLayer = SequenceRecorder.Live
-    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const deps = Layer.mergeAll(
-      Storage.Test(),
-      agentLoopLayer,
-      ExtensionRegistry.fromResolved(resolvedExtensions),
-      DriverRegistry.fromResolved({
-        modelDrivers: resolvedExtensions.modelDrivers,
-        externalDrivers: resolvedExtensions.externalDrivers,
-      }),
-      MachineEngine.Test(),
-      eventStoreLayer,
-      recorderLayer,
-      ToolRunner.Test(),
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ResourceManagerLive,
+  test("sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected", async () => {
+    const { layer: providerLayer, controls } = await Effect.runPromise(
+      createSequenceProvider([
+        {
+          ...textStep("override reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/override")
+          },
+        },
+        {
+          ...textStep("default reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/default")
+          },
+        },
+      ]),
     )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return Layer.provideMerge(
-      SessionRuntime.Live({ baseSections: [] }),
-      Layer.merge(deps, eventPublisherLayer),
-    )
-  }
 
-  test("dispatch ApplySteer hands control to the internal loop", async () => {
-    let steered = false
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () =>
-        Effect.sync(() => {
-          steered = true
-        }),
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-
-    const layer = makeSessionRuntimeLayer(agentLoopLayer)
+    const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.dispatch(
-          applySteerCommand({
-            _tag: "SwitchAgent",
-            sessionId: "s1" as never,
-            branchId: "b1" as never,
-            agent: "deepwork",
-          }),
-        )
-        expect(steered).toBe(true)
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("interrupt translates interject payloads onto a tagged steer command", async () => {
-    let commandSeen:
-      | {
-          _tag: string
-          sessionId: string
-          branchId: string
-          message?: string
-        }
-      | undefined
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: (command) =>
-        Effect.sync(() => {
-          commandSeen = command as typeof commandSeen
-        }),
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-
-    const layer = makeSessionRuntimeLayer(agentLoopLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.dispatch(
-          applySteerCommand(
-            interruptPayloadToSteerCommand({
-              _tag: "Interject",
-              sessionId: "s1" as never,
-              branchId: "b1" as never,
-              message: "cut in",
-            }),
-          ),
-        )
-        expect(commandSeen).toEqual({
-          _tag: "Interject",
-          sessionId: "s1",
-          branchId: "b1",
-          message: "cut in",
-        })
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("sendUserMessage forwards interactive and runSpec through to the loop", async () => {
-    let submitSeen:
-      | {
-          interactive?: boolean
-          agentOverride?: string
-          runSpec?: { tags?: ReadonlyArray<string> }
-        }
-      | undefined
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: (_message, options) =>
-        Effect.sync(() => {
-          submitSeen = options
-        }),
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-
-    const layer = makeSessionRuntimeLayer(agentLoopLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
         const storage = yield* Storage
-        const sessionRuntime = yield* SessionRuntime
-
-        const now = new Date()
-        yield* storage.createSession(
-          new Session({ id: "s1", name: "S", createdAt: now, updatedAt: now }),
-        )
-        yield* storage.createBranch(new Branch({ id: "b1", sessionId: "s1", createdAt: now }))
-
-        yield* sessionRuntime.dispatch(
-          sendUserMessageCommand({
-            sessionId: "s1" as never,
-            branchId: "b1" as never,
-            content: "test",
-            agentOverride: "deepwork",
-            interactive: false,
-            runSpec: { tags: ["background"] },
-          }),
-        )
-
-        expect(submitSeen).toEqual({
-          agentOverride: "deepwork",
-          interactive: false,
-          runSpec: { tags: ["background"] },
-        })
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("sendUserMessage publishes AgentRestarted on defect", async () => {
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.die("boom"),
-      run: () => Effect.die("boom"),
-      steer: () => Effect.void,
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-
-    const layer = makeSessionRuntimeLayer(agentLoopLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const storage = yield* Storage
-        const sessionRuntime = yield* SessionRuntime
         const recorder = yield* SequenceRecorder
-
-        const now = new Date()
-        yield* storage.createSession(
-          new Session({
-            id: "defect-session",
-            name: "Defect",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: "defect-branch",
-            sessionId: "defect-session",
-            createdAt: now,
-          }),
-        )
+        const { sessionId, branchId } = yield* createSessionBranch
 
         yield* sessionRuntime.dispatch(
           sendUserMessageCommand({
-            sessionId: "defect-session" as never,
-            branchId: "defect-branch" as never,
-            content: "trigger defect",
+            sessionId,
+            branchId,
+            content: "first",
+            agentOverride: "memory:reflect",
           }),
         )
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({
+            sessionId,
+            branchId,
+            content: "second",
+          }),
+        )
+
+        const messages = yield* waitFor(
+          storage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 2,
+          5_000,
+          "two assistant replies",
+        )
+
+        expect(messages.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
+        ])
+
+        const state = yield* waitFor(
+          sessionRuntime.getState({ sessionId, branchId }),
+          (current) => current._tag === "Idle",
+          5_000,
+          "idle runtime state",
+        )
+        expect(state.agent).toBe("cowork")
 
         const calls = yield* recorder.getCalls()
-        const publishedTags = calls
-          .filter((call) => call.service === "EventStore" && call.method === "publish")
-          .map((call) => (call.args as { _tag: string } | undefined)?._tag)
-
-        expect(publishedTags).toContain("AgentRestarted")
-        expect(publishedTags).toContain("ErrorOccurred")
-        expect(publishedTags.indexOf("AgentRestarted")).toBeLessThan(
-          publishedTags.indexOf("ErrorOccurred"),
-        )
+        expect(eventTags(calls)).not.toContain("AgentSwitched")
+        yield* controls.assertDone()
       }).pipe(Effect.provide(layer)),
     )
   })
 
-  test("invokeTool persists assistant and tool messages without auto-scheduling a follow-up", async () => {
-    let submitCount = 0
-
-    const recorderLayer = SequenceRecorder.Live
-    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () =>
-        Effect.sync(() => {
-          submitCount += 1
-        }),
-      run: () =>
-        Effect.sync(() => {
-          submitCount += 1
-        }),
-      steer: () => Effect.void,
-      respondInteraction: () => Effect.void,
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-    const toolRunnerLayer = Layer.succeed(ToolRunner, {
-      run: (toolCall) =>
-        Effect.succeed(
-          new ToolResultPart({
-            type: "tool-result",
-            toolCallId: toolCall.toolCallId,
-            toolName: toolCall.toolName,
-            output: { type: "json", value: { ok: true } },
-          }),
-        ),
-    })
-
-    const resolvedExtensions = makeTestExtRegistry()
-    const deps = Layer.mergeAll(
-      Storage.Test(),
-      agentLoopLayer,
-      ExtensionRegistry.fromResolved(resolvedExtensions),
-      DriverRegistry.fromResolved({
-        modelDrivers: resolvedExtensions.modelDrivers,
-        externalDrivers: resolvedExtensions.externalDrivers,
-      }),
-      MachineEngine.Test(),
-      eventStoreLayer,
-      recorderLayer,
-      toolRunnerLayer,
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      ResourceManagerLive,
-    )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    const layer = Layer.provideMerge(
-      SessionRuntime.Live({ baseSections: [] }),
-      Layer.merge(deps, eventPublisherLayer),
-    )
+  test("invokeTool persists assistant and tool messages without queueing a follow-up turn", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const storage = yield* Storage
         const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
         const recorder = yield* SequenceRecorder
-        const now = new Date()
-
-        yield* storage.createSession(
-          new Session({
-            id: "invoke-session",
-            name: "Invoke Tool",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        )
-        yield* storage.createBranch(
-          new Branch({
-            id: "invoke-branch",
-            sessionId: "invoke-session",
-            createdAt: now,
-          }),
-        )
+        const { sessionId, branchId } = yield* createSessionBranch
 
         yield* sessionRuntime.dispatch(
           invokeToolCommand({
-            sessionId: "invoke-session" as never,
-            branchId: "invoke-branch" as never,
+            sessionId,
+            branchId,
             toolName: "read",
             input: {},
           }),
         )
 
-        const messages = yield* storage.listMessages("invoke-branch" as never)
+        const messages = yield* waitFor(
+          storage.listMessages(branchId),
+          (current) => current.length === 2,
+          5_000,
+          "invokeTool messages",
+        )
+        const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
         const calls = yield* recorder.getCalls()
-        const publishedTags = calls
-          .filter((call) => call.service === "EventStore" && call.method === "publish")
-          .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
 
         expect(messages.map((message) => message.role)).toEqual(["assistant", "tool"])
         expect(messages[0]?.parts[0]?.type).toBe("tool-call")
         expect(messages[1]?.parts[0]?.type).toBe("tool-result")
-        expect(submitCount).toBe(0)
-        expect(publishedTags).toContain("ToolCallStarted")
-        expect(publishedTags).toContain("ToolCallSucceeded")
-        expect(
-          publishedTags.filter((tag) => tag === "MessageReceived").length,
-        ).toBeGreaterThanOrEqual(2)
-      }).pipe(Effect.provide(layer)),
-    )
-  })
-
-  test("dispatch RespondInteraction hands the response to the internal loop", async () => {
-    let responseSeen:
-      | {
-          sessionId: string
-          branchId: string
-          requestId: string
-        }
-      | undefined
-
-    const agentLoopLayer = Layer.succeed(AgentLoop, {
-      submit: () => Effect.void,
-      run: () => Effect.void,
-      steer: () => Effect.void,
-      respondInteraction: (input) =>
-        Effect.sync(() => {
-          responseSeen = input as typeof responseSeen
-        }),
-      watchState: () => Effect.succeed(Stream.empty),
-      getState: () => Effect.succeed(idleLoopState),
-    })
-
-    const layer = makeSessionRuntimeLayer(agentLoopLayer)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
-        yield* sessionRuntime.dispatch(
-          respondInteractionCommand({
-            sessionId: "s1" as never,
-            branchId: "b1" as never,
-            requestId: "req-1",
-          }),
-        )
-        expect(responseSeen).toEqual({
-          _tag: "RespondInteraction",
-          sessionId: "s1",
-          branchId: "b1",
-          requestId: "req-1",
-        })
+        expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+        expect(eventTags(calls)).toContain("ToolCallStarted")
+        expect(eventTags(calls)).toContain("ToolCallSucceeded")
       }).pipe(Effect.provide(layer)),
     )
   })

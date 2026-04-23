@@ -147,6 +147,14 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bstatic FromLoop\b/)
   })
 
+  test("session runtime does not accept an ambient AgentLoop override seam", () => {
+    const file = pathResolve(ROOT, "packages/core/src/runtime/session-runtime.ts")
+    const source = readFileSync(file, "utf8")
+
+    expect(source).not.toMatch(/\bserviceOption\(AgentLoop\)/)
+    expect(source).not.toMatch(/\bLayer\.succeed\(AgentLoop,\s*/)
+  })
+
   test("package exports do not expose agent-loop as a public subpath", () => {
     const file = pathResolve(ROOT, "packages/core/package.json")
     const source = readFileSync(file, "utf8")
