@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   GENT_MESSAGE_METADATA_FIELDS,
+  EFFECT_AI_CONTENT_FIELDS,
   responsePartsToMessageParts,
   toPrompt,
   toPromptMessages,
@@ -58,6 +59,11 @@ describe("AI transcript bridge", () => {
           parts: [
             new ReasoningPart({ type: "reasoning", text: "Inspect image first." }),
             new TextPart({ type: "text", text: "I see it." }),
+            new ImagePart({
+              type: "image",
+              image: "data:image/png;base64,assistant-image",
+              mediaType: "image/png",
+            }),
             new ToolCallPart({
               type: "tool-call",
               toolCallId: ToolCallId.of("tc-1"),
@@ -112,8 +118,16 @@ describe("AI transcript bridge", () => {
       expect(assistantMessage.content.map((part) => part.type)).toEqual([
         "reasoning",
         "text",
+        "file",
         "tool-call",
       ])
+      expect(assistantMessage.content[2]).toEqual(
+        expect.objectContaining({
+          type: "file",
+          data: "data:image/png;base64,assistant-image",
+          mediaType: "image/png",
+        }),
+      )
     }
 
     expect(GENT_MESSAGE_METADATA_FIELDS).toEqual([
@@ -121,11 +135,11 @@ describe("AI transcript bridge", () => {
       "sessionId",
       "branchId",
       "kind",
-      "role",
       "createdAt",
       "turnDurationMs",
       "metadata",
     ])
+    expect(EFFECT_AI_CONTENT_FIELDS).toEqual(["role", "parts"])
   })
 
   test("hidden metadata excludes messages from model context unless explicitly included", () => {
@@ -159,6 +173,10 @@ describe("AI transcript bridge", () => {
         params: { path: "README.md" },
         providerExecuted: false,
       }),
+      Response.makePart("file", {
+        mediaType: "image/png",
+        data: new Uint8Array([104, 105]),
+      }),
       Response.makePart("tool-result", {
         id: "tc-2",
         name: "read",
@@ -170,7 +188,19 @@ describe("AI transcript bridge", () => {
       }),
     ])
 
-    expect(parts.assistant.map((part) => part.type)).toEqual(["text", "reasoning", "tool-call"])
+    expect(parts.assistant.map((part) => part.type)).toEqual([
+      "text",
+      "reasoning",
+      "tool-call",
+      "image",
+    ])
+    expect(parts.assistant[3]).toEqual(
+      expect.objectContaining({
+        type: "image",
+        image: "data:image/png;base64,aGk=",
+        mediaType: "image/png",
+      }),
+    )
     expect(parts.tool).toHaveLength(1)
     expect(parts.tool[0]).toEqual(
       expect.objectContaining({
