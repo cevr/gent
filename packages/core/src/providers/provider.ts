@@ -141,10 +141,15 @@ export type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
 
 const toUsage = (usage: Response.FinishPart["usage"]) =>
   usage !== undefined
-    ? {
-        inputTokens: usage.inputTokens.total ?? 0,
-        outputTokens: usage.outputTokens.total ?? 0,
-      }
+    ? (() => {
+        const inputTokens = usage.inputTokens.total
+        const outputTokens = usage.outputTokens.total
+        if (inputTokens === undefined && outputTokens === undefined) return undefined
+        return {
+          ...(inputTokens !== undefined ? { inputTokens } : {}),
+          ...(outputTokens !== undefined ? { outputTokens } : {}),
+        }
+      })()
     : undefined
 
 let _streamPartIdCounter = 0

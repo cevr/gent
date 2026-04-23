@@ -250,6 +250,29 @@ describe("toTurnEvent", () => {
     )
   })
 
+  test("preserves omitted usage as undefined", async () => {
+    const part = Response.makePart("finish", {
+      reason: "stop",
+      usage: new Response.Usage({
+        inputTokens: {
+          uncached: undefined,
+          total: undefined,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+        },
+        outputTokens: {
+          total: undefined,
+          text: undefined,
+          reasoning: undefined,
+        },
+      }),
+      response: undefined,
+    }) satisfies ProviderStreamPart
+    const event = await Effect.runPromise(map(part))
+    expect(event).toBeInstanceOf(Finished)
+    expect(event).toEqual(expect.not.objectContaining({ usage: expect.anything() }))
+  })
+
   test("maps error to ProviderError failure", async () => {
     const part = Response.makePart("error", {
       message: "rate limited",
