@@ -1,73 +1,111 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Ref } from "effect"
-import { EventStore } from "@gent/core/domain/event"
-import { EventPublisher } from "@gent/core/domain/event-publisher"
-import type { SessionId } from "@gent/core/domain/ids"
-import { Permission } from "@gent/core/domain/permission"
-import { Provider } from "@gent/core/providers/provider"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { AppServicesLive } from "@gent/core/server/index"
-import { SessionCommands } from "@gent/core/server/session-commands"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
-import { SessionRuntime } from "@gent/core/runtime/session-runtime"
+import { Deferred, Effect, Stream } from "effect"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { waitFor } from "@gent/core/test-utils/fixtures"
+import { Gent } from "@gent/sdk"
+import { e2ePreset } from "../extensions/helpers/test-preset"
 
-describe("SessionCommands", () => {
-  it.live("deleteSession terminates event delivery workers before removing state", () =>
-    Effect.gen(function* () {
-      const terminatedRef = yield* Ref.make<ReadonlyArray<SessionId>>([])
+const makeClient = (reply = "ok") =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* createSequenceProvider([textStep(reply)])
+    return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+  })
 
-      const baseEventStore = EventStore.Memory
-      const baseDeps = Layer.mergeAll(
-        Storage.TestWithSql(),
-        Provider.Debug(),
-        baseEventStore,
-        AgentLoop.Test(),
-        MachineEngine.Test(),
-        ExtensionRegistry.fromResolved(resolveExtensions([])),
-        Permission.Live([], "allow"),
-        ConfigService.Test(),
-        ApprovalService.Test(),
-        RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-        SessionCwdRegistry.Test(),
-        SessionRuntime.Test(),
-      )
+describe("session.delete", () => {
+  it.live("closes session event streams and removes the session from public queries", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const created = yield* client.session.create({ cwd: process.cwd() })
+        const closed = yield* Deferred.make<void>()
 
-      // Wrap real EventPublisherLive to record terminateSession calls
-      const recordingPublisher = Layer.effect(
-        EventPublisher,
+        yield* client.session
+          .events({
+            sessionId: created.sessionId,
+          })
+          .pipe(
+            Stream.runForEach(() => Effect.void),
+            Effect.ensuring(Deferred.succeed(closed, undefined).pipe(Effect.ignore)),
+            Effect.forkScoped,
+          )
+
+        yield* Effect.sleep("50 millis")
+        yield* client.session.delete({ sessionId: created.sessionId })
+        yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
+
+        const deleted = yield* client.session.get({ sessionId: created.sessionId })
+        const sessions = yield* client.session.list()
+
+        expect(deleted).toBeNull()
+        expect(sessions.some((session) => session.id === created.sessionId)).toBe(false)
+      }),
+    ),
+  )
+
+  it.live("is idempotent when deleting an already deleted session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const created = yield* client.session.create({ cwd: process.cwd() })
+
+        yield* client.session.delete({ sessionId: created.sessionId })
+        yield* client.session.delete({ sessionId: created.sessionId })
+        const deleted = yield* client.session.get({ sessionId: created.sessionId })
+
+        expect(deleted).toBeNull()
+      }),
+    ),
+  )
+})
+
+describe("message.send", () => {
+  it.live(
+    "persists the user message and assistant reply through the public snapshot contract",
+    () =>
+      Effect.scoped(
         Effect.gen(function* () {
-          const real = yield* EventPublisher
-          return {
-            publish: (event) => real.publish(event),
-            terminateSession: (sessionId) =>
-              Ref.update(terminatedRef, (current) => [...current, sessionId]).pipe(
-                Effect.andThen(real.terminateSession(sessionId)),
+          const userText = "hello from acceptance"
+          const assistantText = "acceptance reply"
+          const { client } = yield* makeClient(assistantText)
+          const created = yield* client.session.create({ cwd: process.cwd() })
+
+          yield* client.message.send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: userText,
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === assistantText),
               ),
-          }
+            5_000,
+            "assistant reply in session snapshot",
+          )
+
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.parts.some((part) => part.type === "text" && part.text === userText),
+            ),
+          ).toBe(true)
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === assistantText),
+            ),
+          ).toBe(true)
         }),
-      )
-
-      const publisherDeps = Layer.merge(baseDeps, Layer.provide(EventPublisherLive, baseDeps))
-      const recordingLayer = Layer.provide(recordingPublisher, publisherDeps)
-      const fullDeps = Layer.merge(baseDeps, recordingLayer)
-      const layer = Layer.provideMerge(AppServicesLive, fullDeps)
-
-      yield* Effect.gen(function* () {
-        const commands = yield* SessionCommands
-
-        const created = yield* commands.createSession({ name: "Delete Me" })
-        yield* commands.deleteSession(created.sessionId)
-
-        const terminated = yield* Ref.get(terminatedRef)
-        expect(terminated).toEqual([created.sessionId])
-      }).pipe(Effect.provide(layer))
-    }),
+      ),
   )
 })

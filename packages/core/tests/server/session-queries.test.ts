@@ -1,190 +1,178 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer, Stream } from "effect"
-import { EventStore, AgentSwitched } from "@gent/core/domain/event"
-import { Permission } from "@gent/core/domain/permission"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { Deferred, Effect, Ref, Stream } from "effect"
+import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { SessionId } from "@gent/core/domain/ids"
-import { Storage } from "@gent/core/storage/sqlite-storage"
-import { Provider } from "@gent/core/providers/provider"
-import { AppServicesLive } from "@gent/core/server/index"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import { SessionQueries } from "@gent/core/server/session-queries"
-import { SessionCommands } from "@gent/core/server/session-commands"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { SessionCwdRegistry } from "@gent/core/runtime/session-cwd-registry"
-import { SessionRuntime, SessionRuntimeStateSchema } from "@gent/core/runtime/session-runtime"
-import { SessionSnapshot } from "@gent/core/server/transport-contract"
-import { emptyQueueSnapshot } from "@gent/core/domain/queue"
+import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { waitFor } from "@gent/core/test-utils/fixtures"
+import { Gent } from "@gent/sdk"
+import { e2ePreset } from "../extensions/helpers/test-preset"
 
-const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
+const makeClient = (reply = "ok") =>
+  Effect.gen(function* () {
+    const { layer: providerLayer } = yield* createSequenceProvider([textStep(reply)])
+    return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+  })
 
-describe("Session Snapshot", () => {
-  it.live("getSessionSnapshot only returns persisted state", () => {
-    const eventStoreLayer = EventStore.Memory
-    const sessionRuntimeLayer = Layer.succeed(SessionRuntime, {
-      dispatch: () => Effect.void,
-      drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-      getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
-      getState: () =>
-        Effect.succeed(
-          new SessionRuntimeStateSchema.Running({
-            agent: "deepwork" as const,
-            queue: emptyQueueSnapshot(),
-          }),
+const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
+  Effect.gen(function* () {
+    const values = yield* Ref.make<A[]>([])
+    const ready = yield* Deferred.make<void>()
+
+    yield* stream.pipe(
+      Stream.runForEach((value) =>
+        Ref.update(values, (current) => [...current, value]).pipe(
+          Effect.andThen(Deferred.succeed(ready, undefined).pipe(Effect.ignore)),
         ),
-      getMetrics: () =>
-        Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
-      watchState: () => Effect.succeed(Stream.empty),
-    })
-    const baseWithEventStore = Layer.mergeAll(
-      Storage.TestWithSql(),
-      Provider.Debug(),
-      eventStoreLayer,
-      sessionRuntimeLayer,
-      MachineEngine.Test(),
-      Permission.Live([], "allow"),
-      ConfigService.Test(),
-      emptyRegistryLayer,
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      SessionCwdRegistry.Test(),
+      ),
+      Effect.forkScoped,
     )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
-    const deps = Layer.mergeAll(
-      baseWithEventStore,
-      eventPublisherLayer,
-      AgentLoop.Test(),
-      ApprovalService.Test(),
-    )
-    const testLayer = Layer.provideMerge(AppServicesLive, deps)
 
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const queries = yield* SessionQueries
-      const storage = yield* Storage
-      const session = yield* commands.createSession({ name: "Test Session" })
-      yield* storage.appendEvent(
-        new AgentSwitched({
-          sessionId: session.sessionId,
-          branchId: session.branchId,
-          fromAgent: "deepwork",
-          toAgent: "cowork",
+    yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+    return values
+  })
+
+describe("session queries", () => {
+  it.live(
+    "getSessionSnapshot matches the persisted conversation while runtime transitions through public watchRuntime",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const userText = "snapshot request"
+          const assistantText = "snapshot reply"
+          const { client } = yield* makeClient(assistantText)
+          const created = yield* client.session.create({ cwd: process.cwd() })
+
+          const runtime = yield* collectRuntime(
+            client.session.watchRuntime({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          )
+
+          yield* client.message.send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: userText,
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+            (current) =>
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === assistantText),
+              ),
+            5_000,
+            "session snapshot assistant reply",
+          )
+
+          const states = yield* waitFor(
+            Ref.get(runtime),
+            (current) =>
+              current.some((state) => state._tag !== "Idle") &&
+              current.some((state) => state._tag === "Idle"),
+            5_000,
+            "runtime transition history",
+          )
+
+          expect(states.some((state) => state._tag !== "Idle")).toBe(true)
+          expect(snapshot.runtime._tag).toBe("Idle")
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.parts.some((part) => part.type === "text" && part.text === userText),
+            ),
+          ).toBe(true)
+          expect(
+            snapshot.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === assistantText),
+            ),
+          ).toBe(true)
         }),
-      )
+      ),
+  )
 
-      const result = yield* queries.getSessionSnapshot({
-        sessionId: session.sessionId,
-        branchId: session.branchId,
-      })
-      expect(result).toBeInstanceOf(SessionSnapshot)
-      expect(result.sessionId).toBeDefined()
-      expect(result.messages).toEqual([])
-    }).pipe(Effect.provide(testLayer))
-  })
-})
+  it.live("getChildSessions returns only direct descendants", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const root = yield* client.session.create({ name: "Root", cwd: process.cwd() })
+        const childA = yield* client.session.create({
+          name: "Child A",
+          cwd: process.cwd(),
+          parentSessionId: root.sessionId,
+          parentBranchId: root.branchId,
+        })
+        yield* client.session.create({
+          name: "Grandchild",
+          cwd: process.cwd(),
+          parentSessionId: childA.sessionId,
+          parentBranchId: childA.branchId,
+        })
+        yield* client.session.create({
+          name: "Child B",
+          cwd: process.cwd(),
+          parentSessionId: root.sessionId,
+          parentBranchId: root.branchId,
+        })
 
-describe("Session Tree", () => {
-  const makeTestLayer = () => {
-    const eventStoreLayer = EventStore.Memory
-    const baseWithEventStore = Layer.mergeAll(
-      Storage.TestWithSql(),
-      Provider.Debug(),
-      eventStoreLayer,
-      MachineEngine.Test(),
-      Permission.Live([], "allow"),
-      ConfigService.Test(),
-      emptyRegistryLayer,
-      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
-      SessionCwdRegistry.Test(),
-      SessionRuntime.Test(),
-    )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, baseWithEventStore)
-    const deps = Layer.mergeAll(
-      baseWithEventStore,
-      eventPublisherLayer,
-      AgentLoop.Test(),
-      ApprovalService.Test(),
-    )
-    return Layer.provideMerge(AppServicesLive, deps)
-  }
+        const children = yield* client.session.getChildren({ parentSessionId: root.sessionId })
 
-  it.live("getChildSessions returns direct children", () => {
-    const testLayer = makeTestLayer()
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const queries = yield* SessionQueries
-      const parent = yield* commands.createSession({ name: "Parent" })
-      yield* commands.createSession({
-        name: "Child 1",
-        parentSessionId: parent.sessionId,
-        parentBranchId: parent.branchId,
-      })
-      yield* commands.createSession({
-        name: "Child 2",
-        parentSessionId: parent.sessionId,
-        parentBranchId: parent.branchId,
-      })
-      const result = yield* queries.getChildSessions(parent.sessionId)
-      expect(result.length).toBe(2)
-    }).pipe(Effect.provide(testLayer))
-  })
+        expect(children).toHaveLength(2)
+        expect(children.every((child) => child.parentSessionId === root.sessionId)).toBe(true)
+      }),
+    ),
+  )
 
-  it.live("getSessionTree builds recursive hierarchy", () => {
-    const testLayer = makeTestLayer()
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const queries = yield* SessionQueries
-      const root = yield* commands.createSession({ name: "Root" })
-      const child = yield* commands.createSession({
-        name: "Child",
-        parentSessionId: root.sessionId,
-        parentBranchId: root.branchId,
-      })
-      yield* commands.createSession({
-        name: "Grandchild",
-        parentSessionId: child.sessionId,
-        parentBranchId: child.branchId,
-      })
-      const result = yield* queries.getSessionTree(root.sessionId)
-      expect(result.session.name).toBe("Root")
-      expect(result.children.length).toBe(1)
-      expect(result.children[0]!.session.name).toBe("Child")
-      expect(result.children[0]!.children.length).toBe(1)
-      expect(result.children[0]!.children[0]!.session.name).toBe("Grandchild")
-    }).pipe(Effect.provide(testLayer))
-  })
+  it.live("getSessionTree returns the recursive session hierarchy", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const root = yield* client.session.create({ name: "Root", cwd: process.cwd() })
+        const child = yield* client.session.create({
+          name: "Child",
+          cwd: process.cwd(),
+          parentSessionId: root.sessionId,
+          parentBranchId: root.branchId,
+        })
+        yield* client.session.create({
+          name: "Grandchild",
+          cwd: process.cwd(),
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+        })
 
-  it.live("createSession rejects invalid parentSessionId", () => {
-    const testLayer = makeTestLayer()
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const result = yield* Effect.result(
-        commands.createSession({
-          name: "Orphan",
-          parentSessionId: SessionId.of("nonexistent"),
-        }),
-      )
-      expect(result._tag).toBe("Failure")
-    }).pipe(Effect.provide(testLayer))
-  })
+        const tree = yield* client.session.getTree({ sessionId: root.sessionId })
 
-  it.live("createSession threads parentSessionId to storage", () => {
-    const testLayer = makeTestLayer()
-    return Effect.gen(function* () {
-      const commands = yield* SessionCommands
-      const queries = yield* SessionQueries
-      const parent = yield* commands.createSession({ name: "Parent" })
-      const child = yield* commands.createSession({
-        name: "Child",
-        parentSessionId: parent.sessionId,
-        parentBranchId: parent.branchId,
-      })
-      const result = yield* queries.getSession(child.sessionId)
-      expect(result).not.toBeNull()
-      expect(result!.parentSessionId).toBeDefined()
-    }).pipe(Effect.provide(testLayer))
-  })
+        expect(tree.id).toBe(root.sessionId)
+        expect(tree.children).toHaveLength(1)
+        expect(tree.children[0]?.id).toBe(child.sessionId)
+        expect(tree.children[0]?.children).toHaveLength(1)
+      }),
+    ),
+  )
+
+  it.live("createSession rejects a missing parent session through the public API", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const result = yield* Effect.result(
+          client.session.create({
+            name: "Orphan",
+            cwd: process.cwd(),
+            parentSessionId: SessionId.of("nonexistent"),
+          }),
+        )
+
+        expect(result._tag).toBe("Failure")
+      }),
+    ),
+  )
 })
