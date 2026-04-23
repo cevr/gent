@@ -7,11 +7,14 @@ import type { Atom, AtomInstance, Writable, WritableInstance } from "./atom"
 
 export interface Registry<Services = unknown> {
   readonly fork: <A, E, R extends Services>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
-  readonly read: <A>(atom: Atom<A>) => Accessor<A>
-  readonly get: <A>(atom: Atom<A>) => A
-  readonly set: <R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)) => void
-  readonly refresh: <A>(atom: Atom<A>) => void
-  readonly mount: <A>(atom: Atom<A>) => () => void
+  readonly read: <A, R extends Services>(atom: Atom<A, R>) => Accessor<A>
+  readonly get: <A, R extends Services>(atom: Atom<A, R>) => A
+  readonly set: <R, W, AtomServices extends Services>(
+    atom: Writable<R, W, AtomServices>,
+    value: W | ((value: R) => W),
+  ) => void
+  readonly refresh: <A, R extends Services>(atom: Atom<A, R>) => void
+  readonly mount: <A, R extends Services>(atom: Atom<A, R>) => () => void
   readonly dispose: () => void
 }
 
@@ -30,8 +33,8 @@ export const make = <Services = unknown>(options?: RegistryOptions<Services>): R
 
 class RegistryImpl<Services> implements Registry<Services> {
   private readonly services: Context.Context<Services>
-  private readonly instances = new Map<Atom<unknown>, AtomInstance<unknown>>()
-  private readonly refCounts = new Map<Atom<unknown>, number>()
+  private readonly instances = new Map<Atom<unknown, Services>, AtomInstance<unknown>>()
+  private readonly refCounts = new Map<Atom<unknown, Services>, number>()
   private readonly maxEntries: number | undefined
   private readonly shouldEvict: boolean
   private readonly owner: Owner
@@ -62,28 +65,32 @@ class RegistryImpl<Services> implements Registry<Services> {
     return Effect.runForkWith(this.services)(effect)
   }
 
-  read<A>(atom: Atom<A>): Accessor<A> {
+  read<A, R extends Services>(atom: Atom<A, R>): Accessor<A> {
     return this.ensure(atom).get
   }
 
-  get<A>(atom: Atom<A>): A {
+  get<A, R extends Services>(atom: Atom<A, R>): A {
     return this.read(atom)()
   }
 
-  set<R, W>(atom: Writable<R, W>, value: W | ((value: R) => W)): void {
+  set<R, W, AtomServices extends Services>(
+    atom: Writable<R, W, AtomServices>,
+    value: W | ((value: R) => W),
+  ): void {
     this.ensureWritable(atom).set(value)
   }
 
-  refresh<A>(atom: Atom<A>): void {
-    const instance = this.instances.get(atom as Atom<unknown>)
+  refresh<A, R extends Services>(atom: Atom<A, R>): void {
+    const key = atom as Atom<unknown, Services>
+    const instance = this.instances.get(key)
     if (instance !== undefined) {
-      this.touch(atom as Atom<unknown>, instance)
+      this.touch(key, instance)
     }
     instance?.refresh?.()
   }
 
-  mount<A>(atom: Atom<A>): () => void {
-    const key = atom as Atom<unknown>
+  mount<A, R extends Services>(atom: Atom<A, R>): () => void {
+    const key = atom as Atom<unknown, Services>
     this.ensure(atom)
     this.touch(key)
     const current = this.refCounts.get(key) ?? 0
@@ -108,26 +115,26 @@ class RegistryImpl<Services> implements Registry<Services> {
     this.disposeRoot()
   }
 
-  private ensure<A>(atom: Atom<A>): AtomInstance<A> {
-    const existing = this.instances.get(atom as Atom<unknown>)
+  private ensure<A, R extends Services>(atom: Atom<A, R>): AtomInstance<A> {
+    const key = atom as Atom<unknown, Services>
+    const existing = this.instances.get(key)
     if (existing !== undefined) {
-      this.touch(atom as Atom<unknown>, existing)
+      this.touch(key, existing)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       return existing as AtomInstance<A>
     }
-    const created = runWithOwner(this.owner, () =>
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      atom.build(this as Registry),
-    )
+    const created = runWithOwner(this.owner, () => atom.build(this))
     if (created === undefined) {
       throw new Error("Atom build returned no instance")
     }
-    this.instances.set(atom as Atom<unknown>, created as AtomInstance<unknown>)
+    this.instances.set(key, created as AtomInstance<unknown>)
     this.evictIfNeeded()
     return created
   }
 
-  private ensureWritable<R, W>(atom: Writable<R, W>): WritableInstance<R, W> {
+  private ensureWritable<R, W, AtomServices extends Services>(
+    atom: Writable<R, W, AtomServices>,
+  ): WritableInstance<R, W> {
     const instance = this.ensure(atom)
     if (!("set" in instance)) {
       throw new Error("Atom is not writable")
@@ -136,7 +143,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     return instance as WritableInstance<R, W>
   }
 
-  private touch(atom: Atom<unknown>, instance?: AtomInstance<unknown>): void {
+  private touch(atom: Atom<unknown, Services>, instance?: AtomInstance<unknown>): void {
     if (!this.shouldEvict) return
     const value = instance ?? this.instances.get(atom)
     if (value === undefined) return
@@ -156,7 +163,10 @@ class RegistryImpl<Services> implements Registry<Services> {
     }
   }
 
-  private findEvictable(): { atom: Atom<unknown>; instance: AtomInstance<unknown> } | null {
+  private findEvictable(): {
+    atom: Atom<unknown, Services>
+    instance: AtomInstance<unknown>
+  } | null {
     for (const [atom, instance] of this.instances) {
       if (!this.isMounted(atom)) {
         return { atom, instance }
@@ -165,7 +175,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     return null
   }
 
-  private isMounted(atom: Atom<unknown>): boolean {
+  private isMounted(atom: Atom<unknown, Services>): boolean {
     return (this.refCounts.get(atom) ?? 0) > 0
   }
 }

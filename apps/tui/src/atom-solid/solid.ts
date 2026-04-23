@@ -20,27 +20,33 @@ const defaultRegistry = (() => {
   return _defaultRegistry
 })()
 
-export const RegistryContext = createContext<Registry.Registry>(defaultRegistry)
+export const RegistryContext = createContext<Registry.Registry<unknown>>(defaultRegistry)
 
-export const useRegistry = (): Registry.Registry => useContext(RegistryContext)
+export const useRegistry = <Services = never>(): Registry.Registry<Services> =>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  useContext(RegistryContext) as Registry.Registry<Services>
 
-type AtomInput<A> = Atom<A> | Accessor<Atom<A>>
+type AtomInput<A, Services = never> = Atom<A, Services> | Accessor<Atom<A, Services>>
 
-type WritableInput<R, W> = Writable<R, W> | Accessor<Writable<R, W>>
+type WritableInput<R, W, Services = never> =
+  | Writable<R, W, Services>
+  | Accessor<Writable<R, W, Services>>
 
-const toAccessor = <A>(atom: AtomInput<A>): Accessor<Atom<A>> =>
-  typeof atom === "function" ? (atom as Accessor<Atom<A>>) : () => atom
+const toAccessor = <A, Services>(atom: AtomInput<A, Services>): Accessor<Atom<A, Services>> =>
+  typeof atom === "function" ? (atom as Accessor<Atom<A, Services>>) : () => atom
 
-const toWritableAccessor = <R, W>(atom: WritableInput<R, W>): Accessor<Writable<R, W>> =>
-  typeof atom === "function" ? (atom as Accessor<Writable<R, W>>) : () => atom
+const toWritableAccessor = <R, W, Services>(
+  atom: WritableInput<R, W, Services>,
+): Accessor<Writable<R, W, Services>> =>
+  typeof atom === "function" ? (atom as Accessor<Writable<R, W, Services>>) : () => atom
 
-export interface RegistryProviderProps extends ParentProps {
-  readonly registry?: Registry.Registry
-  readonly services?: Context.Context<unknown>
+export interface RegistryProviderProps<Services = unknown> extends ParentProps {
+  readonly registry?: Registry.Registry<Services>
+  readonly services?: Context.Context<Services>
   readonly maxEntries?: number
 }
 
-export const RegistryProvider = (props: RegistryProviderProps) => {
+export const RegistryProvider = <Services = unknown>(props: RegistryProviderProps<Services>) => {
   const registry =
     props.registry ??
     (props.services === undefined
@@ -60,7 +66,10 @@ export const RegistryProvider = (props: RegistryProviderProps) => {
   })
 }
 
-const mountAtom = <A>(registry: Registry.Registry, atomAccessor: Accessor<Atom<A>>) => {
+const mountAtom = <A, Services>(
+  registry: Registry.Registry<Services>,
+  atomAccessor: Accessor<Atom<A, Services>>,
+) => {
   createEffect(() => {
     const atom = atomAccessor()
     const unmount = registry.mount(atom)
@@ -68,15 +77,15 @@ const mountAtom = <A>(registry: Registry.Registry, atomAccessor: Accessor<Atom<A
   })
 }
 
-export const useAtomValue = <A>(atom: AtomInput<A>): Accessor<A> => {
-  const registry = useRegistry()
+export const useAtomValue = <A, Services = never>(atom: AtomInput<A, Services>): Accessor<A> => {
+  const registry = useRegistry<Services>()
   const atomAccessor = toAccessor(atom)
   mountAtom(registry, atomAccessor)
   return createMemo(() => registry.read(atomAccessor())())
 }
 
-export const useAtomSet = <R, W>(atom: WritableInput<R, W>) => {
-  const registry = useRegistry()
+export const useAtomSet = <R, W, Services = never>(atom: WritableInput<R, W, Services>) => {
+  const registry = useRegistry<Services>()
   const atomAccessor = toWritableAccessor(atom)
   mountAtom(registry, atomAccessor)
 
@@ -85,15 +94,15 @@ export const useAtomSet = <R, W>(atom: WritableInput<R, W>) => {
   }
 }
 
-export const useAtomRefresh = <A>(atom: AtomInput<A>) => {
-  const registry = useRegistry()
+export const useAtomRefresh = <A, Services = never>(atom: AtomInput<A, Services>) => {
+  const registry = useRegistry<Services>()
   const atomAccessor = toAccessor(atom)
   mountAtom(registry, atomAccessor)
   return () => registry.refresh(atomAccessor())
 }
 
-export const useAtomSubscribe = <A>(
-  atom: AtomInput<A>,
+export const useAtomSubscribe = <A, Services = never>(
+  atom: AtomInput<A, Services>,
   f: (value: A) => void,
   options?: { readonly immediate?: boolean },
 ): void => {
@@ -109,8 +118,8 @@ export const useAtomSubscribe = <A>(
   })
 }
 
-export const useAtom = <R, W>(atom: WritableInput<R, W>) => {
-  const registry = useRegistry()
+export const useAtom = <R, W, Services = never>(atom: WritableInput<R, W, Services>) => {
+  const registry = useRegistry<Services>()
   const atomAccessor = toWritableAccessor(atom)
   mountAtom(registry, atomAccessor)
   const value = createMemo(() => registry.read(atomAccessor())())
@@ -120,7 +129,7 @@ export const useAtom = <R, W>(atom: WritableInput<R, W>) => {
   return [value, set] as const
 }
 
-export const useAtomResult = <A, E>(atom: AtomInput<Result<A, E>>) => {
+export const useAtomResult = <A, E, Services = never>(atom: AtomInput<Result<A, E>, Services>) => {
   const result = useAtomValue(atom)
   const value = () => {
     const current = result()

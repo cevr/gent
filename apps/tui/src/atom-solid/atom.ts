@@ -7,8 +7,8 @@ import type { Registry } from "./registry"
 import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
 
-export interface Atom<A> {
-  readonly build: (registry: Registry) => AtomInstance<A>
+export interface Atom<A, Services = never> {
+  readonly build: (registry: Registry<Services>) => AtomInstance<A>
 }
 
 export interface AtomInstance<A> {
@@ -17,19 +17,21 @@ export interface AtomInstance<A> {
   readonly dispose?: () => void
 }
 
-export interface Writable<R, W = R> extends Atom<R> {
-  readonly build: (registry: Registry) => WritableInstance<R, W>
+export interface Writable<R, W = R, Services = never> extends Atom<R, Services> {
+  readonly build: (registry: Registry<Services>) => WritableInstance<R, W>
 }
 
 export interface WritableInstance<R, W> extends AtomInstance<R> {
   readonly set: (value: W | ((value: R) => W)) => void
 }
 
-export const atom = <A>(build: (registry: Registry) => AtomInstance<A>): Atom<A> => ({ build })
+export const atom = <A, Services = never>(
+  build: (registry: Registry<Services>) => AtomInstance<A>,
+): Atom<A, Services> => ({ build })
 
-export const writableAtom = <R, W>(
-  build: (registry: Registry) => WritableInstance<R, W>,
-): Writable<R, W> => ({ build })
+export const writableAtom = <R, W, Services = never>(
+  build: (registry: Registry<Services>) => WritableInstance<R, W>,
+): Writable<R, W, Services> => ({ build })
 
 export const state = <A>(initialValue: A): Writable<A> =>
   writableAtom(() => {
@@ -45,20 +47,27 @@ export const state = <A>(initialValue: A): Writable<A> =>
     return { get: value, set }
   })
 
-export const readable = <A>(read: (get: <T>(atom: Atom<T>) => T) => A): Atom<A> =>
+export const readable = <A, Services = never>(
+  read: (get: <T, AtomServices extends Services>(atom: Atom<T, AtomServices>) => T) => A,
+): Atom<A, Services> =>
   atom((registry) => {
-    const get = <T>(atom: Atom<T>) => registry.read(atom)()
+    const get = <T, AtomServices extends Services>(atom: Atom<T, AtomServices>) =>
+      registry.read(atom)()
     const memo = createMemo(() => read(get))
     return { get: memo }
   })
 
-export const map = <A, B>(atom: Atom<A>, f: (value: A) => B): Atom<B> =>
-  readable((get) => f(get(atom)))
+export const map = <A, B, Services>(
+  atom: Atom<A, Services>,
+  f: (value: A) => B,
+): Atom<B, Services> => readable((get) => f(get(atom)))
 
 export const effect = <A, E, R>(
-  create: Effect.Effect<A, E, R> | ((get: <T>(atom: Atom<T>) => T) => Effect.Effect<A, E, R>),
+  create:
+    | Effect.Effect<A, E, R>
+    | ((get: <T, Services extends R>(atom: Atom<T, Services>) => T) => Effect.Effect<A, E, R>),
   options?: { readonly initialValue?: A },
-): Atom<AtomResult<A, E>> =>
+): Atom<AtomResult<A, E>, R> =>
   atom((registry) => {
     const initialResult =
       options?.initialValue !== undefined
@@ -66,7 +75,7 @@ export const effect = <A, E, R>(
         : Result.initial<A, E>(true)
     const [result, setResult] = createSignal<AtomResult<A, E>>(initialResult)
     const [version, setVersion] = createSignal(0)
-    const get = <T>(atom: Atom<T>) => registry.read(atom)()
+    const get = <T, Services extends R>(atom: Atom<T, Services>) => registry.read(atom)()
 
     const runEffect = (eff: Effect.Effect<A, E, R>) => {
       let cancelled = false

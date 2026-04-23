@@ -4,6 +4,7 @@
 
 import { createMemo } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
+import type { RGBA } from "@opentui/core"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import { MessageList } from "../components/message-list"
 import { Composer } from "../components/composer"
@@ -59,7 +60,7 @@ export function Session(props: SessionProps) {
   }
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: BorderLabelColor) => {
+  const resolveColor = (color: BorderLabelColor | string | undefined): RGBA => {
     if (typeof color === "string") {
       const colorMap = {
         warning: theme.warning,
@@ -69,9 +70,11 @@ export function Session(props: SessionProps) {
         text: theme.text,
         textMuted: theme.textMuted,
       }
-      return colorMap[color]
+      const isKnownColor = (name: string): name is keyof typeof colorMap =>
+        Object.hasOwn(colorMap, name)
+      return isKnownColor(color) ? colorMap[color] : theme.text
     }
-    return color
+    return color ?? theme.text
   }
 
   const topLeftLabels = (): BorderLabelItem[] => {
