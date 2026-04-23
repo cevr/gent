@@ -66,16 +66,54 @@ describe("stripBackground", () => {
 // Integration — real command execution
 // ============================================================================
 
-const stubCtx = {
+const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
+
+const stubCtx: ToolContext = {
   sessionId: SessionId.of("test-session"),
   branchId: BranchId.of("test-branch"),
   toolCallId: ToolCallId.of("tc-1"),
   cwd: process.cwd(),
   home: "/tmp",
+  extension: {
+    send: dieStub("send"),
+    ask: dieStub("ask"),
+    request: dieStub("request"),
+  },
+  agent: {
+    get: dieStub("get"),
+    require: dieStub("require"),
+    run: dieStub("run"),
+    resolveDualModelPair: dieStub("resolveDualModelPair"),
+  },
+  session: {
+    listMessages: dieStub("listMessages"),
+    getSession: dieStub("getSession"),
+    getDetail: dieStub("getDetail"),
+    renameCurrent: dieStub("renameCurrent"),
+    estimateContextPercent: dieStub("estimateContextPercent"),
+    search: dieStub("search"),
+    listBranches: dieStub("listBranches"),
+    createBranch: dieStub("createBranch"),
+    forkBranch: dieStub("forkBranch"),
+    switchBranch: dieStub("switchBranch"),
+    createChildSession: dieStub("createChildSession"),
+    getChildSessions: dieStub("getChildSessions"),
+    getSessionAncestors: dieStub("getSessionAncestors"),
+    deleteSession: dieStub("deleteSession"),
+    deleteBranch: dieStub("deleteBranch"),
+    deleteMessages: dieStub("deleteMessages"),
+  },
   interaction: {
     approve: () => Effect.succeed({ approved: true }),
+    present: dieStub("present"),
+    confirm: dieStub("confirm"),
+    review: dieStub("review"),
   },
-} as unknown as ToolContext
+  turn: {
+    queueFollowUp: dieStub("queueFollowUp"),
+    interject: dieStub("interject"),
+  },
+}
 
 describe("BashTool execution", () => {
   test("runs a command and returns stdout", async () => {

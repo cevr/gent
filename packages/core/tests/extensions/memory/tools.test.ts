@@ -28,8 +28,8 @@ afterEach(() => {
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 
-const makeCtx = (cwd: string): ToolContext =>
-  ({
+const makeCtx = (cwd: string): ToolContext => {
+  const ctx: ToolContext = {
     sessionId: SessionId.of("019d97c0-0000-7000-0000-000000000000"),
     branchId: BranchId.of("019d97c0-0000-7001-0000-000000000000"),
     toolCallId: ToolCallId.of("tc1"),
@@ -38,10 +38,7 @@ const makeCtx = (cwd: string): ToolContext =>
     extension: {
       send: dieStub("send"),
       ask: dieStub("ask"),
-      query: dieStub("query"),
-      mutate: dieStub("mutate"),
-      getUiSnapshots: dieStub("getUiSnapshots"),
-      getUiSnapshot: dieStub("getUiSnapshot"),
+      request: dieStub("request"),
     },
     agent: {
       get: dieStub("get"),
@@ -77,8 +74,9 @@ const makeCtx = (cwd: string): ToolContext =>
       queueFollowUp: dieStub("queueFollowUp"),
       interject: dieStub("interject"),
     },
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  }) as unknown as ToolContext
+  }
+  return ctx
+}
 
 describe("MemoryRememberTool — auto-derived projectKey", () => {
   test("project scope without project_key writes under derived key", async () => {
