@@ -1,17 +1,28 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Layer, Ref, Schema, Stream } from "effect"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import type { AnyCapabilityContribution } from "@gent/core/extensions/api"
-import type { Provider } from "@gent/core/providers/provider"
+import {
+  createSequenceProvider,
+  finishPart,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  type ProviderStreamPart,
+} from "@gent/core/debug/provider"
+import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
+import { Provider } from "@gent/core/providers/provider"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
 import { ConfigService } from "@gent/core/runtime/config-service"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { Permission } from "@gent/core/domain/permission"
+import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
 import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -22,7 +33,10 @@ import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   SessionRuntime,
+  applySteerCommand,
+  interruptPayloadToSteerCommand,
   invokeToolCommand,
+  respondInteractionCommand,
   sendUserMessageCommand,
 } from "@gent/core/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
@@ -82,6 +96,40 @@ const makeRuntimeLayer = (
   )
 }
 
+const makeLiveToolRuntimeLayer = (
+  providerLayer: Layer.Layer<Provider>,
+  tools: AnyCapabilityContribution[],
+) => {
+  const resolvedExtensions = makeTestExtensions(tools)
+  const recorderLayer = SequenceRecorder.Live
+  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const baseDeps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    ExtensionRegistry.fromResolved(resolvedExtensions),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolvedExtensions.modelDrivers,
+      externalDrivers: resolvedExtensions.externalDrivers,
+    }),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    eventStoreLayer,
+    recorderLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    ApprovalService.Test(),
+    Permission.Live([], "allow"),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
+  const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    SessionRuntime.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
+}
+
 const createSessionBranch = Effect.gen(function* () {
   const storage = yield* Storage
   const sessionId = SessionId.of("runtime-session")
@@ -103,6 +151,63 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "publish")
     .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
+
+const latestUserText = (request: { readonly prompt: unknown }) =>
+  [...Prompt.make(request.prompt).content]
+    .reverse()
+    .find((message) => message.role === "user")
+    ?.content.filter((part): part is Prompt.TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n") ?? ""
+
+const makeInteractionTool = (callCount: Ref.Ref<number>, resolution: Deferred.Deferred<void>) =>
+  tool({
+    id: "interaction-tool",
+    description: "Tool that triggers an interaction",
+    resources: ["interaction-tool"],
+    params: Schema.Struct({ value: Schema.String }),
+    execute: (params, ctx) =>
+      Effect.gen(function* () {
+        const count = yield* Ref.getAndUpdate(callCount, (current) => current + 1)
+        if (count === 0) {
+          return yield* new InteractionPendingError({
+            requestId: "req-test-1",
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+          })
+        }
+        yield* Deferred.succeed(resolution, void 0)
+        return { resolved: true, value: params.value }
+      }),
+  })
+
+const makeInteractionProviderLayer = () => {
+  let streamCall = 0
+  return Layer.succeed(Provider, {
+    stream: () => {
+      const call = streamCall++
+      if (call === 0) {
+        return Effect.succeed(
+          Stream.fromIterable([
+            toolCallPart(
+              "interaction-tool",
+              { value: "test" },
+              { toolCallId: ToolCallId.of("tc-1") },
+            ),
+            finishPart({ finishReason: "tool-calls" }),
+          ] satisfies ProviderStreamPart[]),
+        )
+      }
+      return Effect.succeed(
+        Stream.fromIterable([
+          textDeltaPart("done"),
+          finishPart({ finishReason: "stop" }),
+        ] satisfies ProviderStreamPart[]),
+      )
+    },
+    generate: () => Effect.succeed("test"),
+  })
+}
 
 describe("SessionRuntime", () => {
   test("sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected", async () => {
@@ -212,6 +317,129 @@ describe("SessionRuntime", () => {
         expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
         expect(eventTags(calls)).toContain("ToolCallStarted")
         expect(eventTags(calls)).toContain("ToolCallSucceeded")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("dispatch ApplySteer interjects ahead of queued follow-ups", async () => {
+    const { layer: providerLayer, controls } = await Effect.runPromise(
+      createSequenceProvider([
+        {
+          ...textStep("first reply"),
+          gated: true,
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/default")
+            expect(latestUserText(request)).toBe("first")
+          },
+        },
+        {
+          ...textStep("steer reply"),
+          assertRequest: (request) => {
+            expect(latestUserText(request)).toBe("steer now")
+          },
+        },
+        {
+          ...textStep("queued reply"),
+          assertRequest: (request) => {
+            expect(latestUserText(request)).toBe("queued")
+          },
+        },
+      ]),
+    )
+
+    const layer = makeRuntimeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+        )
+        yield* controls.waitForCall(0)
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({ sessionId, branchId, content: "queued" }),
+        )
+        yield* sessionRuntime.dispatch(
+          applySteerCommand(
+            interruptPayloadToSteerCommand({
+              _tag: "Interject",
+              sessionId,
+              branchId,
+              message: "steer now",
+            }),
+          ),
+        )
+
+        const queue = yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })
+        expect(queue.steering).toEqual([
+          expect.objectContaining({ kind: "steering", content: "steer now" }),
+        ])
+        expect(queue.followUp).toEqual([
+          expect.objectContaining({ kind: "follow-up", content: "queued" }),
+        ])
+
+        yield* controls.emitAll(0)
+
+        const messages = yield* waitFor(
+          storage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 3,
+          5_000,
+          "interjected turn completion",
+        )
+
+        expect(messages.filter((message) => message.role === "assistant")).toHaveLength(3)
+        yield* controls.assertDone()
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("dispatch RespondInteraction resumes a waiting interaction through the live loop", async () => {
+    const callCount = Ref.makeUnsafe(0)
+    const resolution = Deferred.makeUnsafe<void>()
+    const toolDef = makeInteractionTool(callCount, resolution)
+    const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({
+            sessionId,
+            branchId,
+            content: "trigger interaction",
+          }),
+        )
+
+        yield* waitFor(
+          sessionRuntime.getState({ sessionId, branchId }),
+          (current) => current._tag === "WaitingForInteraction",
+          5_000,
+          "waiting interaction state",
+        )
+
+        yield* sessionRuntime.dispatch(
+          respondInteractionCommand({
+            sessionId,
+            branchId,
+            requestId: "req-test-1",
+          }),
+        )
+
+        yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
+        const state = yield* waitFor(
+          sessionRuntime.getState({ sessionId, branchId }),
+          (current) => current._tag === "Idle",
+          5_000,
+          "idle after interaction response",
+        )
+
+        expect(state._tag).toBe("Idle")
+        expect(Ref.getUnsafe(callCount)).toBe(2)
       }).pipe(Effect.provide(layer)),
     )
   })
