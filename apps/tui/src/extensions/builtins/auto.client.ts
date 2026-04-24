@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off `AutoPackage.tui` paired-package pattern. The widget
  * owns its own Solid signal inside an Effect-typed setup, fetched via
- * `client.extension.ask` with `AutoProtocol.GetSnapshot` and refreshed on
+ * `askExtension(AutoProtocol.GetSnapshot)` and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/auto`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -23,7 +23,7 @@ import {
 import type { AutoSnapshotReply } from "@gent/extensions/auto-protocol.js"
 import { AutoProtocol } from "@gent/extensions/auto-protocol.js"
 import { AutoGoalOverlay } from "../auto-goal-overlay"
-import { ClientTransport } from "../client-transport"
+import { askExtension, ClientTransport } from "../client-transport"
 import { ClientShell, ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/auto"
@@ -58,11 +58,7 @@ export default defineClientExtension(EXT_ID, {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const reply = await transport.runtime.run(
-          transport.client.extension.ask({
-            sessionId: captured.sessionId,
-            message: AutoProtocol.GetSnapshot.make(),
-            branchId: captured.branchId,
-          }),
+          askExtension(AutoProtocol.GetSnapshot.make(), transport, captured),
         )
         const current = transport.currentSession()
         if (
@@ -75,8 +71,7 @@ export default defineClientExtension(EXT_ID, {
         setState({
           sessionId: captured.sessionId,
           branchId: captured.branchId,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-          model: reply as AutoSnapshotReply,
+          model: reply,
         })
       } catch (err) {
         console.warn(

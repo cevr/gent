@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off `ArtifactsPackage.tui` paired-package pattern. The
  * widget owns its own Solid signal inside an Effect-typed setup, fetched
- * via `client.extension.ask` with `ArtifactProtocol.List` and refreshed on
+ * via `askExtension(ArtifactProtocol.List)` and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/artifacts`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -16,31 +16,10 @@ import { createSignal, createEffect, createRoot } from "solid-js"
 import { Effect } from "effect"
 import { defineClientExtension, borderLabelContribution } from "../client-facets.js"
 import { ArtifactProtocol, type Artifact } from "@gent/extensions/artifacts-protocol.js"
-import { ClientTransport } from "../client-transport"
+import { askExtension, ClientTransport } from "../client-transport"
 import { ClientLifecycle } from "../client-services"
 
 const EXT_ID = "@gent/artifacts"
-
-const isArtifact = (value: unknown): value is Artifact =>
-  typeof value === "object" &&
-  value !== null &&
-  "id" in value &&
-  typeof value.id === "string" &&
-  "label" in value &&
-  typeof value.label === "string" &&
-  "sourceTool" in value &&
-  typeof value.sourceTool === "string" &&
-  "content" in value &&
-  typeof value.content === "string" &&
-  "status" in value &&
-  (value.status === "active" || value.status === "resolved") &&
-  "createdAt" in value &&
-  typeof value.createdAt === "number" &&
-  "updatedAt" in value &&
-  typeof value.updatedAt === "number"
-
-const parseArtifacts = (value: unknown): readonly Artifact[] =>
-  Array.isArray(value) ? value.filter(isArtifact) : []
 
 export default defineClientExtension(EXT_ID, {
   setup: Effect.gen(function* () {
@@ -70,11 +49,7 @@ export default defineClientExtension(EXT_ID, {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const reply = await transport.runtime.run(
-          transport.client.extension.ask({
-            sessionId: captured.sessionId,
-            message: ArtifactProtocol.List.make({}),
-            branchId: captured.branchId,
-          }),
+          askExtension(ArtifactProtocol.List.make({}), transport, captured),
         )
         const current = transport.currentSession()
         if (
@@ -87,7 +62,7 @@ export default defineClientExtension(EXT_ID, {
         setState({
           sessionId: captured.sessionId,
           branchId: captured.branchId,
-          items: parseArtifacts(reply),
+          items: reply,
         })
       } catch (err) {
         console.warn(

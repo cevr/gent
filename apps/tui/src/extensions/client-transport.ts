@@ -31,6 +31,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import type { GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { CapabilityRef } from "@gent/core/extensions/api"
 import {
   type AnyExtensionRequestMessage,
   type ExtractExtensionReply,
@@ -102,19 +103,27 @@ export class ClientTransportReplyDecodeError extends Schema.TaggedErrorClass<Cli
   },
 ) {}
 
-export const askExtension = <M extends AnyExtensionRequestMessage>(
+type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
+const currentOrActiveSession = (
+  transport: ClientTransportShape,
+  activeSession?: ActiveExtensionSession,
+): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
+  const session = activeSession ?? transport.currentSession()
+  return session === undefined ? Effect.fail(new NoActiveSessionError()) : Effect.succeed(session)
+}
+
+const askExtensionAt = <M extends AnyExtensionRequestMessage>(
+  transport: ClientTransportShape,
   message: M,
+  activeSession?: ActiveExtensionSession,
 ): Effect.Effect<
   ExtractExtensionReply<M>,
   NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
-  ClientTransport
+  never
 > =>
   Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const session = transport.currentSession()
-    if (session === undefined) {
-      return yield* new NoActiveSessionError()
-    }
+    const session = yield* currentOrActiveSession(transport, activeSession)
     const reply = yield* transport.client.extension
       .ask({
         sessionId: session.sessionId,
@@ -154,3 +163,106 @@ export const askExtension = <M extends AnyExtensionRequestMessage>(
       ),
     )
   })
+
+export function askExtension<M extends AnyExtensionRequestMessage>(
+  message: M,
+): Effect.Effect<
+  ExtractExtensionReply<M>,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  ClientTransport
+>
+export function askExtension<M extends AnyExtensionRequestMessage>(
+  message: M,
+  transport: ClientTransportShape,
+  activeSession?: ActiveExtensionSession,
+): Effect.Effect<
+  ExtractExtensionReply<M>,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  never
+>
+export function askExtension<M extends AnyExtensionRequestMessage>(
+  message: M,
+  transport?: ClientTransportShape,
+  activeSession?: ActiveExtensionSession,
+) {
+  if (transport !== undefined) return askExtensionAt(transport, message, activeSession)
+  return Effect.gen(function* () {
+    const service = yield* ClientTransport
+    return yield* askExtensionAt(service, message)
+  })
+}
+
+const requestExtensionAt = <Input, Output>(
+  transport: ClientTransportShape,
+  ref: CapabilityRef<Input, Output>,
+  input: Input,
+  activeSession?: ActiveExtensionSession,
+): Effect.Effect<
+  Output,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  never
+> =>
+  Effect.gen(function* () {
+    const session = yield* currentOrActiveSession(transport, activeSession)
+    const reply = yield* Effect.tryPromise({
+      try: () =>
+        transport.runtime.run(
+          transport.client.extension.request({
+            sessionId: session.sessionId,
+            extensionId: ref.extensionId,
+            capabilityId: ref.capabilityId,
+            intent: ref.intent,
+            input,
+            branchId: session.branchId,
+          }),
+        ),
+      catch: (cause) =>
+        new ClientTransportRequestError({
+          extensionId: ref.extensionId,
+          tag: ref.capabilityId,
+          message: `request failed: ${String(cause)}`,
+          cause,
+        }),
+    })
+    return yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(ref.output)(reply),
+      catch: (cause) =>
+        new ClientTransportReplyDecodeError({
+          extensionId: ref.extensionId,
+          tag: ref.capabilityId,
+          message: `reply decode failed: ${String(cause)}`,
+          cause,
+        }),
+    })
+  })
+
+export function requestExtension<Input, Output>(
+  ref: CapabilityRef<Input, Output>,
+  input: Input,
+): Effect.Effect<
+  Output,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  ClientTransport
+>
+export function requestExtension<Input, Output>(
+  ref: CapabilityRef<Input, Output>,
+  input: Input,
+  transport: ClientTransportShape,
+  activeSession?: ActiveExtensionSession,
+): Effect.Effect<
+  Output,
+  NoActiveSessionError | ClientTransportRequestError | ClientTransportReplyDecodeError,
+  never
+>
+export function requestExtension<Input, Output>(
+  ref: CapabilityRef<Input, Output>,
+  input: Input,
+  transport?: ClientTransportShape,
+  activeSession?: ActiveExtensionSession,
+) {
+  if (transport !== undefined) return requestExtensionAt(transport, ref, input, activeSession)
+  return Effect.gen(function* () {
+    const service = yield* ClientTransport
+    return yield* requestExtensionAt(service, ref, input)
+  })
+}

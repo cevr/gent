@@ -227,7 +227,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       ),
     counts: {
       "eslint:@typescript-eslint/no-non-null-assertion": 1,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 21,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 20,
       "eslint:no-control-regex": 2,
       "oxlint:no-await-in-loop": 2,
     },
@@ -415,7 +415,6 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "apps/tui/src/components/tool-renderers/agent-tree.tsx:75 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/components/tool-renderers/grep.tsx:41 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/components/tool-renderers/live-child-tree.tsx:27 eslint:@typescript-eslint/no-unsafe-type-assertion",
-  "apps/tui/src/extensions/builtins/auto.client.ts:78 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/extensions/discovery.ts:54 oxlint:no-await-in-loop",
   "apps/tui/src/extensions/discovery.ts:61 oxlint:no-await-in-loop",
   "apps/tui/src/hooks/use-cache.ts:21 eslint:@typescript-eslint/no-unsafe-type-assertion",

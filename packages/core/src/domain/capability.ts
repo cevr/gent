@@ -213,6 +213,6 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly extensionId: string
   readonly capabilityId: string
   readonly intent: Intent
-  readonly input: Schema.Schema<Input>
-  readonly output: Schema.Schema<Output>
+  readonly input: Schema.Decoder<Input, never>
+  readonly output: Schema.Decoder<Output, never>
 }

@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off the paired-package snapshot cache. The widget owns
  * its own Solid signal inside an Effect-typed setup, fetched via the
- * typed transport (`client.extension.request`) and refreshed on
+ * typed transport (`requestExtension(TaskListRef)`) and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/task-tools`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -24,29 +24,13 @@ import {
 import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
-import { ClientTransport } from "../client-transport"
+import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity.js"
+import { TaskListRef } from "@gent/extensions/task-tools/requests.js"
+import { ClientTransport, requestExtension } from "../client-transport"
 import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"
 import { useScopedKeyboard } from "../../keyboard/context"
 
-const EXT_ID = "@gent/task-tools"
-const QUERY_ID = "task.list"
-
-const isTaskEntry = (value: unknown): value is TaskEntry =>
-  typeof value === "object" &&
-  value !== null &&
-  "id" in value &&
-  typeof value.id === "string" &&
-  "subject" in value &&
-  typeof value.subject === "string" &&
-  "status" in value &&
-  (value.status === "pending" ||
-    value.status === "in_progress" ||
-    value.status === "completed" ||
-    value.status === "failed" ||
-    value.status === "stopped")
-
-const parseTaskEntries = (value: unknown): readonly TaskEntry[] =>
-  Array.isArray(value) ? value.filter(isTaskEntry) : []
+const EXT_ID = TASK_TOOLS_EXTENSION_ID
 
 export default defineClientExtension("@gent/task-tools", {
   setup: Effect.gen(function* () {
@@ -86,14 +70,7 @@ export default defineClientExtension("@gent/task-tools", {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const out = await transport.runtime.run(
-          transport.client.extension.request({
-            sessionId: captured.sessionId,
-            extensionId: EXT_ID,
-            capabilityId: QUERY_ID,
-            intent: "read",
-            input: {},
-            branchId: captured.branchId,
-          }),
+          requestExtension(TaskListRef, {}, transport, captured),
         )
         const current = transport.currentSession()
         if (
@@ -106,7 +83,7 @@ export default defineClientExtension("@gent/task-tools", {
         setState({
           sessionId: captured.sessionId,
           branchId: captured.branchId,
-          tasks: parseTaskEntries(out),
+          tasks: out,
         })
       } catch (err) {
         // Visible refresh failures matter — surface to console (the only
