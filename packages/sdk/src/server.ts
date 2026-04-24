@@ -274,7 +274,7 @@ const buildOwnedServer = (
 
 const probeServer = (
   rpcUrl: string,
-  expected: { serverId: string; dbPath: string; buildFingerprint: string },
+  expected: ReturnType<typeof registryIdentityOf>,
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
@@ -282,13 +282,13 @@ const probeServer = (
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
-    const identity = (yield* response.json) as {
-      serverId?: string
-      dbPath?: string
-      buildFingerprint?: string
-    }
+    const identity = (yield* response.json) as Partial<ReturnType<typeof registryIdentityOf>>
+    // Server id/db/build prove endpoint identity; pid/host prove signal ownership.
+    // All fields must match before attach or SIGTERM.
     return (
       identity.serverId === expected.serverId &&
+      identity.pid === expected.pid &&
+      identity.hostname === expected.hostname &&
       identity.dbPath === expected.dbPath &&
       identity.buildFingerprint === expected.buildFingerprint
     )
@@ -326,6 +326,8 @@ export const resolveServer = (
         // Probe the server before trusting — verify serverId, dbPath, fingerprint
         const alive = yield* probeServer(existing.rpcUrl, {
           serverId: existing.serverId,
+          pid: existing.pid,
+          hostname: existing.hostname,
           dbPath,
           buildFingerprint: fingerprint,
         })
@@ -380,6 +382,8 @@ export const resolveServer = (
         if (retryEntry !== undefined && validateRegistryEntry(retryEntry).valid) {
           return probeServer(retryEntry.rpcUrl, {
             serverId: retryEntry.serverId,
+            pid: retryEntry.pid,
+            hostname: retryEntry.hostname,
             dbPath,
             buildFingerprint: fingerprint,
           }).pipe(

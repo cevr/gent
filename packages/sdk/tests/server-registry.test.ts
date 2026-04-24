@@ -253,6 +253,8 @@ describe("Registry Process Ownership", () => {
     const entry = makeEntry()
     expect(registryIdentityOf(entry)).toEqual({
       serverId: entry.serverId,
+      pid: entry.pid,
+      hostname: entry.hostname,
       dbPath: entry.dbPath,
       buildFingerprint: entry.buildFingerprint,
     })
@@ -268,11 +270,30 @@ describe("Registry Process Ownership", () => {
     const dbPath = join(home, "pid-reuse.db")
     const entry = makeEntry({
       pid: process.pid,
-      rpcUrl: "http://127.0.0.1:9/rpc",
       dbPath,
       buildFingerprint: "stale-fingerprint",
     })
-    writeRegistryEntry(home, entry)
+    const fakeOwner = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        if (new URL(request.url).pathname !== "/_gent/identity") {
+          return new Response("not found", { status: 404 })
+        }
+        return Response.json({
+          serverId: entry.serverId,
+          pid: 99999999,
+          hostname: entry.hostname,
+          dbPath: entry.dbPath,
+          buildFingerprint: entry.buildFingerprint,
+        })
+      },
+    })
+    const fakeOwnerUrl = new URL(fakeOwner.url)
+    const entryWithEndpoint = new ServerRegistryEntry({
+      ...entry,
+      rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
+    })
+    writeRegistryEntry(home, entryWithEndpoint)
 
     const signals: Array<{ pid: number; signal: string | number | undefined }> = []
     const originalKill = Reflect.get(process, "kill") as typeof process.kill
@@ -297,10 +318,11 @@ describe("Registry Process Ownership", () => {
       )
     } finally {
       process.kill = originalKill
+      fakeOwner.stop(true)
     }
 
     expect(signals).toEqual([])
-    expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entry.serverId)
+    expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entryWithEndpoint.serverId)
   })
 })
 

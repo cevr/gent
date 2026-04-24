@@ -224,13 +224,17 @@ export const acquireLock = (home: string, dbPath: string): boolean => {
 
 export interface ServerRegistryIdentity {
   readonly serverId: string
+  readonly pid: number
+  readonly hostname: string
   readonly dbPath: string
   readonly buildFingerprint: string
 }
 
-/** Identity tuple a live gent server must report before its PID can be signaled. */
+/** Full identity tuple a live gent server must report before its PID can be signaled. */
 export const registryIdentityOf = (entry: ServerRegistryEntry): ServerRegistryIdentity => ({
   serverId: entry.serverId,
+  pid: entry.pid,
+  hostname: entry.hostname,
   dbPath: entry.dbPath,
   buildFingerprint: entry.buildFingerprint,
 })
