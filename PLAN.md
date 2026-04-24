@@ -1,18 +1,29 @@
-# Planify: Recursive Hardening Wave 2
+# Planify: Recursive Hardening Wave 3
 
 ## Context
 
-The final recursive audit at HEAD `189a24b7` found material P2 issues. The
-plan is not complete until these findings are fixed, gated, reviewed, and a
-fresh eight-point audit reports no P1/P2 findings.
+Wave 2 implementation completed and was gated, including the fresh final audit.
+That audit still found material P2 issues. This plan supersedes Wave 2 and is
+not complete until the batches below are implemented, gated, reviewed, and the
+fresh eight-point recursive audit reports no P1/P2 findings.
+
+Current verification before this rewrite:
+
+- `bun run gate` green at HEAD `37eedee1`.
+- `bun run test:e2e` green at HEAD `37eedee1`.
+- Eight fresh audit agents completed. Runtime ownership, Effect AI integration,
+  and domain modeling were clean for P1/P2. Storage, extension boundaries,
+  auth boundary behavior, SDK/TUI auth behavior, and public test coverage still
+  reported P2 findings.
 
 ## Scope
 
-- **In**: storage/session lineage invariants, auth failure propagation, legacy
-  auth decode compatibility, stream retry semantics, capability request cwd,
-  and public-tier regression coverage.
-- **Out**: optional P3 cleanup, package-policy removal, and non-material seam
-  polish. Those wait until the recursive audit is clean.
+- **In**: auth storage fail-closed behavior, auth error propagation, session-cwd
+  auth UI calls, extension request session/branch validation, profile-scoped
+  capability service provision, SQLite lineage constraints, recursive session
+  cleanup, and missing public RPC regression coverage.
+- **Out**: optional P3 cleanup, package-policy removal, and docs-only drift.
+  Package-policy removal waits until recursive audit is clean.
 
 ## Constraints
 
@@ -37,160 +48,186 @@ fresh eight-point audit reports no P1/P2 findings.
 
 ## Audit Findings
 
-| ID  | Severity | Finding                                                                       | Evidence                                                                                                                                                                                                                        |
-| --- | -------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A1  | P2       | Capability request handlers receive server launch cwd instead of session cwd. | `packages/core/src/runtime/make-extension-host-context.ts:246-270`, `packages/core/src/server/rpc-handler-groups/extension.ts:72-96`, `packages/core/src/server/transport-contract.ts:342-359`                                  |
-| A2  | P2       | OpenAI OAuth callback can falsely succeed with no credentials saved.          | `packages/extensions/src/openai/index.ts:195-197`, `packages/core/src/providers/provider-auth.ts:154`, `packages/core/src/server/rpc-handler-groups/config.ts:134`, `apps/tui/src/routes/auth.tsx:298-343`                      |
-| A3  | P2       | Manual auth persistence failures are swallowed at the RPC boundary.           | `packages/core/src/domain/auth-store.ts:95`, `packages/core/src/server/rpc-handler-groups/config.ts:105-116`, `apps/tui/src/routes/auth.tsx:156-186`                                                                            |
-| A4  | P2       | Retry wraps stream construction, not stream consumption.                      | `packages/core/src/providers/provider.ts:441-452`, `packages/core/src/runtime/agent/agent-loop.ts:723-751`, `packages/core/src/runtime/agent/agent-loop.ts:1115`, `packages/core/src/runtime/retry.ts:133`                      |
-| A5  | P2       | Legacy OAuth auth records decode as API keys after tagged-enum migration.     | `packages/core/src/domain/auth-store.ts:5-61`, `packages/core/src/domain/schema-tagged-enum-class.ts:112`, `packages/core/src/providers/provider.ts:81`, `packages/core/src/runtime/model-registry.ts:207`                      |
-| A6  | P2       | Provider auth persistence failures lack public RPC-tier coverage.             | `packages/core/tests/providers/provider-auth.test.ts:143-160`, `packages/core/tests/server/auth-rpc.test.ts:20-32`, `packages/core/src/server/rpcs/auth.ts:33-38`                                                               |
-| A7  | P2       | Branch delete corrupts branch ancestry.                                       | `packages/core/src/storage/sqlite-storage.ts:609-617`, `packages/core/src/storage/sqlite-storage.ts:1178-1180`, `packages/core/src/server/session-commands.ts:818-837`, `packages/core/src/server/session-utils.ts:72-81`       |
-| A8  | P2       | Branch delete can cascade-delete child sessions without session cleanup.      | `packages/core/src/storage/sqlite-storage.ts:850-852`, `packages/core/src/storage/sqlite-storage.ts:1213-1218`, `packages/core/src/server/session-commands.ts:803-837`, `packages/core/src/runtime/event-store-live.ts:100-106` |
-| A9  | P2       | `parentBranchId` can be persisted without `parentSessionId`.                  | `packages/core/src/server/transport-contract.ts:19-23`, `packages/core/src/server/session-commands.ts:442-461`, `packages/core/src/storage/sqlite-storage.ts:850-852`, `packages/core/src/storage/sqlite-storage.ts:1085-1088`  |
+| ID  | Severity | Finding                                                                                                      | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --- | -------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| B1  | P2       | Auth file parse/decrypt/schema failures collapse to an empty store, so the next write can erase credentials. | `packages/core/src/domain/auth-storage.ts:366`, `packages/core/src/domain/auth-storage.ts:380`, `packages/core/src/domain/auth-storage.ts:410-429`                                                                                                                                                                                                                                                                       |
+| B2  | P2       | `AuthGuard.listProviders` discards typed auth read/decode failures before SDK/TUI callers can surface them.  | `packages/core/src/domain/auth-store.ts:86-94`, `packages/core/src/domain/auth-guard.ts:131-133`, `apps/tui/src/routes/auth.tsx:95`                                                                                                                                                                                                                                                                                      |
+| B3  | P2       | Auth overlay drops active session context and can resolve project auth against launch cwd.                   | `packages/core/src/domain/auth-guard.ts:24-41`, `packages/core/src/server/rpc-handler-groups/config.ts:97`, `apps/tui/src/app-bootstrap.ts:177`, `apps/tui/src/routes/session-controller.ts:188`, `apps/tui/src/routes/auth.tsx:37`, `apps/tui/src/routes/auth.tsx:82`, `apps/tui/src/routes/auth.tsx:224`                                                                                                               |
+| B4  | P2       | Profile-scoped resource services are not provided when running profile capabilities.                         | `packages/core/src/runtime/profile.ts:340-360`, `packages/core/src/runtime/session-profile.ts:52-63`, `packages/core/src/runtime/session-profile.ts:141-152`, `packages/core/src/runtime/session-runtime-context.ts:63-74`, `packages/core/src/runtime/make-extension-host-context.ts:261`, `packages/core/src/server/rpc-handler-groups/extension.ts:84`, `packages/core/src/runtime/extensions/capability-host.ts:259` |
+| B5  | P2       | Public `extension.request` accepts missing/deleted sessions and falls back to launch cwd.                    | `packages/core/src/server/transport-contract.ts:342-351`, `packages/core/src/server/rpc-handlers.ts:61-76`, `packages/core/src/server/rpc-handler-groups/extension.ts:81-93`, `apps/tui/src/extensions/client-transport.ts:210`                                                                                                                                                                                          |
+| B6  | P2       | Public `extension.request` trusts caller-supplied branch ownership.                                          | `packages/core/src/server/rpc-handler-groups/extension.ts:81-92`, `packages/core/src/server/transport-contract.ts:351`, `packages/extensions/src/task-tools/requests.ts:145-150`, `packages/core/src/server/session-queries.ts:133-134`                                                                                                                                                                                  |
+| B7  | P2       | SQLite still allows `parent_branch_id` without `parent_session_id` through direct SQL.                       | `packages/core/src/storage/sqlite-storage.ts:590-604`, `packages/core/src/storage/sqlite-storage.ts:858-872`, `packages/core/src/storage/sqlite-storage.ts:1109`, `packages/core/src/storage/sqlite-storage.ts:1562`, `packages/core/src/storage/sqlite-storage.ts:1273`                                                                                                                                                 |
+| B8  | P2       | Parent session delete cascades child sessions durably but cleans runtime state only for the root session.    | `packages/core/src/storage/sqlite-storage.ts:1190`, `packages/core/tests/storage/sqlite-storage.test.ts:364`, `packages/core/src/server/session-commands.ts:323-332`, `packages/core/src/server/session-commands.ts:832-843`, `packages/core/src/runtime/extensions/resource-host/machine-engine.ts:276`, `packages/core/src/domain/event.ts:538`, `packages/core/src/runtime/session-cwd-registry.ts:107`               |
+| B9  | P2       | `session.create` lacks public RPC-tier coverage for `parentBranchId` without `parentSessionId`.              | `packages/core/src/server/transport-contract.ts:19`, `packages/core/src/server/rpc-handler-groups/session.ts:40`, `packages/core/src/server/session-commands.ts:452`, `packages/core/tests/server/session-commands.test.ts:460`, `packages/core/tests/storage/sqlite-storage.test.ts:240`, `packages/core/tests/server/session-queries.test.ts:162`                                                                      |
 
 ---
 
-## Commit 1: `fix(storage): preserve session branch lineage`
+## Commit 1: `fix(auth): fail closed on auth storage read errors`
 
-**Justification**: Session/branch lineage is durable domain state. Branch
-deletion must not silently corrupt ancestry or bypass child-session cleanup.
+**Justification**: Auth credentials are durable user state. Corrupt or
+undecryptable auth data must stop writes, not masquerade as an empty store.
 
 **Principles**:
 
-- `fix-root-causes`: block invalid deletion at the command/storage boundary.
-- `make-invalid-states-unrepresentable`: parent branch/session relationships
-  must be explicit and enforced.
-- `prove-it-works`: reproduce the broken lineage and child-session cascade
-  paths in tests.
+- `fix-root-causes`: preserve the boundary error instead of treating corruption
+  as missing data.
+- `boundary-discipline`: file/decrypt/schema failures are storage-boundary
+  errors and must cross the service boundary typed.
+- `prove-it-works`: reproduce fail-open writes and AuthGuard swallowing errors.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                  | Change                                                                                                                | Lines                |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `packages/core/src/server/session-commands.ts`        | Reject deleting a branch with child branches or child sessions; validate `parentBranchId` requires `parentSessionId`. | ~442-461, ~803-837   |
-| `packages/core/src/storage/sqlite-storage.ts`         | Add storage helpers or constraints needed to detect child branches/sessions without cascade side effects.             | ~609-617, ~1178-1218 |
-| `packages/core/tests/server/session-commands.test.ts` | Add command-level tests for child branch deletion, child session deletion, and parent branch without parent session.  | existing             |
-| `packages/core/tests/storage/sqlite-storage.test.ts`  | Add storage-level regression tests where the invariant belongs below commands.                                        | existing             |
+| File                                              | Change                                                                                        | Lines    |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------- | -------- |
+| `packages/core/src/domain/auth-storage.ts`        | Remove catch-all empty fallback for decrypt/read failures; keep missing/empty files as empty. | ~330-380 |
+| `packages/core/src/domain/auth-guard.ts`          | Propagate typed auth read failures from `listProviders` instead of converting to no key.      | ~124-150 |
+| `packages/core/tests/domain/auth-storage.test.ts` | Add regression for corrupt/encrypted-file read blocking `set` and `delete`.                   | existing |
+| `packages/core/tests/server/auth-rpc.test.ts`     | Add public RPC regression that auth read/decode failure surfaces to callers.                  | existing |
 
 **Verification**:
 
-- `bun test packages/core/tests/server/session-commands.test.ts packages/core/tests/storage/sqlite-storage.test.ts`
+- `bun test packages/core/tests/domain/auth-storage.test.ts packages/core/tests/server/auth-rpc.test.ts`
+- `bun run gate`
+
+---
+
+## Commit 2: `fix(tui): carry session context through auth overlay`
+
+**Justification**: Auth method selection is project-cwd sensitive. The TUI
+overlay must query and persist auth through the active session context rather
+than launch-cwd defaults or synthetic session ids.
+
+**Principles**:
+
+- `single-source-of-truth`: session cwd comes from the active session, not a
+  synthetic id.
+- `test-through-public-interfaces`: exercise the same TUI auth surface a caller
+  uses.
+
+**Skills**: `architecture`, `effect-v4`, `react`, `test`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                        | Change                                                                                     | Lines    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ | -------- |
+| `apps/tui/src/routes/auth.tsx`              | Accept/thread active `sessionId` into `listProviders`, `authorize`, and callback handling. | ~37-224  |
+| `apps/tui/src/routes/session-controller.ts` | Pass the active session id into the auth overlay route.                                    | ~188     |
+| `apps/tui/src/app-bootstrap.ts`             | Preserve startup/session auth-gate behavior while avoiding synthetic session context.      | ~177     |
+| `apps/tui/tests` or `apps/tui/integration`  | Add regression for auth overlay calling `auth.listProviders` with active session id.       | existing |
+
+**Verification**:
+
+- targeted TUI auth tests, discovered during implementation
 - `bun run gate`
 - `bun run test:e2e`
 
 ---
 
-## Commit 2: `fix(auth): preserve typed auth failures and legacy oauth`
+## Commit 3: `fix(extensions): enforce session boundary for capability requests`
 
-**Justification**: Auth writes and callbacks are user-visible state changes.
-They must fail when persistence fails, and legacy OAuth records must not become
-API keys.
+**Justification**: Public and nested capability requests execute inside a
+session boundary. Missing sessions, cross-session branches, and missing
+profile-scoped services are boundary violations.
 
 **Principles**:
 
-- `typed-errors-over-logs`: persistence failures cross the RPC boundary as
-  typed failures, not log-only success.
-- `migrate-callers-then-delete-legacy-apis`: old auth records keep their
-  semantics after schema migration.
-- `make-invalid-states-unrepresentable`: stale OAuth callbacks cannot encode
-  success without credentials.
+- `boundary-discipline`: validate session/branch ownership at the RPC boundary.
+- `small-interface-deep-implementation`: capability effects should receive the
+  complete profile runtime context through one narrow dispatch surface.
+- `make-impossible-states-unrepresentable`: request context must not encode a
+  branch that does not belong to the session.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                    | Change                                                                                                                   | Lines    |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |
-| `packages/core/src/domain/auth-store.ts`                | Decode legacy OAuth JSON records explicitly; keep raw string fallback only for raw API keys; use constructor discipline. | ~5-95    |
-| `packages/extensions/src/openai/index.ts`               | Return a typed auth failure for missing/stale OAuth callback state instead of success.                                   | ~195-197 |
-| `packages/core/src/server/rpc-handler-groups/config.ts` | Let `auth.setKey` and `auth.deleteKey` propagate typed persistence failures.                                             | ~105-116 |
-| `packages/core/tests/domain/auth-store.test.ts`         | Add legacy OAuth decode regression and raw API-key fallback coverage.                                                    | existing |
-| `packages/core/tests/server/auth-rpc.test.ts`           | Add RPC acceptance tests for manual auth write/delete failures and authorize/callback persistence failures.              | existing |
-| `packages/core/tests/providers/provider-auth.test.ts`   | Extend stale callback coverage if needed by provider-level semantics.                                                    | existing |
-
-**Verification**:
-
-- `bun test packages/core/tests/domain/auth-store.test.ts packages/core/tests/server/auth-rpc.test.ts packages/core/tests/providers/provider-auth.test.ts`
-- `bun run gate`
-
----
-
-## Commit 3: `fix(runtime): retry provider stream consumption before output`
-
-**Justification**: Retrying only stream construction misses the real request
-failure path. Retry semantics should apply to the provider operation while
-avoiding duplicate partial output.
-
-**Principles**:
-
-- `effect-boundaries-own-effects`: the retry boundary must wrap the effectful
-  stream consumption, not just a lazy stream value.
-- `do-not-lie-about-state`: once model bytes/tool calls are persisted, retrying
-  the same turn can duplicate output; retry only before observable output.
-- `prove-it-works`: test a retryable stream failure during consumption.
-
-**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
-
-**Changes**:
-
-| File                                                               | Change                                                                                                                                        | Lines           |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| `packages/core/src/runtime/agent/agent-loop.ts`                    | Move retry to the pre-output stream-consumption path or introduce an explicit provider-stream retry helper.                                   | ~723-751, ~1115 |
-| `packages/core/src/providers/provider.ts`                          | Preserve retryable provider errors from stream consumption.                                                                                   | ~441-452        |
-| `packages/core/tests/runtime/agent-loop.test.ts` or provider tests | Add regression for retryable stream-consumption failure before first output; assert no retry after partial output if that path is observable. | existing        |
-
-**Verification**:
-
-- `bun test packages/core/tests/runtime/agent-loop.test.ts packages/core/tests/providers/provider-resolution.test.ts`
-- `bun run gate`
-- `bun run test:e2e`
-
----
-
-## Commit 4: `fix(extensions): use session cwd for capability requests`
-
-**Justification**: Capability handlers are session-scoped. Passing launch cwd
-through request paths breaks project-local tools/config in cross-cwd sessions.
-
-**Principles**:
-
-- `single-source-of-truth`: session cwd comes from resolved session runtime
-  context, not ambient platform cwd.
-- `boundary-honesty`: transport and host-context request paths must carry the
-  same `CapabilityCoreContext`.
-- `prove-it-works`: tests must assert nested request `ctx.cwd`, not only
-  `hostCtx.cwd`.
-
-**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
-
-**Changes**:
-
-| File                                                                                   | Change                                                                                             | Lines    |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------- |
-| `packages/core/src/runtime/make-extension-host-context.ts`                             | Use `runInfo.sessionCwd ?? deps.platform.cwd` when constructing nested capability request context. | ~246-270 |
-| `packages/core/src/server/rpc-handler-groups/extension.ts`                             | Resolve and pass session cwd into public `extension.request`.                                      | ~72-96   |
-| `packages/core/tests/runtime/session-runtime-context.test.ts`                          | Add regression for nested capability request cwd.                                                  | existing |
-| `packages/core/tests/server/extension-commands-rpc.test.ts` or `auth-rpc` style helper | Add RPC acceptance coverage for session cwd in request capability context.                         | existing |
+| File                                                          | Change                                                                                                             | Lines    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------- |
+| `packages/core/src/runtime/session-profile.ts`                | Preserve profile `layerContext` or equivalent capability execution context on `SessionProfile`.                    | ~52-152  |
+| `packages/core/src/runtime/session-runtime-context.ts`        | Thread profile execution context into active bindings/host context creation.                                       | ~63-105  |
+| `packages/core/src/runtime/make-extension-host-context.ts`    | Run nested capability requests with the profile execution context and session cwd.                                 | ~246-270 |
+| `packages/core/src/server/rpc-handler-groups/extension.ts`    | Reject missing sessions; verify branch belongs to session; run transport-public capabilities with profile context. | ~72-109  |
+| `packages/core/tests/runtime/session-runtime-context.test.ts` | Add regression for profile-scoped service availability in nested capability requests.                              | existing |
+| `packages/core/tests/server/extension-commands-rpc.test.ts`   | Add RPC regressions for missing session, cross-session branch, and profile service availability.                   | existing |
 
 **Verification**:
 
 - `bun test packages/core/tests/runtime/session-runtime-context.test.ts packages/core/tests/server/extension-commands-rpc.test.ts`
 - `bun run gate`
+- `bun run test:e2e`
 
 ---
 
-## Commit 5: `chore(audit): rerun recursive verification`
+## Commit 4: `fix(storage): harden session lineage cleanup`
 
-**Justification**: Completion is observed only when all original target points
-are audited fresh and no P1/P2 remains.
+**Justification**: Durable session lineage and runtime state must agree. Direct
+SQL cannot create impossible parent shapes, and deleting a parent session must
+clean every descendant session runtime boundary it deletes durably.
 
 **Principles**:
 
-- `prove-it-works`: final status must be backed by gate, e2e, and eight fresh
-  audits.
+- `make-impossible-states-unrepresentable`: enforce parent branch/session
+  pairing in SQLite, not only service code.
+- `serialize-shared-state-mutations`: session deletion owns all descendant
+  cleanup before durable rows disappear.
+- `prove-it-works`: cover direct SQL and command-level recursive cleanup.
+
+**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                                  | Change                                                                                                    | Lines              |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------ |
+| `packages/core/src/storage/sqlite-storage.ts`         | Add/migrate a `CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)` constraint on sessions. | ~590-604, ~858-872 |
+| `packages/core/src/storage/sqlite-storage.ts`         | Add/read helper for descendant sessions, or reuse existing child-session traversal safely.                | ~1190, ~1562       |
+| `packages/core/src/server/session-commands.ts`        | Clean runtime/event/cwd state for all descendant sessions deleted by a parent-session delete.             | ~323-332, ~832-843 |
+| `packages/core/tests/storage/sqlite-storage.test.ts`  | Add direct-SQL invariant regression and migration/repair coverage where needed.                           | existing           |
+| `packages/core/tests/server/session-commands.test.ts` | Add command-level recursive cleanup regression with child sessions.                                       | existing           |
+
+**Verification**:
+
+- `bun test packages/core/tests/storage/sqlite-storage.test.ts packages/core/tests/server/session-commands.test.ts`
+- `bun run gate`
+- `bun run test:e2e`
+
+---
+
+## Commit 5: `test(server): cover parent branch session create boundary`
+
+**Justification**: The original finding targeted public session creation. The
+public RPC layer needs a regression so transport/schema/handler drift cannot
+silently bypass command invariants.
+
+**Principles**:
+
+- `test-through-public-interfaces`: assert through `client.session.create`.
+- `prove-it-works`: lock the public failure shape, not only storage/command internals.
+
+**Skills**: `test`, `effect-v4`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                                                               | Change                                                                            | Lines    |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------- |
+| `packages/core/tests/server/session-queries.test.ts` or `session-commands.test.ts` | Add `Gent.test(...).client.session.create({ parentBranchId })` failure assertion. | existing |
+
+**Verification**:
+
+- targeted server test for session RPC create
+- `bun run gate`
+
+---
+
+## Commit 6: `chore(audit): rerun recursive verification`
+
+**Justification**: Completion is observed only when all original target points
+and the new P2 points are audited fresh and no P1/P2 remains.
+
+**Principles**:
+
+- `prove-it-works`: final status must be backed by gate, e2e, and fresh audits.
 - `guard-the-context-window`: each audit agent owns one target point.
 - `fix-root-causes`: material findings become the next plan, not ignored notes.
 
@@ -231,22 +268,20 @@ Stop only when all eight fresh audits report no P1/P2 findings.
 
 - [ ] `bun run gate` is non-mutating and green.
 - [ ] `bun run test:e2e` is green.
-- [ ] Branch deletion cannot corrupt branch ancestry.
-- [ ] Branch deletion cannot cascade-delete child sessions outside the session
-      cleanup path.
-- [ ] Public session creation cannot persist `parentBranchId` without
-      `parentSessionId`.
-- [ ] Legacy OAuth auth records decode as OAuth, not API keys.
-- [ ] Manual auth persistence failures surface through public RPC.
-- [ ] Stale OpenAI OAuth callbacks fail instead of reporting success.
-- [ ] Retryable provider stream-consumption failures retry before observable
-      output.
-- [ ] Capability request handlers receive the session cwd.
+- [ ] Auth storage read/decode failures fail closed and cannot erase credentials.
+- [ ] AuthGuard surfaces typed auth read/decode failures to public callers.
+- [ ] TUI auth overlay carries active session context for project-cwd auth.
+- [ ] Capability requests reject missing sessions.
+- [ ] Capability requests reject branch/session mismatches.
+- [ ] Profile-scoped capability effects receive profile resource services.
+- [ ] SQLite rejects `parent_branch_id` without `parent_session_id`.
+- [ ] Parent session delete cleans descendant runtime/event/cwd state.
+- [ ] Public `session.create` rejects `parentBranchId` without `parentSessionId`.
 - [ ] Final recursive audit reports no P1/P2 findings.
 
 ## Current Status
 
-- Recursive audit completed at HEAD `189a24b7`.
-- Material P2 findings remain.
-- This plan supersedes the previous plan.
-- Implementation has not started.
+- Wave 2 implementation completed through commit `37eedee1`.
+- Fresh recursive audit found material P2 findings B1-B9.
+- This plan supersedes Wave 2.
+- Implementation of this wave has not started.
