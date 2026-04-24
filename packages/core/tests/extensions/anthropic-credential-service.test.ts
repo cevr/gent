@@ -194,8 +194,8 @@ describe("AnthropicCredentialService — invalidate", () => {
   })
 })
 
-describe("AnthropicCredentialService — persist failure does not regress getFresh", () => {
-  test("write-back failure logs warning but returns fresh creds", async () => {
+describe("AnthropicCredentialService — durable persist failure", () => {
+  test("write-back failure surfaces ProviderAuthError", async () => {
     const stale = makeCreds("stale", 30_000)
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {
@@ -205,17 +205,22 @@ describe("AnthropicCredentialService — persist failure does not regress getFre
     const persistState: PersistState = { lastWritten: undefined, failNext: true }
     const layer = AnthropicCredentialService.layerFromIO(makeIO(state), makeAuthInfo(persistState))
 
-    await runWithTestClock(
+    const result = await runWithTestClock(
       Effect.gen(function* () {
         const svc = yield* AnthropicCredentialService
-        const result = yield* svc.getFresh
-        // Outcome: caller still receives the freshly-refreshed creds
-        // even though persist died. lastWritten remains undefined,
-        // confirming the write didn't land — but getFresh kept moving.
-        expect(result.accessToken).toBe("fresh-access")
-        expect(persistState.lastWritten).toBeUndefined()
+        return yield* Effect.exit(svc.getFresh)
       }).pipe(Effect.provide(layer)),
     )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(errOpt)).toBe(true)
+      if (Option.isSome(errOpt)) {
+        expect(errOpt.value.message).toContain("Failed to persist refreshed Anthropic credentials")
+      }
+    }
+    expect(persistState.lastWritten).toBeUndefined()
   })
 })
 

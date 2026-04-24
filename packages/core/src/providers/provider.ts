@@ -2,7 +2,7 @@ import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message } from "../domain/message.js"
 import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
-import { type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
+import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
@@ -101,7 +101,15 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
                 ...(updated.accountId !== undefined ? { accountId: updated.accountId } : {}),
               }),
             )
-            .pipe(Effect.catchEager(() => Effect.void)),
+            .pipe(
+              Effect.mapError(
+                (e) =>
+                  new ProviderAuthError({
+                    message: `Failed to persist refreshed auth for provider "${providerName}"`,
+                    cause: e,
+                  }),
+              ),
+            ),
       }
     }
 
@@ -426,12 +434,10 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           )
           const modelLayer = resolution.layer
 
-          // Build tools
           const withHandler =
             request.toolkit ??
             (request.tools !== undefined ? convertTools(request.tools) : undefined)
 
-          // Create stream via LanguageModel service
           const rawStream =
             withHandler !== undefined
               ? LanguageModel.streamText({
@@ -457,23 +463,17 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           )
         })
       }
-
       return {
         stream,
-
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
-          const hints: ProviderHints = { maxTokens: request.maxTokens }
           const resolution = yield* getModel(
             request.model,
-            hints,
+            { maxTokens: request.maxTokens },
             request.driverRegistry,
             request.driverId,
           )
           const modelLayer = resolution.layer
-
-          const result = yield* LanguageModel.generateText({
-            prompt: request.prompt,
-          }).pipe(
+          const result = yield* LanguageModel.generateText({ prompt: request.prompt }).pipe(
             // @effect-diagnostics-next-line strictEffectProvide:off
             Effect.provide(modelLayer),
             Effect.mapError(

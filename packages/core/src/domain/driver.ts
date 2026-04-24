@@ -70,6 +70,14 @@ export class DriverError extends Schema.TaggedErrorClass<DriverError>()("DriverE
 
 // ── Shared types lifted from provider-contribution.ts ──
 
+export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
+  "ProviderAuthError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
+
 /** Resolution returned by a model driver's `resolveModel`. The Layer must be
  *  fully self-contained — auth, tool naming, cache control all baked in. */
 export interface ProviderResolution {
@@ -102,7 +110,7 @@ export interface ProviderAuthInfo {
     refresh: string
     expires: number
     accountId?: string
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<void, ProviderAuthError>
 }
 
 /** Persist auth credentials — invoked by `ProviderAuth` into a model driver's
@@ -117,7 +125,7 @@ export type PersistAuth = (
         readonly expires: number
         readonly accountId?: string
       },
-) => Effect.Effect<void>
+) => Effect.Effect<void, ProviderAuthError>
 
 export interface ProviderAuthorizeContext {
   readonly sessionId: string
@@ -140,8 +148,8 @@ export interface ProviderAuthContribution {
   readonly methods: ReadonlyArray<AuthMethod>
   readonly authorize?: (
     ctx: ProviderAuthorizeContext,
-  ) => Effect.Effect<ProviderAuthorizationResult | undefined>
-  readonly callback?: (ctx: ProviderCallbackContext) => Effect.Effect<void>
+  ) => Effect.Effect<ProviderAuthorizationResult | undefined, ProviderAuthError>
+  readonly callback?: (ctx: ProviderCallbackContext) => Effect.Effect<void, ProviderAuthError>
 }
 
 // ── ModelDriverContribution — provider-shaped driver ──

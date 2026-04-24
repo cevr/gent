@@ -3,7 +3,7 @@
  * ChatGPT OAuth (Codex) path.
  *
  * Cache shape: TTL 30s + 60s freshness margin + refresh-on-stale +
- * best-effort `authInfo.persist` write-back. The initial credentials
+ * durable `authInfo.persist` write-back. The initial credentials
  * come from `authInfo` rather than an OS keychain — there is no
  * "read from keychain" IO for OpenAI, so the cell IS the sole copy of
  * the rotated refresh token until persist write-back lands.
@@ -91,9 +91,9 @@ export class OpenAICredentialService extends Context.Service<
 >()("@gent/extensions/openai/CredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
-   * (when present) writes refreshed credentials back to AuthStore as a
-   * best-effort side effect — failures log a warning but do not fail
-   * the get. Preserves session continuity across token refresh races.
+   * (when present) durably writes refreshed credentials back to AuthStore.
+   * Write-back failures fail the credential load so callers never run with
+   * refresh state that only exists in process memory.
    */
   static layer = (authInfo: ProviderAuthInfo): Layer.Layer<OpenAICredentialService> =>
     OpenAICredentialService.layerFromIO(realIO, authInfo)
@@ -150,7 +150,9 @@ export class OpenAICredentialService extends Context.Service<
     authInfo: ProviderAuthInfo,
   ): Effect.Effect<OpenAICredentialServiceShape> =>
     Effect.sync(() => {
-      const persistRefreshed = (creds: OpenAICredentials): Effect.Effect<void> => {
+      const persistRefreshed = (
+        creds: OpenAICredentials,
+      ): Effect.Effect<void, ProviderAuthError> => {
         const persist = authInfo.persist
         if (persist === undefined) return Effect.void
         return persist({
@@ -160,8 +162,13 @@ export class OpenAICredentialService extends Context.Service<
           ...(creds.accountId !== undefined ? { accountId: creds.accountId } : {}),
         }).pipe(
           Effect.catchDefect((cause) =>
-            Effect.logWarning("openai.credential.persist.failed").pipe(
-              Effect.annotateLogs({ error: String(cause) }),
+            Effect.fail(
+              new ProviderAuthError({
+                message: `Failed to persist refreshed OpenAI credentials: ${
+                  cause instanceof Error ? cause.message : String(cause)
+                }`,
+                cause,
+              }),
             ),
           ),
         )

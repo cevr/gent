@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AuthMethod } from "@gent/core/domain/auth-method"
-import { AuthStore } from "@gent/core/domain/auth-store"
+import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import type { AuthApi } from "@gent/core/domain/auth-store"
 import { AuthStorage } from "@gent/core/domain/auth-storage"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -49,12 +49,29 @@ const noopProvider: ModelDriverContribution = {
   },
 }
 
+const persistDuringAuthorizeProvider: ModelDriverContribution = {
+  id: "persisting",
+  name: "Persisting",
+  resolveModel: () => ({}),
+  auth: {
+    methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
+    authorize: (ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.persist({ type: "api", key: "sk-authorize" })
+        return {
+          url: "",
+          method: "done" as const,
+        }
+      }),
+  },
+}
+
 const testResolved = resolveExtensions([
   {
     manifest: { id: "test" },
     scope: "builtin",
     sourcePath: "test",
-    contributions: { modelDrivers: [oauthProvider, noopProvider] },
+    contributions: { modelDrivers: [oauthProvider, noopProvider, persistDuringAuthorizeProvider] },
   } satisfies LoadedExtension,
 ])
 const testRegistry = ExtensionRegistry.fromResolved(testResolved)
@@ -62,6 +79,17 @@ const testDriverRegistry = DriverRegistry.fromResolved({
   modelDrivers: testResolved.modelDrivers,
   externalDrivers: testResolved.externalDrivers,
 })
+
+const failingAuthStoreLayer = Layer.succeed(
+  AuthStore,
+  AuthStore.of({
+    get: () => Effect.succeed(undefined),
+    set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
+    remove: () => Effect.void,
+    list: () => Effect.succeed([]),
+    listInfo: () => Effect.succeed({}),
+  }),
+)
 
 describe("ProviderAuth", () => {
   it("extension authorize + callback stores credentials", async () => {
@@ -108,6 +136,46 @@ describe("ProviderAuth", () => {
 
     expect(Object.keys(methods)).toContain("openai")
     expect(Object.keys(methods)).toContain("anthropic")
+    expect(Object.keys(methods)).toContain("persisting")
     expect(methods["openai"]?.length).toBe(1)
+  })
+
+  it("authorize surfaces credential persistence failures", async () => {
+    const layer = Layer.provideMerge(
+      ProviderAuth.Test(),
+      Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+    )
+
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const auth = yield* ProviderAuth
+        return yield* Effect.exit(auth.authorize("s1", "persisting", 0))
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(exit.cause.toString()).toContain("Failed to persist auth")
+  })
+
+  it("callback surfaces credential persistence failures", async () => {
+    pendingCallbacks.clear()
+    const layer = Layer.provideMerge(
+      ProviderAuth.Test(),
+      Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
+    )
+
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const auth = yield* ProviderAuth
+        const authResult = yield* auth.authorize("s1", "openai", 0)
+        if (authResult === undefined) return yield* Effect.dieMessage("auth setup failed")
+        return yield* Effect.exit(
+          auth.callback("s1", "openai", 0, authResult.authorizationId, "sk-test-key"),
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(exit.cause.toString()).toContain("Failed to persist auth")
   })
 })

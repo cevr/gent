@@ -2,6 +2,7 @@ import { Clock, Effect, Layer, Redacted, Ref } from "effect"
 import {
   defineExtension,
   AuthMethod,
+  ProviderAuthError,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -192,7 +193,18 @@ export const buildAnthropicModelDriver = (
           url: "" as string,
           method: "done" as const,
         }
-      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+      }).pipe(
+        Effect.catchDefect((cause) =>
+          Effect.fail(
+            new ProviderAuthError({
+              message: `Anthropic authorization failed: ${
+                cause instanceof Error ? cause.message : String(cause)
+              }`,
+              cause,
+            }),
+          ),
+        ),
+      ),
   },
 })
 

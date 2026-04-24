@@ -8,9 +8,10 @@
  * Effects.
  *
  * The cache shape (TTL 30s + 60s freshness margin + refresh-on-stale +
- * best-effort write-back via `authInfo.persist`) is a verbatim port from
+ * durable write-back via `authInfo.persist`) is a verbatim port from
  * the (now-deleted) `runtime-boundary.ts:loadCredentialsEffect`.
- * Behavior unchanged; only the interface shape differs.
+ * Persist failures are now typed auth failures instead of warning-only
+ * side effects.
  *
  * Why typed errors instead of `Effect<ClaudeCredentials | null>`: the
  * old shape returned `null` to mean "no creds available" because the
@@ -83,10 +84,9 @@ export class AnthropicCredentialService extends Context.Service<
 >()("@gent/extensions/anthropic/CredentialService") {
   /**
    * Build the credential service for the OAuth path. `authInfo.persist`
-   * (when present) writes refreshed credentials back to AuthStore as a
-   * best-effort side effect — failures log a warning but do not fail
-   * the get. This preserves session continuity even when AuthStore
-   * write-back races with another writer (e.g. `claude` CLI itself).
+   * (when present) durably writes refreshed credentials back to AuthStore.
+   * Write-back failures fail the credential load so callers never run with
+   * refresh state that only exists in process memory.
    *
    * The PRIMARY_CLAUDE_SERVICE source is the only one wired here —
    * multi-account picker UI doesn't exist yet. Spelling out the source
@@ -142,20 +142,24 @@ export class AnthropicCredentialService extends Context.Service<
     authInfo: ProviderAuthInfo | undefined,
   ): Effect.Effect<AnthropicCredentialServiceShape> =>
     Effect.sync(() => {
-      const persistRefreshed = (creds: ClaudeCredentials): Effect.Effect<void> => {
+      const persistRefreshed = (
+        creds: ClaudeCredentials,
+      ): Effect.Effect<void, ProviderAuthError> => {
         const persist = authInfo?.persist
         if (persist === undefined) return Effect.void
-        // `persist` returns `Effect<void>` (no error channel) so only
-        // defects can leak. Catch defects → log warning → succeed
-        // void; the get path keeps moving with the in-memory creds.
         return persist({
           access: creds.accessToken,
           refresh: creds.refreshToken,
           expires: creds.expiresAt,
         }).pipe(
           Effect.catchDefect((cause) =>
-            Effect.logWarning("anthropic.credential.persist.failed").pipe(
-              Effect.annotateLogs({ error: String(cause) }),
+            Effect.fail(
+              new ProviderAuthError({
+                message: `Failed to persist refreshed Anthropic credentials: ${
+                  cause instanceof Error ? cause.message : String(cause)
+                }`,
+                cause,
+              }),
             ),
           ),
         )

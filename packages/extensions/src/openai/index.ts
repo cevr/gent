@@ -3,6 +3,7 @@ import {
   defineExtension,
   AuthMethod,
   Model,
+  ProviderAuthError,
   type ModelDriverContribution,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -181,11 +182,14 @@ export const buildOpenAIModelDriver = (
           pendingCallbacks.set(ctx.authorizationId, { cb, timeoutId })
           return authorization
         },
-        catch: (e) => ({
-          _tag: "OpenAIOAuthError" as const,
-          cause: e,
-        }),
-      }).pipe(Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined)))),
+        catch: (e) =>
+          new ProviderAuthError({
+            message: `OpenAI OAuth authorization failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            cause: e,
+          }),
+      }),
     callback: (ctx) =>
       Effect.gen(function* () {
         const entry = pendingCallbacks.get(ctx.authorizationId)
@@ -195,10 +199,11 @@ export const buildOpenAIModelDriver = (
         const cb = entry.cb
         const result = yield* Effect.tryPromise({
           try: () => cb(ctx.code),
-          catch: (e) => ({
-            _tag: "OpenAIOAuthCallbackError" as const,
-            cause: e,
-          }),
+          catch: (e) =>
+            new ProviderAuthError({
+              message: `OpenAI OAuth callback failed: ${e instanceof Error ? e.message : String(e)}`,
+              cause: e,
+            }),
         })
         yield* ctx.persist({
           type: "oauth",
@@ -207,7 +212,7 @@ export const buildOpenAIModelDriver = (
           expires: result.expires,
           ...(result.accountId !== undefined ? { accountId: result.accountId } : {}),
         })
-      }).pipe(Effect.catchEager(() => Effect.void)),
+      }),
   },
 })
 

@@ -363,8 +363,8 @@ describe("OpenAICredentialService — invalidate", () => {
   })
 })
 
-describe("OpenAICredentialService — persist failure does not regress getFresh", () => {
-  test("write-back failure returns fresh creds anyway", async () => {
+describe("OpenAICredentialService — durable persist failure", () => {
+  test("write-back failure surfaces ProviderAuthError", async () => {
     const fresh = makeCreds("fresh", FAR_FUTURE)
     const state: IOState = {
       refreshResult: () => Effect.succeed(fresh),
@@ -379,22 +379,30 @@ describe("OpenAICredentialService — persist failure does not regress getFresh"
       }),
     )
 
-    await runWithTestClock(
+    const result = await runWithTestClock(
       Effect.gen(function* () {
         const svc = yield* OpenAICredentialService
-        const result = yield* svc.getFresh
-        expect(result.access).toBe("fresh-access")
-        expect(persistState.lastWritten).toBeUndefined()
+        return yield* Effect.exit(svc.getFresh)
       }).pipe(Effect.provide(layer)),
     )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(errOpt)).toBe(true)
+      if (Option.isSome(errOpt)) {
+        expect(errOpt.value.message).toContain("Failed to persist refreshed OpenAI credentials")
+      }
+    }
+    expect(persistState.lastWritten).toBeUndefined()
   })
 })
 
-describe("OpenAICredentialService — invalidate preserves rotated refresh token", () => {
-  test("rotated refresh survives persist failure + invalidate", async () => {
-    // The exact regression: refresh rotates the token, persist defects,
-    // invalidate fires (e.g. 401 recovery), next refresh MUST use the
-    // rotated token in memory — not the bootstrap from authInfo.
+describe("OpenAICredentialService — invalidate preserves durable refresh token", () => {
+  test("failed durable write does not install rotated refresh token", async () => {
+    // If the durable AuthStore write fails, the cache must not claim
+    // the rotated refresh token is installed. That keeps in-memory
+    // state aligned with the persisted auth record.
     const callTokens: string[] = []
     let phase: "first" | "after-invalidate" = "first"
     const state: IOState = {
@@ -431,20 +439,24 @@ describe("OpenAICredentialService — invalidate preserves rotated refresh token
       Effect.gen(function* () {
         const svc = yield* OpenAICredentialService
 
-        // First get rotates token; persist defects; in-memory cell
-        // holds the rotated creds.
-        const first = yield* svc.getFresh
-        expect(first.access).toBe("rotated-access")
+        const failure = yield* Effect.exit(svc.getFresh)
+        expect(failure._tag).toBe("Failure")
+        if (failure._tag === "Failure") {
+          const errOpt = Cause.findErrorOption(failure.cause)
+          expect(Option.isSome(errOpt)).toBe(true)
+          if (Option.isSome(errOpt)) {
+            expect(errOpt.value.message).toContain("Failed to persist refreshed OpenAI credentials")
+          }
+        }
         expect(callTokens[0]).toBe("seed-refresh")
         expect(persistState.lastWritten).toBeUndefined()
 
-        // 401 recovery path: invalidate → next get must refresh using
-        // the rotated token. If invalidate cleared the cell, the
-        // service would fall back to "seed-refresh" (likely revoked).
+        // Since the rotated token never became durable, invalidate
+        // should still preserve the last durable refresh token.
         yield* svc.invalidate
         const second = yield* svc.getFresh
         expect(second.access).toBe("post-invalidate-access")
-        expect(callTokens[1]).toBe("rotated-refresh")
+        expect(callTokens[1]).toBe("seed-refresh")
       }).pipe(Effect.provide(layer)),
     )
   })

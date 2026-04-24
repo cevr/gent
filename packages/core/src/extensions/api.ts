@@ -127,6 +127,7 @@ export {
 } from "../domain/prompt.js"
 export type { TurnExecutor, TurnContext, TurnEvent } from "../domain/driver.js"
 export {
+  ProviderAuthError,
   TurnError,
   TextDelta,
   ReasoningDelta,
@@ -248,7 +249,6 @@ export {
   withReadOnly,
 } from "../domain/read-only.js"
 export { buildToolJsonSchema, flattenAllOf } from "../domain/tool-schema.js"
-export { ProviderAuthError } from "../providers/provider-auth.js"
 
 // ── Public API ──
 

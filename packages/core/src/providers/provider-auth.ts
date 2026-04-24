@@ -1,20 +1,14 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { AuthApi, AuthOauth, AuthStore } from "../domain/auth-store.js"
 import { AuthAuthorization } from "../domain/auth-method.js"
 import type { AuthMethod } from "../domain/auth-method.js"
-import type { PersistAuth } from "../domain/driver.js"
+import { ProviderAuthError, type PersistAuth } from "../domain/driver.js"
 import {
   DriverRegistry,
   type DriverRegistryService,
 } from "../runtime/extensions/driver-registry.js"
 
-export class ProviderAuthError extends Schema.TaggedErrorClass<ProviderAuthError>()(
-  "ProviderAuthError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
-  },
-) {}
+export { ProviderAuthError } from "../domain/driver.js"
 
 export interface ProviderAuthService {
   readonly listMethods: () => Effect.Effect<Record<string, ReadonlyArray<typeof AuthMethod.Type>>>
@@ -64,9 +58,15 @@ const makeProviderAuth = (
       (providerId: string): PersistAuth =>
       (auth) => {
         if (auth.type === "api") {
-          return authStore
-            .set(providerId, new AuthApi({ type: "api", key: auth.key }))
-            .pipe(Effect.catchEager(() => Effect.void))
+          return authStore.set(providerId, new AuthApi({ type: "api", key: auth.key })).pipe(
+            Effect.mapError(
+              (e) =>
+                new ProviderAuthError({
+                  message: `Failed to persist auth for provider "${providerId}"`,
+                  cause: e,
+                }),
+            ),
+          )
         }
         return authStore
           .set(
@@ -79,7 +79,15 @@ const makeProviderAuth = (
               ...(auth.accountId !== undefined ? { accountId: auth.accountId } : {}),
             }),
           )
-          .pipe(Effect.catchEager(() => Effect.void))
+          .pipe(
+            Effect.mapError(
+              (e) =>
+                new ProviderAuthError({
+                  message: `Failed to persist auth for provider "${providerId}"`,
+                  cause: e,
+                }),
+            ),
+          )
       }
 
     const listMethods = Effect.fn("ProviderAuth.listMethods")(function* () {
