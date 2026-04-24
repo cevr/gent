@@ -22,5 +22,5 @@ jobs:
       - name: Gate
         run: bun run gate
 
-      - name: Integration
-        run: bun run test:integration
+      - name: E2E
+        run: bun run test:e2e
