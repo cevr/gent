@@ -34,7 +34,44 @@ const waitForState = async (
     return waitForState(setup, read, predicate, remaining - 1)
   })
 
+const waitForAgentError = async (
+  setup: Awaited<ReturnType<typeof renderWithProviders>>,
+  read: () => string | null,
+  remaining = 10,
+): Promise<string> =>
+  setup.renderOnce().then(() => {
+    const error = read()
+    if (error !== null) return error
+    if (remaining <= 1) throw new Error("agent error did not surface")
+    return waitForAgentError(setup, read, remaining - 1)
+  })
+
 describe("ClientProvider session lifecycle", () => {
+  test("model list failures surface as agent errors", async () => {
+    let ctx: ClientContextValue | undefined
+    const client = createMockClient({
+      model: {
+        list: () =>
+          Effect.fail({
+            _tag: "DriverError",
+            driver: { _tag: "model", id: "openai" },
+            reason: "catalog filter failed",
+          }),
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        client,
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    const error = await waitForAgentError(setup, () => ctx!.error())
+    expect(error).toBe("Driver model: openai: catalog filter failed")
+  })
+
   test("switchSession activates the target session immediately and seeds the target agent", async () => {
     let ctx: ClientContextValue | undefined
     const setup = await renderWithProviders(

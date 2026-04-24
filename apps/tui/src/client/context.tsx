@@ -315,7 +315,13 @@ export function ClientProvider(props: ClientProviderProps) {
             setModelStore({ modelsById })
           }),
         ),
-        Effect.catchEager(() => Effect.void),
+        Effect.catchEager((err) =>
+          Effect.sync(() => {
+            const error = formatError(err)
+            log.error("model.list.failed", { error })
+            setAgentStore({ status: AgentStatus.error(error) })
+          }),
+        ),
       ),
     )
   })

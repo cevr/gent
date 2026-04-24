@@ -41,4 +41,13 @@ describe("formatError", () => {
     const err = { _tag: "ProviderAuthError", message: "invalid key" } as UiError
     expect(formatError(err)).toBe("Auth: invalid key")
   })
+
+  test("DriverError → driver and reason", () => {
+    const err = {
+      _tag: "DriverError",
+      driver: { _tag: "model", id: "openai" },
+      reason: "catalog filter failed",
+    } as UiError
+    expect(formatError(err)).toBe("Driver model: openai: catalog filter failed")
+  })
 })
