@@ -198,8 +198,14 @@ export interface SessionRuntimeService {
   readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
-  new SessionRuntimeError({ message, cause })
+const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
+  // Preserve inner typed SessionRuntimeError (e.g. from `requireSessionExists`)
+  // so callers observing the cause chain see the specific "Session not found"
+  // message instead of a generic "<op> failed" wrapper.
+  const inner = cause.reasons.find(Cause.isFailReason)?.error
+  if (Schema.is(SessionRuntimeError)(inner)) return inner
+  return new SessionRuntimeError({ message, cause })
+}
 
 const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)

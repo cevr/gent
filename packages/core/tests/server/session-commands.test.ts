@@ -1359,12 +1359,23 @@ describe("session.delete", () => {
           const created = yield* client.session.create({ cwd: process.cwd() })
           yield* client.session.delete({ sessionId: created.sessionId })
 
+          const expectSessionNotFound = (exit: {
+            readonly _tag: "Success" | "Failure"
+            readonly cause?: Cause.Cause<unknown>
+          }) => {
+            expect(exit._tag).toBe("Failure")
+            if (exit._tag === "Failure" && exit.cause !== undefined) {
+              const message = String(Cause.squash(exit.cause))
+              expect(message.toLowerCase()).toMatch(/session.*(not found|terminated)/)
+            }
+          }
+
           const eventsExit = yield* Effect.exit(
             client.session
               .events({ sessionId: created.sessionId })
               .pipe(Stream.runDrain, Effect.timeout("5 seconds")),
           )
-          expect(eventsExit._tag).toBe("Failure")
+          expectSessionNotFound(eventsExit)
 
           const watchExit = yield* Effect.exit(
             client.session
@@ -1374,7 +1385,7 @@ describe("session.delete", () => {
               })
               .pipe(Stream.runDrain, Effect.timeout("5 seconds")),
           )
-          expect(watchExit._tag).toBe("Failure")
+          expectSessionNotFound(watchExit)
 
           const stateExit = yield* Effect.exit(
             client.actor.getState({
@@ -1382,7 +1393,7 @@ describe("session.delete", () => {
               branchId: created.branchId,
             }),
           )
-          expect(stateExit._tag).toBe("Failure")
+          expectSessionNotFound(stateExit)
 
           const metricsExit = yield* Effect.exit(
             client.actor.getMetrics({
@@ -1390,7 +1401,7 @@ describe("session.delete", () => {
               branchId: created.branchId,
             }),
           )
-          expect(metricsExit._tag).toBe("Failure")
+          expectSessionNotFound(metricsExit)
 
           const queueExit = yield* Effect.exit(
             client.queue.get({
@@ -1398,9 +1409,30 @@ describe("session.delete", () => {
               branchId: created.branchId,
             }),
           )
-          expect(queueExit._tag).toBe("Failure")
+          expectSessionNotFound(queueExit)
         }),
       ),
+  )
+
+  it.live("terminates an active subscription mid-delete (subscribe-then-delete race)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const created = yield* client.session.create({ cwd: process.cwd() })
+
+        // Subscribe while the session is alive, then delete it while
+        // the stream is still attached. The subscription must terminate
+        // (either via interruption on loop close, or by the event-store
+        // propagating session-gone). A hang means the principle of
+        // terminal-state-exit-safety is violated.
+        const closed = yield* collectSessionEvents(
+          client.session.events({ sessionId: created.sessionId }),
+        )
+
+        yield* client.session.delete({ sessionId: created.sessionId })
+        yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))
+      }),
+    ),
   )
 })
 

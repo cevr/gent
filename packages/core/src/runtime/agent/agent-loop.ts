@@ -3462,6 +3462,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
+                const terminated = yield* Ref.get(terminatedSessionsRef)
+                if (terminated.has(input.sessionId)) {
+                  return yield* new AgentLoopError({
+                    message: `Session terminated: ${input.sessionId}`,
+                  })
+                }
                 return queueSnapshotFromQueueState(emptyLoopQueueState())
               }
 
@@ -3479,6 +3485,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop === undefined) {
+                const terminated = yield* Ref.get(terminatedSessionsRef)
+                if (terminated.has(input.sessionId)) {
+                  return yield* new AgentLoopError({
+                    message: `Session terminated: ${input.sessionId}`,
+                  })
+                }
                 return queueSnapshotFromQueueState(emptyLoopQueueState())
               }
 
@@ -3509,6 +3521,18 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   }),
                 )
                 return state
+              }
+
+              // No running loop. Before synthesizing an idle state from
+              // persisted events, confirm the session wasn't terminated — the
+              // terminated set outlives `closeLoopHandle` and catches the
+              // check-then-use race where delete lands between the caller's
+              // `requireSessionExists` gate and this fallback.
+              const terminated = yield* Ref.get(terminatedSessionsRef)
+              if (terminated.has(input.sessionId)) {
+                return yield* new AgentLoopError({
+                  message: `Session terminated: ${input.sessionId}`,
+                })
               }
 
               return runtimeStateFromLoopState(
