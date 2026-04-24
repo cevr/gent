@@ -27,7 +27,8 @@ import {
 import { Agents } from "@gent/extensions/all-agents"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
-import { EventStore } from "@gent/core/domain/event"
+import { AgentEvent, EventStore, EventStoreError } from "@gent/core/domain/event"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
@@ -346,6 +347,23 @@ describe("AgentRunner", () => {
           { service: "EventStore", method: "append", match: { _tag: "AgentRunSucceeded" } },
         ])
 
+        const spawnRecord = calls.find((c) => {
+          const event = Schema.decodeUnknownOption(AgentEvent)(c.args)
+          return (
+            c.service === "EventStore" &&
+            c.method === "append" &&
+            event._tag === "Some" &&
+            event.value._tag === "AgentRunSpawned"
+          )
+        })
+        expect(spawnRecord).toBeDefined()
+        const spawnEvent = Schema.decodeUnknownSync(AgentEvent)(spawnRecord?.args)
+        expect(spawnEvent._tag).toBe("AgentRunSpawned")
+        if (spawnEvent._tag === "AgentRunSpawned") {
+          const child = yield* storage.getSession(spawnEvent.childSessionId)
+          expect(child?.activeBranchId).toBe(spawnEvent.childBranchId)
+        }
+
         // Verify enriched AgentRunSucceeded payload fields (args is the event object directly)
         const successEvent = calls.find((c) => {
           const args = c.args as Record<string, unknown> | undefined
@@ -362,6 +380,65 @@ describe("AgentRunner", () => {
         expect(event.savedPath).toBeDefined()
         expect(typeof event.savedPath).toBe("string")
         expect(event.savedPath).toContain("/tmp/gent/outputs/")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("rolls back durable child session when spawn event append fails", async () => {
+    const storageLayer = Storage.TestWithSql()
+    const failingPublisherLayer = Layer.succeed(EventPublisher, {
+      append: () => Effect.fail(new EventStoreError({ message: "spawn append failed" })),
+      deliver: () => Effect.void,
+      publish: () => Effect.fail(new EventStoreError({ message: "spawn publish failed" })),
+      terminateSession: () => Effect.void,
+    })
+    const deps = Layer.mergeAll(
+      storageLayer,
+      EventStore.Memory,
+      failingPublisherLayer,
+      ExtensionRegistry.Test(),
+      Provider.Debug(),
+      ToolRunner.Test(),
+      sessionRuntimeStub(),
+    )
+    const runnerLayer = InProcessRunner({}).pipe(
+      Layer.provide(Layer.merge(deps, ephemeralParentDeps)),
+    )
+    const layer = Layer.mergeAll(deps, runnerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const runner = yield* AgentRunnerService
+
+        const now = new Date()
+        const session = new Session({
+          id: "parent-session-spawn-rollback",
+          name: "Parent",
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: "parent-branch-spawn-rollback",
+          sessionId: session.id,
+          createdAt: now,
+        })
+
+        yield* storage.createSession(session)
+        yield* storage.createBranch(branch)
+
+        const result = yield* runner.run({
+          agent: Agents.explore,
+          prompt: "spawn rollback",
+          parentSessionId: session.id,
+          parentBranchId: branch.id,
+          cwd: process.cwd(),
+          runSpec: { persistence: "durable" },
+        })
+
+        expect(result._tag).toBe("error")
+        const sessions = yield* storage.listSessions()
+        expect(sessions.filter((candidate) => candidate.parentSessionId === session.id)).toEqual([])
       }).pipe(Effect.provide(layer)),
     )
   })

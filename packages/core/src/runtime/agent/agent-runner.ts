@@ -333,11 +333,12 @@ const makeSharedRunnerHelpers = (
   storage: StorageService,
   eventPublisher: EventPublisherService,
 ) => {
-  const createAgentRunSession = (params: {
+  const createDurableAgentRunSession = (params: {
     agent: { name: string }
     prompt: string
     parentSessionId: SessionId
     parentBranchId: BranchId
+    toolCallId?: ToolCallId
     cwd: string
   }) =>
     Effect.gen(function* () {
@@ -352,24 +353,42 @@ const makeSharedRunnerHelpers = (
       const branchId = BranchId.make(Bun.randomUUIDv7())
       const now = yield* DateTime.nowAsDate
 
-      yield* storage.createSession(
-        new Session({
-          id: sessionId,
-          name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
-          cwd: params.cwd,
-          parentSessionId: params.parentSessionId,
-          parentBranchId: params.parentBranchId,
-          createdAt: now,
-          updatedAt: now,
+      const committed = yield* storage.withTransaction(
+        Effect.gen(function* () {
+          yield* storage.createSession(
+            new Session({
+              id: sessionId,
+              name: `${params.agent.name}: ${params.prompt.slice(0, 60)}`,
+              cwd: params.cwd,
+              parentSessionId: params.parentSessionId,
+              parentBranchId: params.parentBranchId,
+              activeBranchId: branchId,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          )
+          yield* storage.createBranch(
+            new Branch({
+              id: branchId,
+              sessionId,
+              createdAt: now,
+            }),
+          )
+          const envelope = yield* eventPublisher.append(
+            AgentRunSpawned.make({
+              parentSessionId: params.parentSessionId,
+              childSessionId: sessionId,
+              agentName: params.agent.name,
+              prompt: params.prompt,
+              toolCallId: params.toolCallId,
+              branchId: params.parentBranchId,
+              childBranchId: branchId,
+            }),
+          )
+          return { envelope }
         }),
       )
-      yield* storage.createBranch(
-        new Branch({
-          id: branchId,
-          sessionId,
-          createdAt: now,
-        }),
-      )
+      yield* eventPublisher.deliver(committed.envelope)
 
       return { sessionId, branchId }
     })
@@ -444,7 +463,7 @@ const makeSharedRunnerHelpers = (
       )
 
   return {
-    createAgentRunSession,
+    createDurableAgentRunSession,
     publishAgentRunSpawned,
     publishAgentRunSucceeded,
     publishAgentRunFailed,
@@ -931,20 +950,11 @@ export const InProcessRunner = (
             })
           }
 
-          return shared.createAgentRunSession(params).pipe(
+          return shared.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
 
-                yield* shared.publishAgentRunSpawned({
-                  parentSessionId: params.parentSessionId,
-                  parentBranchId: params.parentBranchId,
-                  toolCallId,
-                  sessionId,
-                  childBranchId: branchId,
-                  agentName: params.agent.name,
-                  prompt: params.prompt,
-                })
                 yield* publishAgentSwitch({
                   sessionId,
                   branchId,
@@ -1086,20 +1096,10 @@ export const SubprocessRunner = (
             })
           }
 
-          return shared.createAgentRunSession(params).pipe(
+          return shared.createDurableAgentRunSession({ ...params, toolCallId }).pipe(
             Effect.flatMap(({ sessionId, branchId }) => {
               const run = Effect.gen(function* () {
                 yield* WideEvent.set({ childSessionId: sessionId })
-
-                yield* shared.publishAgentRunSpawned({
-                  parentSessionId: params.parentSessionId,
-                  parentBranchId: params.parentBranchId,
-                  toolCallId,
-                  sessionId,
-                  childBranchId: branchId,
-                  agentName: params.agent.name,
-                  prompt: params.prompt,
-                })
 
                 // Capture trace context for subprocess propagation
                 const currentSpan = yield* Effect.currentParentSpan.pipe(

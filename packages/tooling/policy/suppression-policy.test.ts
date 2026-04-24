@@ -491,7 +491,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/core/src/extensions/internal.ts:62 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/providers/provider.ts:477 effect:strictEffectProvide:off",
   "packages/core/src/runtime/agent/agent-runner.ts:110 eslint:@typescript-eslint/no-unsafe-type-assertion",
-  "packages/core/src/runtime/agent/agent-runner.ts:474 eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "packages/core/src/runtime/agent/agent-runner.ts:493 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/agent/tool-runner.ts:174 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/agent/tool-runner.ts:177 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/agent/tool-runner.ts:183 eslint:@typescript-eslint/no-unsafe-type-assertion",
