@@ -19,7 +19,7 @@ import {
   ProjectionError,
   type PromptSection,
 } from "@gent/core/extensions/api"
-import { MachineExecute } from "./core-internal.js"
+import { MachineExecute } from "./builtin-internal.js"
 import { AUTO_EXTENSION_ID, AutoProtocol, type AutoSnapshotReply } from "./auto-protocol.js"
 
 const PROJECTION_ID = "auto-loop"

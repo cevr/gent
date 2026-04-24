@@ -307,6 +307,8 @@ describe("architecture policy", () => {
     expect(pkg).not.toMatch(/"\.\/extensions\/internal"/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal": null/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal\.js": null/)
+    expect(extensionsPkg).toMatch(/"\.\/builtin-internal": null/)
+    expect(extensionsPkg).toMatch(/"\.\/builtin-internal\.js": null/)
   })
 
   test("runtime modules do not import server prompt internals", () => {
@@ -341,11 +343,11 @@ describe("architecture policy", () => {
     expect(mainSource).toContain('Flag.string("connect")')
   })
 
-  test("builtin extensions have exactly one core-internal bridge", () => {
+  test("builtin extensions have exactly one explicit internal membrane", () => {
     const bridgeImport = "../../core/src/extensions/internal.js"
     const violations = collectSourceFiles()
       .filter((file) => file.includes("/packages/extensions/src/"))
-      .filter((file) => !file.endsWith("/packages/extensions/src/core-internal.ts"))
+      .filter((file) => !file.endsWith("/packages/extensions/src/builtin-internal.ts"))
       .flatMap((file) =>
         sourceLines(file)
           .filter(({ text }) => !isCommentLine(text))

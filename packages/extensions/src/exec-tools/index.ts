@@ -1,7 +1,7 @@
 import { Layer, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineExtension, resource } from "@gent/core/extensions/api"
-import { defineInternalResource, type InternalResourceMachine } from "../core-internal.js"
+import { defineBuiltinResource, type BuiltinResourceMachine } from "../builtin-internal.js"
 import { BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID, ExecToolsProtocol } from "./protocol.js"
 
@@ -37,7 +37,7 @@ const afterTransition = (
     ? [{ _tag: "QueueFollowUp", content: after.notificationContent }]
     : []
 
-const notificationResource: InternalResourceMachine<
+const notificationResource: BuiltinResourceMachine<
   typeof NotificationState.Type,
   typeof NotificationEvent.Type
 > = {
@@ -55,7 +55,7 @@ export const ExecToolsExtension = defineExtension({
   capabilities: [BashTool],
   resources: [
     resource(
-      defineInternalResource({
+      defineBuiltinResource({
         scope: "process",
         layer: Layer.empty,
         machine: notificationResource,
