@@ -4,8 +4,8 @@ import {
   EFFECT_AI_CONTENT_FIELDS,
   normalizeResponseParts,
   promptFromResponseParts,
+  projectResponsePartsToMessageParts,
   responsePartsFromMessages,
-  responsePartsToMessageParts,
   toPrompt,
   toPromptMessages,
 } from "@gent/core/providers/ai-transcript"
@@ -176,7 +176,7 @@ describe("AI transcript bridge", () => {
   })
 
   test("converts Effect Response parts back to persisted assistant and tool parts", () => {
-    const parts = responsePartsToMessageParts([
+    const parts = projectResponsePartsToMessageParts([
       Response.makePart("text", { text: "Done." }),
       Response.makePart("reasoning", { text: "Need a tool." }),
       Response.makePart("tool-call", {
@@ -222,6 +222,61 @@ describe("AI transcript bridge", () => {
         output: { type: "json", value: { ok: true } },
       }),
     )
+  })
+
+  test("keeps Response parts canonical while deriving storage projections", () => {
+    const responseParts = normalizeResponseParts([
+      Response.makePart("text", { text: "Need confirmation." }),
+      Response.makePart("tool-call", {
+        id: "tc-approval",
+        name: "write_file",
+        params: { path: "PLAN.md" },
+        providerExecuted: false,
+      }),
+      Response.makePart("tool-approval-request", {
+        approvalId: "approval-1",
+        toolCallId: "tc-approval",
+      }),
+      Response.makePart("finish", {
+        reason: "tool-calls",
+        usage: new Response.Usage({
+          inputTokens: {
+            uncached: undefined,
+            total: 12,
+            cacheRead: undefined,
+            cacheWrite: undefined,
+          },
+          outputTokens: {
+            total: 4,
+            text: undefined,
+            reasoning: undefined,
+          },
+        }),
+        response: undefined,
+      }),
+    ])
+
+    expect(responseParts.map((part) => part.type)).toEqual([
+      "text",
+      "tool-call",
+      "tool-approval-request",
+      "finish",
+    ])
+
+    const projection = projectResponsePartsToMessageParts(responseParts)
+    expect(projection.assistant.map((part) => part.type)).toEqual(["text", "tool-call"])
+    expect(projection.tool).toEqual([])
+
+    const replayPrompt = promptFromResponseParts(responseParts)
+    const assistant = replayPrompt.content[0]
+    expect(assistant?.role).toBe("assistant")
+    if (assistant?.role === "assistant") {
+      expect(assistant.content.map((part) => part.type)).toEqual([
+        "text",
+        "tool-call",
+        "tool-approval-request",
+      ])
+    }
   })
 
   test("normalizes streaming deltas and round-trips assistant/tool replay with images", () => {
@@ -284,14 +339,14 @@ describe("AI transcript bridge", () => {
         sessionId: "session",
         branchId: "branch",
         role: "assistant",
-        parts: responsePartsToMessageParts(responseParts).assistant,
+        parts: projectResponsePartsToMessageParts(responseParts).assistant,
       }),
       baseMessage({
         id: "tool-replay",
         sessionId: "session",
         branchId: "branch",
         role: "tool",
-        parts: responsePartsToMessageParts(responseParts).tool,
+        parts: projectResponsePartsToMessageParts(responseParts).tool,
       }),
     ]
 

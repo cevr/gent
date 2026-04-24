@@ -29,7 +29,7 @@ export interface PromptTranscriptOptions {
   readonly includeHidden?: boolean
 }
 
-export interface ResponseMessageParts {
+export interface MessagePartProjection {
   readonly assistant: ReadonlyArray<TextPart | ReasoningPart | ImagePart | ToolCallPart>
   readonly tool: ReadonlyArray<ToolResultPart>
 }
@@ -454,9 +454,9 @@ const responsePartToToolProjection = (part: Response.AnyPart): ToolResultPart | 
       })
     : undefined
 
-export const responsePartsToMessageParts = (
+export const projectResponsePartsToMessageParts = (
   parts: ReadonlyArray<Response.AnyPart>,
-): ResponseMessageParts => {
+): MessagePartProjection => {
   const normalized = normalizeResponseParts(parts)
   const assistant: Array<TextPart | ReasoningPart | ImagePart | ToolCallPart> = []
   const tool: ToolResultPart[] = []

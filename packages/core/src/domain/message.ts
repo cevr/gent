@@ -11,8 +11,9 @@ export const DateFromNumber = Schema.Number.pipe(
   }),
 )
 
-// Persisted transcript projection. Runtime/model IO uses Effect Prompt/Response;
-// these schemas keep Gent-owned metadata, storage, and UI serialization stable.
+// Persisted transcript projection. Runtime/model IO uses Effect Prompt/Response
+// as the canonical AI AST; these schemas keep Gent-owned metadata, storage, and
+// UI serialization stable.
 
 export class TextPart extends Schema.Class<TextPart>("TextPart")({
   type: Schema.Literal("text"),

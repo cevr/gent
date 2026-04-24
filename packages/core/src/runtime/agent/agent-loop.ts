@@ -83,7 +83,7 @@ import {
 } from "../../providers/provider.js"
 import {
   normalizeResponseParts,
-  responsePartsToMessageParts,
+  projectResponsePartsToMessageParts,
 } from "../../providers/ai-transcript.js"
 import { summarizeToolOutput, stringifyOutput } from "../../domain/tool-output.js"
 import { hasMessage } from "../../domain/guards.js"
@@ -353,10 +353,22 @@ interface TurnResponseMessages {
   readonly usage?: AssistantDraft["usage"]
 }
 
-const toolCallsFromAssistantParts = (
-  parts: ReadonlyArray<AssistantResponsePart>,
+const toolCallsFromResponseParts = (
+  parts: ReadonlyArray<Response.AnyPart>,
 ): ReadonlyArray<ToolCallPart> =>
-  parts.filter((part): part is ToolCallPart => part.type === "tool-call")
+  parts.flatMap(
+    (part): ReadonlyArray<ToolCallPart> =>
+      part.type === "tool-call"
+        ? [
+            new ToolCallPart({
+              type: "tool-call",
+              toolCallId: ToolCallId.make(part.id),
+              toolName: part.name,
+              input: part.params,
+            }),
+          ]
+        : [],
+  )
 
 const persistMessageParts = (params: {
   storage: StorageService
@@ -632,7 +644,8 @@ const resolveTurnContext = (params: {
   })
 
 interface CollectedTurnResponse {
-  readonly messages: TurnResponseMessages
+  readonly responseParts: ReadonlyArray<Response.AnyPart>
+  readonly messageProjection: TurnResponseMessages
   readonly interrupted: boolean
   readonly streamFailed: boolean
 }
@@ -640,7 +653,8 @@ interface CollectedTurnResponse {
 const isCollectedTurnResponse = (value: unknown): value is CollectedTurnResponse =>
   typeof value === "object" &&
   value !== null &&
-  "messages" in value &&
+  "responseParts" in value &&
+  "messageProjection" in value &&
   "interrupted" in value &&
   "streamFailed" in value
 
@@ -676,14 +690,15 @@ const collectNormalizedResponse = (params: {
   interrupted: boolean
 }): CollectedTurnResponse => {
   const normalized = normalizeResponseParts(params.responseParts)
-  const messages = responsePartsToMessageParts(normalized)
+  const messages = projectResponsePartsToMessageParts(normalized)
   const usage = normalized
     .filter((part): part is Response.FinishPart => part.type === "finish")
     .map((part) => finishedUsage(part.usage))
     .find((part) => part !== undefined)
 
   return {
-    messages: {
+    responseParts: normalized,
+    messageProjection: {
       assistant: messages.assistant,
       tool: messages.tool,
       ...(usage !== undefined ? { usage } : {}),
@@ -1142,9 +1157,9 @@ const resolveTurnEventStream = (params: {
           if (isCollectedTurnResponse(result)) {
             const collected: CollectedTurnResponse = result
             yield* WideEvent.set({
-              inputTokens: collected.messages.usage?.inputTokens ?? 0,
-              outputTokens: collected.messages.usage?.outputTokens ?? 0,
-              toolCallCount: toolCallsFromAssistantParts(collected.messages.assistant).length,
+              inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
+              outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
+              toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
               interrupted: collected.interrupted,
               streamFailed: collected.streamFailed,
             })
@@ -1212,7 +1227,8 @@ const runTurnStreamPhase = (params: {
 
     if (source === undefined) {
       return {
-        messages: { assistant: [], tool: [] },
+        responseParts: [],
+        messageProjection: { assistant: [], tool: [] },
         interrupted: false,
         streamFailed: true,
       }
@@ -1263,13 +1279,13 @@ const runTurnStreamPhase = (params: {
           }),
         )
         .pipe(Effect.orDie)
-      yield* persistAssistantPartsLocal(collected.messages.assistant)
+      yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
       return collected
     }
 
     if (collected.streamFailed) {
-      yield* persistAssistantPartsLocal(collected.messages.assistant)
-      yield* persistToolPartsLocal(collected.messages.tool)
+      yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
+      yield* persistToolPartsLocal(collected.messageProjection.tool)
       return collected
     }
 
@@ -1278,16 +1294,18 @@ const runTurnStreamPhase = (params: {
         StreamEnded.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          ...(collected.messages.usage !== undefined ? { usage: collected.messages.usage } : {}),
+          ...(collected.messageProjection.usage !== undefined
+            ? { usage: collected.messageProjection.usage }
+            : {}),
         }),
       )
       .pipe(Effect.orDie)
     yield* Effect.logInfo("stream.end").pipe(
       Effect.annotateLogs({
         driverKind: source.driverKind,
-        inputTokens: collected.messages.usage?.inputTokens ?? 0,
-        outputTokens: collected.messages.usage?.outputTokens ?? 0,
-        toolCallCount: toolCallsFromAssistantParts(collected.messages.assistant).length,
+        inputTokens: collected.messageProjection.usage?.inputTokens ?? 0,
+        outputTokens: collected.messageProjection.usage?.outputTokens ?? 0,
+        toolCallCount: toolCallsFromResponseParts(collected.responseParts).length,
       }),
     )
 
@@ -1296,15 +1314,14 @@ const runTurnStreamPhase = (params: {
         ...m,
         agent: params.resolved.currentTurnAgent,
         model: params.resolved.modelId,
-        inputTokens: m.inputTokens + (collected.messages.usage?.inputTokens ?? 0),
-        outputTokens: m.outputTokens + (collected.messages.usage?.outputTokens ?? 0),
-        toolCallCount:
-          m.toolCallCount + toolCallsFromAssistantParts(collected.messages.assistant).length,
+        inputTokens: m.inputTokens + (collected.messageProjection.usage?.inputTokens ?? 0),
+        outputTokens: m.outputTokens + (collected.messageProjection.usage?.outputTokens ?? 0),
+        toolCallCount: m.toolCallCount + toolCallsFromResponseParts(collected.responseParts).length,
       }))
     }
 
-    yield* persistAssistantPartsLocal(collected.messages.assistant)
-    yield* persistToolPartsLocal(collected.messages.tool)
+    yield* persistAssistantPartsLocal(collected.messageProjection.assistant)
+    yield* persistToolPartsLocal(collected.messageProjection.tool)
 
     return collected
   })
@@ -2417,7 +2434,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }
 
                 // No tool calls → LLM is done
-                const toolCalls = toolCallsFromAssistantParts(collected.messages.assistant)
+                const toolCalls = toolCallsFromResponseParts(collected.responseParts)
                 if (toolCalls.length === 0) break
 
                 // 3. Execute tools
