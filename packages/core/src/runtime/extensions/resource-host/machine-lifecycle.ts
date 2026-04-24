@@ -1,9 +1,9 @@
-import { Cause, Deferred, Effect, Ref, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Ref, Schema, Semaphore } from "effect"
 import type { Scope } from "effect"
 import { ExtensionActorStatusInfo, type ExtensionRef } from "../../../domain/extension.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type { ExtensionProtocolError } from "../../../domain/extension-protocol.js"
-import { spawnMachineExtensionRef } from "../spawn-machine-ref.js"
+import { ExtensionPersistenceFailure, spawnMachineExtensionRef } from "../spawn-machine-ref.js"
 import type { ExtensionTurnControlService } from "../turn-control.js"
 import { ExtensionTurnControl } from "../turn-control.js"
 import { getProtocolFailure, type ActorEntry, type ActorSpawnSpec } from "./machine-protocol.js"
@@ -50,6 +50,12 @@ export const makeMachineLifecycle = (params: {
     const spawnSemaphore = yield* Semaphore.make(1)
 
     const formatCause = (cause: Cause.Cause<unknown>) => String(Cause.squash(cause))
+    const getPersistenceFailure = (cause: Cause.Cause<unknown>) => {
+      const die = cause.reasons.find(Cause.isDieReason)
+      return die !== undefined && Schema.is(ExtensionPersistenceFailure)(die.defect)
+        ? die.defect
+        : undefined
+    }
 
     const setActorStatus = (status: ExtensionActorStatusInfo) =>
       Ref.update(actorStatusesRef, (current) => {
@@ -256,6 +262,31 @@ export const makeMachineLifecycle = (params: {
         return restarted
       })
 
+    const failActorWithoutRestart = (
+      sessionId: SessionId,
+      branchId: BranchId | undefined,
+      entry: ActorEntry,
+      error: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const currentStatus = yield* getActorStatus(sessionId, entry.ref.id)
+        const currentRestartCount =
+          currentStatus !== undefined && "restartCount" in currentStatus
+            ? (currentStatus.restartCount ?? 0)
+            : 0
+        const actorBranchId = branchId ?? currentStatus?.branchId
+        yield* stopActor(entry)
+        yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
+        yield* markActorFailed(
+          entry.ref.id,
+          sessionId,
+          actorBranchId,
+          error,
+          "runtime",
+          currentRestartCount,
+        )
+      })
+
     const getOrSpawnActors: MachineLifecycle["getOrSpawnActors"] = (sessionId, branchId) =>
       Effect.withSpan("MachineEngine.spawnWorkflows")(
         Effect.gen(function* () {
@@ -349,6 +380,22 @@ export const makeMachineLifecycle = (params: {
           const protocol = getProtocolFailure(exit.cause)
           if (protocol !== undefined) {
             return { _tag: "protocol", error: protocol } as const
+          }
+
+          const persistenceFailure = getPersistenceFailure(exit.cause)
+          if (persistenceFailure !== undefined) {
+            const error = persistenceFailure.message
+            yield* Effect.logWarning("extension.actor.persistence.failed").pipe(
+              Effect.annotateLogs({
+                extensionId: current.ref.id,
+                sessionId,
+                branchId,
+                operation,
+                error,
+              }),
+            )
+            yield* failActorWithoutRestart(sessionId, branchId, current, error)
+            return { _tag: "terminal", error } as const
           }
 
           const error = formatCause(exit.cause)

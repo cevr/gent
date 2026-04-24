@@ -1,4 +1,4 @@
-import { Effect, Exit, Option, Ref, Scope } from "effect"
+import { Effect, Exit, Option, Ref, Schema, Scope } from "effect"
 import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
 import type { ExtensionRef } from "../../domain/extension.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
@@ -18,6 +18,15 @@ import {
 import type { RuntimeExtensionEffect } from "./runtime-effect.js"
 import { ExtensionTurnControl } from "./turn-control.js"
 import { SubscriptionEngine } from "./resource-host/subscription-engine.js"
+
+export class ExtensionPersistenceFailure extends Schema.TaggedErrorClass<ExtensionPersistenceFailure>()(
+  "ExtensionPersistenceFailure",
+  {
+    extensionId: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
 
 export const spawnMachineExtensionRef = <
   State extends { readonly _tag: string },
@@ -98,7 +107,17 @@ export const spawnMachineExtensionRef = <
                         stateJson: encoded,
                         version: nextVersion,
                       })
-                      .pipe(Effect.orDie)
+                      .pipe(
+                        Effect.mapError(
+                          (error) =>
+                            new ExtensionPersistenceFailure({
+                              extensionId,
+                              message: `extension "${extensionId}" persistence failed`,
+                              cause: error,
+                            }),
+                        ),
+                        Effect.orDie,
+                      )
                     // Increment epoch only after successful save — keeps runtime
                     // consistent with storage if save fails
                     yield* Ref.set(versionRef, nextVersion)
