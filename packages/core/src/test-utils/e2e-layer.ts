@@ -72,6 +72,12 @@ export interface E2ELayerConfig {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** AuthStore override. Use for public RPC auth failure-path tests. */
   readonly authStoreLayer?: Layer.Layer<AuthStore>
+  /**
+   * ConfigService override. Default is `ConfigService.Test()`.
+   * Provide `ConfigService.Live` (or a custom layer) to exercise per-cwd
+   * config resolution — e.g., for driver-override-from-session-cwd tests.
+   */
+  readonly configServiceLayer?: Layer.Layer<ConfigService>
   /** Per-extension layer overrides (e.g., memory vault test layer) */
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
@@ -222,7 +228,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         extensionRuntimeLive,
         machineExecuteLive,
         Permission.Test(),
-        ConfigService.Test(),
+        config.configServiceLayer ?? ConfigService.Test(),
         ModelRegistry.Test(),
         RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
         subagentRunnerLayer,

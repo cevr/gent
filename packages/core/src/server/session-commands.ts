@@ -1,4 +1,4 @@
-import { DateTime, Effect, Layer, Context, Ref, Stream } from "effect"
+import { DateTime, Deferred, Effect, Layer, Context, Ref, Stream } from "effect"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import {
@@ -588,8 +588,28 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       // instead of forking state. Cache is per-server, in-memory only: the
       // window of ambiguity is the transport retry window (seconds), not
       // cross-process. If the server crashes, the client learns on reconnect.
-      const createRequestCache = yield* Ref.make(new Map<string, CreateSessionResult>())
-      const sendRequestCache = yield* Ref.make(new Set<string>())
+      //
+      // Dedup is *concurrency-safe*: `RpcServer.layerHttp` runs with
+      // `concurrency: "unbounded"` and the client has
+      // `retryTransientErrors: true`, so the same requestId can land on two
+      // fibers in parallel. Storing in-flight Deferreds (not completed
+      // results) + atomic Ref.modify claim ensures the second fiber waits on
+      // the first's outcome instead of racing it.
+      //
+      // Note on initialPrompt: the cache only remembers the
+      // createSession *outcome*. If createSession returns successfully and
+      // the follow-up `sessionRuntime.dispatch(sendUserMessageCommand)`
+      // fails asynchronously inside the runtime, a retried create with the
+      // same requestId short-circuits to the cached result and does NOT
+      // re-send the prompt. The TUI does not pass initialPrompt on create
+      // (it sends separately via a dedicated send with its own requestId),
+      // so this is an advisory, not an active failure mode.
+      const createRequestCache = yield* Ref.make(
+        new Map<string, Deferred.Deferred<CreateSessionResult, AppServiceError>>(),
+      )
+      const sendRequestCache = yield* Ref.make(
+        new Map<string, Deferred.Deferred<void, AppServiceError>>(),
+      )
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -660,13 +680,51 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           return committed.result
         })
 
-      const createSession = Effect.fn("SessionCommands.createSession")(function* (
+      const createSession: (
+        input: CreateSessionInput,
+      ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
+        "SessionCommands.createSession",
+      )(function* (input: CreateSessionInput) {
+        // Atomic claim: first concurrent caller with this requestId installs
+        // a fresh Deferred and does the work; subsequent callers see the
+        // existing Deferred and await its outcome.
+        if (input.requestId !== undefined) {
+          const rid = input.requestId
+          const fresh = yield* Deferred.make<CreateSessionResult, AppServiceError>()
+          const claimed = yield* Ref.modify(createRequestCache, (m) => {
+            const existing = m.get(rid)
+            if (existing !== undefined) return [existing, m] as const
+            const next = new Map(m)
+            next.set(rid, fresh)
+            return [fresh, next] as const
+          })
+          if (claimed !== fresh) {
+            return yield* Deferred.await(claimed)
+          }
+          // Run the body; publish outcome to the Deferred so concurrent
+          // awaiters resume. On failure, evict the entry so retries can
+          // retry (we don't want to cache a permanent failure under the
+          // same requestId).
+          return yield* doCreateSession(input).pipe(
+            Effect.tap((result) => Deferred.succeed(fresh, result)),
+            Effect.tapCause((cause) =>
+              Effect.gen(function* () {
+                yield* Ref.update(createRequestCache, (m) => {
+                  const next = new Map(m)
+                  next.delete(rid)
+                  return next
+                })
+                yield* Deferred.failCause(fresh, cause)
+              }),
+            ),
+          )
+        }
+        return yield* doCreateSession(input)
+      })
+
+      const doCreateSession = Effect.fn("SessionCommands.doCreateSession")(function* (
         input: CreateSessionInput,
       ) {
-        if (input.requestId !== undefined) {
-          const cached = (yield* Ref.get(createRequestCache)).get(input.requestId)
-          if (cached !== undefined) return cached
-        }
         const sessionId = SessionId.make(Bun.randomUUIDv7())
         if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
           return yield* new NotFoundError({
@@ -756,14 +814,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         const result: CreateSessionResult = { sessionId, branchId, name }
-        if (input.requestId !== undefined) {
-          const rid = input.requestId
-          yield* Ref.update(createRequestCache, (m) => {
-            const next = new Map(m)
-            next.set(rid, result)
-            return next
-          })
-        }
         return result
       })
 
@@ -1033,13 +1083,41 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return { reasoningLevel: input.reasoningLevel }
       })
 
-      const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
+      const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
+        Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
+          if (input.requestId !== undefined) {
+            const rid = input.requestId
+            const fresh = yield* Deferred.make<void, AppServiceError>()
+            const claimed = yield* Ref.modify(sendRequestCache, (m) => {
+              const existing = m.get(rid)
+              if (existing !== undefined) return [existing, m] as const
+              const next = new Map(m)
+              next.set(rid, fresh)
+              return [fresh, next] as const
+            })
+            if (claimed !== fresh) {
+              return yield* Deferred.await(claimed)
+            }
+            return yield* doSendMessage(input).pipe(
+              Effect.tap(() => Deferred.succeed(fresh, undefined)),
+              Effect.tapCause((cause) =>
+                Effect.gen(function* () {
+                  yield* Ref.update(sendRequestCache, (m) => {
+                    const next = new Map(m)
+                    next.delete(rid)
+                    return next
+                  })
+                  yield* Deferred.failCause(fresh, cause)
+                }),
+              ),
+            )
+          }
+          yield* doSendMessage(input)
+        })
+
+      const doSendMessage = Effect.fn("SessionCommands.doSendMessage")(function* (
         input: SendMessageInput,
       ) {
-        if (input.requestId !== undefined) {
-          const seen = (yield* Ref.get(sendRequestCache)).has(input.requestId)
-          if (seen) return
-        }
         yield* sessionRuntime.dispatch(
           sendUserMessageCommand({
             sessionId: input.sessionId,
@@ -1050,14 +1128,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
           }),
         )
-        if (input.requestId !== undefined) {
-          const rid = input.requestId
-          yield* Ref.update(sendRequestCache, (s) => {
-            const next = new Set(s)
-            next.add(rid)
-            return next
-          })
-        }
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({
             sessionId: input.sessionId,

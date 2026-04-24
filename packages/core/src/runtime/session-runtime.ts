@@ -36,6 +36,13 @@ export const SessionRuntimeTarget = Schema.Struct({
 })
 export type SessionRuntimeTarget = typeof SessionRuntimeTarget.Type
 
+/**
+ * Client-generated request ID for end-to-end correlation + transport-retry
+ * dedup. Bounded so a malicious/buggy client cannot bloat per-server
+ * dedup caches keyed on it. Callers in this repo use `crypto.randomUUID()`.
+ */
+const RequestIdSchema = Schema.String.check(Schema.isMaxLength(128))
+
 export const SendUserMessagePayload = Schema.Struct({
   commandId: Schema.optional(ActorCommandId),
   sessionId: SessionId,
@@ -45,7 +52,7 @@ export const SendUserMessagePayload = Schema.Struct({
   interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
   /** Client-generated correlation id for end-to-end observability. */
-  requestId: Schema.optional(Schema.String),
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -122,7 +129,7 @@ export const SendUserMessageCommand = Schema.TaggedStruct("SendUserMessage", {
   ...RuntimeTurnFields,
   content: Schema.String,
   ...RuntimeTurnOptionFields,
-  requestId: Schema.optional(Schema.String),
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type SendUserMessageCommand = typeof SendUserMessageCommand.Type
 

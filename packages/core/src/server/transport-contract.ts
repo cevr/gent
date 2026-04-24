@@ -21,6 +21,14 @@ import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/ses
 // identity as the domain-owned state, not a parallel copy.
 export { ExtensionActorFailurePhase, ExtensionActorStatusInfo }
 
+/**
+ * Client-generated request ID for end-to-end correlation and transport-retry
+ * dedup. Bounded to 128 chars so a malicious/buggy client cannot bloat the
+ * per-server dedup cache with arbitrary-length keys. Callers in this repo
+ * use `crypto.randomUUID()` which fits comfortably.
+ */
+export const RequestIdSchema = Schema.String.check(Schema.isMaxLength(128))
+
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
@@ -30,8 +38,8 @@ export const CreateSessionInput = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   /** Agent override for the initial prompt (turn-scoped, not persistent) */
   agentOverride: Schema.optional(Schema.String),
-  /** Client-generated request ID for end-to-end correlation */
-  requestId: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
 
@@ -192,8 +200,8 @@ export const SendMessageInput = Schema.Struct({
   agentOverride: Schema.optional(Schema.String),
   /** Per-run dispatch config — forwarded to the agent loop for this turn only. */
   runSpec: Schema.optional(RunSpecSchema),
-  /** Client-generated request ID for end-to-end correlation */
-  requestId: Schema.optional(Schema.String),
+  /** Client-generated request ID for end-to-end correlation + dedup. See RequestIdSchema. */
+  requestId: Schema.optional(RequestIdSchema),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
 

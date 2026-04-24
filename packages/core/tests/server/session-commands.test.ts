@@ -1657,6 +1657,28 @@ describe("requestId idempotency", () => {
     }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 
+  it.live("concurrent duplicate createSession requestIds converge on one session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      // Fire three parallel creates with the same requestId. Before the
+      // Deferred-based claim this would race two `Ref.get` misses through
+      // storage and leave two sessions. Under the atomic claim the first
+      // fiber wins the write; the others `Deferred.await` its outcome.
+      const results = yield* Effect.all(
+        [
+          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+          commands.createSession({ cwd: "/tmp/conc", requestId: "req-conc-1" }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(results[0].sessionId).toBe(results[1].sessionId)
+      expect(results[0].sessionId).toBe(results[2].sessionId)
+      expect((yield* sessions.listSessions()).length).toBe(1)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
   it.live("duplicate sendMessage requestId dispatches the runtime only once", () =>
     Effect.gen(function* () {
       let dispatchCount = 0
@@ -1719,6 +1741,75 @@ describe("requestId idempotency", () => {
 
       yield* probe
       expect(dispatchCount).toBe(2)
+    }),
+  )
+
+  it.live("concurrent duplicate sendMessage requestIds dispatch only once", () =>
+    Effect.gen(function* () {
+      let dispatchCount = 0
+      const countingRuntime = Layer.succeed(SessionRuntime, {
+        dispatch: () =>
+          Effect.sync(() => {
+            dispatchCount++
+          }),
+        runPrompt: () => Effect.void,
+        drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+        getState: () =>
+          Effect.succeed(
+            SessionRuntimeStateSchema.Idle.make({
+              agent: "cowork" as const,
+              queue: emptyQueueSnapshot(),
+            }),
+          ),
+        getMetrics: () =>
+          Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        watchState: () => Effect.succeed(Stream.empty),
+        terminateSession: () => Effect.void,
+        restoreSession: () => Effect.void,
+      })
+      const storageLayer = Storage.MemoryWithSql()
+      const deps = Layer.mergeAll(
+        storageLayer,
+        subTagLayers(storageLayer),
+        countingRuntime,
+        SessionCommands.SessionRuntimeTerminatorLive,
+        EventStore.Memory,
+        EventPublisher.Test(),
+        Provider.Debug(),
+        MachineEngine.Test(),
+        SessionCwdRegistry.Test(),
+      )
+      const layer = Layer.provideMerge(SessionCommands.Live, deps)
+
+      yield* Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        yield* Effect.all(
+          [
+            commands.sendMessage({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              content: "hi",
+              requestId: "req-conc-send",
+            }),
+            commands.sendMessage({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              content: "hi",
+              requestId: "req-conc-send",
+            }),
+            commands.sendMessage({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              content: "hi",
+              requestId: "req-conc-send",
+            }),
+          ],
+          { concurrency: "unbounded" },
+        )
+      }).pipe(Effect.provide(layer))
+
+      expect(dispatchCount).toBe(1)
     }),
   )
 })

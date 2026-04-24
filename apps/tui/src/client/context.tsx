@@ -663,6 +663,15 @@ export function ClientProvider(props: ClientProviderProps) {
         client.session.create({ requestId, cwd: workspace.cwd }).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
+              // Replicate `switchSession`'s side-effect resets so `/new`
+              // does not inherit stale agent status / token counts / error
+              // banners / extension-health from the previous session.
+              // Create always transitions out of a prior session (or from
+              // "none"), so the extensionHealth reset is unconditional.
+              setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+              setLatestInputTokens(0)
+              setConnectionIssue(null)
+              setExtensionHealth(EMPTY_EXTENSION_HEALTH)
               dispatchSession({
                 _tag: "CreateSucceeded",
                 session: {
