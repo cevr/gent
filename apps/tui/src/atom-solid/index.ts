@@ -40,6 +40,7 @@ export {
   RegistryContext,
   useRegistry,
   RegistryProvider,
+  makeRegistryScope,
   useAtomValue,
   useAtomSet,
   useAtomRefresh,
@@ -47,4 +48,5 @@ export {
   useAtom,
   useAtomResult,
   type RegistryProviderProps,
+  type RegistryScope,
 } from "./solid"

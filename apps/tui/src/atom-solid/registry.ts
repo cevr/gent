@@ -18,23 +18,38 @@ export interface Registry<Services = unknown> {
   readonly dispose: () => void
 }
 
-export interface RegistryOptions<Services = unknown> {
-  readonly services?: Context.Context<Services>
+export interface RegistryOptionsWithoutServices {
+  readonly services?: undefined
   readonly maxEntries?: number
 }
 
-export const make = <Services = unknown>(options?: RegistryOptions<Services>): Registry<Services> =>
-  new RegistryImpl(
-    options?.services ??
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-      (Context.empty() as Context.Context<Services>),
-    options?.maxEntries,
-  )
+export interface RegistryOptionsWithServices<Services> {
+  readonly services: Context.Context<Services>
+  readonly maxEntries?: number
+}
+
+export type RegistryOptions<Services = never> =
+  | RegistryOptionsWithoutServices
+  | RegistryOptionsWithServices<Services>
+
+export function make(options?: RegistryOptionsWithoutServices): Registry<never>
+export function make<Services>(options: RegistryOptionsWithServices<Services>): Registry<Services>
+export function make<Services>(
+  options?: RegistryOptions<Services>,
+): Registry<Services> | Registry<never> {
+  if (options?.services !== undefined) {
+    return new RegistryImpl(options.services, options.maxEntries)
+  }
+  return new RegistryImpl(Context.empty(), options?.maxEntries)
+}
+
+const isWritableInstance = <R, W>(instance: AtomInstance<R>): instance is WritableInstance<R, W> =>
+  "set" in instance && typeof instance.set === "function"
 
 class RegistryImpl<Services> implements Registry<Services> {
   private readonly services: Context.Context<Services>
-  private readonly instances = new Map<Atom<unknown, Services>, AtomInstance<unknown>>()
-  private readonly refCounts = new Map<Atom<unknown, Services>, number>()
+  private readonly instances = new Map<symbol, AtomInstance<unknown>>()
+  private readonly refCounts = new Map<symbol, number>()
   private readonly maxEntries: number | undefined
   private readonly shouldEvict: boolean
   private readonly owner: Owner
@@ -81,26 +96,24 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   refresh<A, R extends Services>(atom: Atom<A, R>): void {
-    const key = atom as Atom<unknown, Services>
-    const instance = this.instances.get(key)
+    const instance = this.instances.get(atom.key)
     if (instance !== undefined) {
-      this.touch(key, instance)
+      this.touch(atom.key, instance)
     }
     instance?.refresh?.()
   }
 
   mount<A, R extends Services>(atom: Atom<A, R>): () => void {
-    const key = atom as Atom<unknown, Services>
     this.ensure(atom)
-    this.touch(key)
-    const current = this.refCounts.get(key) ?? 0
-    this.refCounts.set(key, current + 1)
+    this.touch(atom.key)
+    const current = this.refCounts.get(atom.key) ?? 0
+    this.refCounts.set(atom.key, current + 1)
     return () => {
-      const next = (this.refCounts.get(key) ?? 1) - 1
+      const next = (this.refCounts.get(atom.key) ?? 1) - 1
       if (next <= 0) {
-        this.refCounts.delete(key)
+        this.refCounts.delete(atom.key)
       } else {
-        this.refCounts.set(key, next)
+        this.refCounts.set(atom.key, next)
       }
       this.evictIfNeeded()
     }
@@ -116,18 +129,17 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   private ensure<A, R extends Services>(atom: Atom<A, R>): AtomInstance<A> {
-    const key = atom as Atom<unknown, Services>
-    const existing = this.instances.get(key)
+    const existing = this.instances.get(atom.key)
     if (existing !== undefined) {
-      this.touch(key, existing)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
+      this.touch(atom.key, existing)
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cached atom identity owns the instance type relation
       return existing as AtomInstance<A>
     }
     const created = runWithOwner(this.owner, () => atom.build(this))
     if (created === undefined) {
       throw new Error("Atom build returned no instance")
     }
-    this.instances.set(key, created as AtomInstance<unknown>)
+    this.instances.set(atom.key, created)
     this.evictIfNeeded()
     return created
   }
@@ -136,19 +148,18 @@ class RegistryImpl<Services> implements Registry<Services> {
     atom: Writable<R, W, AtomServices>,
   ): WritableInstance<R, W> {
     const instance = this.ensure(atom)
-    if (!("set" in instance)) {
+    if (!isWritableInstance<R, W>(instance)) {
       throw new Error("Atom is not writable")
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
-    return instance as WritableInstance<R, W>
+    return instance
   }
 
-  private touch(atom: Atom<unknown, Services>, instance?: AtomInstance<unknown>): void {
+  private touch(key: symbol, instance?: AtomInstance<unknown>): void {
     if (!this.shouldEvict) return
-    const value = instance ?? this.instances.get(atom)
+    const value = instance ?? this.instances.get(key)
     if (value === undefined) return
-    this.instances.delete(atom)
-    this.instances.set(atom, value)
+    this.instances.delete(key)
+    this.instances.set(key, value)
   }
 
   private evictIfNeeded(): void {
@@ -157,25 +168,25 @@ class RegistryImpl<Services> implements Registry<Services> {
     while (this.instances.size > maxEntries) {
       const evictable = this.findEvictable()
       if (evictable === null) return
-      this.instances.delete(evictable.atom)
-      this.refCounts.delete(evictable.atom)
+      this.instances.delete(evictable.key)
+      this.refCounts.delete(evictable.key)
       evictable.instance.dispose?.()
     }
   }
 
   private findEvictable(): {
-    atom: Atom<unknown, Services>
+    key: symbol
     instance: AtomInstance<unknown>
   } | null {
-    for (const [atom, instance] of this.instances) {
-      if (!this.isMounted(atom)) {
-        return { atom, instance }
+    for (const [key, instance] of this.instances) {
+      if (!this.isMounted(key)) {
+        return { key, instance }
       }
     }
     return null
   }
 
-  private isMounted(atom: Atom<unknown, Services>): boolean {
-    return (this.refCounts.get(atom) ?? 0) > 0
+  private isMounted(key: symbol): boolean {
+    return (this.refCounts.get(key) ?? 0) > 0
   }
 }

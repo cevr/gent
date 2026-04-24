@@ -8,6 +8,7 @@ import * as Result from "./result"
 import type { Result as AtomResult } from "./result"
 
 export interface Atom<A, Services = never> {
+  readonly key: symbol
   readonly build: (registry: Registry<Services>) => AtomInstance<A>
 }
 
@@ -27,11 +28,11 @@ export interface WritableInstance<R, W> extends AtomInstance<R> {
 
 export const atom = <A, Services = never>(
   build: (registry: Registry<Services>) => AtomInstance<A>,
-): Atom<A, Services> => ({ build })
+): Atom<A, Services> => ({ key: Symbol("atom"), build })
 
 export const writableAtom = <R, W, Services = never>(
   build: (registry: Registry<Services>) => WritableInstance<R, W>,
-): Writable<R, W, Services> => ({ build })
+): Writable<R, W, Services> => ({ key: Symbol("writableAtom"), build })
 
 export const state = <A>(initialValue: A): Writable<A> =>
   writableAtom(() => {
