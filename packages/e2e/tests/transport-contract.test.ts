@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
 import { ToolCallId } from "@gent/core/domain/ids.js"
 import { extractText } from "@gent/sdk"
 import { transportCases, waitFor } from "./transport-harness"
@@ -149,5 +152,86 @@ describe("GentClient transport contract", () => {
         }),
       )
     }, 15_000)
+  }
+
+  // Two sessions on two distinct cwds must have independent per-session
+  // profile + event routing — a regression to launch-cwd-only event
+  // delivery (where session B's events leak into session A's stream)
+  // would fail this test.
+  for (const transport of transportCases) {
+    test(`${transport.name} two sessions on distinct cwds isolate snapshots and events`, async () => {
+      await transport.run(({ client }) =>
+        Effect.gen(function* () {
+          const cwdA = fs.mkdtempSync(path.join(os.tmpdir(), "gent-secondary-A-"))
+          const cwdB = fs.mkdtempSync(path.join(os.tmpdir(), "gent-secondary-B-"))
+          try {
+            const a = yield* client.session
+              .create({ cwd: cwdA })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const b = yield* client.session
+              .create({ cwd: cwdB })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            expect(a.sessionId).not.toBe(b.sessionId)
+
+            yield* client.message
+              .send({
+                sessionId: a.sessionId,
+                branchId: a.branchId,
+                content: "msg-A",
+              })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            yield* client.message
+              .send({
+                sessionId: b.sessionId,
+                branchId: b.branchId,
+                content: "msg-B",
+              })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+
+            // Each session's snapshot must contain ONLY its own user message.
+            // A regression where the per-cwd EventPublisher router fans out
+            // events to the wrong session's stream would surface here.
+            const snapshotA = yield* waitFor(
+              client.session
+                .getSnapshot({ sessionId: a.sessionId, branchId: a.branchId })
+                .pipe(Effect.mapError((error) => new Error(String(error)))),
+              (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-A"),
+            )
+            const snapshotB = yield* waitFor(
+              client.session
+                .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
+                .pipe(Effect.mapError((error) => new Error(String(error)))),
+              (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-B"),
+            )
+            expect(
+              snapshotA.messages.every(
+                (m) => m.role !== "user" || extractText(m.parts) !== "msg-B",
+              ),
+            ).toBe(true)
+            expect(
+              snapshotB.messages.every(
+                (m) => m.role !== "user" || extractText(m.parts) !== "msg-A",
+              ),
+            ).toBe(true)
+
+            // Sessions are listed under both cwds.
+            const sessions = yield* client.session
+              .list()
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const sa = sessions.find((s) => s.id === a.sessionId)
+            const sb = sessions.find((s) => s.id === b.sessionId)
+            expect(sa?.cwd).toBe(cwdA)
+            expect(sb?.cwd).toBe(cwdB)
+          } finally {
+            try {
+              fs.rmSync(cwdA, { recursive: true, force: true })
+              fs.rmSync(cwdB, { recursive: true, force: true })
+            } catch {
+              /* */
+            }
+          }
+        }),
+      )
+    }, 20_000)
   }
 })

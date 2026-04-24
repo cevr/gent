@@ -5,7 +5,7 @@
  * codemode proxy dispatch/rejection behavior.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import {
   ReasoningDelta,
@@ -14,9 +14,14 @@ import {
   ToolFailed,
   ToolStarted,
 } from "@gent/core/extensions/api"
+import { ToolRunner } from "../../src/extensions/internal.js"
+import { ToolResultPart } from "../../src/domain/message.js"
+import { BranchId, SessionId, type ToolCallId } from "../../src/domain/ids.js"
+import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
+import { makeAcpRunTool } from "../../../extensions/src/acp-agents/executor-boundary.js"
 
 // ── ACP → TurnEvent mapping ──
 
@@ -235,6 +240,148 @@ describe("codemode proxy", () => {
         }),
       })
 
+      const result = (await parseSseResult(response)) as Record<string, unknown> | undefined
+      expect(result?.["isError"]).toBe(true)
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+// ── Codemode proxy via real makeAcpRunTool boundary ──
+//
+// The previous block stubs `runTool` directly. This block drives the same
+// dispatch through `makeAcpRunTool`, which is the boundary helper used in
+// production by the ACP executor. A regression that breaks the
+// Effect-runtime crossing (e.g. forgetting to thread services into
+// `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
+// surfaces here and not in the stubbed test above.
+
+const makeStubHostCtx = (): Omit<ExtensionHostContext, "toolCallId"> => ({
+  sessionId: SessionId.make("ses-acp-boundary-test"),
+  branchId: BranchId.make("br-acp-boundary-test"),
+  cwd: "/tmp/gent-acp-boundary-test",
+  home: "/tmp/gent-acp-boundary-test-home",
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub: facets are not invoked by makeAcpRunTool
+  extension: {} as ExtensionHostContext["extension"],
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
+  agent: {} as ExtensionHostContext["agent"],
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
+  session: {} as ExtensionHostContext["session"],
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test stub
+  interaction: {} as ExtensionHostContext["interaction"],
+})
+
+describe("codemode proxy via makeAcpRunTool", () => {
+  test("runs through the boundary helper and reaches ToolRunner", async () => {
+    const calls: Array<{ toolCallId: ToolCallId; toolName: string; input: unknown }> = []
+
+    const recordingToolRunner = ToolRunner.of({
+      run: (toolCall) => {
+        calls.push({
+          toolCallId: toolCall.toolCallId,
+          toolName: toolCall.toolName,
+          input: toolCall.input,
+        })
+        return Effect.succeed(
+          new ToolResultPart({
+            type: "tool-result",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            output: { type: "json", value: { boundary: "ok" } },
+          }),
+        )
+      },
+    })
+
+    const services = Context.make(
+      ToolRunner,
+      recordingToolRunner,
+    ) as unknown as Context.Context<never>
+    const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
+
+    const mockTool: AnyCapabilityContribution = {
+      id: "echo",
+      description: "echo tool",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({ text: Schema.String }),
+      output: Schema.Unknown,
+      effect: () => Effect.succeed({ echoed: true }),
+    }
+
+    const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
+
+    try {
+      const response = await fetch(`${server.url}/mcp`, {
+        method: "POST",
+        headers: mcpHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return await gent.echo({ text: "via-boundary" })' },
+          },
+        }),
+      })
+
+      const result = await parseSseResult(response)
+
+      expect(calls.length).toBe(1)
+      expect(calls[0]!.toolName).toBe("echo")
+      expect(calls[0]!.input).toEqual({ text: "via-boundary" })
+      // Each invocation generates a fresh toolCallId via crypto.randomUUID().
+      expect(typeof calls[0]!.toolCallId).toBe("string")
+      expect(calls[0]!.toolCallId.length).toBeGreaterThan(0)
+      expect(result).toBeDefined()
+    } finally {
+      server.stop()
+    }
+  })
+
+  test("propagates ToolRunner errors back through the SDK boundary", async () => {
+    const failingToolRunner = ToolRunner.of({
+      run: () => Effect.die(new Error("tool runner exploded")),
+    })
+
+    const services = Context.make(
+      ToolRunner,
+      failingToolRunner,
+    ) as unknown as Context.Context<never>
+    const runTool = makeAcpRunTool({ services, hostCtx: makeStubHostCtx() })
+
+    const mockTool: AnyCapabilityContribution = {
+      id: "echo",
+      description: "echo",
+      audiences: ["model"],
+      intent: "write",
+      input: Schema.Struct({ text: Schema.String }),
+      output: Schema.Unknown,
+      effect: () => Effect.succeed({ echoed: true }),
+    }
+
+    const server = await Effect.runPromise(startCodemodeServer({ tools: [mockTool], runTool }))
+
+    try {
+      const response = await fetch(`${server.url}/mcp`, {
+        method: "POST",
+        headers: mcpHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "execute",
+            arguments: { code: 'return await gent.echo({ text: "fail" })' },
+          },
+        }),
+      })
+
+      // Failure surfaces through the codemode SSE response as an error
+      // payload, not a thrown native Error — the boundary must not let
+      // the Effect die-cause crash the codemode server.
       const result = (await parseSseResult(response)) as Record<string, unknown> | undefined
       expect(result?.["isError"]).toBe(true)
     } finally {

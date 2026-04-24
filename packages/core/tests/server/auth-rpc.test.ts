@@ -11,6 +11,10 @@
  */
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
@@ -18,6 +22,8 @@ import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
 import { ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { ConfigService } from "../../src/runtime/config-service.js"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform.js"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -105,50 +111,94 @@ describe("auth.listProviders", () => {
   )
 
   it.live(
-    "with sessionId + driver override pointing at an external driver, the agent's model auth is NOT required",
+    "driver override written at session cwd is honored by auth.listProviders(sessionId) through ConfigService.Live",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // Three distinct dirs so we can prove the handler resolves config
+          // from the *session's* cwd, not the server's launch cwd. Writing
+          // the override into the session cwd's project config (and NOT
+          // into the launch cwd or user config) means a launch-cwd-only
+          // regression would return required=true here.
+          const launch = mkdtempSync(join(tmpdir(), "gent-authrpc-launch-"))
+          const sessionCwd = mkdtempSync(join(tmpdir(), "gent-authrpc-session-"))
+          const home = mkdtempSync(join(tmpdir(), "gent-authrpc-home-"))
+
+          // Seed the session cwd's project config with a driver override
+          // for `cowork`. The id points at the acp-claude-code external
+          // driver that the ACP extension registers under e2ePreset.
+          mkdirSync(join(sessionCwd, ".gent"), { recursive: true })
+          writeFileSync(
+            join(sessionCwd, ".gent", "config.json"),
+            JSON.stringify({
+              driverOverrides: { cowork: { _tag: "external", id: "acp-claude-code" } },
+            }),
+          )
+
+          const runtimePlatformLive = RuntimePlatform.Live({
+            cwd: launch,
+            home,
+            platform: "darwin",
+          })
+          const configServiceLive = ConfigService.Live.pipe(
+            Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
+          )
+
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              configServiceLayer: configServiceLive,
+            }),
+          )
+
+          try {
+            // Launch cwd has no override → cowork (anthropic-modeled)
+            // requires anthropic. Proves the override is NOT in user config.
+            const launchSession = yield* client.session.create({ cwd: launch })
+            const launchList = yield* client.auth.listProviders({
+              agentName: "cowork",
+              sessionId: launchSession.sessionId,
+            })
+            expect(launchList.find((p) => p.provider === "anthropic")?.required).toBe(true)
+
+            // Session cwd has the project override → anthropic is NOT
+            // required because the agent is externally routed.
+            const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
+            const overriddenList = yield* client.auth.listProviders({
+              agentName: "cowork",
+              sessionId: overriddenSession.sessionId,
+            })
+            expect(overriddenList.find((p) => p.provider === "anthropic")?.required).toBe(false)
+          } finally {
+            rmSync(launch, { recursive: true, force: true })
+            rmSync(sessionCwd, { recursive: true, force: true })
+            rmSync(home, { recursive: true, force: true })
+          }
+        }),
+      ),
+  )
+
+  it.live(
+    "legacy RPC path: driver.set followed by no-sessionId listProviders honors override",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
           const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
-
-          // Create a session — this gives us a real sessionId tied to a real cwd.
-          const session = yield* client.session.create({})
-          const sessionId = session.id
-
-          // Pick any registered external driver. If none exist in the test
-          // layer, fall back to the model path — the test is still valid
-          // (asserts the no-override case below) but the override branch
-          // is skipped.
           const drivers = (yield* client.driver.list()).drivers
           const externalDriver = drivers.find((d) => d._tag === "external")
-
-          // Baseline: without an override, cowork (anthropic-modeled) should
-          // include "anthropic" in its required providers.
-          const baseline = yield* client.auth.listProviders({
+          if (externalDriver === undefined) return
+          yield* client.driver.set({
             agentName: "cowork",
-            sessionId,
+            driver: ExternalDriverRef.make({ id: externalDriver.id }),
           })
-          const baselineAnth = baseline.find((p) => p.provider === "anthropic")
-          expect(baselineAnth?.required).toBe(true)
-
-          if (externalDriver !== undefined) {
-            // Set an override and re-query. With the fix, the handler reads
-            // the session's cwd → configService.get(cwd) → driverOverrides
-            // → AuthGuard sees the external routing → skips model auth.
-            yield* client.driver.set({
-              agentName: "cowork",
-              driver: ExternalDriverRef.make({ id: externalDriver.id }),
-            })
-            const overridden = yield* client.auth.listProviders({
-              agentName: "cowork",
-              sessionId,
-            })
-            const overriddenAnth = overridden.find((p) => p.provider === "anthropic")
-            // External routing must skip model auth — a regression to
-            // launch-cwd-only would fail this assertion.
-            expect(overriddenAnth?.required).toBe(false)
-          }
+          // No sessionId → launch cwd path. Under ConfigService.Test this
+          // still works because driver.set writes to the in-memory user
+          // ref that `get(undefined)` also reads.
+          const list = yield* client.auth.listProviders({ agentName: "cowork" })
+          expect(list.find((p) => p.provider === "anthropic")?.required).toBe(false)
         }),
       ),
   )
