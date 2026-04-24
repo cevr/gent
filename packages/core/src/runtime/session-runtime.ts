@@ -210,7 +210,17 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
 
 type RuntimeCommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
-  | { readonly _tag: "unchanged"; readonly result: A }
+  | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
+
+const findPersistedRuntimeEvent = (params: {
+  storage: StorageService
+  sessionId: SessionId
+  branchId: BranchId
+  match: (envelope: EventEnvelope) => boolean
+}) =>
+  params.storage
+    .listEvents({ sessionId: params.sessionId, branchId: params.branchId })
+    .pipe(Effect.map((events) => [...events].reverse().find(params.match)))
 
 const commitRuntimeMutationWithEvent = <A, E, R>(params: {
   storage: StorageService
@@ -219,7 +229,7 @@ const commitRuntimeMutationWithEvent = <A, E, R>(params: {
 }) =>
   Effect.gen(function* () {
     const committed = yield* params.storage.withTransaction(params.mutation)
-    if (committed._tag === "changed") {
+    if (committed.envelope !== undefined) {
       yield* params.eventPublisher.deliver(committed.envelope)
     }
     return committed.result
@@ -440,7 +450,22 @@ const makeLiveSessionRuntime: Effect.Effect<
           eventPublisher,
           mutation: Effect.gen(function* () {
             const existing = yield* storage.getMessage(message.id)
-            if (existing !== undefined) return { _tag: "unchanged" as const, result: existing }
+            if (existing !== undefined) {
+              const envelope = yield* findPersistedRuntimeEvent({
+                storage,
+                sessionId: command.sessionId,
+                branchId: command.branchId,
+                match: (candidate) =>
+                  (candidate.event._tag === "ToolCallSucceeded" ||
+                    candidate.event._tag === "ToolCallFailed") &&
+                  candidate.event.toolCallId === command.toolCallId,
+              })
+              return {
+                _tag: "unchanged" as const,
+                result: existing,
+                ...(envelope !== undefined ? { envelope } : {}),
+              }
+            }
 
             const result = yield* storage.createMessageIfAbsent(message)
             const envelope = yield* eventPublisher.append(

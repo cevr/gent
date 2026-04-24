@@ -101,7 +101,7 @@ const makeRuntimeLayer = (
 
 const makeRuntimeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
-  eventPublisherLayer: Layer.Layer<EventPublisher>,
+  eventPublisherLayer: Layer.Layer<EventPublisher, never, Storage>,
 ) => {
   const resolvedExtensions = makeTestExtensions()
   const recorderLayer = SequenceRecorder.Live
@@ -124,11 +124,50 @@ const makeRuntimeLayerWithEventPublisher = (
     BunServices.layer,
     ResourceManagerLive,
   )
+  const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.merge(baseDeps, providedEventPublisherLayer),
   )
 }
+
+const makePublisherFailingFirstMatchingDelivery = (
+  matches: (event: AgentEvent) => boolean,
+  delivered: string[],
+) =>
+  Layer.effect(
+    EventPublisher,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      let failed = false
+      const append = (event: AgentEvent) =>
+        storage
+          .appendEvent(event)
+          .pipe(
+            Effect.mapError(
+              (error) => new EventStoreError({ message: error.message, cause: error }),
+            ),
+          )
+      const deliver = (envelope: EventEnvelope) =>
+        Effect.gen(function* () {
+          delivered.push(envelope.event._tag)
+          if (!failed && matches(envelope.event)) {
+            failed = true
+            return yield* new EventStoreError({ message: "deliver failed" })
+          }
+        })
+      return EventPublisher.of({
+        append,
+        deliver,
+        publish: (event) =>
+          Effect.gen(function* () {
+            const envelope = yield* append(event)
+            yield* deliver(envelope)
+          }),
+        terminateSession: () => Effect.void,
+      })
+    }),
+  )
 
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
@@ -426,6 +465,47 @@ describe("SessionRuntime", () => {
 
         expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
         expect(toolSucceeded).toHaveLength(1)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("recordToolResult retries committed event delivery without duplicating the durable event", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const delivered: string[] = []
+    const eventPublisherLayer = makePublisherFailingFirstMatchingDelivery(
+      (event) => event._tag === "ToolCallSucceeded",
+      delivered,
+    )
+    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+        const commandId = ActorCommandId.make("record-tool-delivery-retry")
+        const command = recordToolResultCommand({
+          commandId,
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("tool-call-delivery-retry"),
+          toolName: "read",
+          output: { ok: true },
+        })
+
+        const firstExit = yield* Effect.exit(sessionRuntime.dispatch(command))
+        yield* sessionRuntime.dispatch(command)
+
+        const messages = yield* storage.listMessages(branchId)
+        const events = yield* storage.listEvents({ sessionId, branchId })
+        const toolSucceeded = events.filter(
+          (envelope) => envelope.event._tag === "ToolCallSucceeded",
+        )
+
+        expect(firstExit._tag).toBe("Failure")
+        expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+        expect(toolSucceeded).toHaveLength(1)
+        expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
       }).pipe(Effect.provide(layer)),
     )
   })

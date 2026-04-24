@@ -282,6 +282,7 @@ describe("Auto extension E2E", () => {
       const { layer: providerLayer, controls } = yield* createSequenceProvider([
         textStep("Starting."), // Turn 1: initial
         gatedCheckpoint, // Turn 2: gated — held until we release
+        textStep("Done."), // Continuation after checkpoint tool result
       ])
 
       const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
@@ -348,6 +349,8 @@ describe("Auto extension E2E", () => {
           status: "complete",
           summary: "Done",
         }),
+        textStep("Done."),
+        textStep("Acknowledged handoff request."),
       ])
 
       const e2eLayer = createE2ELayer({

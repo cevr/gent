@@ -171,7 +171,21 @@ const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
 type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never>
 type CommittedEvent<A> =
   | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
-  | { readonly _tag: "unchanged"; readonly result: A }
+  | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
+
+type TurnFailureState =
+  | { readonly count: number }
+  | { readonly count: number; readonly error: AgentLoopError }
+
+const findPersistedEvent = (params: {
+  storage: StorageService
+  sessionId: SessionId
+  branchId: BranchId
+  match: (envelope: EventEnvelope) => boolean
+}) =>
+  params.storage
+    .listEvents({ sessionId: params.sessionId, branchId: params.branchId })
+    .pipe(Effect.map((events) => [...events].reverse().find(params.match)))
 
 const commitWithEvent = <A, E, R>(params: {
   storage: StorageService
@@ -180,7 +194,7 @@ const commitWithEvent = <A, E, R>(params: {
 }) =>
   Effect.gen(function* () {
     const committed = yield* params.storage.withTransaction(params.mutation)
-    if (committed._tag === "changed") {
+    if (committed.envelope !== undefined) {
       yield* params.eventPublisher.deliver(committed.envelope)
     }
     return committed.result
@@ -197,7 +211,21 @@ const persistMessageReceived = (params: {
     eventPublisher: params.eventPublisher,
     mutation: Effect.gen(function* () {
       const existing = yield* params.storage.getMessage(params.message.id)
-      if (existing !== undefined) return { _tag: "unchanged" as const, result: existing }
+      if (existing !== undefined) {
+        const envelope = yield* findPersistedEvent({
+          storage: params.storage,
+          sessionId: params.message.sessionId,
+          branchId: params.message.branchId,
+          match: (candidate) =>
+            candidate.event._tag === "MessageReceived" &&
+            candidate.event.messageId === params.message.id,
+        })
+        return {
+          _tag: "unchanged" as const,
+          result: existing,
+          ...(envelope !== undefined ? { envelope } : {}),
+        }
+      }
 
       yield* params.storage.createMessageIfAbsent(params.message)
       const envelope = yield* params.eventPublisher.append(
@@ -888,15 +916,12 @@ const resolveTurnPhase = (params: {
   hostCtx: ExtensionHostContext
 }) =>
   Effect.gen(function* () {
-    const existing = yield* params.storage.getMessage(params.message.id)
-    if (existing === undefined) {
-      yield* persistMessageReceived({
-        storage: params.storage,
-        eventPublisher: params.eventPublisher,
-        message: params.message,
-        role: "user",
-      })
-    }
+    yield* persistMessageReceived({
+      storage: params.storage,
+      eventPublisher: params.eventPublisher,
+      message: params.message,
+      role: "user",
+    })
 
     const resolved = yield* resolveTurnContext(params)
     if (resolved === undefined) return undefined
@@ -1322,7 +1347,20 @@ const finalizeTurnPhase = (params: {
 }) =>
   Effect.gen(function* () {
     const existingMessage = yield* params.storage.getMessage(params.messageId)
-    if (existingMessage?.turnDurationMs !== undefined) return
+    if (existingMessage?.turnDurationMs !== undefined) {
+      const envelope = yield* findPersistedEvent({
+        storage: params.storage,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        match: (candidate) =>
+          candidate.event._tag === "TurnCompleted" &&
+          candidate.event.messageId === params.messageId,
+      })
+      if (envelope !== undefined) {
+        yield* params.eventPublisher.deliver(envelope)
+      }
+      return
+    }
 
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
@@ -1334,6 +1372,7 @@ const finalizeTurnPhase = (params: {
           TurnCompleted.make({
             sessionId: params.sessionId,
             branchId: params.branchId,
+            messageId: params.messageId,
             durationMs: Number(turnDurationMs),
             ...(params.turnInterrupted ? { interrupted: true } : {}),
           }),
@@ -1509,6 +1548,7 @@ type LoopHandle = {
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   queueRef: Ref.Ref<LoopQueueState>
   idlePersistedRef: SubscriptionRef.SubscriptionRef<number>
+  turnFailureRef: SubscriptionRef.SubscriptionRef<TurnFailureState>
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   runtimeStateRef: SubscriptionRef.SubscriptionRef<LoopRuntimeState>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
@@ -1582,6 +1622,41 @@ const awaitIdlePersisted = (
       Stream.filter((count) => count > baseline),
       Stream.runHead,
     )
+  })
+
+const failTurnFailureState = (state: TurnFailureState) =>
+  Effect.fail(
+    "error" in state
+      ? state.error
+      : new AgentLoopError({
+          message: "Agent loop turn failed",
+        }),
+  )
+
+const awaitTurnFailure = (
+  loop: LoopHandle,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(loop.turnFailureRef)
+    if (current.count > baseline) return yield* failTurnFailureState(current)
+    const next = yield* SubscriptionRef.changes(loop.turnFailureRef).pipe(
+      Stream.filter((state) => state.count > baseline),
+      Stream.runHead,
+    )
+    if (Option.isSome(next)) return yield* failTurnFailureState(next.value)
+    return yield* new AgentLoopError({
+      message: "Agent loop turn failure stream ended",
+    })
+  })
+
+const failIfTurnFailedSince = (
+  loop: LoopHandle,
+  baseline: number,
+): Effect.Effect<void, AgentLoopError> =>
+  Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(loop.turnFailureRef)
+    if (current.count > baseline) return yield* failTurnFailureState(current)
   })
 
 const makePublishingInspector = (params: {
@@ -1916,6 +1991,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
             const queueRef = yield* Ref.make(initialQueue)
             const idlePersistedRef = yield* SubscriptionRef.make(0)
+            const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const runtimeStateRef = yield* SubscriptionRef.make(
               runtimeStateFromLoopState(buildIdleState({ currentAgent }), initialQueue),
@@ -1971,6 +2047,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Ref.get(queueRef).pipe(
                 Effect.flatMap((queue) => persistRuntimeSnapshot(state, queue)),
               )
+
+            const recordTurnFailure = (cause: Cause.Cause<unknown>) =>
+              Effect.gen(function* () {
+                const current = yield* SubscriptionRef.get(turnFailureRef)
+                yield* SubscriptionRef.set(turnFailureRef, {
+                  count: current.count + 1,
+                  error: actorCauseFailure(cause),
+                })
+              })
 
             const refreshRuntimeState = Effect.gen(function* () {
               if (loopActor === undefined) return
@@ -2333,7 +2418,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     Effect.annotateLogs({ sessionId, branchId }),
                     Effect.withSpan("AgentLoop.turn"),
                     Effect.tapCause((cause) =>
-                      publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
+                      recordTurnFailure(cause).pipe(
+                        Effect.andThen(
+                          publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
+                        ),
+                      ),
                     ),
                   ),
                 { name: "turn", onFailure: () => AgentLoopEvent.TurnFailed },
@@ -2409,6 +2498,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               activeStreamRef,
               queueRef,
               idlePersistedRef,
+              turnFailureRef,
               persistenceFailure: Deferred.await(persistenceFailure),
               runtimeStateRef,
               persistState: persistRuntimeState,
@@ -2542,10 +2632,14 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           }
 
           const idlePersistedBaseline = yield* SubscriptionRef.get(loop.idlePersistedRef)
+          const turnFailureBaseline = (yield* SubscriptionRef.get(loop.turnFailureRef)).count
           yield* loop.actor.send(AgentLoopEvent.Start({ item }))
           yield* Effect.raceFirst(
             Effect.raceFirst(
-              awaitIdlePersisted(loop, idlePersistedBaseline),
+              Effect.raceFirst(
+                awaitIdlePersisted(loop, idlePersistedBaseline),
+                awaitTurnFailure(loop, turnFailureBaseline),
+              ),
               loop.persistenceFailure,
             ),
             loop.actor.awaitExit.pipe(
@@ -2560,6 +2654,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               ),
             ),
           )
+          yield* failIfTurnFailedSince(loop, turnFailureBaseline)
         })
 
         const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (

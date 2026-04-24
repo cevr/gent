@@ -299,7 +299,8 @@ describe("E2E: Slash Commands", () => {
       testContext = await seedAndSpawn()
       await testContext.pty.waitFor("❯", { timeout: 10_000 })
       testContext.pty.write("/")
-      await testContext.pty.waitFor("agent", { timeout: 5_000 })
+      await testContext.pty.waitFor("Commands", { timeout: 5_000 })
+      await testContext.pty.waitFor("/new", { timeout: 5_000 })
       testContext.pty.write(ESC)
     },
     TEST_TIMEOUT,

@@ -90,6 +90,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
   TurnCompleted: {
     sessionId: SessionId,
     branchId: BranchId,
+    messageId: Schema.optional(MessageId),
     durationMs: Schema.Number,
     interrupted: Schema.optional(Schema.Boolean),
   },

@@ -313,7 +313,7 @@ const makeLayerWithEvents = (
 
 const makeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<Provider>,
-  eventPublisherLayer: Layer.Layer<EventPublisher>,
+  eventPublisherLayer: Layer.Layer<EventPublisher, never, Storage>,
 ) => {
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
@@ -328,11 +328,53 @@ const makeLayerWithEventPublisher = (
     BunServices.layer,
     ResourceManagerLive,
   )
+  const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.merge(deps, providedEventPublisherLayer),
   )
 }
+
+const makePublisherFailingFirstMatchingDelivery = (
+  matches: (event: AgentEvent) => boolean,
+  delivered: string[],
+) =>
+  Layer.effect(
+    EventPublisher,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      let failed = false
+      const append = (event: AgentEvent) =>
+        storage
+          .appendEvent(event)
+          .pipe(
+            Effect.mapError(
+              (error) => new EventStoreError({ message: error.message, cause: error }),
+            ),
+          )
+      const deliver = (envelope: EventEnvelope) =>
+        Effect.gen(function* () {
+          const event = envelope.event
+          delivered.push(
+            event._tag === "MessageReceived" ? `${event._tag}:${event.role}` : event._tag,
+          )
+          if (!failed && matches(event)) {
+            failed = true
+            return yield* new EventStoreError({ message: "deliver failed" })
+          }
+        })
+      return EventPublisher.of({
+        append,
+        deliver,
+        publish: (event) =>
+          Effect.gen(function* () {
+            const envelope = yield* append(event)
+            yield* deliver(envelope)
+          }),
+        terminateSession: () => Effect.void,
+      })
+    }),
+  )
 
 const parityExternalAgent = AgentDefinition.make({
   name: "test-external-parity" as never,
@@ -719,9 +761,10 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
 
-        yield* agentLoop.run(message)
+        const exit = yield* Effect.exit(agentLoop.run(message))
         const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
 
+        expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer))),
     )
@@ -749,10 +792,53 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
 
-        yield* agentLoop.run(message)
+        const exit = yield* Effect.exit(agentLoop.run(message))
         const user = yield* storage.getMessage(message.id)
 
+        expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
+      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer))),
+    )
+  })
+
+  test("retries committed user event delivery without duplicating the durable event", async () => {
+    const providerLayer = scriptedProvider([
+      [textDeltaPart("after retry"), finishPart({ finishReason: "stop" })],
+    ])
+    const delivered: string[] = []
+    const failingPublisherLayer = makePublisherFailingFirstMatchingDelivery(
+      (event) => event._tag === "MessageReceived" && event.role === "user",
+      delivered,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("retry-assistant-session", "retry-assistant-branch", "hello")
+
+        const firstExit = yield* Effect.exit(agentLoop.run(message))
+        yield* waitForPhase(
+          agentLoop,
+          { sessionId: message.sessionId, branchId: message.branchId },
+          "Idle",
+        )
+        yield* agentLoop.run(message)
+
+        const events = yield* storage.listEvents({
+          sessionId: message.sessionId,
+          branchId: message.branchId,
+        })
+        const userReceived = events.filter(
+          (envelope) =>
+            envelope.event._tag === "MessageReceived" && envelope.event.messageId === message.id,
+        )
+
+        expect(firstExit._tag).toBe("Failure")
+        expect(userReceived).toHaveLength(1)
+        expect(
+          delivered.filter((tag) => tag === "MessageReceived:user").length,
+        ).toBeGreaterThanOrEqual(2)
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer))),
     )
   })

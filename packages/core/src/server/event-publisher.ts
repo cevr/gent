@@ -6,6 +6,7 @@ import {
   getEventBranchId,
   getEventSessionId,
   type EventEnvelope,
+  type EventStoreError,
   type EventStoreService,
 } from "../domain/event.js"
 import type { MachineEngineService } from "../runtime/extensions/resource-host/machine-engine.js"
@@ -121,6 +122,18 @@ const deliverInner = (
     }
   })
 
+const makeIdempotentDeliver = (
+  deliver: (envelope: EventEnvelope) => Effect.Effect<void, EventStoreError>,
+) => {
+  const delivered = new Set<EventEnvelope["id"]>()
+  return (envelope: EventEnvelope) =>
+    Effect.gen(function* () {
+      if (delivered.has(envelope.id)) return
+      yield* deliver(envelope)
+      delivered.add(envelope.id)
+    })
+}
+
 // ── Single-profile EventPublisher (ephemeral children, tests) ──
 
 /**
@@ -144,14 +157,15 @@ export const EventPublisherLive: Layer.Layer<
 
     const deps: InnerPublisherDeps = { baseEventStore, stateRuntime, bus }
     const pulseByTag = buildPulseIndex(registry)
+    const deliver = makeIdempotentDeliver((envelope) => deliverInner(envelope, deps, pulseByTag))
 
     return EventPublisher.of({
       append: (event) => baseEventStore.append(event),
-      deliver: (envelope) => deliverInner(envelope, deps, pulseByTag),
+      deliver,
       publish: (event) =>
         Effect.gen(function* () {
           const envelope = yield* baseEventStore.append(event)
-          yield* deliverInner(envelope, deps, pulseByTag)
+          yield* deliver(envelope)
         }),
       terminateSession: (_sessionId) => Effect.void,
     })
@@ -214,7 +228,7 @@ export const makeEventPublisherRouter = (): {
       // Per-cwd pulse index cache — built lazily on first event for a cwd.
       const cwdPulseCache = new Map<string, Map<string, Set<string>>>()
 
-      const deliver = (envelope: EventEnvelope) =>
+      const deliverToProfile = (envelope: EventEnvelope) =>
         Effect.gen(function* () {
           const event = envelope.event
           const sessionId = getEventSessionId(event)
@@ -294,6 +308,7 @@ export const makeEventPublisherRouter = (): {
 
           yield* deliverInner(envelope, cwdDeps, pulseByTag)
         })
+      const deliver = makeIdempotentDeliver(deliverToProfile)
 
       return EventPublisher.of({
         append: (event) => baseEventStore.append(event),
