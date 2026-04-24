@@ -5,8 +5,8 @@ import {
   type MakeExtensionHostContextDeps,
 } from "../../src/runtime/make-extension-host-context"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
-import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
-import { Message, Session, Branch, TextPart } from "@gent/core/domain/message"
+import { EventStoreError } from "@gent/core/domain/event"
+import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
 import { SessionDeleter } from "@gent/core/domain/session-deleter"
 
 // Minimal in-memory storage for session mutation tests
@@ -98,6 +98,101 @@ const createTestStorage = () => {
 const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
   const die = (label: string) => () => Effect.die(`${label} not available`)
   const published: Array<{ _tag: string }> = []
+  const publish = (event: { _tag: string }) =>
+    Effect.sync(() => {
+      published.push(event)
+    })
+
+  const sessionMutations: MakeExtensionHostContextDeps["sessionMutations"] = {
+    renameSession: ({ sessionId, name }) =>
+      Effect.gen(function* () {
+        const trimmed = name.trim().slice(0, 80)
+        if (trimmed.length === 0) return { renamed: false as const }
+        const session = testStorage.sessions.get(sessionId)
+        if (session === undefined) return { renamed: false as const }
+        if (session.name === trimmed) return { renamed: false as const }
+        testStorage.sessions.set(sessionId, new Session({ ...session, name: trimmed }))
+        yield* publish({ _tag: "SessionNameUpdated" })
+        return { renamed: true as const, name: trimmed }
+      }),
+    createSessionBranch: ({ sessionId, parentBranchId, name }) =>
+      Effect.gen(function* () {
+        const branch = new Branch({
+          id: BranchId.make(Bun.randomUUIDv7()),
+          sessionId,
+          parentBranchId,
+          name,
+          createdAt: new Date(),
+        })
+        testStorage.branches.set(branch.id, branch)
+        yield* publish({ _tag: "BranchCreated" })
+        return { branchId: branch.id }
+      }),
+    forkSessionBranch: ({ sessionId, fromBranchId, atMessageId, name }) =>
+      testStorage.storage.withTransaction(
+        Effect.gen(function* () {
+          const messages = testStorage.messages.get(fromBranchId) ?? []
+          const targetIndex = messages.findIndex((message) => message.id === atMessageId)
+          if (targetIndex === -1) return yield* Effect.die("Message not found in current branch")
+          const branch = new Branch({
+            id: BranchId.make(Bun.randomUUIDv7()),
+            sessionId,
+            parentBranchId: fromBranchId,
+            parentMessageId: atMessageId,
+            name,
+            createdAt: new Date(),
+          })
+          testStorage.branches.set(branch.id, branch)
+          for (const message of messages.slice(0, targetIndex + 1)) {
+            yield* testStorage.storage.createMessage(
+              copyMessageToBranch(message, {
+                id: MessageId.make(Bun.randomUUIDv7()),
+                branchId: branch.id,
+              }),
+            )
+          }
+          yield* publish({ _tag: "BranchCreated" })
+          return { branchId: branch.id }
+        }),
+      ),
+    switchActiveBranch: ({ sessionId, fromBranchId, toBranchId }) =>
+      Effect.gen(function* () {
+        const targetBranch = testStorage.branches.get(toBranchId)
+        if (targetBranch === undefined) return yield* Effect.die(`Branch "${toBranchId}" not found`)
+        if (targetBranch.sessionId !== sessionId) {
+          return yield* Effect.die(`Branch "${toBranchId}" belongs to a different session`)
+        }
+        const session = testStorage.sessions.get(sessionId)
+        if (session === undefined) return yield* Effect.die("Current session not found")
+        testStorage.sessions.set(sessionId, new Session({ ...session, activeBranchId: toBranchId }))
+        void fromBranchId
+        yield* publish({ _tag: "BranchSwitched" })
+      }),
+    createChildSession: ({ parentSessionId, parentBranchId, name, cwd }) =>
+      testStorage.storage.withTransaction(
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(Bun.randomUUIDv7())
+          const branchId = BranchId.make(Bun.randomUUIDv7())
+          const session = new Session({
+            id: sessionId,
+            name: name ?? "child session",
+            cwd,
+            parentSessionId,
+            parentBranchId,
+            activeBranchId: branchId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          testStorage.sessions.set(sessionId, session)
+          testStorage.branches.set(
+            branchId,
+            new Branch({ id: branchId, sessionId, createdAt: new Date() }),
+          )
+          yield* publish({ _tag: "SessionStarted" })
+          return { sessionId, branchId }
+        }),
+      ),
+  }
 
   const deps: MakeExtensionHostContextDeps = {
     platform: {
@@ -134,25 +229,7 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
     agentRunner: {
       run: die("AgentRunnerService"),
     } as MakeExtensionHostContextDeps["agentRunner"],
-    eventPublisher: {
-      append: (event: AgentEvent) =>
-        Effect.succeed(
-          EventEnvelope.make({
-            id: EventId.make(published.length + 1),
-            event,
-            createdAt: Date.now(),
-          }),
-        ),
-      deliver: (envelope: EventEnvelope) =>
-        Effect.sync(() => {
-          published.push(envelope.event)
-        }),
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          published.push(event)
-        }),
-      terminateSession: die("EventPublisher"),
-    } as MakeExtensionHostContextDeps["eventPublisher"],
+    sessionMutations,
   }
 
   return { deps, published }
@@ -160,6 +237,17 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
+
+const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutations"] => {
+  const fail = () => Effect.fail(new EventStoreError({ message: "publish failed" }))
+  return {
+    renameSession: fail,
+    createSessionBranch: fail,
+    forkSessionBranch: fail,
+    switchActiveBranch: fail,
+    createChildSession: fail,
+  }
+}
 
 const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
   const session = new Session({
@@ -259,12 +347,7 @@ describe("session mutation primitives", () => {
       { sessionId: SESSION_ID, branchId: BRANCH_ID },
       {
         ...deps,
-        eventPublisher: {
-          append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-          deliver: () => Effect.void,
-          publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-          terminateSession: () => Effect.void,
-        },
+        sessionMutations: failingSessionMutations(),
       },
     )
 
@@ -325,12 +408,7 @@ describe("session mutation primitives", () => {
       { sessionId: SESSION_ID, branchId: BRANCH_ID },
       {
         ...deps,
-        eventPublisher: {
-          append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-          deliver: () => Effect.void,
-          publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
-          terminateSession: () => Effect.void,
-        },
+        sessionMutations: failingSessionMutations(),
       },
     )
 

@@ -10,6 +10,7 @@ const BaseAppServicesLive = Layer.mergeAll(
   // Tag so the runtime's extension host context can call into destructive
   // cleanup without importing from `server/`.
   SessionCommands.SessionDeleterLive.pipe(Layer.provideMerge(SessionCommands.Live)),
+  SessionCommands.SessionMutationsLive.pipe(Layer.provideMerge(SessionCommands.Live)),
 )
 
 export const AppServicesLive = Layer.merge(

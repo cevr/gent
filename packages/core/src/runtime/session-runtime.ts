@@ -288,9 +288,6 @@ const makeLiveSessionRuntime: Effect.Effect<
     extensionStateRuntime,
     extensionRegistry,
     storage,
-    overrides: {
-      eventPublisher,
-    },
   })
 
   const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (

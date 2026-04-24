@@ -5,7 +5,7 @@
  * Single wiring point: ToolRunner and agent-loop both call this.
  */
 
-import { Context, DateTime, Effect } from "effect"
+import { Context, Effect } from "effect"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -13,7 +13,7 @@ import type {
 } from "../domain/capability.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
-import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import type { BranchId, SessionId } from "../domain/ids.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
@@ -21,17 +21,10 @@ import { PromptPresenter, type PromptPresenterService } from "../domain/prompt-p
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
-import { Session, Branch, copyMessageToBranch, type Message } from "../domain/message.js"
-import type { EventPublisherService } from "../domain/event-publisher.js"
+import type { Message } from "../domain/message.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
+import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
-import {
-  SessionNameUpdated,
-  BranchCreated,
-  BranchSwitched,
-  SessionStarted,
-  type AgentEvent,
-} from "../domain/event.js"
 import { AgentRunnerService } from "../domain/agent.js"
 
 export interface MakeExtensionHostContextDeps {
@@ -43,7 +36,7 @@ export interface MakeExtensionHostContextDeps {
   readonly storage: StorageService
   readonly searchStorage: SearchStorageService
   readonly agentRunner: AgentRunner
-  readonly eventPublisher: EventPublisherService
+  readonly sessionMutations: SessionMutationsService
 }
 
 export interface MakeExtensionHostContextRunInfo {
@@ -61,7 +54,7 @@ type AmbientHostContextDefaults = Pick<
   | "promptPresenter"
   | "searchStorage"
   | "agentRunner"
-  | "eventPublisher"
+  | "sessionMutations"
 >
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
@@ -114,14 +107,15 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
   },
 )
 
-export const HostEventPublisherRef = Context.Reference<EventPublisherService>(
-  "@gent/core/src/runtime/make-extension-host-context/HostEventPublisherRef",
+export const HostSessionMutationsRef = Context.Reference<SessionMutationsService>(
+  "@gent/core/src/runtime/make-extension-host-context/HostSessionMutationsRef",
   {
     defaultValue: () => ({
-      append: unavailable("EventPublisher"),
-      deliver: unavailable("EventPublisher"),
-      publish: () => Effect.void,
-      terminateSession: unavailable("EventPublisher"),
+      renameSession: unavailable("SessionMutations"),
+      createSessionBranch: unavailable("SessionMutations"),
+      forkSessionBranch: unavailable("SessionMutations"),
+      switchActiveBranch: unavailable("SessionMutations"),
+      createChildSession: unavailable("SessionMutations"),
     }),
   },
 )
@@ -132,7 +126,7 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   promptPresenter: Effect.service(HostPromptPresenterRef),
   searchStorage: Effect.service(HostSearchStorageRef),
   agentRunner: Effect.service(HostAgentRunnerRef),
-  eventPublisher: Effect.service(HostEventPublisherRef),
+  sessionMutations: Effect.service(HostSessionMutationsRef),
 })
 
 type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
@@ -145,6 +139,7 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
       promptPresenter: Effect.serviceOption(PromptPresenter),
       searchStorage: Effect.serviceOption(SearchStorage),
       agentRunner: Effect.serviceOption(AgentRunnerService),
+      sessionMutations: Effect.serviceOption(SessionMutations),
     })
 
     return {
@@ -160,6 +155,9 @@ const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOver
         : {}),
       ...(available.agentRunner._tag === "Some"
         ? { agentRunner: available.agentRunner.value }
+        : {}),
+      ...(available.sessionMutations._tag === "Some"
+        ? { sessionMutations: available.sessionMutations.value }
         : {}),
     }
   },
@@ -185,8 +183,8 @@ const withAmbientHostContextOverrides = <A, E, R>(
   if (overrides.agentRunner !== undefined) {
     next = next.pipe(Effect.provideService(HostAgentRunnerRef, overrides.agentRunner))
   }
-  if (overrides.eventPublisher !== undefined) {
-    next = next.pipe(Effect.provideService(HostEventPublisherRef, overrides.eventPublisher))
+  if (overrides.sessionMutations !== undefined) {
+    next = next.pipe(Effect.provideService(HostSessionMutationsRef, overrides.sessionMutations))
   }
   return next
 }
@@ -215,25 +213,8 @@ export const makeAmbientExtensionHostContextDeps = (
       storage: input.storage,
       searchStorage: defaults.searchStorage,
       agentRunner: defaults.agentRunner,
-      eventPublisher: defaults.eventPublisher,
+      sessionMutations: defaults.sessionMutations,
     }
-  })
-
-const transactHostMutationWithEvent = <A, E, R>(
-  deps: MakeExtensionHostContextDeps,
-  mutation: Effect.Effect<A, E, R>,
-  event: AgentEvent,
-) =>
-  Effect.gen(function* () {
-    const committed = yield* deps.storage.withTransaction(
-      Effect.gen(function* () {
-        const result = yield* mutation
-        const envelope = yield* deps.eventPublisher.append(event)
-        return { result, envelope }
-      }),
-    )
-    yield* deps.eventPublisher.deliver(committed.envelope)
-    return committed.result
   })
 
 export const makeExtensionHostContext = (
@@ -296,23 +277,7 @@ export const makeExtensionHostContext = (
     getSession: (sessionId) => deps.storage.getSession(sessionId ?? runInfo.sessionId),
     getDetail: (sessionId) => deps.storage.getSessionDetail(sessionId),
     renameCurrent: (name) =>
-      Effect.gen(function* () {
-        const trimmed = name.trim().slice(0, 80)
-        if (trimmed.length === 0) return { renamed: false as const }
-        const session = yield* deps.storage.getSession(runInfo.sessionId)
-        if (session === undefined) return { renamed: false as const }
-        if (session.name === trimmed) return { renamed: false as const }
-        const updated = new Session({
-          ...session,
-          name: trimmed,
-          updatedAt: yield* DateTime.nowAsDate,
-        })
-        yield* deps.storage.updateSession(updated)
-        yield* deps.eventPublisher.publish(
-          SessionNameUpdated.make({ sessionId: runInfo.sessionId, name: trimmed }),
-        )
-        return { renamed: true as const, name: trimmed }
-      }),
+      deps.sessionMutations.renameSession({ sessionId: runInfo.sessionId, name }),
     estimateContextPercent: (options) =>
       Effect.gen(function* () {
         const messages: ReadonlyArray<Message> = yield* deps.storage.listMessages(runInfo.branchId)
@@ -324,118 +289,33 @@ export const makeExtensionHostContext = (
     listBranches: () => deps.storage.listBranches(runInfo.sessionId),
 
     createBranch: (params) =>
-      Effect.gen(function* () {
-        const branch = new Branch({
-          id: BranchId.make(Bun.randomUUIDv7()),
-          sessionId: runInfo.sessionId,
-          parentBranchId: runInfo.branchId,
-          name: params.name,
-          createdAt: yield* DateTime.nowAsDate,
-        })
-        yield* transactHostMutationWithEvent(
-          deps,
-          deps.storage.createBranch(branch),
-          BranchCreated.make({
-            sessionId: runInfo.sessionId,
-            branchId: branch.id,
-            parentBranchId: runInfo.branchId,
-          }),
-        )
-        return { branchId: branch.id }
+      deps.sessionMutations.createSessionBranch({
+        sessionId: runInfo.sessionId,
+        parentBranchId: runInfo.branchId,
+        name: params.name,
       }),
 
     forkBranch: (params) =>
-      Effect.gen(function* () {
-        const messages = yield* deps.storage.listMessages(runInfo.branchId)
-        const targetIndex = messages.findIndex((m) => m.id === params.atMessageId)
-        if (targetIndex === -1) return yield* Effect.die("Message not found in current branch")
-
-        const branch = new Branch({
-          id: BranchId.make(Bun.randomUUIDv7()),
-          sessionId: runInfo.sessionId,
-          parentBranchId: runInfo.branchId,
-          parentMessageId: params.atMessageId,
-          name: params.name,
-          createdAt: yield* DateTime.nowAsDate,
-        })
-        yield* transactHostMutationWithEvent(
-          deps,
-          Effect.gen(function* () {
-            yield* deps.storage.createBranch(branch)
-
-            for (const msg of messages.slice(0, targetIndex + 1)) {
-              yield* deps.storage.createMessage(
-                copyMessageToBranch(msg, {
-                  id: MessageId.make(Bun.randomUUIDv7()),
-                  branchId: branch.id,
-                }),
-              )
-            }
-          }),
-          BranchCreated.make({
-            sessionId: runInfo.sessionId,
-            branchId: branch.id,
-            parentBranchId: runInfo.branchId,
-          }),
-        )
-        return { branchId: branch.id }
+      deps.sessionMutations.forkSessionBranch({
+        sessionId: runInfo.sessionId,
+        fromBranchId: runInfo.branchId,
+        atMessageId: params.atMessageId,
+        name: params.name,
       }),
 
     switchBranch: (params) =>
-      Effect.gen(function* () {
-        const targetBranch = yield* deps.storage.getBranch(params.toBranchId)
-        if (targetBranch === undefined) {
-          return yield* Effect.die(`Branch "${params.toBranchId}" not found`)
-        }
-        if (targetBranch.sessionId !== runInfo.sessionId) {
-          return yield* Effect.die(`Branch "${params.toBranchId}" belongs to a different session`)
-        }
-        const session = yield* deps.storage.getSession(runInfo.sessionId)
-        if (session === undefined) return yield* Effect.die("Current session not found")
-        const updated = new Session({
-          ...session,
-          activeBranchId: params.toBranchId,
-          updatedAt: yield* DateTime.nowAsDate,
-        })
-        yield* deps.storage.updateSession(updated)
-        yield* deps.eventPublisher.publish(
-          BranchSwitched.make({
-            sessionId: runInfo.sessionId,
-            fromBranchId: runInfo.branchId,
-            toBranchId: params.toBranchId,
-          }),
-        )
+      deps.sessionMutations.switchActiveBranch({
+        sessionId: runInfo.sessionId,
+        fromBranchId: runInfo.branchId,
+        toBranchId: params.toBranchId,
       }),
 
     createChildSession: (params) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.nowAsDate
-        const sessionId = SessionId.make(Bun.randomUUIDv7())
-        const branchId = BranchId.make(Bun.randomUUIDv7())
-        const session = new Session({
-          id: sessionId,
-          name: params.name ?? "child session",
-          cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
-          parentSessionId: runInfo.sessionId,
-          parentBranchId: runInfo.branchId,
-          createdAt: now,
-          updatedAt: now,
-          activeBranchId: branchId,
-        })
-        yield* transactHostMutationWithEvent(
-          deps,
-          Effect.gen(function* () {
-            yield* deps.storage.createSession(session)
-            const branch = new Branch({
-              id: branchId,
-              sessionId,
-              createdAt: now,
-            })
-            yield* deps.storage.createBranch(branch)
-          }),
-          SessionStarted.make({ sessionId, branchId }),
-        )
-        return { sessionId, branchId }
+      deps.sessionMutations.createChildSession({
+        parentSessionId: runInfo.sessionId,
+        parentBranchId: runInfo.branchId,
+        name: params.name,
+        cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
       }),
 
     getChildSessions: () => deps.storage.getChildSessions(runInfo.sessionId),

@@ -2110,9 +2110,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               extensionStateRuntime,
               extensionRegistry,
               storage,
-              overrides: {
-                eventPublisher,
-              },
             })
 
             const profileCache =

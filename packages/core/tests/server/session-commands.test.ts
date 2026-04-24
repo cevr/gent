@@ -182,6 +182,94 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(failingSessionCommandsLayer())),
   )
 
+  it.live("rolls back session rename when event publication fails", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const sessionId = SessionId.make("session-rename-rollback")
+      const branchId = BranchId.make("branch-rename-rollback")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "before",
+          activeBranchId: branchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+
+      const exit = yield* Effect.exit(commands.renameSession({ sessionId, name: "after" }))
+
+      expect(exit._tag).toBe("Failure")
+      expect((yield* sessions.getSession(sessionId))?.name).toBe("before")
+    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+  )
+
+  it.live("rolls back active branch switch when event publication fails", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-switch-rollback")
+      const fromBranchId = BranchId.make("branch-switch-from")
+      const toBranchId = BranchId.make("branch-switch-to")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "switch",
+          activeBranchId: fromBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: fromBranchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
+
+      const exit = yield* Effect.exit(
+        commands.switchBranch({
+          sessionId,
+          fromBranchId,
+          toBranchId,
+          summarize: false,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
+    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+  )
+
+  it.live("rolls back reasoning setting when event publication fails", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const sessionId = SessionId.make("session-settings-rollback")
+      const branchId = BranchId.make("branch-settings-rollback")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "settings",
+          activeBranchId: branchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+
+      const exit = yield* Effect.exit(
+        commands.updateSessionReasoningLevel({ sessionId, reasoningLevel: "high" }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect((yield* sessions.getSession(sessionId))?.reasoningLevel).toBeUndefined()
+    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+  )
+
   it.live("does not roll back committed rows when post-commit delivery fails", () =>
     Effect.gen(function* () {
       const commands = yield* SessionCommands

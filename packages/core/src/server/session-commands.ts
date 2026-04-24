@@ -1,5 +1,6 @@
 import { DateTime, Effect, Layer, Context, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
+import { SessionMutations } from "../domain/session-mutations.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { SessionDeleter } from "../domain/session-deleter.js"
@@ -12,13 +13,15 @@ import {
   BranchCreated,
   BranchSummarized,
   SessionStarted,
+  SessionNameUpdated,
   SessionSettingsUpdated,
   type AgentEvent,
+  type EventStoreError,
 } from "../domain/event.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 import { Provider, providerRequestFromMessages } from "../providers/provider.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import {
@@ -49,10 +52,36 @@ export interface SessionCommandsService {
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
+  readonly renameSession: (input: {
+    readonly sessionId: SessionId
+    readonly name: string
+  }) => Effect.Effect<{ renamed: boolean; name?: string }, StorageError | EventStoreError>
+  readonly createSessionBranch: (input: {
+    readonly sessionId: SessionId
+    readonly parentBranchId?: BranchId
+    readonly name?: string
+  }) => Effect.Effect<CreateBranchResult, StorageError | EventStoreError>
   readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError>
+  readonly switchActiveBranch: (input: {
+    readonly sessionId: SessionId
+    readonly fromBranchId: BranchId
+    readonly toBranchId: BranchId
+  }) => Effect.Effect<void, StorageError | EventStoreError>
   readonly forkBranch: (
     input: ForkBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
+  readonly forkSessionBranch: (input: {
+    readonly sessionId: SessionId
+    readonly fromBranchId: BranchId
+    readonly atMessageId: MessageId
+    readonly name?: string
+  }) => Effect.Effect<CreateBranchResult, StorageError | EventStoreError>
+  readonly createChildSession: (input: {
+    readonly parentSessionId: SessionId
+    readonly parentBranchId: BranchId
+    readonly name?: string
+    readonly cwd?: string
+  }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, StorageError | EventStoreError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void, AppServiceError>
   readonly drainQueuedMessages: (input: {
@@ -137,7 +166,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const transactWithEvent = <A, E, R>(
         mutation: Effect.Effect<A, E, R>,
         event: AgentEvent,
-      ): Effect.Effect<A, E | AppServiceError, R> =>
+      ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
         Effect.gen(function* () {
           const committed = yield* storage.withTransaction(
             Effect.gen(function* () {
@@ -231,26 +260,82 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
         input: CreateBranchInput,
       ) {
-        const branch = new Branch({
-          id: BranchId.make(Bun.randomUUIDv7()),
+        return yield* createSessionBranch({
           sessionId: input.sessionId,
           name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
         })
+      })
+
+      const renameSession = Effect.fn("SessionCommands.renameSession")(function* (input: {
+        readonly sessionId: SessionId
+        readonly name: string
+      }) {
+        const trimmed = input.name.trim().slice(0, 80)
+        if (trimmed.length === 0) return { renamed: false as const }
+        const session = yield* sessionStorage.getSession(input.sessionId)
+        if (session === undefined) return { renamed: false as const }
+        if (session.name === trimmed) return { renamed: false as const }
         yield* transactWithEvent(
-          branchStorage.createBranch(branch),
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            ...(branch.parentBranchId !== undefined
-              ? { parentBranchId: branch.parentBranchId }
-              : {}),
-            ...(branch.parentMessageId !== undefined
-              ? { parentMessageId: branch.parentMessageId }
-              : {}),
+          sessionStorage.updateSession(
+            new Session({
+              ...session,
+              name: trimmed,
+              updatedAt: yield* DateTime.nowAsDate,
+            }),
+          ),
+          SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed }),
+        )
+        return { renamed: true as const, name: trimmed }
+      })
+
+      const createSessionBranch = Effect.fn("SessionCommands.createSessionBranch")(
+        function* (input: {
+          readonly sessionId: SessionId
+          readonly parentBranchId?: BranchId
+          readonly name?: string
+        }) {
+          const branch = new Branch({
+            id: BranchId.make(Bun.randomUUIDv7()),
+            sessionId: input.sessionId,
+            parentBranchId: input.parentBranchId,
+            name: input.name,
+            createdAt: yield* DateTime.nowAsDate,
+          })
+          yield* transactWithEvent(
+            branchStorage.createBranch(branch),
+            BranchCreated.make({
+              sessionId: branch.sessionId,
+              branchId: branch.id,
+              ...(branch.parentBranchId !== undefined
+                ? { parentBranchId: branch.parentBranchId }
+                : {}),
+            }),
+          )
+          return { branchId: branch.id }
+        },
+      )
+
+      const switchActiveBranch = Effect.fn("SessionCommands.switchActiveBranch")(function* (input: {
+        readonly sessionId: SessionId
+        readonly fromBranchId: BranchId
+        readonly toBranchId: BranchId
+      }) {
+        const session = yield* sessionStorage.getSession(input.sessionId)
+        if (session === undefined) return yield* Effect.die("Current session not found")
+        yield* transactWithEvent(
+          sessionStorage.updateSession(
+            new Session({
+              ...session,
+              activeBranchId: input.toBranchId,
+              updatedAt: yield* DateTime.nowAsDate,
+            }),
+          ),
+          BranchSwitched.make({
+            sessionId: input.sessionId,
+            fromBranchId: input.fromBranchId,
+            toBranchId: input.toBranchId,
           }),
         )
-        return { branchId: branch.id }
       })
 
       const switchBranch = Effect.fn("SessionCommands.switchBranch")(function* (
@@ -281,25 +366,11 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }
         }
 
-        // Persist active branch pointer before publishing event
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session !== undefined) {
-          yield* sessionStorage.updateSession(
-            new Session({
-              ...session,
-              activeBranchId: input.toBranchId,
-              updatedAt: yield* DateTime.nowAsDate,
-            }),
-          )
-        }
-
-        yield* eventPublisher.publish(
-          BranchSwitched.make({
-            sessionId: input.sessionId,
-            fromBranchId: input.fromBranchId,
-            toBranchId: input.toBranchId,
-          }),
-        )
+        yield* switchActiveBranch({
+          sessionId: input.sessionId,
+          fromBranchId: input.fromBranchId,
+          toBranchId: input.toBranchId,
+        })
       })
 
       const forkBranch = Effect.fn("SessionCommands.forkBranch")(function* (
@@ -311,12 +382,36 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         }
 
         const messages = yield* messageStorage.listMessages(input.fromBranchId)
-        const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
-        if (targetIndex === -1) {
+        if (!messages.some((message) => message.id === input.atMessageId)) {
           return yield* new NotFoundError({
             message: "Message not found in branch",
             entity: "message",
           })
+        }
+
+        return yield* forkSessionBranch({
+          sessionId: input.sessionId,
+          fromBranchId: input.fromBranchId,
+          atMessageId: input.atMessageId,
+          name: input.name,
+        })
+      })
+
+      const forkSessionBranch = Effect.fn("SessionCommands.forkSessionBranch")(function* (input: {
+        readonly sessionId: SessionId
+        readonly fromBranchId: BranchId
+        readonly atMessageId: MessageId
+        readonly name?: string
+      }) {
+        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+          return yield* Effect.die("Branch not found")
+        }
+
+        const messages = yield* messageStorage.listMessages(input.fromBranchId)
+        const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
+        if (targetIndex === -1) {
+          return yield* Effect.die("Message not found in branch")
         }
 
         const branch = new Branch({
@@ -352,6 +447,72 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           }),
         )
         return { branchId: branch.id }
+      })
+
+      const createChildSession = Effect.fn("SessionCommands.createChildSession")(function* (input: {
+        readonly parentSessionId: SessionId
+        readonly parentBranchId: BranchId
+        readonly name?: string
+        readonly cwd?: string
+      }) {
+        const sessionId = SessionId.make(Bun.randomUUIDv7())
+        const branchId = BranchId.make(Bun.randomUUIDv7())
+        const now = yield* DateTime.nowAsDate
+        const session = new Session({
+          id: sessionId,
+          name: input.name ?? "child session",
+          cwd: input.cwd,
+          parentSessionId: input.parentSessionId,
+          parentBranchId: input.parentBranchId,
+          activeBranchId: branchId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        const branch = new Branch({
+          id: branchId,
+          sessionId,
+          createdAt: now,
+        })
+        const committed = yield* storage
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* sessionStorage.createSession(session)
+              yield* branchStorage.createBranch(branch)
+              if (input.cwd !== undefined) {
+                yield* sessionCwdRegistry.record(sessionId, input.cwd)
+              }
+              const envelope = yield* eventPublisher.append(
+                SessionStarted.make({ sessionId, branchId }),
+              )
+              return { envelope }
+            }),
+          )
+          .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
+        yield* eventPublisher.deliver(committed.envelope)
+        return { sessionId, branchId }
+      })
+
+      const updateReasoningLevel = Effect.fn("SessionCommands.updateReasoningLevel")(function* (
+        input: UpdateSessionReasoningLevelInput,
+      ) {
+        const session = yield* sessionStorage.getSession(input.sessionId)
+        if (session === undefined) {
+          return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+        }
+        yield* transactWithEvent(
+          sessionStorage.updateSession(
+            new Session({
+              ...session,
+              reasoningLevel: input.reasoningLevel,
+              updatedAt: yield* DateTime.nowAsDate,
+            }),
+          ),
+          SessionSettingsUpdated.make({
+            sessionId: input.sessionId,
+            reasoningLevel: input.reasoningLevel,
+          }),
+        )
+        return { reasoningLevel: input.reasoningLevel }
       })
 
       const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
@@ -392,36 +553,20 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             ),
           ),
         createBranch,
+        renameSession,
+        createSessionBranch,
         switchBranch,
+        switchActiveBranch,
         forkBranch,
+        forkSessionBranch,
+        createChildSession,
         sendMessage,
         steer: (command) => sessionRuntime.dispatch(applySteerCommand(command)),
         drainQueuedMessages: ({ sessionId, branchId }) =>
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
-        updateSessionReasoningLevel: Effect.fn("SessionCommands.updateSessionReasoningLevel")(
-          function* (input: UpdateSessionReasoningLevelInput) {
-            const session = yield* sessionStorage.getSession(input.sessionId)
-            if (session === undefined) {
-              return yield* new NotFoundError({ message: "Session not found", entity: "session" })
-            }
-            yield* sessionStorage.updateSession(
-              new Session({
-                ...session,
-                reasoningLevel: input.reasoningLevel,
-                updatedAt: yield* DateTime.nowAsDate,
-              }),
-            )
-            yield* eventPublisher.publish(
-              SessionSettingsUpdated.make({
-                sessionId: input.sessionId,
-                reasoningLevel: input.reasoningLevel,
-              }),
-            )
-            return { reasoningLevel: input.reasoningLevel }
-          },
-        ),
+        updateSessionReasoningLevel: updateReasoningLevel,
       } satisfies SessionCommandsService
     }),
   )
@@ -443,6 +588,20 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         // error tail via `Effect.catchEager` regardless.
         deleteSession: (sessionId) =>
           cmds.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void)),
+      }
+    }),
+  )
+
+  static SessionMutationsLive = Layer.effect(
+    SessionMutations,
+    Effect.gen(function* () {
+      const cmds = yield* SessionCommands
+      return {
+        renameSession: (input) => cmds.renameSession(input),
+        createSessionBranch: (input) => cmds.createSessionBranch(input),
+        forkSessionBranch: (input) => cmds.forkSessionBranch(input),
+        switchActiveBranch: (input) => cmds.switchActiveBranch(input),
+        createChildSession: (input) => cmds.createChildSession(input),
       }
     }),
   )
