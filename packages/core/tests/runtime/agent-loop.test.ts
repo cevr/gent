@@ -160,36 +160,48 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
   )
 }
 
-const failingCheckpointStorageLayer = (operation: "upsert" | "remove") =>
-  Layer.succeed(CheckpointStorage, {
-    upsert: (record) =>
-      operation === "upsert"
-        ? Effect.fail(
-            new StorageError({
-              message: "checkpoint upsert failed",
-            }),
-          )
-        : Effect.succeed(record),
-    get: () => Effect.succeed(undefined),
-    list: () => Effect.succeed([]),
-    remove: () =>
-      operation === "remove"
-        ? Effect.fail(
-            new StorageError({
-              message: "checkpoint remove failed",
-            }),
-          )
-        : Effect.void,
-  })
+const checkpointKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
 
-const makeCheckpointFailureLayer = (operation: "upsert" | "remove") => {
+const checkpointStorageLayer = (options?: { failUpsertOn?: number; failRemoveOn?: number }) => {
+  let upsertCount = 0
+  let removeCount = 0
+  const records = new Map<string, AgentLoopCheckpointRecord>()
+
+  return Layer.succeed(CheckpointStorage, {
+    upsert: (record) =>
+      Effect.gen(function* () {
+        upsertCount += 1
+        if (options?.failUpsertOn === upsertCount) {
+          return yield* new StorageError({
+            message: "checkpoint upsert failed",
+          })
+        }
+        records.set(checkpointKey(record.sessionId, record.branchId), record)
+        return record
+      }),
+    get: (input) => Effect.succeed(records.get(checkpointKey(input.sessionId, input.branchId))),
+    list: () => Effect.succeed(Array.from(records.values())),
+    remove: (input) =>
+      Effect.gen(function* () {
+        removeCount += 1
+        if (options?.failRemoveOn === removeCount) {
+          return yield* new StorageError({
+            message: "checkpoint remove failed",
+          })
+        }
+        records.delete(checkpointKey(input.sessionId, input.branchId))
+      }),
+  })
+}
+
+const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemoveOn?: number }) => {
   const providerLayer = Layer.succeed(Provider, {
     stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
     generate: () => Effect.succeed("test response"),
   })
   const deps = Layer.mergeAll(
     Storage.TestWithSql(),
-    failingCheckpointStorageLayer(operation),
+    checkpointStorageLayer(options),
     providerLayer,
     makeExtRegistry(),
     MachineEngine.Test(),
@@ -1755,7 +1767,7 @@ describe("interaction", () => {
 
 describe("checkpoint persistence", () => {
   test("submit fails when saving the running checkpoint fails", async () => {
-    const layer = makeCheckpointFailureLayer("upsert")
+    const layer = makeCheckpointFailureLayer({ failUpsertOn: 1 })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -1776,7 +1788,7 @@ describe("checkpoint persistence", () => {
   })
 
   test("run fails when removing the completed checkpoint fails", async () => {
-    const layer = makeCheckpointFailureLayer("remove")
+    const layer = makeCheckpointFailureLayer({ failRemoveOn: 2 })
 
     await Effect.runPromise(
       Effect.scoped(
@@ -1791,6 +1803,183 @@ describe("checkpoint persistence", () => {
             expect(Cause.pretty(exit.cause)).toContain("Failed to persist agent loop checkpoint")
             expect(Cause.pretty(exit.cause)).toContain("checkpoint remove failed")
           }
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("failed checkpoint save removes the dead loop so later turns can recreate it", async () => {
+    let providerCalls = 0
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.sync(() => {
+          providerCalls += 1
+          return Stream.fromIterable([finishPart({ finishReason: "stop" })])
+        }),
+      generate: () => Effect.succeed("test response"),
+    })
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      checkpointStorageLayer({ failUpsertOn: 1 }),
+      providerLayer,
+      makeExtRegistry(),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      EventStore.Memory,
+      ToolRunner.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          const failed = yield* Effect.exit(
+            agentLoop.submit(makeMessage("checkpoint-recreate-session", "b1", "first")),
+          )
+          expect(failed._tag).toBe("Failure")
+
+          yield* agentLoop.run(makeMessage("checkpoint-recreate-session", "b1", "second"))
+
+          expect(providerCalls).toBe(1)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("failed queue checkpoint leaves queued follow-up out of memory", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
+          ),
+        ),
+      generate: () => Effect.succeed("test response"),
+    })
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      checkpointStorageLayer({ failUpsertOn: 2 }),
+      providerLayer,
+      makeExtRegistry(),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      EventStore.Memory,
+      ToolRunner.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const fiber = yield* Effect.forkChild(
+            agentLoop.run(makeMessage("checkpoint-queue-session", "b1", "first")),
+          )
+          yield* Deferred.await(firstStarted)
+
+          const queued = yield* Effect.exit(
+            agentLoop.submit(makeMessage("checkpoint-queue-session", "b1", "queued")),
+          )
+          expect(queued._tag).toBe("Failure")
+
+          const snapshot = yield* agentLoop.getQueue({
+            sessionId: "checkpoint-queue-session",
+            branchId: "b1",
+          })
+          expect(snapshot).toEqual(emptyQueueSnapshot())
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("failed drain checkpoint leaves queued follow-up in memory", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
+          ),
+        ),
+      generate: () => Effect.succeed("test response"),
+    })
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      checkpointStorageLayer({ failUpsertOn: 3 }),
+      providerLayer,
+      makeExtRegistry(),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      EventStore.Memory,
+      ToolRunner.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const fiber = yield* Effect.forkChild(
+            agentLoop.run(makeMessage("checkpoint-drain-session", "b1", "first")),
+          )
+          yield* Deferred.await(firstStarted)
+          yield* agentLoop.submit(makeMessage("checkpoint-drain-session", "b1", "queued"))
+
+          const drained = yield* Effect.exit(
+            agentLoop.drainQueue({
+              sessionId: "checkpoint-drain-session",
+              branchId: "b1",
+            }),
+          )
+          expect(drained._tag).toBe("Failure")
+
+          const snapshot = yield* agentLoop.getQueue({
+            sessionId: "checkpoint-drain-session",
+            branchId: "b1",
+          })
+          expect(snapshot.followUp).toEqual([
+            expect.objectContaining({ _tag: "follow-up", content: "queued" }),
+          ])
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
         }).pipe(Effect.provide(layer)),
       ),
     )
