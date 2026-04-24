@@ -700,6 +700,27 @@ const collectNormalizedResponse = (params: {
   }
 }
 
+const isObservableModelOutputPart = (part: Response.AnyPart): boolean => {
+  switch (part.type) {
+    case "text":
+      return part.text.length > 0
+    case "text-delta":
+      return part.delta.length > 0
+    case "reasoning":
+      return part.text.length > 0
+    case "reasoning-delta":
+      return part.delta.length > 0
+    case "file":
+    case "tool-call":
+    case "tool-approval-request":
+      return true
+    case "tool-result":
+      return part.preliminary !== true
+    default:
+      return false
+  }
+}
+
 const collectModelTurnResponse = (params: {
   turnStream: Stream.Stream<ProviderStreamPart, ProviderError>
   publishEvent: PublishEvent
@@ -712,6 +733,7 @@ const collectModelTurnResponse = (params: {
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
+    let hasObservableOutput = false
 
     const streamFailed = yield* Stream.runForEach(
       params.turnStream.pipe(
@@ -727,6 +749,7 @@ const collectModelTurnResponse = (params: {
             })
           }
           responseParts.push(part)
+          hasObservableOutput = hasObservableOutput || isObservableModelOutputPart(part)
           if (part.type === "text-delta") {
             yield* params
               .publishEvent(
@@ -745,7 +768,7 @@ const collectModelTurnResponse = (params: {
         Effect.gen(function* () {
           const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
           if (interrupted) return false
-          if (params.retryPreOutputFailures === true && responseParts.length === 0) {
+          if (params.retryPreOutputFailures === true && !hasObservableOutput) {
             return yield* streamError
           }
           yield* Effect.logWarning("stream error, persisting partial output").pipe(

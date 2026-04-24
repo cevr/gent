@@ -1222,6 +1222,97 @@ describe("streaming", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }).pipe(Effect.runPromise))
 
+  test("retries retryable provider stream-consumption failures after metadata but before output", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      let streamCalls = 0
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.sync(() => {
+            streamCalls += 1
+            if (streamCalls === 1) {
+              return Stream.concat(
+                Stream.fromIterable([
+                  Response.makePart("response-metadata", {
+                    id: "response-before-output",
+                    modelId: "test",
+                    timestamp: undefined,
+                    request: undefined,
+                  }),
+                  Response.makePart("text-start", { id: "text-before-output" }),
+                ]),
+                Stream.fail(retryableStreamError()),
+              )
+            }
+            return Stream.fromIterable([
+              textDeltaPart("after metadata retry"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        generate: () => Effect.succeed("test response"),
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage(
+          "stream-metadata-retry-session",
+          "stream-metadata-retry-branch",
+          "retry",
+        )
+
+        yield* runAgentLoop(agentLoop, message)
+
+        const events = yield* Ref.get(eventsRef)
+        const tags = events.map((event) => event._tag)
+        expect(streamCalls).toBe(2)
+        expect(tags).toContain("ProviderRetrying")
+        expect(tags).not.toContain("ErrorOccurred")
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant?.parts).toEqual([
+          new TextPart({ type: "text", text: "after metadata retry" }),
+        ])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
+
+  test("emits stream failure events after pre-output retries are exhausted", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      let streamCalls = 0
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.sync(() => {
+            streamCalls += 1
+            return Stream.fail(retryableStreamError())
+          }),
+        generate: () => Effect.succeed("test response"),
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage(
+          "stream-retry-exhausted-session",
+          "stream-retry-exhausted-branch",
+          "retry",
+        )
+
+        yield* runAgentLoop(agentLoop, message)
+
+        const events = yield* Ref.get(eventsRef)
+        const tags = events.map((event) => event._tag)
+        expect(streamCalls).toBe(3)
+        expect(tags.filter((tag) => tag === "ProviderRetrying")).toHaveLength(2)
+        expect(tags).toContain("StreamEnded")
+        expect(tags).toContain("ErrorOccurred")
+        expect(tags).toContain("TurnCompleted")
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant).toBeUndefined()
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
+
   test("does not retry retryable provider stream failures after partial output", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
