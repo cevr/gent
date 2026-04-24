@@ -5,6 +5,7 @@ import type { ExtensionScope, GentExtension, LoadedExtension } from "../../domai
 import { ExtensionLoadError } from "../../domain/extension.js"
 import type { ExtensionContributions } from "../../domain/contribution.js"
 import { sealRuntimeLoadedEffect } from "../../domain/extension-load-boundary.js"
+import { validatePackageShape } from "../../extensions/api.js"
 import type { PromptSection } from "../../domain/prompt.js"
 
 /** Static prompt sections live on `Capability.prompt` (folded by the
@@ -251,6 +252,12 @@ export const setupExtension = (
       failureMessage: (cause) => `Extension setup failed: ${String(cause)}`,
       defectMessage: (cause) => `Extension setup defect: ${String(cause)}`,
     })
+
+    // Defensive re-run of cross-bucket validation. `defineExtension`-wrapped
+    // setups already run this; raw `{ manifest, setup }` objects (e.g. tests,
+    // hand-rolled extensions) bypass it. Running here closes the install
+    // boundary — malformed contributions fail activation, not mid-dispatch.
+    yield* validatePackageShape(extension.manifest, contributions)
 
     return {
       manifest: extension.manifest,

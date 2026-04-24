@@ -66,17 +66,23 @@ export const makeMachineEngine = (
   ExtensionTurnControl
 > =>
   Effect.gen(function* () {
-    const { spawnSpecs, spawnByExtension, protocols } = collectMachineProtocol(extensions)
+    const { spawnSpecs, spawnByExtension, shadowedScopesByExtension, protocols } =
+      collectMachineProtocol(extensions)
+
+    const shadowedSummary = [...shadowedScopesByExtension.entries()]
+      .flatMap(([id, scopes]) => scopes.map((scope) => `${id}@${scope}`))
+      .join(", ")
 
     yield* Effect.logDebug("extension.state-runtime.init").pipe(
       Effect.annotateLogs({
         totalExtensions: extensions.length,
         extensionsWithActors: spawnSpecs.length,
-        actorIds: spawnSpecs.map((spec) => spec.extensionId).join(", "),
+        actorIds: spawnSpecs.map((spec) => `${spec.extensionId}@${spec.scope}`).join(", "),
         extensionsWithoutActors: extensions
           .filter((extension) => extractMachine(extension) === undefined)
           .map((extension) => extension.manifest.id)
           .join(", "),
+        shadowedActors: shadowedSummary,
       }),
     )
 

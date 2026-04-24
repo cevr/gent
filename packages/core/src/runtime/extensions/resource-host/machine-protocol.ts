@@ -1,6 +1,7 @@
 import { Cause, Effect, Schema } from "effect"
-import type { LoadedExtension, ExtensionRef } from "../../../domain/extension.js"
+import type { ExtensionScope, LoadedExtension, ExtensionRef } from "../../../domain/extension.js"
 import type { AnyResourceMachine } from "../../../domain/resource.js"
+import { SCOPE_PRECEDENCE } from "../disabled.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionMessageDefinition,
@@ -21,6 +22,7 @@ export interface ActorEntry {
 
 export interface ActorSpawnSpec {
   readonly extensionId: string
+  readonly scope: ExtensionScope
   readonly actor: AnyResourceMachine
 }
 
@@ -31,6 +33,10 @@ interface ExtensionProtocolRegistry {
 export interface CollectedMachineProtocol {
   readonly spawnSpecs: ReadonlyArray<ActorSpawnSpec>
   readonly spawnByExtension: ReadonlyMap<string, ActorSpawnSpec>
+  /** Scopes that were shadowed out by a higher-precedence extension of the
+   *  same id. Debug-logged at engine init; useful for diagnosing "why isn't
+   *  my override running?". Does not affect dispatch. */
+  readonly shadowedScopesByExtension: ReadonlyMap<string, ReadonlyArray<ExtensionScope>>
   readonly protocols: MachineProtocol
 }
 
@@ -175,24 +181,55 @@ export class MachineProtocol {
   }
 }
 
+/** Resolve `(extensionId) → machine + protocol` by scope precedence
+ *  (`builtin < user < project`). Two extensions sharing an id at different
+ *  scopes are NOT spawned as separate actors — the highest-scope entry wins
+ *  the actor + its protocol bundle, and lower-scope shadows are dropped
+ *  (with a debug log). This matches how capabilities/drivers/agents resolve
+ *  in `registry.ts`; without it, both actors spawn and dispatch finds the
+ *  builtin (first match) while decode runs against the project protocol. */
 export const collectMachineProtocol = (
   extensions: ReadonlyArray<LoadedExtension>,
 ): CollectedMachineProtocol => {
+  // Pick one winner per extensionId, respecting scope precedence. Iteration
+  // order of the input is not trusted — we resolve explicitly.
+  const winnerByExtension = new Map<string, LoadedExtension>()
+  const shadowedByExtension = new Map<string, ExtensionScope[]>()
+  for (const ext of extensions) {
+    if (extractMachine(ext) === undefined) continue
+    const current = winnerByExtension.get(ext.manifest.id)
+    if (current === undefined) {
+      winnerByExtension.set(ext.manifest.id, ext)
+      continue
+    }
+    const incomingRank = SCOPE_PRECEDENCE[ext.scope]
+    const currentRank = SCOPE_PRECEDENCE[current.scope]
+    if (incomingRank > currentRank) {
+      const shadows = shadowedByExtension.get(ext.manifest.id) ?? []
+      winnerByExtension.set(ext.manifest.id, ext)
+      shadowedByExtension.set(ext.manifest.id, [...shadows, current.scope])
+    } else {
+      const shadows = shadowedByExtension.get(ext.manifest.id) ?? []
+      shadowedByExtension.set(ext.manifest.id, [...shadows, ext.scope])
+    }
+  }
+
   const spawnSpecs: ActorSpawnSpec[] = []
   const spawnByExtension = new Map<string, ActorSpawnSpec>()
   const protocolMap = new Map<string, Map<string, AnyExtensionMessageDefinition>>()
-  for (const ext of extensions) {
+  for (const ext of winnerByExtension.values()) {
     const actor = extractMachine(ext)
-    if (actor !== undefined) {
-      const spec = {
-        extensionId: ext.manifest.id,
-        actor,
-      }
-      spawnSpecs.push(spec)
-      spawnByExtension.set(ext.manifest.id, spec)
+    if (actor === undefined) continue
+    const spec: ActorSpawnSpec = {
+      extensionId: ext.manifest.id,
+      scope: ext.scope,
+      actor,
     }
+    spawnSpecs.push(spec)
+    spawnByExtension.set(ext.manifest.id, spec)
+
     const allDefs =
-      actor?.protocols !== undefined ? listExtensionProtocolDefinitions(actor.protocols) : []
+      actor.protocols !== undefined ? listExtensionProtocolDefinitions(actor.protocols) : []
     for (const definition of allDefs) {
       const byTag = protocolMap.get(definition.extensionId) ?? new Map()
       byTag.set(definition._tag, definition)
@@ -203,6 +240,7 @@ export const collectMachineProtocol = (
   return {
     spawnSpecs,
     spawnByExtension,
+    shadowedScopesByExtension: shadowedByExtension,
     protocols: new MachineProtocol({
       get: (extensionId, tag) => protocolMap.get(extensionId)?.get(tag),
     }),

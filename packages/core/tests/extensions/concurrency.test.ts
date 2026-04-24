@@ -987,4 +987,75 @@ describe("extension concurrency", () => {
       }),
     )
   })
+
+  describe("scope precedence for machine actors", () => {
+    it.live("project-scope machine overrides builtin-scope with the same extensionId", () => {
+      const reduced: string[] = []
+
+      const makeActor = (tag: string) =>
+        reducerActor<{ touched: number }>({
+          id: "scope-override",
+          initial: { touched: 0 },
+          reduce: (state, event) => {
+            if (event._tag === "SessionStarted") {
+              reduced.push(tag)
+              return { state: { touched: state.touched + 1 } }
+            }
+            return { state }
+          },
+        })
+
+      const extensions = [
+        {
+          manifest: { id: "scope-override", version: "1.0.0" },
+          scope: "builtin" as const,
+          sourcePath: "builtin",
+          contributions: {
+            resources: [
+              defineResource({
+                scope: "process",
+                layer: Layer.empty as Layer.Layer<unknown>,
+                machine: makeActor("builtin"),
+              }),
+            ],
+          },
+        },
+        {
+          manifest: { id: "scope-override", version: "1.0.0" },
+          scope: "project" as const,
+          sourcePath: "project",
+          contributions: {
+            resources: [
+              defineResource({
+                scope: "process",
+                layer: Layer.empty as Layer.Layer<unknown>,
+                machine: makeActor("project"),
+              }),
+            ],
+          },
+        },
+      ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+      const layer = Layer.provide(
+        MachineEngine.fromExtensions(extensions),
+        ExtensionTurnControl.Test(),
+      )
+
+      return Effect.gen(function* () {
+        const runtime = yield* MachineEngine
+        yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), {
+          sessionId,
+          branchId,
+        })
+
+        // Only the project-scope machine reduces; the builtin shadow never spawns.
+        expect(reduced).toEqual(["project"])
+
+        // At most one actor is registered for the shared extensionId.
+        const statuses = yield* runtime.getActorStatuses(sessionId)
+        expect(statuses).toHaveLength(1)
+        expect(statuses[0]?.extensionId).toBe("scope-override")
+      }).pipe(Effect.provide(layer))
+    })
+  })
 })

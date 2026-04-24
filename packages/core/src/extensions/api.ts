@@ -421,7 +421,10 @@ const validateDriverIds = (contribs: ExtensionContributions): string | undefined
   return undefined
 }
 
-const validatePackageShape = (
+/** Internal: cross-bucket validation invoked by `defineExtension` and
+ *  `setupExtension` (the loader runs it defensively on raw `{ manifest, setup }`
+ *  objects that bypassed `defineExtension`). */
+export const validatePackageShape = (
   manifest: ExtensionManifest,
   contribs: ExtensionContributions,
 ): Effect.Effect<void, ExtensionLoadError> =>
