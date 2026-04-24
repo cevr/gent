@@ -180,7 +180,7 @@ export const acquireLock = (home: string, dbPath: string): boolean => {
     // Lock dir exists — check if stale
     let info: LockInfo | undefined
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- lockfile JSON is trusted only for stale-lock probing
       info = JSON.parse(readFileSync(infoPath, "utf8")) as LockInfo
     } catch {
       // Missing or corrupt info.json (crash between mkdir and write) — treat as stale

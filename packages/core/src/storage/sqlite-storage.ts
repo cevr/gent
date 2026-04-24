@@ -70,7 +70,7 @@ const decodeEvent = (json: string) =>
 
 const expandEventTags = (tags: ReadonlyArray<string>) => [
   ...new Set(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- legacy tag lookup narrows string to known alias keys
     tags.flatMap((tag) => LEGACY_EVENT_TAGS[tag as keyof typeof LEGACY_EVENT_TAGS] ?? [tag]),
   ),
 ]

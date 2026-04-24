@@ -646,7 +646,7 @@ const plugin: Plugin = {
           Program(node) {
             // Comments live on `sourceCode.getAllComments()` in the oxlint plugin
             // surface, not on the Program node directly.
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
             const ctx = context as unknown as {
               sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
             }

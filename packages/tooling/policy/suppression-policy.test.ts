@@ -41,7 +41,7 @@ interface SuppressionCategory {
 }
 
 const ROOT = pathResolve(import.meta.dir, "..", "..", "..")
-const SCAN_ROOTS = ["packages", "apps"] as const
+const SCAN_ROOTS = ["packages", "apps", "lint"] as const
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"])
 
 const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
@@ -186,6 +186,15 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     },
   },
   {
+    id: "tooling-lint-adapters",
+    reason:
+      "Local lint rules bridge oxlint's plugin API where the runtime context exposes fields that the public type surface does not model.",
+    matches: (file) => file === "lint/no-direct-env.ts",
+    counts: {
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 1,
+    },
+  },
+  {
     id: "runtime-internals",
     reason:
       "Runtime internals still carry typed erase/cast residue. They are allowed here only until the surrounding architecture gets simpler enough to delete them.",
@@ -294,7 +303,9 @@ const parseEffectRules = (line: string): ReadonlyArray<SuppressionRule> => {
 }
 
 const parseEslintRules = (line: string): ReadonlyArray<SuppressionRule> => {
-  const eslintMatch = line.match(/\beslint-disable(?<scope>-next-line|-line)?\b(?<rules>.*)$/)
+  const eslintMatch = line.match(
+    /(?:^|\s)(?:\/\/|\/\*)\s*eslint-disable(?<scope>-next-line|-line)?\b(?<rules>.*)$/,
+  )
   const rulesText = eslintMatch?.groups?.rules
   if (rulesText === undefined) return []
   if (eslintMatch.groups?.scope === undefined) return ["eslint:<block>" as SuppressionRule]
