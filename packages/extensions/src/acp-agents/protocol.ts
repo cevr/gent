@@ -6,7 +6,18 @@
  *
  * @module
  */
-import { Deferred, Effect, Fiber, HashMap, PubSub, Queue, Ref, Schema, Stream } from "effect"
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  HashMap,
+  Option,
+  PubSub,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import type {
   InitializeRequest,
   InitializeResponse,
@@ -91,6 +102,16 @@ const encodeResponse = (id: number | string | null, result: unknown): string =>
 
 const encodeErrorResponse = (id: number | string | null, code: number, message: string): string =>
   JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n"
+
+// Incoming JSON-RPC envelopes: the wire format is a flat object with
+// `id`, `method`, `params`, `result`, or `error` keys. We decode to an
+// open record and let `handleLine` dispatch on field presence — the
+// per-method payload schemas live in `./schema.ts` and are applied
+// after routing.
+const IncomingJsonRpcEnvelope = Schema.Record(Schema.String, Schema.Unknown)
+const decodeIncomingEnvelope = Schema.decodeUnknownOption(
+  Schema.fromJsonString(IncomingJsonRpcEnvelope),
+)
 
 // ── Connection Factory ──
 
@@ -195,16 +216,14 @@ export const makeAcpConnection = (
       Effect.gen(function* () {
         if (line.trim() === "") return
 
-        let parsed: Record<string, unknown>
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-          parsed = JSON.parse(line) as Record<string, unknown>
-        } catch {
+        const decoded = decodeIncomingEnvelope(line)
+        if (Option.isNone(decoded)) {
           yield* Effect.logWarning("acp: unparseable line").pipe(
             Effect.annotateLogs({ line: line.slice(0, 200) }),
           )
           return
         }
+        const parsed = decoded.value
 
         // Response to one of our requests
         if ("id" in parsed && parsed["id"] !== null && !("method" in parsed)) {

@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as os from "node:os"
 import * as fsPromises from "node:fs/promises"
@@ -24,6 +24,18 @@ const ClaudeCredentials = Schema.Struct({
 const ClaudeCredentialsWrapper = Schema.Struct({
   claudeAiOauth: ClaudeCredentials,
 })
+
+const CredentialBlobSchema = Schema.Record(Schema.String, Schema.Unknown)
+const decodeCredentialBlob = Schema.decodeUnknownOption(Schema.fromJsonString(CredentialBlobSchema))
+
+const OAuthTokenResponseSchema = Schema.Struct({
+  access_token: Schema.optional(Schema.String),
+  refresh_token: Schema.optional(Schema.String),
+  expires_in: Schema.optional(Schema.Number),
+})
+const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OAuthTokenResponseSchema),
+)
 
 export type ClaudeCredentials = typeof ClaudeCredentials.Type
 
@@ -346,21 +358,20 @@ export const updateCredentialBlob = (
   existingJson: string,
   newCreds: ClaudeCredentials,
 ): string | undefined => {
-  let parsed: Record<string, unknown>
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-    parsed = JSON.parse(existingJson) as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-  const wrapper = parsed["claudeAiOauth"] as Record<string, unknown> | undefined
+  const decoded = decodeCredentialBlob(existingJson)
+  if (Option.isNone(decoded)) return undefined
+  const parsed = decoded.value
+  const wrapperValue = parsed["claudeAiOauth"]
+  const wrapper = isRecord(wrapperValue) ? wrapperValue : undefined
   const target = wrapper ?? parsed
   target["accessToken"] = newCreds.accessToken
   target["refreshToken"] = newCreds.refreshToken
   target["expiresAt"] = newCreds.expiresAt
   return JSON.stringify(parsed)
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 
 /**
  * Persist refreshed credentials back to the keychain entry named by
@@ -437,12 +448,6 @@ export const writeBackCredentials = (
 const OAUTH_TOKEN_URL = "https://claude.ai/v1/oauth/token"
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
-interface OAuthTokenResponse {
-  readonly access_token?: string
-  readonly refresh_token?: string
-  readonly expires_in?: number
-}
-
 /**
  * Parse a raw OAuth refresh response body into `ClaudeCredentials`.
  * Returns `undefined` if the body is not valid JSON, not an object,
@@ -456,21 +461,14 @@ export const parseOAuthResponse = (
   fallbackRefreshToken: string,
   now: number = Date.now(),
 ): ClaudeCredentials | undefined => {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return undefined
-  }
-  if (typeof parsed !== "object" || parsed === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-  const data = parsed as OAuthTokenResponse
-  if (typeof data.access_token !== "string") return undefined
-  const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 36_000
+  const decoded = decodeOAuthTokenResponse(raw)
+  if (Option.isNone(decoded)) return undefined
+  const data = decoded.value
+  if (data.access_token === undefined) return undefined
+  const expiresIn = data.expires_in ?? 36_000
   return {
     accessToken: data.access_token,
-    refreshToken:
-      typeof data.refresh_token === "string" ? data.refresh_token : fallbackRefreshToken,
+    refreshToken: data.refresh_token ?? fallbackRefreshToken,
     expiresAt: now + expiresIn * 1000,
   }
 }

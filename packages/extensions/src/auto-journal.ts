@@ -45,6 +45,23 @@ const ConfigRowSchema = Schema.Struct({
   startedAt: Schema.Number,
 })
 
+const CheckpointRowSchema = Schema.Struct({
+  type: Schema.Literal("checkpoint"),
+  iteration: Schema.Number,
+  status: Schema.Literals(["continue", "complete", "abandon"]),
+  summary: Schema.String,
+  learnings: Schema.optional(Schema.String),
+  metrics: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
+  nextIdea: Schema.optional(Schema.String),
+})
+
+const ReviewRowSchema = Schema.Struct({
+  type: Schema.Literal("review"),
+  iteration: Schema.Number,
+})
+
+const JournalRowSchema = Schema.Union([ConfigRowSchema, CheckpointRowSchema, ReviewRowSchema])
+
 const ActivePointerSchema = Schema.Struct({
   path: Schema.String,
   sessionId: Schema.optional(Schema.String),
@@ -52,6 +69,7 @@ const ActivePointerSchema = Schema.Struct({
 
 const encodeConfigRowJson = Schema.encodeSync(Schema.fromJsonString(ConfigRowSchema))
 const encodeActivePointerJson = Schema.encodeSync(Schema.fromJsonString(ActivePointerSchema))
+const decodeJournalRow = Schema.decodeUnknownOption(Schema.fromJsonString(JournalRowSchema))
 
 // ── Service ──
 
@@ -122,19 +140,22 @@ export class AutoJournal extends Context.Service<AutoJournal, AutoJournalService
 
         const readRows = (filePath: string) =>
           fs.readFileString(filePath).pipe(
-            Effect.map((content) =>
-              content
-                .split("\n")
-                .filter((line) => line.trim() !== "")
-                .map((line): JournalRow | undefined => {
-                  try {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
-                    return JSON.parse(line) as JournalRow
-                  } catch {
-                    return undefined
+            Effect.flatMap((content) =>
+              Effect.gen(function* () {
+                const lines = content.split("\n").filter((line) => line.trim() !== "")
+                const rows: JournalRow[] = []
+                for (const line of lines) {
+                  const decoded = decodeJournalRow(line)
+                  if (Option.isSome(decoded)) {
+                    rows.push(decoded.value)
+                  } else {
+                    yield* Effect.logWarning("auto-journal.row.decode-failed").pipe(
+                      Effect.annotateLogs({ path: filePath, line }),
+                    )
                   }
-                })
-                .filter((row): row is JournalRow => row !== undefined),
+                }
+                return rows
+              }),
             ),
             Effect.orElseSucceed((): JournalRow[] => []),
           )

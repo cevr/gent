@@ -1,4 +1,8 @@
 import { Buffer } from "node:buffer"
+import { Option, Schema } from "effect"
+
+const JwtClaimsSchema = Schema.Record(Schema.String, Schema.Unknown)
+const decodeJwtClaims = Schema.decodeUnknownOption(Schema.fromJsonString(JwtClaimsSchema))
 
 export const OPENAI_OAUTH_ALLOWED_MODELS = new Set(["gpt-5.4", "gpt-5.4-mini"])
 
@@ -57,11 +61,8 @@ const generateState = (): string =>
 const parseJwtClaims = (token: string): Record<string, unknown> | undefined => {
   const parts = token.split(".")
   if (parts.length !== 3) return undefined
-  try {
-    return JSON.parse(Buffer.from(parts[1] ?? "", "base64url").toString())
-  } catch {
-    return undefined
-  }
+  const json = Buffer.from(parts[1] ?? "", "base64url").toString()
+  return Option.getOrUndefined(decodeJwtClaims(json))
 }
 
 const extractAccountId = (tokens: TokenResponse): string | undefined => {
