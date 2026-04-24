@@ -564,6 +564,77 @@ describe("extension command RPCs", () => {
     }
   })
 
+  test("RPC request gives transport-public handlers the wide host context (ctx.extension.send)", async () => {
+    // Regression: `action({ public: true })` handlers are typed against
+    // `ModelCapabilityContext` and call `ctx.extension.send(...)`. Pre-fix,
+    // `extension.request` passed a narrow 4-key ctx so the narrowCtxGuard
+    // threw on `ctx.extension` and the transport path silently no-op'd
+    // (the exact bug behind `/executor-start` / `/executor-stop`).
+    boundaryReceived.length = 0
+
+    const wideExtension: GentExtension = {
+      manifest: { id: "@test/wide-ctx-action" },
+      setup: () =>
+        Effect.succeed({
+          capabilities: [
+            {
+              id: "touch",
+              audiences: ["transport-public"],
+              intent: "write",
+              input: Schema.String,
+              output: Schema.Void,
+              effect: (label: string, ctx) =>
+                ctx.extension.send(BoundaryProtocol.Touch.make({ label })).pipe(Effect.orDie),
+            },
+          ],
+        }),
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const wideExt = yield* Effect.provide(
+            setupExtension(
+              { extension: wideExtension, scope: "builtin", sourcePath: "builtin" },
+              "/test/cwd",
+              "/test/home",
+            ),
+            BunServices.layer,
+          )
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [boundaryExtension, wideExt],
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({
+            cwd: "/tmp/gent-wide-ctx-action",
+          })
+
+          yield* client.extension.request({
+            sessionId,
+            extensionId: "@test/wide-ctx-action",
+            capabilityId: "touch",
+            intent: "write",
+            input: "wide-ctx-ok",
+            branchId,
+          })
+
+          yield* waitFor(
+            Effect.sync(() => boundaryReceived.length),
+            (count) => count > 0,
+            5_000,
+            "boundary to receive send",
+          )
+        }),
+      ),
+    )
+
+    expect(boundaryReceived).toEqual([{ kind: "send", label: "wide-ctx-ok" }])
+  })
+
   test("RPC listStatus returns structurally tagged extension health", async () => {
     const failingExtension: GentExtension = {
       manifest: { id: "@test/failing-status" },

@@ -3,6 +3,10 @@ import { BranchId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
+import {
+  makeAmbientExtensionHostContextDeps,
+  makeExtensionHostContext,
+} from "../../runtime/make-extension-host-context.js"
 import { buildExtensionHealthSnapshot } from "../extension-health.js"
 import { CommandInfo } from "../transport-contract.js"
 import type {
@@ -197,22 +201,38 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         })
       }
 
-      const { registry, capabilityContext } = yield* deps.resolveSessionServices(sessionId)
-      const capabilities = registry.getResolved().capabilities
-      const request = capabilities
-        .run(
+      if (deps.storage === undefined) {
+        return yield* extensionRequestError({
           extensionId,
           capabilityId,
-          "transport-public",
-          input,
-          {
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            cwd: scope.session.cwd,
-            home: deps.platform.home,
-          },
-          { intent },
-        )
+          message: "Storage unavailable for transport-public capability dispatch",
+        })
+      }
+      const { registry, stateRuntime, capabilityContext } =
+        yield* deps.resolveSessionServices(sessionId)
+      // Transport-public action handlers are typed against `ModelCapabilityContext`
+      // (wide host surface — `extension.send/ask`, `session.*`, `agent.*`, etc.).
+      // Build the full ExtensionHostContext here so handlers like `executor-start`
+      // / `executor-stop` can steer their sidecar actors over `ctx.extension.send`.
+      // The narrow 4-key fallback is reserved for server-internal `agent-protocol`
+      // dispatch where handlers author against `CapabilityCoreContext`.
+      const hostDeps = yield* makeAmbientExtensionHostContextDeps({
+        extensionStateRuntime: stateRuntime,
+        extensionRegistry: registry,
+        storage: deps.storage,
+        ...(capabilityContext !== undefined ? { capabilityContext } : {}),
+      })
+      const hostCtx = makeExtensionHostContext(
+        {
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          sessionCwd: scope.session.cwd,
+        },
+        hostDeps,
+      )
+      const capabilities = registry.getResolved().capabilities
+      const request = capabilities
+        .run(extensionId, capabilityId, "transport-public", input, hostCtx, { intent })
         .pipe(
           Effect.mapError((error) =>
             extensionRequestError({

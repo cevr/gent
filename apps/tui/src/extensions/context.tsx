@@ -282,7 +282,17 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
                         input: args,
                         branchId: bid,
                       })
-                      .pipe(Effect.catchEager(() => Effect.void)),
+                      .pipe(
+                        Effect.catchEager((error) =>
+                          Effect.logWarning("slash.command.failed").pipe(
+                            Effect.annotateLogs({
+                              extensionId: c.extensionId,
+                              capabilityId: c.capabilityId,
+                              error: String(error),
+                            }),
+                          ),
+                        ),
+                      ),
                   )
                 }
 
