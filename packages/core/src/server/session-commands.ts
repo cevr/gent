@@ -347,20 +347,29 @@ const makeSessionMutationsService: Effect.Effect<
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,
   ) {
-    const sessionIds = yield* collectSessionTreeIds(sessionId)
-    yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForMutation, { discard: true })
-    yield* sessionStorage
-      .deleteSession(sessionId)
-      .pipe(
-        Effect.onError(() =>
-          Effect.forEach(sessionIds, restoreSessionRuntimeStateForMutation, { discard: true }),
-        ),
-      )
-    yield* Effect.forEach(sessionIds, forgetDeletedSessionRuntimeStateForMutation, {
+    // Pre-collect is the best effort set we can tombstone BEFORE the durable
+    // delete — so their runtimes stop accepting work while the tx runs. The
+    // durable delete returns the authoritative set (the same rows the cascade
+    // touched, collected inside its own tx) which we then use for the final
+    // cleanup pass. Any descendant created between pre-collect and the tx is
+    // included in the authoritative set and cleaned up here too.
+    const preTombstoned = yield* collectSessionTreeIds(sessionId)
+    yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForMutation, { discard: true })
+    const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
+      // On failure we only restore `preTombstoned`: descendants created after pre-collect
+      // were never tombstoned here, so there's no runtime state for them to "restore" to.
+      Effect.onError(() =>
+        Effect.forEach(preTombstoned, restoreSessionRuntimeStateForMutation, { discard: true }),
+      ),
+    )
+    const preSet = new Set(preTombstoned)
+    const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
+    yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForMutation, { discard: true })
+    yield* Effect.forEach(cascadedIds, forgetDeletedSessionRuntimeStateForMutation, {
       discard: true,
     })
     yield* Effect.forEach(
-      sessionIds,
+      cascadedIds,
       (deletedSessionId) =>
         Effect.logInfo("session.deleted").pipe(
           Effect.annotateLogs({ sessionId: deletedSessionId }),
@@ -1079,20 +1088,34 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const deleteSessionCascade = Effect.fn("SessionCommands.deleteSessionCascade")(function* (
         sessionId: SessionId,
       ) {
-        const sessionIds = yield* collectSessionTreeIds(sessionId)
-        yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForCommand, { discard: true })
-        yield* sessionStorage
-          .deleteSession(sessionId)
-          .pipe(
-            Effect.onError(() =>
-              Effect.forEach(sessionIds, restoreSessionRuntimeStateForCommand, { discard: true }),
-            ),
-          )
-        yield* Effect.forEach(sessionIds, forgetDeletedSessionRuntimeStateForCommand, {
+        // See the mirror comment in `makeSessionMutations.deleteSessionCascade`:
+        // pre-collect tombstones the best-effort set before the durable tx,
+        // then the tx returns the authoritative cascade set (including any
+        // descendant created between pre-collect and the durable delete),
+        // and we clean runtime state for exactly what the DB removed.
+        const preTombstoned = yield* collectSessionTreeIds(sessionId)
+        yield* Effect.forEach(preTombstoned, cleanupSessionRuntimeStateForCommand, {
+          discard: true,
+        })
+        const cascadedIds = yield* sessionStorage.deleteSession(sessionId).pipe(
+          // On failure we only restore `preTombstoned`: descendants created after pre-collect
+          // were never tombstoned here, so there's no runtime state for them to "restore" to.
+          Effect.onError(() =>
+            Effect.forEach(preTombstoned, restoreSessionRuntimeStateForCommand, {
+              discard: true,
+            }),
+          ),
+        )
+        const preSet = new Set(preTombstoned)
+        const postDeleteOnly = cascadedIds.filter((id) => !preSet.has(id))
+        yield* Effect.forEach(postDeleteOnly, cleanupSessionRuntimeStateForCommand, {
+          discard: true,
+        })
+        yield* Effect.forEach(cascadedIds, forgetDeletedSessionRuntimeStateForCommand, {
           discard: true,
         })
         yield* Effect.forEach(
-          sessionIds,
+          cascadedIds,
           (deletedSessionId) =>
             Effect.logInfo("session.deleted").pipe(
               Effect.annotateLogs({ sessionId: deletedSessionId }),

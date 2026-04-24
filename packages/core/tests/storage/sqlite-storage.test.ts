@@ -435,7 +435,7 @@ describe("Storage", () => {
           }),
         )
 
-        yield* storage.deleteSession(sessionId)
+        const cascadedIds = yield* storage.deleteSession(sessionId)
 
         const sessions = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM sessions`
         const branches = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM branches`
@@ -452,6 +452,15 @@ describe("Storage", () => {
         expect(refs[0]?.count).toBe(0)
         expect(chunks[0]?.count).toBe(0)
         expect(fts[0]?.count).toBe(0)
+        expect([...cascadedIds].sort()).toEqual([sessionId, childSessionId].sort())
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("returns the cascade set for a no-op delete of an already-removed session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const cascadedIds = yield* storage.deleteSession(SessionId.make("never-existed"))
+        expect(cascadedIds).toEqual([])
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 

@@ -396,6 +396,81 @@ const sessionCommandsLayerWithProfileMachineProbes = (params: {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
+/**
+ * SessionCommands layer that injects a child-session create into the DB
+ * between the pre-collect and the durable `deleteSession` tx. Simulates the
+ * race the audit flagged: a new descendant committing after
+ * `collectSessionTreeIds` runs but before the cascade tx opens. Fires once
+ * for any deleteSession call, inserting a child pointed at the deleted root.
+ */
+const racySessionCommandsLayer = (params: {
+  readonly terminated: Array<SessionId>
+  readonly runtimeTerminated: Array<SessionId>
+  readonly lateChild: { sessionId: SessionId; branchId: BranchId }
+}) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const baseSubTags = subTagLayers(storageLayer)
+  const racingSessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      let fired = false
+      return {
+        ...sessions,
+        deleteSession: (rootId: SessionId) =>
+          Effect.gen(function* () {
+            if (!fired) {
+              fired = true
+              const now = new Date("2026-01-01T00:00:00.000Z")
+              yield* sessions.createSession(
+                new Session({
+                  id: params.lateChild.sessionId,
+                  cwd: "/tmp/racing-late-child",
+                  parentSessionId: rootId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              )
+              yield* branches.createBranch(
+                new Branch({
+                  id: params.lateChild.branchId,
+                  sessionId: params.lateChild.sessionId,
+                  createdAt: now,
+                }),
+              )
+            }
+            return yield* sessions.deleteSession(rootId)
+          }),
+      }
+    }),
+  ).pipe(Layer.provide(baseSubTags))
+
+  const machineProbeLayer = Layer.succeed(MachineEngine, {
+    publish: () => Effect.succeed([]),
+    send: () => Effect.void,
+    execute: () => Effect.die("unexpected machine request"),
+    getActorStatuses: () => Effect.succeed([]),
+    terminateAll: (sessionId) =>
+      Effect.sync(() => {
+        params.terminated.push(sessionId)
+      }),
+  } satisfies MachineEngineService)
+  const deps = Layer.mergeAll(
+    storageLayer,
+    baseSubTags,
+    racingSessionStorageLayer,
+    sessionRuntimeProbeLayer(params.runtimeTerminated),
+    SessionCommands.SessionRuntimeTerminatorLive,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    machineProbeLayer,
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
 const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
   id: "parent-tool-call-probe",
   query: (ctx) => Effect.succeed(ctx.turn.parentToolCallId),
@@ -1124,6 +1199,39 @@ describe("session.delete", () => {
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
         expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated))),
+    )
+  })
+
+  it.live("cleans runtime state for a child created mid-cascade", () => {
+    const terminated: Array<SessionId> = []
+    const runtimeTerminated: Array<SessionId> = []
+    const lateChildSessionId = SessionId.make("race-late-child")
+    const lateChildBranchId = BranchId.make("race-late-child-branch")
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const sessions = yield* SessionStorage
+
+        const parent = yield* commands.createSession({ cwd: "/tmp/race-parent" })
+
+        yield* commands.deleteSession(parent.sessionId)
+
+        expect(yield* sessions.getSession(parent.sessionId)).toBeUndefined()
+        expect(yield* sessions.getSession(lateChildSessionId)).toBeUndefined()
+        expect(runtimeTerminated.sort()).toEqual([parent.sessionId, lateChildSessionId].sort())
+        expect(terminated.sort()).toEqual([parent.sessionId, lateChildSessionId].sort())
+      }).pipe(
+        Effect.provide(
+          racySessionCommandsLayer({
+            terminated,
+            runtimeTerminated,
+            lateChild: {
+              sessionId: lateChildSessionId,
+              branchId: lateChildBranchId,
+            },
+          }),
+        ),
+      ),
     )
   })
 

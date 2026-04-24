@@ -22,7 +22,13 @@ export interface SessionStorageService {
     StorageError
   >
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
-  readonly deleteSession: (id: SessionId) => Effect.Effect<void, StorageError>
+  /**
+   * Deletes the session and every descendant, returning the full set of
+   * session ids the cascade actually removed. Callers use the returned set
+   * (not a pre-read tree snapshot) to clean in-memory runtime state, so a
+   * child created between pre-collect and the durable tx is still cleaned.
+   */
+  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
 }
 
 export class SessionStorage extends Context.Service<SessionStorage, SessionStorageService>()(

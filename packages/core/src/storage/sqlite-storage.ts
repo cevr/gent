@@ -98,7 +98,14 @@ export interface StorageService {
     StorageError
   >
   readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
-  readonly deleteSession: (id: SessionId) => Effect.Effect<void, StorageError>
+  /**
+   * Deletes the session and every descendant. SELECT + DELETE execute inside
+   * the same transaction so a child created mid-delete is either picked up
+   * (commits before the tx) or rejected by the missing-parent FK (commits
+   * after). Returns the full set of session ids the cascade actually removed
+   * so in-memory cleanup uses the same snapshot.
+   */
+  readonly deleteSession: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
 
   // Branches
   readonly createBranch: (branch: Branch) => Effect.Effect<Branch, StorageError>
@@ -1210,7 +1217,13 @@ const makeStorage = Effect.gen(function* () {
       sql
         .withTransaction(
           Effect.gen(function* () {
-            yield* sql`
+            // SELECT + DELETE inside one tx keeps the descendant set consistent
+            // with the durable cascade. A child created after the tx begins
+            // violates the parent FK when it tries to commit, so either it's
+            // in our SELECT or it never durably lands. Returning the set lets
+            // the caller clean runtime state for exactly the same ids the DB
+            // removed — no ghost loops / streams / cwd-registry entries.
+            const descendantRows = yield* sql<{ id: SessionId }>`
               WITH RECURSIVE descendants(id) AS (
                 SELECT id FROM sessions WHERE id = ${id}
                 UNION
@@ -1218,14 +1231,17 @@ const makeStorage = Effect.gen(function* () {
                 FROM sessions
                 JOIN descendants ON sessions.parent_session_id = descendants.id
               )
-              DELETE FROM messages_fts WHERE session_id IN (SELECT id FROM descendants)
+              SELECT id FROM descendants
             `
-            yield* sql`DELETE FROM sessions WHERE id = ${id}`
+            const cascadedIds = descendantRows.map((row) => row.id)
+            if (cascadedIds.length === 0) return cascadedIds
+            yield* sql`DELETE FROM messages_fts WHERE session_id IN ${sql.in(cascadedIds)}`
+            yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
             yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+            return cascadedIds
           }),
         )
         .pipe(
-          Effect.asVoid,
           Effect.mapError(mapError("Failed to delete session")),
           Effect.withSpan("Storage.deleteSession"),
         ),
@@ -1775,6 +1791,11 @@ export class Storage extends Context.Service<Storage, StorageService>()(
         return yield* makeStorage
       }),
     ).pipe(Layer.provide(Layer.orDie(SqliteClient.layer({ filename: dbPath }))))
+  // Load-bearing: `deleteSession`'s atomic SELECT+DELETE relies on @effect/sql-sqlite-bun's
+  // single-connection + Semaphore(1) serialization. If this layer is ever swapped for a
+  // pooled/multi-connection driver, the cascade tx must switch to BEGIN IMMEDIATE (or an
+  // equivalent write-lock) to preserve the invariant that no child row is committed between
+  // the recursive SELECT and the DELETE.
 
   /** Live layer that also exposes SqlClient and focused storage services */
   static LiveWithSql = (
