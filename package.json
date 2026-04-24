@@ -15,6 +15,7 @@
     "build": "turbo run build",
     "test": "env -u FORCE_COLOR NO_COLOR=1 turbo run test",
     "policy": "env -u FORCE_COLOR NO_COLOR=1 turbo run policy",
+    "test:integration": "env -u FORCE_COLOR NO_COLOR=1 turbo run test:integration",
     "test:e2e": "turbo run test:e2e",
     "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build,test,policy \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" \"bun run test\" \"bun run policy\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
