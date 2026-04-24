@@ -8,11 +8,17 @@ interface SessionMailboxJob {
   readonly terminal: boolean
 }
 
+type TerminalDone = Deferred.Deferred<Exit.Exit<void>>
+type TerminalClaim =
+  | { readonly _tag: "owner"; readonly done: TerminalDone }
+  | { readonly _tag: "existing"; readonly done: TerminalDone }
+
 interface SessionMailboxSlot {
   readonly queue: Queue.Queue<SessionMailboxJob>
   readonly reentrantQueue: Ref.Ref<Array<SessionMailboxJob>>
   readonly priorityQueue: Ref.Ref<Array<SessionMailboxJob>>
   readonly closing: Ref.Ref<boolean>
+  readonly terminalDone: Ref.Ref<TerminalDone | undefined>
   readonly workerFiberId: Ref.Ref<number>
 }
 
@@ -38,20 +44,22 @@ export const makeSessionMailbox = (
       })
 
     const takeNextJob = (slot: SessionMailboxSlot): Effect.Effect<SessionMailboxJob> =>
-      Ref.modify(slot.reentrantQueue, (jobs) => {
-        const [next, ...rest] = jobs
-        return [next, rest] as const
-      }).pipe(
-        Effect.flatMap((reentrant) =>
-          reentrant === undefined
-            ? takeNextJobFromRef(slot.priorityQueue).pipe(
-                Effect.flatMap((priority) =>
-                  priority === undefined ? Queue.take(slot.queue) : Effect.succeed(priority),
-                ),
-              )
-            : Effect.succeed(reentrant),
-        ),
-      )
+      Effect.gen(function* () {
+        if (yield* Ref.get(slot.closing)) {
+          const priority = yield* takeNextJobFromRef(slot.priorityQueue)
+          if (priority !== undefined) return priority
+        }
+
+        const reentrant = yield* Ref.modify(slot.reentrantQueue, (jobs) => {
+          const [next, ...rest] = jobs
+          return [next, rest] as const
+        })
+        if (reentrant !== undefined) return reentrant
+
+        const priority = yield* takeNextJobFromRef(slot.priorityQueue)
+        if (priority !== undefined) return priority
+        return yield* Queue.take(slot.queue)
+      })
 
     const runJob = (sessionId: SessionId, job: SessionMailboxJob) =>
       job.effect.pipe(
@@ -127,12 +135,14 @@ export const makeSessionMailbox = (
           const reentrantQueue = yield* Ref.make<Array<SessionMailboxJob>>([])
           const priorityQueue = yield* Ref.make<Array<SessionMailboxJob>>([])
           const closing = yield* Ref.make(false)
+          const terminalDone = yield* Ref.make<TerminalDone | undefined>(undefined)
           const workerFiberId = yield* Ref.make(-1)
           const slot: SessionMailboxSlot = {
             queue,
             reentrantQueue,
             priorityQueue,
             closing,
+            terminalDone,
             workerFiberId,
           }
           const worker = yield* Effect.forkIn(mailboxWorker(sessionId, slot), runtimeScope)
@@ -148,32 +158,39 @@ export const makeSessionMailbox = (
       )
 
     const getSlot = (sessionId: SessionId): Effect.Effect<SessionMailboxSlot | undefined> =>
-      Effect.map(Ref.get(slotsRef), (slots) => slots.get(sessionId))
+      semaphore.withPermits(1)(Effect.map(Ref.get(slotsRef), (slots) => slots.get(sessionId)))
 
     const offerJob = (slot: SessionMailboxSlot, job: SessionMailboxJob) =>
       Effect.gen(function* () {
-        if (yield* Ref.get(slot.closing)) {
+        if ((yield* Ref.get(slot.terminalDone)) !== undefined) {
           yield* job.discard
           return false
         }
-        yield* Queue.offer(slot.queue, job)
-        return true
+        const offered = yield* Queue.offer(slot.queue, job)
+        if (offered) return true
+        yield* job.discard
+        return false
       })
 
-    const claimClosing = (slot: SessionMailboxSlot) =>
-      Ref.modify(slot.closing, (closing) => {
-        if (closing) return [false, closing] as const
-        return [true, true] as const
+    const claimTerminal = (
+      slot: SessionMailboxSlot,
+      done: TerminalDone,
+    ): Effect.Effect<TerminalClaim> =>
+      Ref.modify(slot.terminalDone, (existing): readonly [TerminalClaim, TerminalDone] => {
+        if (existing !== undefined) return [{ _tag: "existing" as const, done: existing }, existing]
+        return [{ _tag: "owner" as const, done }, done]
       })
 
     const enqueueTerminalJob = (slot: SessionMailboxSlot, job: SessionMailboxJob) =>
       Effect.gen(function* () {
+        yield* Ref.set(slot.closing, true)
         yield* Ref.update(slot.priorityQueue, (jobs) => [...jobs, job])
-        yield* Queue.offer(slot.queue, {
+        const offered = yield* Queue.offer(slot.queue, {
           effect: Effect.void,
           discard: Effect.void,
           terminal: false,
         })
+        if (!offered) yield* job.discard
       })
 
     const makeSubmitJob = <A, E>(
@@ -211,7 +228,7 @@ export const makeSessionMailbox = (
       Effect.gen(function* () {
         const slot = yield* ensureSlot(sessionId)
         if ((yield* Effect.fiberId) === (yield* Ref.get(slot.workerFiberId))) {
-          if (yield* Ref.get(slot.closing)) return
+          if ((yield* Ref.get(slot.terminalDone)) !== undefined) return
           yield* Ref.update(slot.reentrantQueue, (jobs) => [
             ...jobs,
             { effect: task, discard: Effect.void, terminal: false },
@@ -228,9 +245,17 @@ export const makeSessionMailbox = (
           yield* task
           return
         }
-        if (!(yield* claimClosing(slot))) return
 
         const done = yield* Deferred.make<Exit.Exit<void>>()
+        const claim = yield* claimTerminal(slot, done)
+        if (claim._tag === "existing") {
+          const exit = yield* Deferred.await(claim.done)
+          return yield* Exit.match(exit, {
+            onSuccess: Effect.succeed,
+            onFailure: Effect.failCause,
+          })
+        }
+
         const job: SessionMailboxJob = {
           effect: Effect.exit(task).pipe(
             Effect.andThen((exit) => Deferred.succeed(done, exit)),

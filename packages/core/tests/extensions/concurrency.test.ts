@@ -813,6 +813,7 @@ describe("extension concurrency", () => {
         const firstEntered = yield* Deferred.make<void>()
         const secondEntered = yield* Deferred.make<void>()
         const releaseFirst = yield* Deferred.make<void>()
+        const secondTerminateCompleted = yield* Deferred.make<void>()
         const ReadSerial = ExtensionMessage.reply(
           "terminate-priority-executor",
           "ReadSerial",
@@ -884,10 +885,24 @@ describe("extension concurrency", () => {
             )
             yield* Effect.yieldNow
 
+            const terminatedAgain = yield* Effect.forkScoped(
+              runtime
+                .terminateAll(sessionId)
+                .pipe(
+                  Effect.ensuring(
+                    Deferred.succeed(secondTerminateCompleted, void 0).pipe(Effect.asVoid),
+                  ),
+                  Effect.timeout("1 second"),
+                ),
+            )
+            yield* Effect.yieldNow
+            expect(yield* Deferred.isDone(secondTerminateCompleted)).toBe(false)
+
             yield* Deferred.succeed(releaseFirst, void 0)
 
             expect(yield* Fiber.join(first)).toEqual({ order: 1 })
             yield* Fiber.join(terminated)
+            yield* Fiber.join(terminatedAgain)
 
             const secondExit = yield* Fiber.await(second)
             expect(secondExit._tag).toBe("Failure")
