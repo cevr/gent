@@ -6,7 +6,7 @@ import { AgentEvent, EventEnvelope, EventId, getEventSessionId } from "../domain
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { ReasoningEffort } from "../domain/agent.js"
 import { isRecord } from "../domain/guards.js"
-import { SqlClient } from "effect/unstable/sql"
+import { SqlClient, SqlError } from "effect/unstable/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { CheckpointStorage } from "./checkpoint-storage.js"
 import { InteractionStorage } from "./interaction-storage.js"
@@ -75,6 +75,10 @@ export class StorageError extends Schema.TaggedErrorClass<StorageError>()("Stora
 // Storage Service Interface
 
 export interface StorageService {
+  readonly withTransaction: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | StorageError, R>
+
   // Sessions
   readonly createSession: (session: Session) => Effect.Effect<Session, StorageError>
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
@@ -643,6 +647,17 @@ const makeStorage = Effect.gen(function* () {
   ) => indexMessageSearch(message).pipe(Effect.provideService(SqlClient.SqlClient, sql))
 
   return {
+    withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.catchIf(SqlError.isSqlError, (error) =>
+            Effect.fail(
+              new StorageError({ message: "Failed to run storage transaction", cause: error }),
+            ),
+          ),
+        ),
+
     // Sessions
     createSession: Effect.fn("Storage.createSession")(
       function* (session) {

@@ -17,6 +17,7 @@ import {
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { Provider, providerRequestFromMessages } from "../providers/provider.js"
 import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 import {
@@ -71,6 +72,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sessionStorage = yield* SessionStorage
       const branchStorage = yield* BranchStorage
       const messageStorage = yield* MessageStorage
+      const storage = yield* Storage
       const sessionRuntime = yield* SessionRuntime
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
@@ -164,18 +166,24 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        yield* sessionStorage.createSession(session)
-        yield* branchStorage.createBranch(branch)
-        // Pre-record the (sessionId → cwd) binding BEFORE the first event
-        // publish so the per-cwd EventPublisher router can dispatch the
-        // SessionStarted pulse to the right SessionProfile without falling
-        // back to a storage read. `input.cwd` is optional in the schema for
-        // legacy callers; sessions without a cwd fall through to the
-        // server's primary cwd routing in the publisher.
-        if (input.cwd !== undefined) {
-          yield* sessionCwdRegistry.record(sessionId, input.cwd)
-        }
-        yield* eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
+        yield* storage
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* sessionStorage.createSession(session)
+              yield* branchStorage.createBranch(branch)
+              // Pre-record the (sessionId → cwd) binding BEFORE the first event
+              // publish so the per-cwd EventPublisher router can dispatch the
+              // SessionStarted pulse to the right SessionProfile without falling
+              // back to a storage read. `input.cwd` is optional in the schema for
+              // legacy callers; sessions without a cwd fall through to the
+              // server's primary cwd routing in the publisher.
+              if (input.cwd !== undefined) {
+                yield* sessionCwdRegistry.record(sessionId, input.cwd)
+              }
+              yield* eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
+            }),
+          )
+          .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({
             sessionId,
@@ -208,17 +216,21 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* branchStorage.createBranch(branch)
-        yield* eventPublisher.publish(
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            ...(branch.parentBranchId !== undefined
-              ? { parentBranchId: branch.parentBranchId }
-              : {}),
-            ...(branch.parentMessageId !== undefined
-              ? { parentMessageId: branch.parentMessageId }
-              : {}),
+        yield* storage.withTransaction(
+          Effect.gen(function* () {
+            yield* branchStorage.createBranch(branch)
+            yield* eventPublisher.publish(
+              BranchCreated.make({
+                sessionId: branch.sessionId,
+                branchId: branch.id,
+                ...(branch.parentBranchId !== undefined
+                  ? { parentBranchId: branch.parentBranchId }
+                  : {}),
+                ...(branch.parentMessageId !== undefined
+                  ? { parentMessageId: branch.parentMessageId }
+                  : {}),
+              }),
+            )
           }),
         )
         return { branchId: branch.id }
@@ -298,27 +310,31 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* branchStorage.createBranch(branch)
+        yield* storage.withTransaction(
+          Effect.gen(function* () {
+            yield* branchStorage.createBranch(branch)
 
-        for (const message of messages.slice(0, targetIndex + 1)) {
-          yield* messageStorage.createMessage(
-            copyMessageToBranch(message, {
-              id: MessageId.make(Bun.randomUUIDv7()),
-              branchId: branch.id,
-            }),
-          )
-        }
+            for (const message of messages.slice(0, targetIndex + 1)) {
+              yield* messageStorage.createMessage(
+                copyMessageToBranch(message, {
+                  id: MessageId.make(Bun.randomUUIDv7()),
+                  branchId: branch.id,
+                }),
+              )
+            }
 
-        yield* eventPublisher.publish(
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            ...(branch.parentBranchId !== undefined
-              ? { parentBranchId: branch.parentBranchId }
-              : {}),
-            ...(branch.parentMessageId !== undefined
-              ? { parentMessageId: branch.parentMessageId }
-              : {}),
+            yield* eventPublisher.publish(
+              BranchCreated.make({
+                sessionId: branch.sessionId,
+                branchId: branch.id,
+                ...(branch.parentBranchId !== undefined
+                  ? { parentBranchId: branch.parentBranchId }
+                  : {}),
+                ...(branch.parentMessageId !== undefined
+                  ? { parentMessageId: branch.parentMessageId }
+                  : {}),
+              }),
+            )
           }),
         )
         return { branchId: branch.id }

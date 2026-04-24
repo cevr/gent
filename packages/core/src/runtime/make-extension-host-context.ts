@@ -312,12 +312,16 @@ export const makeExtensionHostContext = (
           name: params.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* deps.storage.createBranch(branch)
-        yield* deps.eventPublisher.publish(
-          BranchCreated.make({
-            sessionId: runInfo.sessionId,
-            branchId: branch.id,
-            parentBranchId: runInfo.branchId,
+        yield* deps.storage.withTransaction(
+          Effect.gen(function* () {
+            yield* deps.storage.createBranch(branch)
+            yield* deps.eventPublisher.publish(
+              BranchCreated.make({
+                sessionId: runInfo.sessionId,
+                branchId: branch.id,
+                parentBranchId: runInfo.branchId,
+              }),
+            )
           }),
         )
         return { branchId: branch.id }
@@ -337,22 +341,26 @@ export const makeExtensionHostContext = (
           name: params.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* deps.storage.createBranch(branch)
+        yield* deps.storage.withTransaction(
+          Effect.gen(function* () {
+            yield* deps.storage.createBranch(branch)
 
-        for (const msg of messages.slice(0, targetIndex + 1)) {
-          yield* deps.storage.createMessage(
-            copyMessageToBranch(msg, {
-              id: MessageId.make(Bun.randomUUIDv7()),
-              branchId: branch.id,
-            }),
-          )
-        }
+            for (const msg of messages.slice(0, targetIndex + 1)) {
+              yield* deps.storage.createMessage(
+                copyMessageToBranch(msg, {
+                  id: MessageId.make(Bun.randomUUIDv7()),
+                  branchId: branch.id,
+                }),
+              )
+            }
 
-        yield* deps.eventPublisher.publish(
-          BranchCreated.make({
-            sessionId: runInfo.sessionId,
-            branchId: branch.id,
-            parentBranchId: runInfo.branchId,
+            yield* deps.eventPublisher.publish(
+              BranchCreated.make({
+                sessionId: runInfo.sessionId,
+                branchId: branch.id,
+                parentBranchId: runInfo.branchId,
+              }),
+            )
           }),
         )
         return { branchId: branch.id }
@@ -399,14 +407,18 @@ export const makeExtensionHostContext = (
           updatedAt: now,
           activeBranchId: branchId,
         })
-        yield* deps.storage.createSession(session)
-        const branch = new Branch({
-          id: branchId,
-          sessionId,
-          createdAt: now,
-        })
-        yield* deps.storage.createBranch(branch)
-        yield* deps.eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
+        yield* deps.storage.withTransaction(
+          Effect.gen(function* () {
+            yield* deps.storage.createSession(session)
+            const branch = new Branch({
+              id: branchId,
+              sessionId,
+              createdAt: now,
+            })
+            yield* deps.storage.createBranch(branch)
+            yield* deps.eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
+          }),
+        )
         return { sessionId, branchId }
       }),
 

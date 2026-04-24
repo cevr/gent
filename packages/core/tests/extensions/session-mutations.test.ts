@@ -5,6 +5,7 @@ import {
   type MakeExtensionHostContextDeps,
 } from "@gent/core/runtime/make-extension-host-context"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
+import { EventStoreError } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart } from "@gent/core/domain/message"
 import { SessionDeleter } from "@gent/core/domain/session-deleter"
 
@@ -18,6 +19,24 @@ const createTestStorage = () => {
 
   return {
     storage: {
+      withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          const sessionsSnapshot = new Map(sessions)
+          const branchesSnapshot = new Map(branches)
+          const messagesSnapshot = new Map(messages)
+          return yield* effect.pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                sessions.clear()
+                for (const [key, value] of sessionsSnapshot) sessions.set(key, value)
+                branches.clear()
+                for (const [key, value] of branchesSnapshot) branches.set(key, value)
+                messages.clear()
+                for (const [key, value] of messagesSnapshot) messages.set(key, value)
+              }),
+            ),
+          )
+        }),
       listMessages: (branchId: BranchId) => Effect.succeed(messages.get(branchId) ?? []),
       getSession: (id: SessionId) => Effect.succeed(sessions.get(id)),
       getSessionDetail: die("getSessionDetail"),
@@ -219,6 +238,31 @@ describe("session mutation primitives", () => {
     expect(published.some((e) => e._tag === "BranchCreated")).toBe(true)
   })
 
+  test("forkBranch rolls back copied messages when publishing fails", async () => {
+    const testStorage = createTestStorage()
+    seedSession(testStorage)
+    const msgs = seedMessages(testStorage, 2)
+    const { deps } = makeTestDeps(testStorage)
+    const ctx = makeExtensionHostContext(
+      { sessionId: SESSION_ID, branchId: BRANCH_ID },
+      {
+        ...deps,
+        eventPublisher: {
+          publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+          terminateSession: () => Effect.void,
+        },
+      },
+    )
+
+    await expect(
+      Effect.runPromise(ctx.session.forkBranch({ atMessageId: msgs[1]!.id, name: "fork" })),
+    ).rejects.toThrow("publish failed")
+
+    expect(testStorage.branches.size).toBe(1)
+    expect(testStorage.messages.size).toBe(1)
+    expect(testStorage.messages.get(BRANCH_ID)).toHaveLength(2)
+  })
+
   test("switchBranch updates session activeBranchId", async () => {
     const testStorage = createTestStorage()
     seedSession(testStorage)
@@ -257,6 +301,29 @@ describe("session mutation primitives", () => {
     expect(child.parentBranchId).toBe(BRANCH_ID)
     expect(child.cwd).toBe("/tmp/child")
     expect(published.some((e) => e._tag === "SessionStarted")).toBe(true)
+  })
+
+  test("createChildSession rolls back session and branch when publishing fails", async () => {
+    const testStorage = createTestStorage()
+    seedSession(testStorage)
+    const { deps } = makeTestDeps(testStorage)
+    const ctx = makeExtensionHostContext(
+      { sessionId: SESSION_ID, branchId: BRANCH_ID },
+      {
+        ...deps,
+        eventPublisher: {
+          publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+          terminateSession: () => Effect.void,
+        },
+      },
+    )
+
+    await expect(
+      Effect.runPromise(ctx.session.createChildSession({ name: "child", cwd: "/tmp/child" })),
+    ).rejects.toThrow("publish failed")
+
+    expect(testStorage.sessions.size).toBe(1)
+    expect(testStorage.branches.size).toBe(1)
   })
 
   test("getChildSessions returns children of current session", async () => {
