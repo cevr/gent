@@ -16,7 +16,7 @@ import type {
 } from "./api.js"
 
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
-export { EventPublisher } from "../domain/event-publisher.js"
+export { BuiltinEventSink, type BuiltinEventSinkService } from "../domain/event-publisher.js"
 export { ToolRunner, type ToolRunnerService } from "../runtime/agent/tool-runner.js"
 export { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
 export { MachineExecute } from "../runtime/extensions/machine-execute.js"

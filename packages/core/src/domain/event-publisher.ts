@@ -9,6 +9,10 @@ export interface EventPublisherService {
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
+export interface BuiltinEventSinkService {
+  readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
+}
+
 export class EventPublisher extends Context.Service<EventPublisher, EventPublisherService>()(
   "@gent/core/src/domain/event-publisher/EventPublisher",
 ) {
@@ -19,5 +23,14 @@ export class EventPublisher extends Context.Service<EventPublisher, EventPublish
       deliver: () => Effect.void,
       publish: () => Effect.void,
       terminateSession: () => Effect.void,
+    })
+}
+
+export class BuiltinEventSink extends Context.Service<BuiltinEventSink, BuiltinEventSinkService>()(
+  "@gent/core/src/domain/event-publisher/BuiltinEventSink",
+) {
+  static Test = (): Layer.Layer<BuiltinEventSink> =>
+    Layer.succeed(BuiltinEventSink, {
+      publish: () => Effect.void,
     })
 }

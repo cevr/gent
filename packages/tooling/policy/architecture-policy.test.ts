@@ -421,10 +421,12 @@ describe("architecture policy", () => {
       )
 
     expect(violations).toEqual([])
+    expect(membraneSource).not.toMatch(/\bEventPublisher\b/)
     expect(membraneSource).toMatchInlineSnapshot(`
 "export {
+  BuiltinEventSink,
+  type BuiltinEventSinkService,
   defineBuiltinResource,
-  EventPublisher,
   InteractionPendingReader,
   MachineExecute,
   ToolRunner,

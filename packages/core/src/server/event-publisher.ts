@@ -1,5 +1,9 @@
-import { Effect, Layer } from "effect"
-import { EventPublisher } from "../domain/event-publisher.js"
+import { Context, Effect, Layer } from "effect"
+import {
+  BuiltinEventSink,
+  EventPublisher,
+  type EventPublisherService,
+} from "../domain/event-publisher.js"
 import {
   EventStore,
   ExtensionStateChanged,
@@ -134,6 +138,14 @@ const makeIdempotentDeliver = (
     })
 }
 
+const makePublisherContext = (publisher: EventPublisherService) =>
+  Context.empty().pipe(
+    Context.add(EventPublisher, publisher),
+    Context.add(BuiltinEventSink, {
+      publish: publisher.publish,
+    }),
+  )
+
 // ── Single-profile EventPublisher (ephemeral children, tests) ──
 
 /**
@@ -143,11 +155,10 @@ const makeIdempotentDeliver = (
  * once at construction and dispatches all events through them.
  */
 export const EventPublisherLive: Layer.Layer<
-  EventPublisher,
+  EventPublisher | BuiltinEventSink,
   never,
   EventStore | MachineEngine | ExtensionRegistry
-> = Layer.effect(
-  EventPublisher,
+> = Layer.effectContext(
   Effect.gen(function* () {
     const baseEventStore = yield* EventStore
     const stateRuntime = yield* MachineEngine
@@ -159,16 +170,18 @@ export const EventPublisherLive: Layer.Layer<
     const pulseByTag = buildPulseIndex(registry)
     const deliver = makeIdempotentDeliver((envelope) => deliverInner(envelope, deps, pulseByTag))
 
-    return EventPublisher.of({
-      append: (event) => baseEventStore.append(event),
-      deliver,
-      publish: (event) =>
-        Effect.gen(function* () {
-          const envelope = yield* baseEventStore.append(event)
-          yield* deliver(envelope)
-        }),
-      terminateSession: (_sessionId) => Effect.void,
-    })
+    return makePublisherContext(
+      EventPublisher.of({
+        append: (event) => baseEventStore.append(event),
+        deliver,
+        publish: (event) =>
+          Effect.gen(function* () {
+            const envelope = yield* baseEventStore.append(event)
+            yield* deliver(envelope)
+          }),
+        terminateSession: (_sessionId) => Effect.void,
+      }),
+    )
   }),
 )
 
@@ -199,15 +212,14 @@ export interface EventPublisherRouterHandle {
 export const makeEventPublisherRouter = (): {
   readonly handle: EventPublisherRouterHandle
   readonly layer: Layer.Layer<
-    EventPublisher,
+    EventPublisher | BuiltinEventSink,
     never,
     EventStore | MachineEngine | ExtensionRegistry | SessionCwdRegistry | RuntimePlatform
   >
 } => {
   const handle: EventPublisherRouterHandle = { profileCache: undefined }
 
-  const layer = Layer.effect(
-    EventPublisher,
+  const layer = Layer.effectContext(
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
       const primaryStateRuntime = yield* MachineEngine
@@ -310,17 +322,19 @@ export const makeEventPublisherRouter = (): {
         })
       const deliver = makeIdempotentDeliver(deliverToProfile)
 
-      return EventPublisher.of({
-        append: (event) => baseEventStore.append(event),
-        deliver,
-        publish: (event) =>
-          Effect.gen(function* () {
-            const envelope = yield* baseEventStore.append(event)
-            yield* deliver(envelope)
-          }),
+      return makePublisherContext(
+        EventPublisher.of({
+          append: (event) => baseEventStore.append(event),
+          deliver,
+          publish: (event) =>
+            Effect.gen(function* () {
+              const envelope = yield* baseEventStore.append(event)
+              yield* deliver(envelope)
+            }),
 
-        terminateSession: (_sessionId) => Effect.void,
-      })
+          terminateSession: (_sessionId) => Effect.void,
+        }),
+      )
     }),
   )
 

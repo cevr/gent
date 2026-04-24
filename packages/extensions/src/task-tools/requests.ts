@@ -16,7 +16,6 @@ import {
   Task,
   TaskId,
 } from "@gent/core/extensions/api"
-import { EventPublisher } from "../../internal/builtin.js"
 import { TaskService } from "../task-tools-service.js"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
@@ -146,7 +145,6 @@ export const TaskCreateRequest = request({
   execute: (input, ctx) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      const eventPublisher = yield* EventPublisher
       return yield* taskService
         .create({
           sessionId: ctx.sessionId,
@@ -159,7 +157,6 @@ export const TaskCreateRequest = request({
           metadata: input.metadata,
         })
         .pipe(
-          Effect.provideService(EventPublisher, eventPublisher),
           Effect.catchEager((e) =>
             Effect.fail(
               new CapabilityError({
@@ -203,11 +200,8 @@ export const TaskUpdateRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      const eventPublisher = yield* EventPublisher
       const { taskId, ...fields } = input
-      const result = yield* taskService
-        .update(taskId, fields)
-        .pipe(Effect.orDie, Effect.provideService(EventPublisher, eventPublisher))
+      const result = yield* taskService.update(taskId, fields).pipe(Effect.orDie)
       return result ?? null
     }),
 })
@@ -234,10 +228,7 @@ export const TaskDeleteRequest = request({
   execute: (input) =>
     Effect.gen(function* () {
       const taskService = yield* TaskService
-      const eventPublisher = yield* EventPublisher
-      yield* taskService
-        .remove(input.taskId)
-        .pipe(Effect.provideService(EventPublisher, eventPublisher))
+      yield* taskService.remove(input.taskId)
       return null
     }),
 })

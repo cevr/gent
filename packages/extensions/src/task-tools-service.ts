@@ -15,7 +15,7 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core/extensions/api"
-import { EventPublisher } from "../internal/builtin.js"
+import { BuiltinEventSink } from "../internal/builtin.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.
@@ -59,7 +59,7 @@ export interface TaskServiceApi {
     prompt?: string
     cwd?: string
     metadata?: unknown
-  }) => Effect.Effect<Task, never, EventPublisher>
+  }) => Effect.Effect<Task, never, BuiltinEventSink>
 
   readonly get: (id: TaskId) => Effect.Effect<Task | undefined>
 
@@ -73,9 +73,9 @@ export interface TaskServiceApi {
       owner: string | null
       metadata: unknown | null
     }>,
-  ) => Effect.Effect<Task | undefined, TaskTransitionError, EventPublisher>
+  ) => Effect.Effect<Task | undefined, TaskTransitionError, BuiltinEventSink>
 
-  readonly remove: (id: TaskId) => Effect.Effect<void, never, EventPublisher>
+  readonly remove: (id: TaskId) => Effect.Effect<void, never, BuiltinEventSink>
 
   readonly addDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
   readonly removeDep: (taskId: TaskId, blockedById: TaskId) => Effect.Effect<void>
@@ -107,7 +107,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.create(params),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventPublisher = yield* EventPublisher
+                const eventSink = yield* BuiltinEventSink
                 const id = TaskId.make(Bun.randomUUIDv7())
                 const now = yield* DateTime.nowAsDate
                 const task = Task.make({
@@ -125,7 +125,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                   updatedAt: now,
                 })
                 yield* storage.createTask(task)
-                yield* eventPublisher.publish(
+                yield* eventSink.publish(
                   TaskCreated.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
@@ -167,7 +167,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.update(id, fields),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventPublisher = yield* EventPublisher
+                const eventSink = yield* BuiltinEventSink
                 // Validate status transition if status is being changed
                 if (fields.status !== undefined) {
                   const existing = yield* storage.getTask(id)
@@ -185,7 +185,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                 const updated = yield* storage.updateTask(id, fields)
                 if (updated !== undefined && fields.status !== undefined) {
                   if (fields.status === "completed") {
-                    yield* eventPublisher.publish(
+                    yield* eventSink.publish(
                       TaskCompleted.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
@@ -202,7 +202,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                       typeof updated.metadata.error === "string"
                         ? updated.metadata.error
                         : undefined
-                    yield* eventPublisher.publish(
+                    yield* eventSink.publish(
                       TaskFailed.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
@@ -211,7 +211,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                       }),
                     )
                   } else if (fields.status === "stopped") {
-                    yield* eventPublisher.publish(
+                    yield* eventSink.publish(
                       TaskStopped.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
@@ -219,7 +219,7 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
                       }),
                     )
                   } else {
-                    yield* eventPublisher.publish(
+                    yield* eventSink.publish(
                       TaskUpdated.make({
                         sessionId: updated.sessionId,
                         branchId: updated.branchId,
@@ -242,14 +242,14 @@ export class TaskService extends Context.Service<TaskService, TaskServiceApi>()(
             onNone: () => TaskService.Noop.remove(id),
             onSome: (storage: TaskStorageService) =>
               Effect.gen(function* () {
-                const eventPublisher = yield* EventPublisher
+                const eventSink = yield* BuiltinEventSink
                 const existing = yield* storage.getTask(id).pipe(Effect.orDie)
                 if (existing === undefined) {
                   yield* storage.deleteTask(id).pipe(Effect.orDie)
                   return
                 }
                 yield* storage.deleteTask(id).pipe(Effect.orDie)
-                yield* eventPublisher
+                yield* eventSink
                   .publish(
                     TaskDeleted.make({
                       sessionId: existing.sessionId,

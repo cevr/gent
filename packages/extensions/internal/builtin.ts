@@ -1,6 +1,7 @@
 export {
+  BuiltinEventSink,
+  type BuiltinEventSinkService,
   defineBuiltinResource,
-  EventPublisher,
   InteractionPendingReader,
   MachineExecute,
   ToolRunner,
