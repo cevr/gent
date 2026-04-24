@@ -311,36 +311,47 @@ const makeLiveSessionRuntime: Effect.Effect<
   const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
     command: RuntimeCommand,
   ) {
-    const requireDispatchSession = (target: SessionRuntimeTarget) =>
-      resolveSessionEnvironmentOrFail({
-        sessionId: target.sessionId,
-        branchId: target.branchId,
-        storage,
-        hostDeps,
-        profileCache,
-        defaults: {
-          driverRegistry,
-          permission: defaultPermission,
-          baseSections: [],
-        },
-      }).pipe(
-        Effect.flatMap((resolved) =>
-          resolved._tag === "SessionFound"
-            ? Effect.succeed(resolved)
-            : Effect.fail(
+    const requireDispatchSessionExists = (target: SessionRuntimeTarget) =>
+      storage.getSession(target.sessionId).pipe(
+        Effect.flatMap((session) =>
+          session === undefined
+            ? Effect.fail(
                 new SessionRuntimeError({
                   message: `Session not found: ${target.sessionId}`,
                 }),
-              ),
+              )
+            : Effect.succeed(session),
         ),
       )
 
     const target = runtimeCommandTarget(command)
-    const resolved = yield* requireDispatchSession(target)
+    yield* requireDispatchSessionExists(target)
 
     switch (command._tag) {
       case "SendUserMessage": {
         const commandId = command.commandId ?? makeCommandId()
+        const resolved = yield* resolveSessionEnvironmentOrFail({
+          sessionId: command.sessionId,
+          branchId: command.branchId,
+          storage,
+          hostDeps,
+          profileCache,
+          defaults: {
+            driverRegistry,
+            permission: defaultPermission,
+            baseSections: [],
+          },
+        }).pipe(
+          Effect.flatMap((result) =>
+            result._tag === "SessionFound"
+              ? Effect.succeed(result)
+              : Effect.fail(
+                  new SessionRuntimeError({
+                    message: `Session not found: ${command.sessionId}`,
+                  }),
+                ),
+          ),
+        )
         const { environment } = resolved
         const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
           {

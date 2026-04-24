@@ -32,6 +32,7 @@ import { MachineEngine } from "../../src/runtime/extensions/resource-host/machin
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -75,11 +76,12 @@ const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {
 const makeRuntimeLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: AnyCapabilityContribution[] = [],
+  profileCacheLayer?: Layer.Layer<SessionProfileCache>,
 ) => {
   const resolvedExtensions = makeTestExtensions(tools)
   const recorderLayer = SequenceRecorder.Live
   const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const baseDeps = Layer.mergeAll(
+  const baseDepsWithoutProfile = Layer.mergeAll(
     Storage.TestWithSql(),
     providerLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
@@ -98,6 +100,10 @@ const makeRuntimeLayer = (
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
   )
+  const baseDeps =
+    profileCacheLayer === undefined
+      ? baseDepsWithoutProfile
+      : Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionMutationsLayer = Layer.provide(
     SessionCommands.SessionMutationsLive,
@@ -302,6 +308,24 @@ const createSessionBranch = Effect.gen(function* () {
   return { sessionId, branchId }
 })
 
+const createCwdSessionBranch = Effect.gen(function* () {
+  const storage = yield* Storage
+  const sessionId = SessionId.make("runtime-session-with-cwd")
+  const branchId = BranchId.make("runtime-branch-with-cwd")
+  const now = new Date()
+  yield* storage.createSession(
+    new Session({
+      id: sessionId,
+      name: "Runtime Test With Cwd",
+      cwd: "/tmp/profile-breaks",
+      createdAt: now,
+      updatedAt: now,
+    }),
+  )
+  yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+  return { sessionId, branchId }
+})
+
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
@@ -365,6 +389,38 @@ const makeInteractionProviderLayer = () => {
 }
 
 describe("SessionRuntime", () => {
+  test("control-plane dispatch checks session existence without resolving profiles", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const profileCacheLayer = Layer.succeed(SessionProfileCache, {
+      resolve: () => Effect.die("control-plane dispatch must not resolve session profiles"),
+    })
+    const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createCwdSessionBranch
+
+        yield* sessionRuntime.dispatch(
+          applySteerCommand(
+            interruptPayloadToSteerCommand({
+              _tag: "Cancel",
+              sessionId,
+              branchId,
+            }),
+          ),
+        )
+        yield* sessionRuntime.dispatch(
+          respondInteractionCommand({
+            sessionId,
+            branchId,
+            requestId: "req-not-waiting",
+          }),
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   test("dispatch SendUserMessage fails when saving the running checkpoint fails", async () => {
     const layer = makeRuntimeLayerWithCheckpointFailure({ failUpsertOn: 1 })
 
