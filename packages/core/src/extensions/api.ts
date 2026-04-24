@@ -177,7 +177,11 @@ export {
 } from "../domain/message.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
-export type { ExtensionHostContext } from "../domain/extension-host-context.js"
+export {
+  ExtensionHostError,
+  ExtensionHostSearchResult,
+  type ExtensionHostContext,
+} from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"

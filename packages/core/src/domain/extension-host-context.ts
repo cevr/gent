@@ -1,4 +1,4 @@
-import type { Effect, PlatformError } from "effect"
+import { Schema, type Effect, type PlatformError } from "effect"
 import type { AgentDefinition, AgentName, AgentRunError, AgentRunResult, RunSpec } from "./agent"
 import type { CapabilityError, CapabilityNotFoundError, CapabilityRef } from "./capability"
 import type { EventStoreError } from "./event"
@@ -8,7 +8,7 @@ import type {
   ExtensionProtocolError,
   ExtractExtensionReply,
 } from "./extension-protocol"
-import type { BranchId, MessageId, SessionId } from "./ids"
+import { BranchId, SessionId, type MessageId } from "./ids"
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -16,8 +16,25 @@ import type {
 } from "./interaction-request"
 import type { Branch, Message, Session } from "./message"
 import type { ModelId } from "./model"
-import type { SearchResult } from "../storage/search-storage"
-import type { StorageError } from "../storage/sqlite-storage"
+
+export class ExtensionHostError extends Schema.TaggedErrorClass<ExtensionHostError>()(
+  "ExtensionHostError",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {}
+
+export class ExtensionHostSearchResult extends Schema.Class<ExtensionHostSearchResult>(
+  "ExtensionHostSearchResult",
+)({
+  sessionId: SessionId,
+  sessionName: Schema.NullOr(Schema.String),
+  branchId: BranchId,
+  snippet: Schema.String,
+  createdAt: Schema.Number,
+}) {}
 
 // ---------------------------------------------------------------------------
 // ExtensionHostContext — unified capability-shaped boundary for extension code
@@ -81,9 +98,11 @@ export declare namespace ExtensionHostContext {
   interface SessionFacet {
     readonly listMessages: (
       branchId?: BranchId,
-    ) => Effect.Effect<ReadonlyArray<Message>, StorageError>
+    ) => Effect.Effect<ReadonlyArray<Message>, ExtensionHostError>
 
-    readonly getSession: (sessionId?: SessionId) => Effect.Effect<Session | undefined, StorageError>
+    readonly getSession: (
+      sessionId?: SessionId,
+    ) => Effect.Effect<Session | undefined, ExtensionHostError>
 
     readonly getDetail: (sessionId: SessionId) => Effect.Effect<
       {
@@ -93,73 +112,68 @@ export declare namespace ExtensionHostContext {
           messages: ReadonlyArray<Message>
         }>
       },
-      StorageError
+      ExtensionHostError
     >
 
     readonly renameCurrent: (
       name: string,
-    ) => Effect.Effect<{ renamed: boolean; name?: string }, StorageError | EventStoreError>
+    ) => Effect.Effect<{ renamed: boolean; name?: string }, ExtensionHostError>
 
     readonly estimateContextPercent: (options?: {
       modelId?: string
-    }) => Effect.Effect<number, StorageError>
+    }) => Effect.Effect<number, ExtensionHostError>
 
     readonly search: (
       query: string,
       options?: {
-        sessionId?: string
+        sessionId?: SessionId
         dateAfter?: number
         dateBefore?: number
         limit?: number
       },
-    ) => Effect.Effect<ReadonlyArray<SearchResult>, StorageError>
+    ) => Effect.Effect<ReadonlyArray<ExtensionHostSearchResult>, ExtensionHostError>
 
     // Branch operations
 
-    readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, StorageError>
+    readonly listBranches: () => Effect.Effect<ReadonlyArray<Branch>, ExtensionHostError>
 
     readonly createBranch: (params: {
       name?: string
-    }) => Effect.Effect<{ branchId: BranchId }, StorageError | EventStoreError>
+    }) => Effect.Effect<{ branchId: BranchId }, ExtensionHostError>
 
     readonly forkBranch: (params: {
       atMessageId: MessageId
       name?: string
-    }) => Effect.Effect<{ branchId: BranchId }, StorageError | EventStoreError>
+    }) => Effect.Effect<{ branchId: BranchId }, ExtensionHostError>
 
     readonly switchBranch: (params: {
       toBranchId: BranchId
-    }) => Effect.Effect<void, StorageError | EventStoreError>
+    }) => Effect.Effect<void, ExtensionHostError>
 
     // Session tree
 
     readonly createChildSession: (params: {
       name?: string
       cwd?: string
-    }) => Effect.Effect<
-      { sessionId: SessionId; branchId: BranchId },
-      StorageError | EventStoreError
-    >
+    }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, ExtensionHostError>
 
-    readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, StorageError>
+    readonly getChildSessions: () => Effect.Effect<ReadonlyArray<Session>, ExtensionHostError>
 
     readonly getSessionAncestors: (
       sessionId?: SessionId,
-    ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
+    ) => Effect.Effect<ReadonlyArray<Session>, ExtensionHostError>
 
     // Deletion
 
-    readonly deleteSession: (
-      sessionId: SessionId,
-    ) => Effect.Effect<void, StorageError | EventStoreError>
+    readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, ExtensionHostError>
 
-    readonly deleteBranch: (branchId: BranchId) => Effect.Effect<void, StorageError>
+    readonly deleteBranch: (branchId: BranchId) => Effect.Effect<void, ExtensionHostError>
 
     // Message mutation
 
     readonly deleteMessages: (params: {
       afterMessageId?: MessageId
-    }) => Effect.Effect<void, StorageError>
+    }) => Effect.Effect<void, ExtensionHostError>
   }
 
   interface Interaction {

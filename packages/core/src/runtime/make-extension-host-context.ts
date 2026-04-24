@@ -11,9 +11,13 @@ import type {
   CapabilityNotFoundError,
   CapabilityRef,
 } from "../domain/capability.js"
-import type { ExtensionHostContext } from "../domain/extension-host-context.js"
+import {
+  ExtensionHostError,
+  ExtensionHostSearchResult,
+  type ExtensionHostContext,
+} from "../domain/extension-host-context.js"
 import type { AgentRunner, AgentName } from "../domain/agent.js"
-import type { BranchId, SessionId } from "../domain/ids.js"
+import { BranchId, SessionId } from "../domain/ids.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
 import { ApprovalService, type ApprovalServiceShape } from "./approval-service.js"
@@ -57,6 +61,28 @@ type AmbientHostContextDefaults = Pick<
 >
 
 const unavailable = (service: string) => () => Effect.die(`${service} not available`)
+
+const errorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message
+  }
+  return String(error)
+}
+
+const toHostError =
+  (operation: string) =>
+  (error: unknown): ExtensionHostError =>
+    new ExtensionHostError({
+      operation,
+      message: errorMessage(error),
+      cause: error,
+    })
 
 export const HostPlatformRef = Context.Reference<RuntimePlatformShape>(
   "@gent/core/src/runtime/make-extension-host-context/HostPlatformRef",
@@ -273,55 +299,96 @@ export const makeExtensionHostContext = (
   },
 
   session: {
-    listMessages: (branchId) => deps.storage.listMessages(branchId ?? runInfo.branchId),
-    getSession: (sessionId) => deps.storage.getSession(sessionId ?? runInfo.sessionId),
-    getDetail: (sessionId) => deps.storage.getSessionDetail(sessionId),
+    listMessages: (branchId) =>
+      deps.storage
+        .listMessages(branchId ?? runInfo.branchId)
+        .pipe(Effect.mapError(toHostError("session.listMessages"))),
+    getSession: (sessionId) =>
+      deps.storage
+        .getSession(sessionId ?? runInfo.sessionId)
+        .pipe(Effect.mapError(toHostError("session.getSession"))),
+    getDetail: (sessionId) =>
+      deps.storage
+        .getSessionDetail(sessionId)
+        .pipe(Effect.mapError(toHostError("session.getDetail"))),
     renameCurrent: (name) =>
-      deps.sessionMutations.renameSession({ sessionId: runInfo.sessionId, name }),
+      deps.sessionMutations
+        .renameSession({ sessionId: runInfo.sessionId, name })
+        .pipe(Effect.mapError(toHostError("session.renameCurrent"))),
     estimateContextPercent: (options) =>
       Effect.gen(function* () {
         const messages: ReadonlyArray<Message> = yield* deps.storage.listMessages(runInfo.branchId)
         const modelId = options?.modelId ?? "anthropic/claude-opus-4-6"
         return estimateContextPercent(messages, modelId)
-      }),
-    search: (query, options) => deps.searchStorage.searchMessages(query, options),
+      }).pipe(Effect.mapError(toHostError("session.estimateContextPercent"))),
+    search: (query, options) =>
+      deps.searchStorage.searchMessages(query, options).pipe(
+        Effect.map((results) =>
+          results.map((result) =>
+            ExtensionHostSearchResult.make({
+              sessionId: SessionId.make(result.sessionId),
+              sessionName: result.sessionName,
+              branchId: BranchId.make(result.branchId),
+              snippet: result.snippet,
+              createdAt: result.createdAt,
+            }),
+          ),
+        ),
+        Effect.mapError(toHostError("session.search")),
+      ),
 
-    listBranches: () => deps.storage.listBranches(runInfo.sessionId),
+    listBranches: () =>
+      deps.storage
+        .listBranches(runInfo.sessionId)
+        .pipe(Effect.mapError(toHostError("session.listBranches"))),
 
     createBranch: (params) =>
-      deps.sessionMutations.createSessionBranch({
-        sessionId: runInfo.sessionId,
-        parentBranchId: runInfo.branchId,
-        name: params.name,
-      }),
+      deps.sessionMutations
+        .createSessionBranch({
+          sessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          name: params.name,
+        })
+        .pipe(Effect.mapError(toHostError("session.createBranch"))),
 
     forkBranch: (params) =>
-      deps.sessionMutations.forkSessionBranch({
-        sessionId: runInfo.sessionId,
-        fromBranchId: runInfo.branchId,
-        atMessageId: params.atMessageId,
-        name: params.name,
-      }),
+      deps.sessionMutations
+        .forkSessionBranch({
+          sessionId: runInfo.sessionId,
+          fromBranchId: runInfo.branchId,
+          atMessageId: params.atMessageId,
+          name: params.name,
+        })
+        .pipe(Effect.mapError(toHostError("session.forkBranch"))),
 
     switchBranch: (params) =>
-      deps.sessionMutations.switchActiveBranch({
-        sessionId: runInfo.sessionId,
-        fromBranchId: runInfo.branchId,
-        toBranchId: params.toBranchId,
-      }),
+      deps.sessionMutations
+        .switchActiveBranch({
+          sessionId: runInfo.sessionId,
+          fromBranchId: runInfo.branchId,
+          toBranchId: params.toBranchId,
+        })
+        .pipe(Effect.mapError(toHostError("session.switchBranch"))),
 
     createChildSession: (params) =>
-      deps.sessionMutations.createChildSession({
-        parentSessionId: runInfo.sessionId,
-        parentBranchId: runInfo.branchId,
-        name: params.name,
-        cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
-      }),
+      deps.sessionMutations
+        .createChildSession({
+          parentSessionId: runInfo.sessionId,
+          parentBranchId: runInfo.branchId,
+          name: params.name,
+          cwd: params.cwd ?? runInfo.sessionCwd ?? deps.platform.cwd,
+        })
+        .pipe(Effect.mapError(toHostError("session.createChildSession"))),
 
-    getChildSessions: () => deps.storage.getChildSessions(runInfo.sessionId),
+    getChildSessions: () =>
+      deps.storage
+        .getChildSessions(runInfo.sessionId)
+        .pipe(Effect.mapError(toHostError("session.getChildSessions"))),
 
     getSessionAncestors: (sessionId) =>
-      deps.storage.getSessionAncestors(sessionId ?? runInfo.sessionId),
+      deps.storage
+        .getSessionAncestors(sessionId ?? runInfo.sessionId)
+        .pipe(Effect.mapError(toHostError("session.getSessionAncestors"))),
 
     deleteSession: (sessionId) =>
       Effect.gen(function* () {
@@ -329,7 +396,7 @@ export const makeExtensionHostContext = (
           return yield* Effect.die("Cannot delete the current session from within it")
         }
         yield* deps.sessionMutations.deleteSession(sessionId)
-      }),
+      }).pipe(Effect.mapError(toHostError("session.deleteSession"))),
 
     deleteBranch: (branchId) =>
       Effect.gen(function* () {
@@ -341,14 +408,16 @@ export const makeExtensionHostContext = (
           currentBranchId: runInfo.branchId,
           branchId,
         })
-      }),
+      }).pipe(Effect.mapError(toHostError("session.deleteBranch"))),
 
     deleteMessages: (params) =>
-      deps.sessionMutations.deleteMessages({
-        sessionId: runInfo.sessionId,
-        branchId: runInfo.branchId,
-        afterMessageId: params.afterMessageId,
-      }),
+      deps.sessionMutations
+        .deleteMessages({
+          sessionId: runInfo.sessionId,
+          branchId: runInfo.branchId,
+          afterMessageId: params.afterMessageId,
+        })
+        .pipe(Effect.mapError(toHostError("session.deleteMessages"))),
   },
 
   interaction: {

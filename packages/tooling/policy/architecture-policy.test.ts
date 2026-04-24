@@ -461,6 +461,22 @@ describe("architecture policy", () => {
     expect(extensionsPkg).toMatch(/"\.\/internal\/\*": null/)
   })
 
+  test("public extension host context does not import storage internals", () => {
+    const publicBoundaryFiles = [
+      pathResolve(ROOT, "packages/core/src/domain/extension-host-context.ts"),
+      pathResolve(ROOT, "packages/core/src/extensions/api.ts"),
+    ]
+
+    const violations = publicBoundaryFiles.flatMap((file) =>
+      sourceLines(file)
+        .filter(({ text }) => !isCommentLine(text))
+        .filter(({ text }) => /(?:\.\.\/storage\/|@gent\/core\/storage\/)/.test(text))
+        .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+    )
+
+    expect(violations).toEqual([])
+  })
+
   test("workspace paths do not bypass blocked extension internals", () => {
     const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
       readonly compilerOptions?: {

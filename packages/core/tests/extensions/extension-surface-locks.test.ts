@@ -24,9 +24,13 @@ import {
   type ReadOnlyTag,
   type ReadRequestInput,
   type ExtensionHostContext,
+  ExtensionHostError,
+  ExtensionHostSearchResult,
   makeRunSpec,
   request,
   resource,
+  BranchId,
+  SessionId,
   tool,
   ToolCallId,
   type ToolInput,
@@ -244,6 +248,33 @@ describe("Effect-purity locks (compile-time)", () => {
       _ctx.session.queueFollowUp({ content: "x" })
 
     void bad
+    expect(true).toBe(true)
+  })
+
+  test("host session facet exposes host-domain errors/results, not storage types", () => {
+    type SearchEffect = ReturnType<ExtensionHostContext.SessionFacet["search"]>
+    type SearchResult = SearchEffect extends Effect.Effect<infer A, unknown, unknown> ? A : never
+    type SearchError = SearchEffect extends Effect.Effect<unknown, infer E, unknown> ? E : never
+
+    const error: SearchError = new ExtensionHostError({
+      operation: "session.search",
+      message: "failed",
+    })
+    const result = ExtensionHostSearchResult.make({
+      sessionId: SessionId.make("session-id"),
+      sessionName: null,
+      branchId: BranchId.make("branch-id"),
+      snippet: "match",
+      createdAt: 1,
+    }) satisfies SearchResult[number]
+
+    // @ts-expect-error — storage-layer errors are not public extension authoring API
+    type _BadStorageError = PublicExtensionApi.StorageError
+    // @ts-expect-error — storage-layer search rows are not public extension authoring API
+    type _BadStorageSearchResult = PublicExtensionApi.SearchResult
+
+    void error
+    void result
     expect(true).toBe(true)
   })
 
