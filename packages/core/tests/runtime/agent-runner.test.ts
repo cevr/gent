@@ -15,6 +15,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
@@ -152,6 +153,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
+    ModelRegistry.Test(),
     ephemeralParentDeps,
   )
   const sessionMutationsLayer = Layer.provide(
@@ -174,6 +176,7 @@ const ephemeralParentDeps = Layer.mergeAll(
   RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
   ServerProfileService.Test(),
   ConfigService.Test(),
+  ModelRegistry.Test(),
 )
 
 const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () => Effect.void) =>

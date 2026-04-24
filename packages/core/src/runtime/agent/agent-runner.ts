@@ -61,6 +61,7 @@ import { EventStoreLive } from "../event-store-live.js"
 import { ResourceManagerLive } from "../resource-manager.js"
 import { RuntimePlatform } from "../runtime-platform.js"
 import { ConfigService } from "../config-service.js"
+import { ModelRegistry } from "../model-registry.js"
 import { buildExtensionLayers } from "../profile.js"
 import { ServerProfileService, type ServerProfile } from "../scope-brands.js"
 import { RuntimeComposer } from "../composer.js"
@@ -508,6 +509,7 @@ const buildEphemeralLayer = (params: {
   const parentPathLayer = Layer.succeed(Path.Path, parentService(Path.Path))
   const parentProviderLayer = Layer.succeed(Provider, parentService(Provider))
   const parentConfigLayer = Layer.succeed(ConfigService, parentService(ConfigService))
+  const parentModelRegistryLayer = Layer.succeed(ModelRegistry, parentService(ModelRegistry))
   const promptPresenterLayer = Layer.provide(
     PromptPresenter.Live,
     Layer.mergeAll(
@@ -555,6 +557,7 @@ const buildEphemeralLayer = (params: {
         extensionLayers,
         parentProviderLayer,
         parentConfigLayer,
+        parentModelRegistryLayer,
       ),
     ),
   )

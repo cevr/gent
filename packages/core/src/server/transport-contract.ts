@@ -15,7 +15,7 @@ import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
-import { SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
+import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
 
 // Re-export shared domain shapes — the transport contract is the same
 // identity as the domain-owned state, not a parallel copy.
@@ -239,6 +239,10 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   activeBranchId: Schema.optional(BranchId),
   /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntime),
+  /** Cumulative usage derived from the event log (turns, tokens, cost, last
+   * model). The server is the authority — clients that hydrate from here do
+   * not maintain their own cost/model bookkeeping. */
+  metrics: SessionRuntimeMetrics,
 }) {}
 
 export const SessionRuntime = SessionRuntimeStateSchema

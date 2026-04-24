@@ -1451,6 +1451,7 @@ const runTurnStreamPhase = (params: {
           ...(collected.messageProjection.usage !== undefined
             ? { usage: collected.messageProjection.usage }
             : {}),
+          model: params.resolved.modelId,
         }),
       )
       .pipe(Effect.orDie)

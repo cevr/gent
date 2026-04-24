@@ -3,6 +3,7 @@ import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effe
 import { Message } from "./message"
 import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
+import { ModelId } from "./model"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
 
 // ============================================================================
@@ -83,6 +84,11 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     sessionId: SessionId,
     branchId: BranchId,
     usage: Schema.optional(UsageSchema),
+    // `model` identifies which model produced the stream that just ended. The
+    // server pairs it with `usage` to compute cost; SessionRuntimeMetrics
+    // sums this per session so the TUI no longer re-joins usage against a
+    // client-side model registry to get cost.
+    model: Schema.optional(ModelId),
     interrupted: Schema.optional(Schema.Boolean),
   },
   TurnCompleted: {

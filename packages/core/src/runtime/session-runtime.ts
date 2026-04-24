@@ -8,9 +8,11 @@ import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../d
 import { Message, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
 import { Storage } from "../storage/sqlite-storage.js"
+import { calculateCost, type ModelId } from "../domain/model.js"
 import { AgentLoop } from "./agent/agent-loop.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
+import { ModelRegistry } from "./model-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
@@ -166,6 +168,16 @@ export const SessionRuntimeMetrics = Schema.Struct({
   toolCalls: Schema.Number,
   retries: Schema.Number,
   durationMs: Schema.Number,
+  /** Cumulative USD cost across all `StreamEnded` events that carried
+   * `(usage, model)`. Computed server-side against ModelRegistry pricing,
+   * so clients never need a local model pricing registry to display it. */
+  costUsd: Schema.Number,
+  /** Input-tokens reported by the most recent `StreamEnded` (for "how close
+   * to the context window are we right now" — sums don't answer that). */
+  lastInputTokens: Schema.Number,
+  /** Model id reported by the most recent `StreamEnded` (drives the model
+   * name label in the TUI). `undefined` until the first stream ends. */
+  lastModelId: Schema.optional(Schema.String),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
@@ -299,12 +311,14 @@ const makeLiveSessionRuntime: Effect.Effect<
   | MachineEngine
   | Permission
   | SessionProfileCache
+  | ModelRegistry
 > = Effect.gen(function* () {
   const agentLoop = yield* AgentLoop
   const storage = yield* Storage
   const eventPublisher = yield* EventPublisher
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
+  const modelRegistry = yield* ModelRegistry
   const permissionOpt = yield* Effect.serviceOption(Permission)
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
@@ -502,11 +516,29 @@ const makeLiveSessionRuntime: Effect.Effect<
         const envelopes = yield* storage
           .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
           .pipe(Effect.catchEager(() => Effect.succeed([])))
+        // Cache pricing lookups so a session with N `StreamEnded` events that
+        // all use the same model doesn't hit ModelRegistry.get N times.
+        const pricingCache = new Map<
+          ModelId,
+          { readonly input: number; readonly output: number } | undefined
+        >()
+        const getPricing = (modelId: ModelId) =>
+          Effect.gen(function* () {
+            if (pricingCache.has(modelId)) return pricingCache.get(modelId)
+            const model = yield* modelRegistry
+              .get(modelId)
+              .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+            pricingCache.set(modelId, model?.pricing)
+            return model?.pricing
+          })
         let turns = 0
         let tokens = 0
         let toolCalls = 0
         let retries = 0
         let durationMs = 0
+        let costUsd = 0
+        let lastInputTokens = 0
+        let lastModelId: string | undefined
         for (const { event } of envelopes) {
           switch (event._tag) {
             case "TurnCompleted":
@@ -516,6 +548,14 @@ const makeLiveSessionRuntime: Effect.Effect<
             case "StreamEnded":
               if (event.usage !== undefined) {
                 tokens += event.usage.inputTokens + event.usage.outputTokens
+                lastInputTokens = event.usage.inputTokens
+                if (event.model !== undefined) {
+                  const pricing = yield* getPricing(event.model)
+                  costUsd += calculateCost(event.usage, pricing)
+                }
+              }
+              if (event.model !== undefined) {
+                lastModelId = event.model
               }
               break
             case "ToolCallStarted":
@@ -532,6 +572,9 @@ const makeLiveSessionRuntime: Effect.Effect<
           toolCalls,
           retries,
           durationMs,
+          costUsd,
+          lastInputTokens,
+          ...(lastModelId !== undefined ? { lastModelId } : {}),
         } satisfies SessionRuntimeMetrics
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause)))),
 
@@ -569,7 +612,15 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
           }),
         ),
       getMetrics: () =>
-        Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+        Effect.succeed({
+          turns: 0,
+          tokens: 0,
+          toolCalls: 0,
+          retries: 0,
+          durationMs: 0,
+          costUsd: 0,
+          lastInputTokens: 0,
+        }),
       watchState: () => Effect.succeed(Stream.empty),
       terminateSession: () => Effect.void,
       restoreSession: () => Effect.void,

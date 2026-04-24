@@ -31,6 +31,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { SessionProfileCache } from "../../src/runtime/session-profile"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
@@ -100,6 +101,7 @@ const makeRuntimeLayer = (
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
+    ModelRegistry.Test(),
   )
   const baseDeps =
     profileCacheLayer === undefined
@@ -142,6 +144,7 @@ const makeRuntimeLayerWithEventPublisher = (
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
+    ModelRegistry.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
   const sessionMutationsLayer = Layer.provide(
@@ -213,6 +216,7 @@ const makeRuntimeLayerWithCheckpointFailure = (options: {
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   return Layer.provideMerge(
@@ -284,6 +288,7 @@ const makeLiveToolRuntimeLayer = (
     Permission.Live([], "allow"),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)

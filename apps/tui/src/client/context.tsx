@@ -9,7 +9,7 @@ import {
   onCleanup,
   type ParentProps,
 } from "solid-js"
-import { createStore, produce } from "solid-js/store"
+import { createStore } from "solid-js/store"
 import { Effect, Fiber, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
@@ -23,7 +23,7 @@ import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
   AllBuiltinAgents.map((a) => [a.name, a]),
 )
-import { calculateCost, type Model } from "@gent/core/domain/model.js"
+import { type Model } from "@gent/core/domain/model.js"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { MessageId } from "@gent/core/domain/ids.js"
@@ -479,16 +479,26 @@ export function ClientProvider(props: ClientProviderProps) {
 
         const event = envelope.event
 
-        // Update agent state based on events
+        // Cost/token updates come from the server — `client.actor.getMetrics`
+        // is the authority. On `StreamEnded` we fetch fresh metrics instead
+        // of re-joining event.usage against a client-side pricing registry.
+        // The server computes cost against ModelRegistry and sums it per
+        // session, so there is one source of truth.
         if (event._tag === "StreamEnded" && event.usage !== undefined) {
-          const modelInfo = resolveModelInfo(modelStore.modelsById, agentStore.agent)
-          const turnCost = calculateCost(event.usage, modelInfo?.pricing)
-          setAgentStore(
-            produce((draft) => {
-              draft.cost += turnCost
-            }),
-          )
-          setLatestInputTokens(event.usage.inputTokens)
+          const s = session()
+          if (s !== null) {
+            cast(
+              client.actor.getMetrics({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
+                Effect.tap((metrics) =>
+                  Effect.sync(() => {
+                    setAgentStore({ cost: metrics.costUsd })
+                    setLatestInputTokens(metrics.lastInputTokens)
+                  }),
+                ),
+                Effect.catchEager(() => Effect.void),
+              ),
+            )
+          }
         }
 
         if (event._tag === "ErrorOccurred") {
@@ -574,7 +584,8 @@ export function ClientProvider(props: ClientProviderProps) {
                   }
                   const rt = snapshot.runtime
                   const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
-                  setAgentStore({ agent: rt.agent, status })
+                  setAgentStore({ agent: rt.agent, status, cost: snapshot.metrics.costUsd })
+                  setLatestInputTokens(snapshot.metrics.lastInputTokens)
 
                   // No initial-snapshot fan-out: the UI snapshot channel is gone.
                   // Widgets fetch initial state via `client.extension.request(...)`

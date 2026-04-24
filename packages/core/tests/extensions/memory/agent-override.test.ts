@@ -14,6 +14,7 @@ import { ConfigService } from "../../../src/runtime/config-service"
 import { DriverRegistry } from "../../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../../src/runtime/extensions/registry"
 import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
+import { ModelRegistry } from "../../../src/runtime/model-registry"
 import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { SessionRuntime } from "../../../src/runtime/session-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -65,6 +66,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
     SessionCommands.SessionRuntimeTerminatorLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionMutationsLayer = Layer.provide(
