@@ -167,7 +167,6 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "packages/core/src/runtime/extensions/resource-host/machine-protocol.ts",
         "packages/sdk/src/client.ts",
         "packages/sdk/src/namespaced-client.ts",
-        "packages/sdk/src/local-supervisor.ts",
         "packages/sdk/src/server-registry.ts",
         "apps/tui/src/extensions/client-facets.ts",
       ].includes(file),

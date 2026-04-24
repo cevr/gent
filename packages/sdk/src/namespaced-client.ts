@@ -56,57 +56,6 @@ export type { GentConnectionError, GentLifecycle, ConnectionState }
 // Adapter factory — builds a GentNamespacedClient from the flat RPC transport
 // ---------------------------------------------------------------------------
 
-export const makeFlatRpcClient = (
-  route: <K extends keyof GentRpcClient>(key: K) => GentRpcClient[K],
-): GentRpcClient =>
-  ({
-    "actor.sendUserMessage": route("actor.sendUserMessage"),
-    "actor.sendToolResult": route("actor.sendToolResult"),
-    "actor.invokeTool": route("actor.invokeTool"),
-    "actor.interrupt": route("actor.interrupt"),
-    "actor.getState": route("actor.getState"),
-    "actor.getMetrics": route("actor.getMetrics"),
-    "auth.listProviders": route("auth.listProviders"),
-    "auth.setKey": route("auth.setKey"),
-    "auth.deleteKey": route("auth.deleteKey"),
-    "auth.listMethods": route("auth.listMethods"),
-    "auth.authorize": route("auth.authorize"),
-    "auth.callback": route("auth.callback"),
-    "branch.list": route("branch.list"),
-    "branch.create": route("branch.create"),
-    "branch.getTree": route("branch.getTree"),
-    "branch.switch": route("branch.switch"),
-    "branch.fork": route("branch.fork"),
-    "driver.list": route("driver.list"),
-    "driver.set": route("driver.set"),
-    "driver.clear": route("driver.clear"),
-    "extension.send": route("extension.send"),
-    "extension.ask": route("extension.ask"),
-    "extension.request": route("extension.request"),
-    "extension.listStatus": route("extension.listStatus"),
-    "extension.listCommands": route("extension.listCommands"),
-    "interaction.respondInteraction": route("interaction.respondInteraction"),
-    "message.send": route("message.send"),
-    "message.list": route("message.list"),
-    "model.list": route("model.list"),
-    "permission.listRules": route("permission.listRules"),
-    "permission.deleteRule": route("permission.deleteRule"),
-    "queue.drain": route("queue.drain"),
-    "queue.get": route("queue.get"),
-    "server.status": route("server.status"),
-    "session.create": route("session.create"),
-    "session.list": route("session.list"),
-    "session.get": route("session.get"),
-    "session.delete": route("session.delete"),
-    "session.getChildren": route("session.getChildren"),
-    "session.getTree": route("session.getTree"),
-    "session.getSnapshot": route("session.getSnapshot"),
-    "session.updateReasoningLevel": route("session.updateReasoningLevel"),
-    "session.events": route("session.events"),
-    "session.watchRuntime": route("session.watchRuntime"),
-    "steer.command": route("steer.command"),
-  }) satisfies GentRpcClient
-
 export const makeNamespacedClient = (flat: GentRpcClient): GentNamespacedClient =>
   ({
     actor: {

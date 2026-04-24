@@ -1,9 +1,8 @@
 /**
  * Supervisor Promise edges.
  *
- * Both `local-supervisor.ts` and `supervisor.ts` need to invoke supervised
- * Effects from a Promise-returning callback (process exit handler in
- * `supervisor.ts`, `lifecycle.restart` in `local-supervisor.ts`). The
+ * `supervisor.ts` needs to invoke supervised Effects from Promise-returning
+ * callbacks (process exit handlers and coordinated restart state). The
  * Effect→Promise edges live here.
  *
  * Per `gent/no-runpromise-outside-boundary`, both Promise edges live in
@@ -13,22 +12,7 @@
  * shape so callers cannot launder additional Effects through them.
  */
 
-import { Effect, Scope, type Context } from "effect"
-
-/**
- * Run a supervisor restart Effect on the captured services and return a
- * `Promise<void>`. Used by `local-supervisor.ts` to wire `lifecycle.restart`
- * (an `Effect.promise`-returning lifecycle method) — the inner Effect is
- * scoped to the supervisor's own scope so its finalizers run in band.
- */
-export const runSupervisorRestart = <R>(
-  services: Context.Context<R>,
-  supervisorScope: Scope.Scope,
-  restartInternal: Effect.Effect<void, never, R | Scope.Scope>,
-): Promise<void> =>
-  Effect.runPromiseWith(services)(
-    restartInternal.pipe(Effect.provideService(Scope.Scope, supervisorScope)),
-  )
+import { Effect, type Context } from "effect"
 
 /**
  * Fire-and-forget a worker-supervisor restart triggered from a process
