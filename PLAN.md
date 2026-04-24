@@ -1,49 +1,38 @@
-# Planify: Recursive Audit Hardening Plan
+# Planify: Recursive Audit Follow-Up Plan
 
 ## Context
 
-The previous post-audit plan was executed through Batch 23 and the final
-recursive audit batch was started at HEAD `ef27bc1f`. The audit did not clear.
-Five of the eight original target points still produced P1/P2 structural
-findings. Per the recursive rule, this file is overwritten with the next
-execution contract.
+The recursive audit at HEAD `75a67481` did not clear. `bun run gate` passed,
+and `bun run test:e2e` passed when rerun alone, but eight independent audit
+agents found remaining P1/P2 structural issues across the original target
+points.
 
-This plan is based on:
-
-- the completed commit history through `ef27bc1f`
-- eight fresh independent audit agents, one per original target point
-- direct source reads of the cited files
-- brain vault principles loaded from `/Users/cvr/.brain/principles.md` and the
-  relevant linked principle files
-
-Goal: finish the original simplification work by fixing the remaining structural
-issues. No feature cuts. Correctness over expedience. Breaking changes are
-allowed when callers and tests migrate in the same wave.
+This plan supersedes the prior `Recursive Audit Hardening Plan`. The work
+continues under the same rules: no feature cuts, correctness over expedience,
+breaking changes allowed when migrations land in the same wave, one review per
+batch, and recursive audit until no material findings remain.
 
 ## Scope
 
-- **In**: runtime queue ownership, storage integrity, agent child-session
-  atomicity, extension persistence failure semantics, package export
-  boundaries, builtin extension privilege membrane, extension health modeling,
-  driver event constructors, final recursive audit.
-- **Out**: cosmetic renames, compatibility bridges kept for comfort, PR
-  workflow, P3 polish unless it exposes a structural fault.
+- **In**: verification gate semantics, runtime mutation failure propagation,
+  causal builtin follow-up queueing, destructive session mutation ownership,
+  session relationship integrity, provider auth persistence, extension health
+  modeling and RPC coverage, extension API/package boundaries, SDK stale
+  supervisor deletion, final recursive audit.
+- **Out**: P3 polish, compatibility bridges kept only for comfort, unrelated UI
+  refinements, PR workflow.
 
 ## Constraints
 
-- Work lands in commit batches. Each batch must be independently gated.
-- Gate every batch with `bun run gate`.
-- Run `bun run test:e2e` for batches touching runtime ownership, storage/event
-  durability, supervisor/lifecycle, transport contracts, or package boundaries
-  that affect e2e consumers.
-- Run exactly one review subagent per batch after the commit is created.
-- If review finds real issues, fix them before moving to the next batch.
-- If a batch grows past 20 files or crosses multiple subsystems, split it into
-  reviewable sub-commits without asking.
-- Migrate callers and delete legacy APIs in the same wave.
-- No TODO placeholders. No `any` or `as unknown as X` to escape types.
-- Final verification is recursive: if material findings remain, overwrite this
-  file again and continue.
+- Every implementation batch is independently committed.
+- Every batch runs `bun run gate`.
+- High-risk runtime/storage/server/package-boundary batches also run
+  `bun run test:e2e`.
+- Exactly one review subagent runs after each implementation commit.
+- Real review findings are fixed before moving on; fix commits do not get a
+  second review.
+- If any final audit agent reports P1/P2 findings, overwrite this file again
+  with the next Planify plan and keep going.
 
 ## Applicable Skills
 
@@ -51,8 +40,8 @@ allowed when callers and tests migrate in the same wave.
 - `architecture`
 - `effect-v4`
 - `code-style`
-- `bun`
 - `test`
+- `bun`
 
 ## Gate Command
 
@@ -68,149 +57,178 @@ bun run test:e2e
 
 ## Principle Grounding
 
-| Principle                                 | Application                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `serialize-shared-state-mutations`        | Queue/session mutations need one structural owner, not multiple callers mutating refs/storage directly.      |
-| `make-operations-idempotent`              | Crash/retry points must converge without orphan rows, half-created child sessions, or stale extension state. |
-| `boundary-discipline`                     | Public package exports and builtin membranes must not leak internal server/storage/runtime services.         |
-| `small-interface-deep-implementation`     | Builtin extensions need a narrow event-publish facade, not full `EventPublisher`.                            |
-| `make-impossible-states-unrepresentable`  | Health transport DTOs should not encode contradictory status bags.                                           |
-| `migrate-callers-then-delete-legacy-apis` | Export-map and DTO migrations must move callers and remove the old broad path in one wave.                   |
-| `use-the-platform`                        | SQLite FK enforcement belongs in SQLite, not in hand-rolled cleanup assumptions.                             |
-| `prove-it-works`                          | Each fix gets direct tests for the failure mode, not confidence from typecheck alone.                        |
-| `test-through-public-interfaces`          | Behavioral tests should exercise RPC/runtime/transport surfaces where callers observe the bug.               |
-| `fix-root-causes`                         | The plan fixes owning boundaries, not single call sites.                                                     |
+| Principle                                 | Application                                                                                  |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `prove-it-works`                          | Gates must observe correctness without mutating source; final audit must verify real paths.  |
+| `test-through-public-interfaces`          | Health, send failures, and auth failures need RPC/runtime acceptance coverage.               |
+| `serialize-shared-state-mutations`        | Runtime queue and destructive session mutations must have one causal owner.                  |
+| `make-operations-idempotent`              | Storage relationships and durable auth writes must not leave partial, lying state.           |
+| `use-the-platform`                        | SQLite should enforce session relationships instead of convention-only checks.               |
+| `boundary-discipline`                     | Public extension/package APIs must not leak storage/runtime/source-tree internals.           |
+| `small-interface-deep-implementation`     | SDK and extension APIs should expose capabilities, not proxy layers or implementation seams. |
+| `make-impossible-states-unrepresentable`  | Extension health must not encode contradictory health/snapshot states.                       |
+| `migrate-callers-then-delete-legacy-apis` | Delete stale local supervisor and wildcard export paths in the same wave callers migrate.    |
+| `fix-root-causes`                         | Fix ownership/model boundaries, not only the observed failing call sites.                    |
 
-## Research Synthesis
+## Fresh Audit Results
 
-### Audit Results
+| Point                                    | Result   | Summary                                                                                                                                  |
+| ---------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| runtime ownership / actor-model clarity  | Material | Public send masks loop persistence failure; builtin follow-up queue is fire-and-forget; extension host still owns destructive mutations. |
+| extension API boundaries                 | Material | `@gent/extensions` wildcard exposes internals; public host context leaks storage types.                                                  |
+| Effect-native AI integration             | Material | Provider auth persistence failures can be reported as success.                                                                           |
+| storage model                            | Material | `sessions` parent/active relationships are not SQLite-enforced.                                                                          |
+| domain modeling / constructor discipline | Material | Extension health snapshot still allows contradictory constructor/snapshot states.                                                        |
+| suppression debt / boundary discipline   | Material | Suppression accounting holds; remaining wildcard exports bypass boundary policy.                                                         |
+| SDK/TUI adapter debt                     | Material | Dead local supervisor proxy path remains in SDK.                                                                                         |
+| test taxonomy / behavioral coverage      | Material | `bun run gate` mutates source; extension health lacks RPC acceptance coverage.                                                           |
 
-| Point                                    | Result   | Summary                                                                                                                                      |
-| ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| runtime ownership / actor-model clarity  | Material | Queue mutations still bypass the serialized session owner. Session mutations remain split across server commands and extension host context. |
-| extension API boundaries                 | Material | Core export map still exposes broad internals. Builtin membrane exports full `EventPublisher`.                                               |
-| Effect-native AI integration             | Clean    | Provider/toolkit typing and Prompt/Response boundary now hold.                                                                               |
-| storage model                            | Material | SQLite FKs are declared but not enforced. Durable agent child sessions are not atomic. Extension state persistence failures are swallowed.   |
-| domain modeling / constructor discipline | Material | Health transport DTOs remain status bags. External driver TurnEvent producers bypass constructors.                                           |
-| suppression debt / boundary discipline   | Material | Suppression policy is strong, but server internals remain wildcard-exported.                                                                 |
-| SDK/TUI adapter debt                     | Clean    | Local supervisor, typed widgets, and atom registry ownership now hold.                                                                       |
-| test taxonomy / behavioral coverage      | Clean    | CI/gate/e2e scripts execute claimed suites; route flow and lifecycle coverage are live.                                                      |
+## Material Findings
 
-### Material Findings
+| Severity | Finding                                                         | Evidence                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1       | Public send masks loop persistence failures.                    | `packages/core/src/runtime/session-runtime.ts:329-363`; `packages/core/src/server/session-commands.ts:526-544`; `packages/core/tests/runtime/agent-loop.test.ts:1999-2034`; `packages/core/tests/runtime/session-runtime.test.ts:513-856`                                                                                                                                    |
+| P2       | Builtin follow-up queue is fire-and-forget.                     | `packages/core/src/runtime/extensions/turn-control.ts:55-68`; `packages/core/src/runtime/extensions/extension-actor-shared.ts:50-59`; `packages/core/src/runtime/agent/agent-loop.ts:3028-3058,3214-3239`; `packages/extensions/src/auto.ts:372-444`                                                                                                                         |
+| P2       | Extension host still owns direct destructive session mutations. | `packages/core/src/domain/extension-host-context.ts:150-162`; `packages/core/src/runtime/make-extension-host-context.ts:326-351`; `packages/core/src/server/session-commands.ts:547-615`                                                                                                                                                                                     |
+| P2       | Session relationships bypass SQLite integrity.                  | `packages/core/src/storage/sqlite-storage.ts:799-810,1044,1110`; probe showed `PRAGMA foreign_key_list(sessions) = []` and orphan child sessions survive parent delete.                                                                                                                                                                                                      |
+| P2       | Provider auth write failures can report success.                | `packages/core/src/domain/driver.ts:108-120`; `packages/core/src/domain/auth-store.ts:41-47,95-104`; `packages/core/src/providers/provider-auth.ts:62-83`; `packages/extensions/src/openai/index.ts:166-210`; `packages/extensions/src/anthropic/index.ts:169-195`; `packages/core/src/server/errors.ts:23-44`; `packages/core/tests/providers/provider-auth.test.ts:66-113` |
+| P2       | Extension health snapshot still encodes contradictions.         | `packages/core/src/server/transport-contract.ts:451-513`; `packages/core/tests/server/extension-health.test.ts:140`                                                                                                                                                                                                                                                          |
+| P2       | Extension health lacks RPC acceptance coverage.                 | `packages/core/src/server/rpcs/extension.ts:29-33`; `packages/core/src/server/rpc-handler-groups/extension.ts:17-23`; `packages/sdk/src/namespaced-client.ts:83-87,140-145`; `packages/core/tests/server/extension-health.test.ts:6-180`; `packages/core/tests/server/extension-commands-rpc.test.ts:136-260`                                                                |
+| P2       | Public extension host context leaks storage layer types.        | `packages/core/src/extensions/api.ts:179`; `packages/core/src/domain/extension-host-context.ts:19-20,81-162`; `packages/core/src/storage/search-storage.ts:36-53`; `packages/core/src/storage/sqlite-storage.ts:77-82`                                                                                                                                                       |
+| P2       | Wildcard package exports still bypass boundary policy.          | `packages/core/package.json:71,139`; `packages/extensions/package.json:13-17`; `tsconfig.json:16,179,188`; `packages/tooling/policy/architecture-policy.test.ts:250-317,320-374,465-489`                                                                                                                                                                                     |
+| P2       | Stale local supervisor path remains in SDK.                     | `ARCHITECTURE.md:236-240`; `packages/sdk/package.json:5`; `packages/sdk/src/local-supervisor.ts:79-223`; `packages/sdk/src/supervisor-boundary.ts:24`; `packages/sdk/src/namespaced-client.ts:59`; `packages/sdk/tests/local-supervisor.test.ts:5`                                                                                                                           |
+| P2       | Gate mutates source instead of checking it.                     | `package.json:13-19`; `PLAN.md` previous gate requirements                                                                                                                                                                                                                                                                                                                   |
 
-| Severity | Finding                                                   | Evidence                                                                                                                                                                                                       |
-| -------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1       | Queue mutations still bypass the session mutation owner.  | `packages/core/src/runtime/agent/agent-loop.ts:2223-2229,2769-2777,2864-2880,3106-3116`; `packages/core/src/runtime/session-runtime.ts:296-389`; `packages/core/tests/runtime/session-runtime.test.ts:513-650` |
-| P1       | SQLite foreign keys are not enforced.                     | `packages/core/src/storage/sqlite-storage.ts:518-651,1290-1361`; direct audit probe showed `PRAGMA foreign_keys = 0`, orphan rows insert, and delete leaves children.                                          |
-| P2       | Session mutations still have multiple direct owners.      | `packages/core/src/server/session-commands.ts:256-303,403-423`; `packages/core/src/runtime/make-extension-host-context.ts:298-314,384-407`; `packages/core/tests/extensions/session-mutations.test.ts:253-340` |
-| P2       | Durable child agent sessions are not atomic.              | `packages/core/src/runtime/agent/agent-runner.ts:350-367,873-886`                                                                                                                                              |
-| P2       | Extension state persistence failures are swallowed.       | `packages/core/src/runtime/extensions/spawn-machine-ref.ts:90-114`; `packages/core/src/server/event-publisher.ts:73-96,162-169`                                                                                |
-| P2       | Core export map bypasses extension/server boundaries.     | `packages/core/package.json:5-35`; `tsconfig.json:15-40`; `packages/tooling/policy/architecture-policy.test.ts:166-234,300-391`                                                                                |
-| P2       | Builtin membrane exports overpowered `EventPublisher`.    | `packages/extensions/internal/builtin.ts:1-8`; `packages/core/src/domain/event-publisher.ts:5`; `packages/core/src/server/event-publisher.ts:60-169`                                                           |
-| P2       | Extension health transport DTOs permit impossible states. | `packages/core/src/server/transport-contract.ts:531-568`; `packages/core/src/server/extension-health.ts:4-72`; `packages/core/tests/server/extension-health.test.ts:7-134`                                     |
-| P2       | Driver `TurnEvent` producers bypass constructors.         | `packages/extensions/src/acp-agents/executor.ts:78-120,241-249`; `packages/core/src/domain/driver.ts:199-247,307-337`; `packages/core/tests/domain/schema-tagged-enum-class.test.ts:187-203`                   |
+## Clean Areas
 
-### Clean Areas
-
-- Effect-native AI integration is not carried forward.
-- SDK/TUI adapter debt is not carried forward.
-- CI/e2e/test taxonomy is not carried forward.
-- Suppression location accounting is not carried forward, except for adding
-  boundary-policy coverage where package exports remain too broad.
+- External driver `TurnEvent` producers now use constructors in ACP and Claude
+  SDK adapters.
+- Suppression accounting is location/count frozen and requires reasons.
+- TUI route/widget/atom ownership held in the audit.
+- Worker supervisor restart lifecycle held in the audit.
 
 ## Execution Protocol
 
 For every commit below:
 
-1. Invoke listed skills.
-2. Implement only that batch.
+1. Implement only that batch.
+2. Run listed focused verification.
 3. Run `bun run gate`.
 4. Run `bun run test:e2e` when listed.
-5. Commit with the listed conventional commit message.
-6. Run exactly one review subagent against the commit diff and this section.
+5. Commit with the listed conventional message.
+6. Run exactly one review subagent against the commit.
 7. Fix real findings before moving on.
 
 ---
 
-## Commit 1: `fix(storage): enforce sqlite referential integrity`
+## Commit 1: `fix(build): make gate non-mutating`
 
-**Justification**: The schema declares FK and cascade semantics, but SQLite is
-not enforcing them. The durable model is lying.
+**Justification**: A verification gate that formats files is not a gate. It can
+turn dirty code green while changing the thing being verified.
 
 **Principles**:
 
-- `use-the-platform`: use SQLite FK enforcement instead of hand-maintained assumptions.
-- `make-operations-idempotent`: deletes and retries must converge without orphan rows.
-- `prove-it-works`: add direct storage tests for FK mode, orphan rejection, and cascade behavior.
+- `prove-it-works`: verification must observe, not mutate.
+- `encode-lessons-in-structure`: make the script enforce the distinction.
 
-**Skills**: `bun`, `effect-v4`, `test`, `code-style`
+**Skills**: `bun`, `code-style`, `test`
 
 **Changes**:
 
-| File                                                 | Change                                                                                                                           | Lines                  |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `packages/core/src/storage/sqlite-storage.ts`        | Enable `PRAGMA foreign_keys = ON` for every SQLite connection before schema use; keep it active for test and file-backed layers. | ~1290-1361             |
-| `packages/core/tests/storage/sqlite-storage.test.ts` | Add tests for `PRAGMA foreign_keys`, orphan branch/message/event rejection, and delete cascade for sessions.                     | existing storage tests |
+| File           | Change                                                                 | Lines  |
+| -------------- | ---------------------------------------------------------------------- | ------ |
+| `package.json` | Change the `gate` style leg from `bun run fmt` to `bun run fmt:check`. | ~13-19 |
 
 **Verification**:
 
-- `bun test packages/core/tests/storage/sqlite-storage.test.ts`
+- `bun run fmt:check`
 - `bun run gate`
-- `bun run test:e2e`
 
 ---
 
-## Commit 2: `fix(runtime): serialize queue mutations through session owner`
+## Commit 2: `fix(runtime): propagate send command loop failures`
 
-**Justification**: Same-session queue mutation still has direct ref/checkpoint
-paths outside the serialized owner.
+**Justification**: `AgentLoop.submit` now fails on checkpoint/persistence
+failure, but `SessionRuntime.dispatch(SendUserMessage)` converts that failure
+into logged diagnostics and success.
 
 **Principles**:
 
-- `serialize-shared-state-mutations`: queue mutation must have one structural owner.
-- `make-operations-idempotent`: checkpoint updates must not lose queued work under concurrency.
-- `test-through-public-interfaces`: prove via session/runtime command paths, not ref inspection only.
+- `serialize-shared-state-mutations`: the public command surface must honor the mutation owner's result.
+- `prove-it-works`: fail through the public runtime path, not only direct loop tests.
+- `fix-root-causes`: remove the swallow at the boundary.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                  | Change                                                                                                                               | Lines                              |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| `packages/core/src/runtime/agent/agent-loop.ts`       | Route follow-up queueing, interject queueing, and drain through the same serialized mutation owner used by tool result/invoke flows. | ~2223-2229, ~2769-2880, ~3106-3116 |
-| `packages/core/src/runtime/session-runtime.ts`        | Ensure public command entry points use the serialized runtime path consistently.                                                     | ~296-389                           |
-| `packages/core/tests/runtime/session-runtime.test.ts` | Add concurrency tests for follow-up queueing, interject queueing, and drain ordering against a running turn.                         | ~513-650                           |
+| File                                                  | Change                                                                                                           | Lines    |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------- |
+| `packages/core/src/runtime/session-runtime.ts`        | Publish diagnostics with `tapError`/`tapCause`, then fail as `SessionRuntimeError` instead of returning success. | ~329-363 |
+| `packages/core/tests/runtime/session-runtime.test.ts` | Add public `dispatch(SendUserMessage)` tests for checkpoint/save failure propagation.                            | ~513-856 |
+| `packages/core/tests/server/session-commands.test.ts` | Assert `sendMessage` surfaces runtime failure instead of logging `messageSent`.                                  | existing |
 
 **Verification**:
 
-- `bun test packages/core/tests/runtime/session-runtime.test.ts`
+- `bun test packages/core/tests/runtime/session-runtime.test.ts packages/core/tests/server/session-commands.test.ts`
 - `bun run gate`
 - `bun run test:e2e`
 
 ---
 
-## Commit 3: `fix(server): unify session mutation ownership`
+## Commit 3: `fix(runtime): make turn-control queue mutations causal`
 
-**Justification**: Session mutation writes still live in both `SessionCommands`
-and extension host context, with non-atomic storage + publish paths for active
-branch/name/settings changes.
+**Justification**: Builtin `QueueFollowUp` currently succeeds when the command is
+placed on an unbounded mailbox, not when the loop queue mutation is durably
+applied.
 
 **Principles**:
 
-- `serialize-shared-state-mutations`: session state mutation needs one command owner.
-- `small-interface-deep-implementation`: extension host should call a narrow session command facade, not duplicate storage/event choreography.
-- `migrate-callers-then-delete-legacy-apis`: move extension callers and remove duplicated mutation logic in one wave.
+- `serialize-shared-state-mutations`: follow-up queue mutation must report through the queue owner.
+- `make-operations-idempotent`: dropped hidden follow-ups leave inconsistent workflow state.
+- `test-through-public-interfaces`: actor transitions should observe enqueue failure.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                       | Change                                                                                                                         | Lines                          |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
-| `packages/core/src/server/session-commands.ts`             | Expose narrow internal mutation operations that own active branch, rename/settings, create/fork transaction + event semantics. | ~137-151, ~256-303, ~403-423   |
-| `packages/core/src/runtime/make-extension-host-context.ts` | Replace duplicate direct storage/event mutation logic with calls into the session command owner.                               | ~222-237, ~298-345, ~384-438   |
-| `packages/core/tests/extensions/session-mutations.test.ts` | Add rollback/failure tests for extension switch/settings/rename paths, matching create/fork coverage.                          | ~253-340                       |
-| `packages/core/tests/server/session-commands.test.ts`      | Lock command-owner behavior for active branch and settings mutations.                                                          | existing session command tests |
+| File                                                                  | Change                                                                             | Lines                  |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------- |
+| `packages/core/src/runtime/extensions/turn-control.ts`                | Replace fire-and-forget queueing with an acknowledged command path or durable ack. | ~55-68                 |
+| `packages/core/src/runtime/extensions/extension-actor-shared.ts`      | Await the queue mutation result for `QueueFollowUp`/interject effects.             | ~50-59                 |
+| `packages/core/src/runtime/agent/agent-loop.ts`                       | Stop swallowing turn-control enqueue/steer failures in the forked consumer.        | ~3028-3058, ~3214-3239 |
+| `packages/core/tests/extensions/concurrency.test.ts` or runtime tests | Add a checkpoint-failure test proving builtin follow-up transition fails causally. | existing               |
+
+**Verification**:
+
+- `bun test packages/core/tests/extensions/concurrency.test.ts packages/core/tests/runtime/session-runtime.test.ts`
+- `bun run gate`
+- `bun run test:e2e`
+
+---
+
+## Commit 4: `fix(server): own destructive session mutations in commands`
+
+**Justification**: Non-destructive session mutations moved behind
+`SessionMutations`, but extension host still directly deletes branches/messages
+and swallows session delete failure.
+
+**Principles**:
+
+- `serialize-shared-state-mutations`: destructive session writes need one owner.
+- `small-interface-deep-implementation`: extension host calls a command facade, not storage choreography.
+- `migrate-callers-then-delete-legacy-apis`: move extension callers and delete duplicate logic.
+
+**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                                       | Change                                                                                                                     | Lines    |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `packages/core/src/server/session-commands.ts`             | Add command-owned `deleteBranch`, `deleteMessages`, and non-swallowing extension-safe `deleteSession` operations.          | ~547-615 |
+| `packages/core/src/runtime/make-extension-host-context.ts` | Route destructive extension host methods through `SessionMutations`; remove direct storage deletes and swallowed failures. | ~326-351 |
+| `packages/core/tests/extensions/session-mutations.test.ts` | Add extension-triggered delete failure and rollback/cleanup tests.                                                         | existing |
+| `packages/core/tests/server/session-commands.test.ts`      | Lock destructive command-owner behavior.                                                                                   | existing |
 
 **Verification**:
 
@@ -220,114 +238,148 @@ branch/name/settings changes.
 
 ---
 
-## Commit 4: `fix(runtime): persist agent spawn atomically`
+## Commit 5: `fix(storage): enforce session relationship integrity`
 
-**Justification**: Durable child agent sessions can be created without the
-corresponding parent event and with missing active branch data.
+**Justification**: SQLite now enforces branch/message/event relationships, but
+session parent/active relationships are still convention-only.
 
 **Principles**:
 
-- `make-operations-idempotent`: crash points during child spawn must converge.
-- `serialize-shared-state-mutations`: child session/branch/event belongs in one durable transition.
-- `prove-it-works`: add failure-injection coverage for the partial-spawn point.
+- `use-the-platform`: encode relationships in SQLite FKs.
+- `make-operations-idempotent`: deletes/retries must not leave orphan child sessions.
+- `prove-it-works`: add direct migration and FK behavior tests.
 
-**Skills**: `effect-v4`, `architecture`, `test`, `code-style`, `bun`
+**Skills**: `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                               | Change                                                                                                                                 | Lines                       |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| `packages/core/src/runtime/agent/agent-runner.ts`  | Create durable child session, branch, active branch state, and `AgentRunSpawned` event in one transaction or delegated atomic command. | ~350-367, ~873-886          |
-| `packages/core/tests/runtime/agent-runner.test.ts` | Add rollback test for spawn event failure and assert durable child active branch is set.                                               | existing agent-runner tests |
+| File                                                 | Change                                                                                                                                               | Lines                  |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `packages/core/src/storage/sqlite-storage.ts`        | Add/migrate FKs for `sessions.parent_session_id`, `parent_branch_id`, and `active_branch_id`; choose cascade or explicit recursive delete semantics. | ~799-810, ~1044, ~1110 |
+| `packages/core/tests/storage/sqlite-storage.test.ts` | Add orphan parent, wrong parent branch, invalid active branch, legacy migration, and parent delete behavior tests.                                   | existing               |
 
 **Verification**:
 
-- `bun test packages/core/tests/runtime/agent-runner.test.ts`
+- `bun test packages/core/tests/storage/sqlite-storage.test.ts`
 - `bun run gate`
 - `bun run test:e2e`
 
 ---
 
-## Commit 5: `fix(extensions): fail transitions when state persistence fails`
+## Commit 6: `fix(providers): propagate provider auth persistence failures`
 
-**Justification**: Persistent extension actors currently advance in-memory state
-and pulse clients even when durable state save fails.
+**Justification**: Explicit auth flows can report success while credential writes
+failed, leaving the next model turn to fail later.
 
 **Principles**:
 
-- `make-operations-idempotent`: restart must observe the same state live clients saw.
-- `fix-root-causes`: do not log-and-continue through failed durability.
-- `prove-it-works`: simulate save failure and assert no successful transition pulse.
+- `boundary-discipline`: auth persistence failure belongs at the auth boundary.
+- `make-operations-idempotent`: durable credential writes must not lie.
+- `test-through-public-interfaces`: provider auth APIs need negative persistence tests.
 
-**Skills**: `effect-v4`, `architecture`, `test`, `code-style`, `bun`
+**Skills**: `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                        | Change                                                                                          | Lines                                |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `packages/core/src/runtime/extensions/spawn-machine-ref.ts` | Propagate `saveExtensionState` failures through the transition path instead of swallowing them. | ~90-114                              |
-| `packages/core/tests/extensions/persistence.test.ts`        | Add persistence-failure tests for actor state, emitted pulses, and recovery semantics.          | ~53-325                              |
-| `packages/core/tests/extensions/concurrency.test.ts`        | Adjust expectations if failed persistence changes transition/error ordering.                    | existing extension concurrency tests |
+| File                                                  | Change                                                                           | Lines    |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------- | -------- |
+| `packages/core/src/domain/driver.ts`                  | Give `PersistAuth` a typed error channel instead of `Effect<void>`.              | ~108-120 |
+| `packages/core/src/providers/provider-auth.ts`        | Remove catch-to-void persistence swallow; map failures to `ProviderAuthError`.   | ~62-83   |
+| `packages/extensions/src/openai/index.ts`             | Surface authorize/callback failures instead of flattening to `undefined`/`void`. | ~166-210 |
+| `packages/extensions/src/anthropic/index.ts`          | Surface authorize failures instead of flattening to `undefined`/`void`.          | ~169-195 |
+| `packages/core/tests/providers/provider-auth.test.ts` | Add failing `AuthStore` persistence tests.                                       | ~66-113  |
+| OpenAI/Anthropic extension driver tests               | Add RPC-visible auth failure assertions if needed.                               | existing |
 
 **Verification**:
 
-- `bun test packages/core/tests/extensions/persistence.test.ts packages/core/tests/extensions/concurrency.test.ts`
+- `bun test packages/core/tests/providers/provider-auth.test.ts packages/core/tests/extensions/openai-extension-driver.test.ts packages/core/tests/extensions/anthropic-extension-driver.test.ts`
 - `bun run gate`
 - `bun run test:e2e`
 
 ---
 
-## Commit 6: `refactor(extensions): narrow builtin event membrane`
+## Commit 7: `fix(server): make extension health snapshot structurally consistent`
 
-**Justification**: Builtin extensions need event publishing capability, not full
-`EventPublisher` control over append/deliver/termination.
+**Justification**: Health DTOs are tagged, but degraded constructors and snapshot
+summary can still encode contradictory states.
 
 **Principles**:
 
-- `small-interface-deep-implementation`: expose the minimum builtin privilege.
-- `boundary-discipline`: builtin-only membrane should not leak app service internals.
-- `migrate-callers-then-delete-legacy-apis`: move callers off full `EventPublisher` and block regressions.
+- `make-impossible-states-unrepresentable`: health issues need a tight state model.
+- `test-through-public-interfaces`: verify via `client.extension.listStatus`.
+- `migrate-callers-then-delete-legacy-apis`: migrate SDK/TUI consumers in one wave.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                  | Change                                                                                    | Lines              |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------ |
-| `packages/extensions/internal/builtin.ts`             | Replace full `EventPublisher` export with a narrow builtin event sink/facade.             | ~1-8               |
-| `packages/core/src/extensions/internal.ts`            | Define or export the narrow builtin capability from the core internal membrane if needed. | ~18-47             |
-| `packages/extensions/src/task-tools/*`                | Migrate builtin callers to the narrow event sink.                                         | discovered callers |
-| `packages/tooling/policy/architecture-policy.test.ts` | Add policy coverage forbidding full `EventPublisher` through the builtin membrane.        | ~300-391           |
+| File                                                                        | Change                                                                                              | Lines                   |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------- |
+| `packages/core/src/server/transport-contract.ts`                            | Replace broad degraded fields/independent summary with structurally consistent health/issues model. | ~451-513                |
+| `packages/core/src/server/extension-health.ts`                              | Project runtime status into the new health snapshot shape.                                          | existing                |
+| `packages/sdk/src/*`, `apps/tui/src/*` health consumers                     | Migrate consumers to the new snapshot model.                                                        | discovered by typecheck |
+| `packages/core/tests/server/extension-health.test.ts`                       | Add constructor/snapshot contradiction tests and RPC acceptance coverage.                           | ~6-180                  |
+| `packages/core/tests/server/extension-commands-rpc.test.ts` or new RPC test | Call `client.extension.listStatus({ sessionId })` over `Gent.test(...)`.                            | ~136-260 pattern        |
 
 **Verification**:
 
-- `bun test packages/tooling/policy/architecture-policy.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts packages/core/tests/extensions/concurrency.test.ts`
+- `bun test packages/core/tests/server/extension-health.test.ts packages/core/tests/server/extension-commands-rpc.test.ts`
+- `bun run gate`
+- `bun run test:e2e`
+
+---
+
+## Commit 8: `refactor(extensions): decouple host context from storage types`
+
+**Justification**: Public `ExtensionHostContext` exposes storage-layer
+`StorageError` and `SearchResult`, making extension authoring APIs depend on
+SQLite/search internals.
+
+**Principles**:
+
+- `boundary-discipline`: storage errors/results stay behind runtime boundaries.
+- `small-interface-deep-implementation`: expose extension-domain capabilities, not storage implementation types.
+
+**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                                       | Change                                                                                       | Lines           |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------- |
+| `packages/core/src/domain/extension-host-context.ts`       | Introduce domain-level host search result/error types; remove `../storage/*` imports.        | ~19-20, ~81-162 |
+| `packages/core/src/runtime/make-extension-host-context.ts` | Map storage-layer failures/results into host-context domain types at the boundary.           | existing        |
+| Extension/API tests                                        | Update type and behavior tests for the storage-free public API.                              | existing        |
+| `packages/tooling/policy/architecture-policy.test.ts`      | Add policy lock: public extension API/domain host context must not import storage internals. | existing        |
+
+**Verification**:
+
+- `bun test packages/tooling/policy/architecture-policy.test.ts packages/core/tests/extensions/extension-surface-locks.test.ts`
 - `bun run gate`
 
 ---
 
-## Commit 7: `refactor(core): close internal package export wildcards`
+## Commit 9: `refactor(packages): close remaining wildcard exports`
 
-**Justification**: Broad `@gent/core/server/*`, storage, provider, and domain
-wildcards make internal boundaries advisory. Runtime wildcard closure already
-worked; server/storage/provider/domain need the same discipline with an allowlist.
+**Justification**: `@gent/core/debug/*`, `@gent/core/test-utils/*`, and
+`@gent/extensions/*` still publish source-tree layout as public API.
 
 **Principles**:
 
-- `boundary-discipline`: consumers must not import server/storage/provider internals as public API.
-- `small-interface-deep-implementation`: package exports should expose stable capabilities, not source tree topology.
-- `migrate-callers-then-delete-legacy-apis`: migrate monorepo callers before removing broad paths.
+- `boundary-discipline`: package exports must be explicit allowlists.
+- `migrate-callers-then-delete-legacy-apis`: migrate callers and close wildcard paths together.
+- `encode-lessons-in-structure`: policy should reject wildcard reintroduction.
 
-**Skills**: `architecture`, `effect-v4`, `code-style`, `test`, `bun`
+**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                  | Change                                                                                                                         | Lines                   |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| `packages/core/package.json`                          | Replace broad `./server/*`, `./storage/*`, `./providers/*`, and overbroad `./domain/*` with explicit public allowlist exports. | ~5-35                   |
-| `tsconfig.json`                                       | Mirror the allowlist or remove wildcard workspace paths that bypass package boundaries.                                        | ~15-40                  |
-| `apps/*`, `packages/*` imports                        | Migrate affected consumers to approved subpaths, relative internal imports, or new public entrypoints.                         | discovered by typecheck |
-| `packages/tooling/policy/architecture-policy.test.ts` | Add policy coverage for server/storage/provider/domain export allowlists.                                                      | ~166-234, ~300-391      |
+| File                                                  | Change                                                                                      | Lines                   |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------- |
+| `packages/core/package.json`                          | Replace `./debug/*` and `./test-utils/*` wildcards with explicit public subpath allowlists. | ~71, ~139               |
+| `packages/extensions/package.json`                    | Replace `./*` with explicit public entrypoints; null internal/adapters as needed.           | ~13-17                  |
+| `tsconfig.json`                                       | Remove mirrored wildcard path side doors and add explicit paths.                            | ~16, ~179, ~188         |
+| Repo imports                                          | Migrate affected imports to explicit allowed subpaths or relative internal paths.           | discovered by typecheck |
+| `packages/tooling/policy/architecture-policy.test.ts` | Reject all package/tsconfig wildcards unless explicitly blocked internal null patterns.     | ~250-489                |
 
 **Verification**:
 
@@ -338,84 +390,55 @@ worked; server/storage/provider/domain need the same discipline with an allowlis
 
 ---
 
-## Commit 8: `refactor(server): tag extension health transport states`
+## Commit 10: `refactor(sdk): delete dead local supervisor path`
 
-**Justification**: Extension health transport DTOs are still status bags that can
-encode contradictory lifecycle states.
+**Justification**: `local-supervisor.ts` is unexported, unused by production, and
+kept alive only by tests while mirroring RPC by hand.
 
 **Principles**:
 
-- `make-impossible-states-unrepresentable`: health states need tagged variants, not loose optional field bags.
-- `migrate-callers-then-delete-legacy-apis`: migrate transport, SDK/TUI consumers, and tests in one wave.
-- `test-through-public-interfaces`: health must be verified at RPC/transport projection points.
+- `subtract-before-you-add`: delete stale proxy layers.
+- `small-interface-deep-implementation`: keep supervisor ownership in the exported worker supervisor.
+- `migrate-callers-then-delete-legacy-apis`: remove dead helpers/tests together.
 
 **Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File                                                  | Change                                                             | Lines                   |
-| ----------------------------------------------------- | ------------------------------------------------------------------ | ----------------------- |
-| `packages/core/src/server/transport-contract.ts`      | Replace extension health status bags with tagged transport states. | ~531-568                |
-| `packages/core/src/server/extension-health.ts`        | Project runtime lifecycle state into the new tagged DTOs.          | ~4-72                   |
-| `packages/sdk/src/client.ts` and TUI health consumers | Migrate type consumers to tagged health states.                    | discovered by typecheck |
-| `packages/core/tests/server/extension-health.test.ts` | Add impossible-state and projection tests for tagged health.       | ~7-134                  |
+| File                                                 | Change                                                                     | Lines      |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- | ---------- |
+| `packages/sdk/src/local-supervisor.ts`               | Delete stale local supervisor implementation.                              | whole file |
+| `packages/sdk/tests/local-supervisor.test.ts`        | Delete self-test for dead implementation.                                  | whole file |
+| `packages/sdk/src/supervisor-boundary.ts`            | Remove `runSupervisorRestart` edge if it is only used by local supervisor. | ~24        |
+| `packages/sdk/src/namespaced-client.ts`              | Delete unused `makeFlatRpcClient` if repo-wide usage remains zero.         | ~59        |
+| `packages/tooling/policy/suppression-policy.test.ts` | Update suppression ledger only if deletion changes counts/locations.       | existing   |
 
 **Verification**:
 
-- `bun test packages/core/tests/server/extension-health.test.ts`
+- `bun test packages/sdk/tests/supervisor.test.ts packages/sdk/tests/client.test.ts`
 - `bun run gate`
 - `bun run test:e2e`
 
 ---
 
-## Commit 9: `refactor(drivers): construct turn events at producer boundaries`
+## Commit 11: `chore(audit): recursively verify remaining plan targets`
 
-**Justification**: `TurnEvent` constructors exist, but primary external driver
-producers still return raw `_tag` object literals.
-
-**Principles**:
-
-- `make-impossible-states-unrepresentable`: constructor classes preserve event domain identity.
-- `boundary-discipline`: external adapter output should enter the domain through constructors.
-- `fix-root-causes`: lock constructor use at producer boundaries, not only in tests.
-
-**Skills**: `effect-v4`, `test`, `code-style`, `bun`
-
-**Changes**:
-
-| File                                                          | Change                                                                              | Lines                        |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------- |
-| `packages/extensions/src/acp-agents/executor.ts`              | Replace raw `TurnEvent` object literals with `TurnEvent.cases.*.make` constructors. | ~78-120, ~241-249            |
-| `packages/extensions/src/acp-agents/claude-code-executor.ts`  | Migrate any raw turn-event production if present.                                   | ~49-133                      |
-| `packages/core/tests/runtime/external-turn.test.ts`           | Assert constructor-backed events still flow through external turns.                 | existing external turn tests |
-| `packages/core/tests/domain/schema-tagged-enum-class.test.ts` | Keep constructor/identity lock coverage aligned.                                    | ~187-203                     |
-
-**Verification**:
-
-- `bun test packages/core/tests/runtime/external-turn.test.ts packages/core/tests/domain/schema-tagged-enum-class.test.ts`
-- `bun run gate`
-
----
-
-## Commit 10: `chore(audit): recursively verify original plan targets`
-
-**Justification**: Completion requires a fresh audit across the same original
-targets after the new fixes land.
+**Justification**: The plan is complete only when a fresh audit of the same
+original target points reports no P1/P2 findings.
 
 **Principles**:
 
 - `prove-it-works`: completion is observed, not inferred.
-- `fix-root-causes`: any material finding becomes a new plan, not a footnote.
-- `redesign-from-first-principles`: if the remaining shape is still wrong, rewrite around reality.
+- `fix-root-causes`: material findings become the next plan.
+- `guard-the-context-window`: independent agents audit focused target points.
 
-**Skills**: `planify`, `architecture`, `effect-v4`, `bun`, `test`, `code-style`
+**Skills**: `planify`, `architecture`, `effect-v4`, `test`, `code-style`, `bun`
 
 **Changes**:
 
-| File             | Change                                                                         | Lines               |
-| ---------------- | ------------------------------------------------------------------------------ | ------------------- |
-| `PLAN.md`        | Overwrite with either final verification receipt or a new remaining-work plan. | whole file          |
-| implicated files | Only if the audit finds material issues that must be fixed before completion.  | discovered by audit |
+| File      | Change                                                                       | Lines      |
+| --------- | ---------------------------------------------------------------------------- | ---------- |
+| `PLAN.md` | Overwrite with either final verification receipt or the next recursive plan. | whole file |
 
 **Verification**:
 
@@ -433,35 +456,33 @@ targets after the new fixes land.
 
 **Recursive Rule**:
 
-If any audit agent reports a material finding:
+If any audit agent reports a P1/P2 material finding:
 
 1. overwrite `PLAN.md` with a new Planify plan containing those findings and
    commit batches
 2. implement those batches with the same gate/review protocol
 3. rerun this audit commit
 
-Stop only when all eight fresh audits report no P1/P2 structural findings.
+Stop only when all eight fresh audits report no P1/P2 findings.
 
 ## End State Checks
 
-- [ ] SQLite FK enforcement is active for every storage layer.
-- [ ] Orphan branch/message/event rows cannot be inserted.
-- [ ] Session delete cascades or explicitly deletes children with tests.
-- [ ] Queue mutations are serialized through one same-session owner.
-- [ ] Extension and server session mutations share one command owner.
-- [ ] Durable child agent spawn is atomic with its parent event.
-- [ ] Extension actor state save failure fails the transition.
-- [ ] Builtin extension membrane exposes only narrow event publishing.
-- [ ] Core package exports no broad server/storage/provider/internal domain wildcards.
-- [ ] Policy locks export allowlists and builtin membrane width.
-- [ ] Extension health transport states are tagged and cannot encode contradictions.
-- [ ] External driver `TurnEvent` producers use constructors.
-- [ ] `bun run gate` is green.
+- [ ] `bun run gate` is non-mutating and green.
 - [ ] `bun run test:e2e` is green.
+- [ ] Public send reports loop persistence failure as failure.
+- [ ] Builtin follow-up/interject queue mutations are causally acknowledged.
+- [ ] Extension host destructive session mutations route through command ownership.
+- [ ] SQLite enforces session parent/active relationships or delete semantics explicitly converge.
+- [ ] Provider auth persistence/callback failures surface to callers.
+- [ ] Extension health snapshot cannot encode contradictory states and is covered through RPC.
+- [ ] Public extension host context has no storage-layer type leaks.
+- [ ] Core/extensions package exports have no broad wildcard public side doors.
+- [ ] Dead SDK local supervisor path is deleted.
 - [ ] Final recursive audit reports no P1/P2 findings.
 
 ## Current Status
 
-- Recursive audit completed at HEAD `ef27bc1f`.
-- Material findings remain, so this plan supersedes the previous one.
+- Recursive audit completed at HEAD `75a67481`.
+- Material findings remain, including one P1.
+- This plan supersedes the previous plan.
 - No implementation batches from this plan have started yet.
