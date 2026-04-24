@@ -134,6 +134,21 @@ const sendFailingSessionCommandsLayer = () => {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
+const sessionCommandsLayer = () => {
+  const storageLayer = Storage.MemoryWithSql()
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    SessionRuntime.Test(),
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    MachineEngine.Test(),
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
 const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
   id: "parent-tool-call-probe",
   query: (ctx) => Effect.succeed(ctx.turn.parentToolCallId),
@@ -398,6 +413,173 @@ describe("session command persistence", () => {
       expect(exit._tag).toBe("Failure")
       expect(yield* sessions.listSessions()).toHaveLength(1)
     }).pipe(Effect.provide(postCommitFailingSessionCommandsLayer())),
+  )
+
+  it.live("deletes only non-active branches owned by the session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-delete-branch")
+      const activeBranchId = BranchId.make("branch-delete-active")
+      const deletedBranchId = BranchId.make("branch-delete-target")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "delete branch",
+          activeBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: activeBranchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(new Branch({ id: deletedBranchId, sessionId, createdAt: now }))
+
+      yield* commands.deleteBranch({
+        sessionId,
+        currentBranchId: activeBranchId,
+        branchId: deletedBranchId,
+      })
+
+      expect(yield* branches.getBranch(deletedBranchId)).toBeUndefined()
+      expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("rejects deleting the active branch even when it is not the caller branch", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-delete-active")
+      const activeBranchId = BranchId.make("branch-active-delete")
+      const currentBranchId = BranchId.make("branch-current-delete")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "delete active",
+          activeBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: activeBranchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(new Branch({ id: currentBranchId, sessionId, createdAt: now }))
+
+      const exit = yield* Effect.exit(
+        commands.deleteBranch({
+          sessionId,
+          currentBranchId,
+          branchId: activeBranchId,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("rejects destructive branch mutation across sessions", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const ownerSessionId = SessionId.make("session-delete-owner")
+      const otherSessionId = SessionId.make("session-delete-other")
+      const currentBranchId = BranchId.make("branch-delete-owner-current")
+      const otherBranchId = BranchId.make("branch-delete-other-target")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: ownerSessionId,
+          name: "owner",
+          activeBranchId: currentBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* sessions.createSession(
+        new Session({
+          id: otherSessionId,
+          name: "other",
+          activeBranchId: otherBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: currentBranchId, sessionId: ownerSessionId, createdAt: now }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: otherBranchId, sessionId: otherSessionId, createdAt: now }),
+      )
+
+      const exit = yield* Effect.exit(
+        commands.deleteBranch({
+          sessionId: ownerSessionId,
+          currentBranchId,
+          branchId: otherBranchId,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* branches.getBranch(otherBranchId)).toBeDefined()
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("deleteMessages only mutates branches owned by the session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const sessionId = SessionId.make("session-delete-messages")
+      const branchId = BranchId.make("branch-delete-messages")
+      const firstMessageId = MessageId.make("message-delete-1")
+      const secondMessageId = MessageId.make("message-delete-2")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "delete messages",
+          activeBranchId: branchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: firstMessageId,
+          sessionId,
+          branchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "first" })],
+          createdAt: now,
+        }),
+      )
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: secondMessageId,
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [new TextPart({ type: "text", text: "second" })],
+          createdAt: new Date(now.getTime() + 1),
+        }),
+      )
+
+      yield* commands.deleteMessages({ sessionId, branchId, afterMessageId: firstMessageId })
+
+      const remaining = yield* messages.listMessages(branchId)
+      expect(remaining.map((message) => message.id)).toEqual([firstMessageId])
+    }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 })
 

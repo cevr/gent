@@ -22,7 +22,6 @@ import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { StorageService } from "../storage/sqlite-storage.js"
 import { SearchStorage, type SearchStorageService } from "../storage/search-storage.js"
 import type { Message } from "../domain/message.js"
-import { SessionDeleter } from "../domain/session-deleter.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
 import { AgentRunnerService } from "../domain/agent.js"
@@ -106,7 +105,6 @@ export const HostAgentRunnerRef = Context.Reference<AgentRunner>(
     }),
   },
 )
-
 export const HostSessionMutationsRef = Context.Reference<SessionMutationsService>(
   "@gent/core/src/runtime/make-extension-host-context/HostSessionMutationsRef",
   {
@@ -116,6 +114,9 @@ export const HostSessionMutationsRef = Context.Reference<SessionMutationsService
       forkSessionBranch: unavailable("SessionMutations"),
       switchActiveBranch: unavailable("SessionMutations"),
       createChildSession: unavailable("SessionMutations"),
+      deleteSession: unavailable("SessionMutations"),
+      deleteBranch: unavailable("SessionMutations"),
+      deleteMessages: unavailable("SessionMutations"),
     }),
   },
 )
@@ -128,7 +129,6 @@ const loadAmbientHostContextDefaults: Effect.Effect<AmbientHostContextDefaults> 
   agentRunner: Effect.service(HostAgentRunnerRef),
   sessionMutations: Effect.service(HostSessionMutationsRef),
 })
-
 type AmbientHostContextOverrides = Partial<AmbientHostContextDefaults>
 
 const availableAmbientHostContextOverrides: Effect.Effect<AmbientHostContextOverrides> = Effect.gen(
@@ -328,15 +328,7 @@ export const makeExtensionHostContext = (
         if (sessionId === runInfo.sessionId) {
           return yield* Effect.die("Cannot delete the current session from within it")
         }
-        // Prefer SessionDeleter (server-tier cleanup: terminate actors,
-        // events, etc.); fall back to bare storage deletion when the
-        // server is absent (e.g., headless or test contexts).
-        const deleter = yield* Effect.serviceOption(SessionDeleter)
-        if (deleter._tag === "Some") {
-          yield* deleter.value.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void))
-        } else {
-          yield* deps.storage.deleteSession(sessionId)
-        }
+        yield* deps.sessionMutations.deleteSession(sessionId)
       }),
 
     deleteBranch: (branchId) =>
@@ -344,11 +336,19 @@ export const makeExtensionHostContext = (
         if (branchId === runInfo.branchId) {
           return yield* Effect.die("Cannot delete the current branch")
         }
-        yield* deps.storage.deleteBranch(branchId)
+        yield* deps.sessionMutations.deleteBranch({
+          sessionId: runInfo.sessionId,
+          currentBranchId: runInfo.branchId,
+          branchId,
+        })
       }),
 
     deleteMessages: (params) =>
-      deps.storage.deleteMessages(runInfo.branchId, params.afterMessageId),
+      deps.sessionMutations.deleteMessages({
+        sessionId: runInfo.sessionId,
+        branchId: runInfo.branchId,
+        afterMessageId: params.afterMessageId,
+      }),
   },
 
   interaction: {

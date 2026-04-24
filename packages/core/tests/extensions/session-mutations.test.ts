@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
@@ -7,7 +7,6 @@ import {
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { EventStoreError } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart, copyMessageToBranch } from "@gent/core/domain/message"
-import { SessionDeleter } from "@gent/core/domain/session-deleter"
 
 // Minimal in-memory storage for session mutation tests
 const createTestStorage = () => {
@@ -192,6 +191,25 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
           return { sessionId, branchId }
         }),
       ),
+    deleteSession: (sessionId) => testStorage.storage.deleteSession(sessionId),
+    deleteBranch: ({ sessionId, currentBranchId, branchId }) =>
+      Effect.gen(function* () {
+        if (branchId === currentBranchId)
+          return yield* Effect.die("Cannot delete the current branch")
+        const branch = testStorage.branches.get(branchId)
+        if (branch === undefined || branch.sessionId !== sessionId) {
+          return yield* Effect.die(`Branch "${branchId}" not found in current session`)
+        }
+        yield* testStorage.storage.deleteBranch(branchId)
+      }),
+    deleteMessages: ({ sessionId, branchId, afterMessageId }) =>
+      Effect.gen(function* () {
+        const branch = testStorage.branches.get(branchId)
+        if (branch === undefined || branch.sessionId !== sessionId) {
+          return yield* Effect.die(`Branch "${branchId}" not found in current session`)
+        }
+        yield* testStorage.storage.deleteMessages(branchId, afterMessageId)
+      }),
   }
 
   const deps: MakeExtensionHostContextDeps = {
@@ -246,6 +264,9 @@ const failingSessionMutations = (): MakeExtensionHostContextDeps["sessionMutatio
     forkSessionBranch: fail,
     switchActiveBranch: fail,
     createChildSession: fail,
+    deleteSession: fail,
+    deleteBranch: fail,
+    deleteMessages: fail,
   }
 }
 
@@ -450,40 +471,37 @@ describe("session mutation primitives", () => {
     expect(testStorage.sessions.has(childId)).toBe(false)
   })
 
-  test("deleteSession uses SessionDeleter when provided (server present)", async () => {
+  test("deleteSession propagates command facade failure without storage fallback", async () => {
     const testStorage = createTestStorage()
     seedSession(testStorage)
     const { deps } = makeTestDeps(testStorage)
-    const ctx = makeExtensionHostContext({ sessionId: SESSION_ID, branchId: BRANCH_ID }, deps)
-
-    // Create a child session up front
+    const childContext = makeExtensionHostContext(
+      { sessionId: SESSION_ID, branchId: BRANCH_ID },
+      deps,
+    )
     const { sessionId: childId } = await Effect.runPromise(
-      ctx.session.createChildSession({ name: "to-delete-via-deleter" }),
+      childContext.session.createChildSession({ name: "delete failure should surface" }),
     )
     expect(testStorage.sessions.has(childId)).toBe(true)
 
-    // Provide a SessionDeleter spy — proves the runtime took the inverted
-    // path (server-tier cleanup) and did NOT fall through to the bare
-    // storage.deleteSession fallback.
-    const calls: SessionId[] = []
-    const deleterLayer = Layer.succeed(SessionDeleter, {
-      deleteSession: (id: SessionId) => {
-        calls.push(id)
-        return Effect.void
+    const ctx = makeExtensionHostContext(
+      { sessionId: SESSION_ID, branchId: BRANCH_ID },
+      {
+        ...deps,
+        sessionMutations: {
+          ...deps.sessionMutations,
+          deleteSession: () => Effect.fail(new EventStoreError({ message: "delete failed" })),
+        },
       },
-    })
+    )
 
-    await Effect.runPromise(ctx.session.deleteSession(childId).pipe(Effect.provide(deleterLayer)))
-
-    expect(calls).toEqual([childId])
-    // Storage fallback path NOT taken — child still in test storage map
-    // because the spy doesn't actually delete (server cleanup is a black
-    // box from the runtime's POV). This proves the runtime didn't double-
-    // fall-through to `storage.deleteSession`.
+    await expect(Effect.runPromise(ctx.session.deleteSession(childId))).rejects.toThrow(
+      "delete failed",
+    )
     expect(testStorage.sessions.has(childId)).toBe(true)
   })
 
-  test("deleteSession falls back to storage when SessionDeleter absent (headless)", async () => {
+  test("deleteSession routes through command facade", async () => {
     const testStorage = createTestStorage()
     seedSession(testStorage)
     const { deps } = makeTestDeps(testStorage)
@@ -494,9 +512,6 @@ describe("session mutation primitives", () => {
     )
     expect(testStorage.sessions.has(childId)).toBe(true)
 
-    // No SessionDeleter provided — runtime falls through to bare
-    // storage.deleteSession. Mirrors the existing test above (kept as the
-    // pair: explicit assertion that the *fallback* path is the no-server case).
     await Effect.runPromise(ctx.session.deleteSession(childId))
     expect(testStorage.sessions.has(childId)).toBe(false)
   })

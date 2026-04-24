@@ -48,7 +48,19 @@ export interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, AppServiceError>
-  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, AppServiceError>
+  readonly deleteSession: (
+    sessionId: SessionId,
+  ) => Effect.Effect<void, StorageError | EventStoreError>
+  readonly deleteBranch: (input: {
+    readonly sessionId: SessionId
+    readonly currentBranchId: BranchId
+    readonly branchId: BranchId
+  }) => Effect.Effect<void, StorageError>
+  readonly deleteMessages: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly afterMessageId?: MessageId
+  }) => Effect.Effect<void, StorageError>
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
@@ -544,22 +556,62 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         )
       })
 
+      const deleteSessionOwned = Effect.fn("SessionCommands.deleteSession")(function* (
+        sessionId: SessionId,
+      ) {
+        yield* extensionStateRuntime.terminateAll(sessionId).pipe(
+          // Session deletion owns cleanup best-effort actor termination, then
+          // propagates durable store failures below.
+          Effect.catchDefect(() => Effect.void),
+        )
+        yield* eventPublisher.terminateSession(sessionId)
+        yield* eventStore.removeSession(sessionId)
+        yield* sessionStorage.deleteSession(sessionId)
+        yield* sessionCwdRegistry.forget(sessionId)
+        yield* Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId }))
+      })
+
+      const deleteBranch = Effect.fn("SessionCommands.deleteBranch")(function* (input: {
+        readonly sessionId: SessionId
+        readonly currentBranchId: BranchId
+        readonly branchId: BranchId
+      }) {
+        if (input.branchId === input.currentBranchId) {
+          return yield* Effect.die("Cannot delete the current branch")
+        }
+        const session = yield* sessionStorage.getSession(input.sessionId)
+        if (session === undefined) {
+          return yield* Effect.die("Current session not found")
+        }
+        if (session.activeBranchId === input.branchId) {
+          return yield* Effect.die("Cannot delete the active branch")
+        }
+        const branch = yield* branchStorage.getBranch(input.branchId)
+        if (branch === undefined || branch.sessionId !== input.sessionId) {
+          return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+        }
+        yield* branchStorage.deleteBranch(input.branchId)
+      })
+
+      const deleteMessages = Effect.fn("SessionCommands.deleteMessages")(function* (input: {
+        readonly sessionId: SessionId
+        readonly branchId: BranchId
+        readonly afterMessageId?: MessageId
+      }) {
+        const branch = yield* branchStorage.getBranch(input.branchId)
+        if (branch === undefined || branch.sessionId !== input.sessionId) {
+          return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+        }
+        yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
+      })
+
       return {
         createSession,
         // SessionEnded is not emitted on delete — FK cascade would immediately
         // remove the persisted event. Delete is destructive and rare.
-        // Terminate actors first to prevent leaks.
-        deleteSession: (sessionId) =>
-          extensionStateRuntime.terminateAll(sessionId).pipe(
-            Effect.catchDefect(() => Effect.void),
-            Effect.tap(() => eventPublisher.terminateSession(sessionId)),
-            Effect.tap(() => eventStore.removeSession(sessionId)),
-            Effect.tap(() => sessionStorage.deleteSession(sessionId)),
-            Effect.tap(() => sessionCwdRegistry.forget(sessionId)),
-            Effect.tap(() =>
-              Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId })),
-            ),
-          ),
+        deleteSession: deleteSessionOwned,
+        deleteBranch,
+        deleteMessages,
         createBranch,
         renameSession,
         createSessionBranch,
@@ -610,6 +662,9 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         forkSessionBranch: (input) => cmds.forkSessionBranch(input),
         switchActiveBranch: (input) => cmds.switchActiveBranch(input),
         createChildSession: (input) => cmds.createChildSession(input),
+        deleteSession: (sessionId) => cmds.deleteSession(sessionId),
+        deleteBranch: (input) => cmds.deleteBranch(input),
+        deleteMessages: (input) => cmds.deleteMessages(input),
       }
     }),
   )

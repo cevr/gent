@@ -32,6 +32,17 @@ export interface SessionMutationsService {
     readonly name?: string
     readonly cwd?: string
   }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, SessionMutationError>
+  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionMutationError>
+  readonly deleteBranch: (input: {
+    readonly sessionId: SessionId
+    readonly currentBranchId: BranchId
+    readonly branchId: BranchId
+  }) => Effect.Effect<void, StorageError>
+  readonly deleteMessages: (input: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly afterMessageId?: MessageId
+  }) => Effect.Effect<void, StorageError>
 }
 
 export class SessionMutations extends Context.Service<SessionMutations, SessionMutationsService>()(
