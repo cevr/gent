@@ -58,7 +58,7 @@ const discoverDir = (
       if (info.value.type === "File" && isClientFile(entry)) {
         results.push({ filePath, scope })
       } else if (info.value.type === "Directory") {
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- sequential: directory scan recurses through nested scopes
         const subEntries = yield* fs
           .readDirectory(filePath)
           .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))

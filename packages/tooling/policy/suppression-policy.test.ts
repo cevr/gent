@@ -25,6 +25,8 @@ type SuppressionRule =
   | "eslint:no-process-env"
   | "eslint:typescript-eslint/consistent-type-imports"
   | "ts:@ts-expect-error"
+  | "ts:@ts-nocheck"
+  | "oxlint:no-await-in-loop"
 
 interface SuppressionInstance {
   readonly file: string
@@ -195,6 +197,15 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     },
   },
   {
+    id: "tooling-rule-fixtures",
+    reason:
+      "Rule fixtures may disable TypeScript checking at the file boundary because they intentionally model invalid or partial source snippets for the linter.",
+    matches: (file) => /packages\/tooling\/fixtures\/.+\.ts$/.test(file),
+    counts: {
+      "ts:@ts-nocheck": 14,
+    },
+  },
+  {
     id: "runtime-internals",
     reason:
       "Runtime internals still carry typed erase/cast residue. They are allowed here only until the surrounding architecture gets simpler enough to delete them.",
@@ -218,6 +229,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "eslint:@typescript-eslint/no-non-null-assertion": 1,
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 21,
       "eslint:no-control-regex": 2,
+      "oxlint:no-await-in-loop": 2,
     },
   },
   {
@@ -275,11 +287,27 @@ const parseSuppressions = (file: string): ReadonlyArray<SuppressionInstance> => 
         text: line.trim(),
       })
     }
+    for (const rule of parseOxlintRules(line)) {
+      out.push({
+        file: rel,
+        line: index + 1,
+        rule,
+        text: line.trim(),
+      })
+    }
     if (/^\s*\/\/\s*@ts-expect-error\b/.test(line)) {
       out.push({
         file: rel,
         line: index + 1,
         rule: "ts:@ts-expect-error",
+        text: line.trim(),
+      })
+    }
+    if (/^\s*\/\/\s*@ts-nocheck\b/.test(line)) {
+      out.push({
+        file: rel,
+        line: index + 1,
+        rule: "ts:@ts-nocheck",
         text: line.trim(),
       })
     }
@@ -322,8 +350,29 @@ const parseEslintRules = (line: string): ReadonlyArray<SuppressionRule> => {
     : rules.map((rule) => `eslint:${rule}` as SuppressionRule)
 }
 
+const parseOxlintRules = (line: string): ReadonlyArray<SuppressionRule> => {
+  const oxlintMatch = line.match(
+    /(?:^|\s)(?:\/\/|\/\*)\s*oxlint-disable(?<scope>-next-line|-line)?\b(?<rules>.*)$/,
+  )
+  const rulesText = oxlintMatch?.groups?.rules
+  if (rulesText === undefined) return []
+  if (oxlintMatch.groups?.scope === undefined) return ["oxlint:<block>" as SuppressionRule]
+
+  const withoutBlockEnd = rulesText.replace(/\*\/\s*$/, "")
+  const [ruleList = ""] = withoutBlockEnd.split(/\s--\s/, 1)
+  const rules = ruleList
+    .split(",")
+    .map((rule) => rule.trim())
+    .filter((rule) => rule.length > 0)
+
+  return rules.length === 0
+    ? ["oxlint:<all>" as SuppressionRule]
+    : rules.map((rule) => `oxlint:${rule}` as SuppressionRule)
+}
+
 const hasInlineReason = (suppression: SuppressionInstance): boolean =>
-  !suppression.rule.startsWith("eslint:") || /\s--\s+\S/.test(suppression.text)
+  (!suppression.rule.startsWith("eslint:") && !suppression.rule.startsWith("oxlint:")) ||
+  /\s--\s+\S/.test(suppression.text)
 
 const ESLINT_RULES_REQUIRING_INLINE_REASON = new Set<SuppressionRule>([
   "eslint:@typescript-eslint/no-empty-object-type",
@@ -339,6 +388,7 @@ const ESLINT_RULES_REQUIRING_INLINE_REASON = new Set<SuppressionRule>([
   "eslint:no-new",
   "eslint:no-process-env",
   "eslint:typescript-eslint/consistent-type-imports",
+  "oxlint:no-await-in-loop",
 ])
 
 const collectSuppressions = (): ReadonlyArray<SuppressionInstance> =>
@@ -366,6 +416,8 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "apps/tui/src/components/tool-renderers/grep.tsx:41 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/components/tool-renderers/live-child-tree.tsx:27 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/extensions/builtins/auto.client.ts:78 eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "apps/tui/src/extensions/discovery.ts:54 oxlint:no-await-in-loop",
+  "apps/tui/src/extensions/discovery.ts:61 oxlint:no-await-in-loop",
   "apps/tui/src/hooks/use-cache.ts:21 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/main.tsx:199 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/main.tsx:215 eslint:@typescript-eslint/no-unsafe-type-assertion",
@@ -689,6 +741,20 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/sdk/src/server.ts:318 effect:strictEffectProvide:off",
   "packages/sdk/src/server.ts:45 eslint:@typescript-eslint/no-empty-object-type",
   "packages/sdk/src/supervisor.ts:303 effect:nodeBuiltinImport:off",
+  "packages/tooling/fixtures/all-errors-are-tagged.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/all-errors-are-tagged.valid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/brand-constructor-callers.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/brand-constructor-callers.valid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-define-extension-throw.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-define-extension-throw.valid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-dynamic-imports.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-dynamic-imports.valid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-r-equals-never-comment.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-r-equals-never-comment.valid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-runpromise-outside-boundary-boundary.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-runpromise-outside-boundary.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-scope-brand-cast.invalid.ts:1 ts:@ts-nocheck",
+  "packages/tooling/fixtures/no-scope-brand-cast.valid.ts:1 ts:@ts-nocheck",
   "packages/tooling/tests/fixtures.test.ts:49 eslint:@typescript-eslint/no-unsafe-type-assertion",
 ])
 
@@ -715,6 +781,8 @@ const APPROVED_SUPPRESSION_RULES = new Set<SuppressionRule>([
   "eslint:no-process-env",
   "eslint:typescript-eslint/consistent-type-imports",
   "ts:@ts-expect-error",
+  "ts:@ts-nocheck",
+  "oxlint:no-await-in-loop",
 ])
 
 const formatCounts = (
