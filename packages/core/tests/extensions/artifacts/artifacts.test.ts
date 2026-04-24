@@ -2,6 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { ArtifactId, BranchId, SessionId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
+import { ensureStorageParents } from "@gent/core/test-utils"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
@@ -21,6 +22,7 @@ const withRuntime = (
 
     yield* Effect.gen(function* () {
       const runtime = yield* MachineEngine
+      yield* ensureStorageParents({ sessionId, branchId })
       yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
       yield* fn(runtime)
     }).pipe(Effect.provide(e2eLayer))

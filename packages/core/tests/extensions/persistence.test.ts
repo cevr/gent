@@ -1,12 +1,17 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Layer, Schema } from "effect"
-import { SessionStarted, TurnCompleted } from "@gent/core/domain/event"
+import { AgentEvent, SessionStarted, TurnCompleted } from "@gent/core/domain/event"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { LoadedExtension, ReduceResult } from "../../src/domain/extension.js"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
-import { ensureStorageParents } from "@gent/core/test-utils"
+import { ensureStorageParents, RecordingEventStore, SequenceRecorder } from "@gent/core/test-utils"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -50,6 +55,68 @@ const makeCounterExtension = (id = "persist-counter"): LoadedExtension => {
 
 const makeLayer = (extensions: LoadedExtension[]) =>
   makeActorRuntimeLayer({ extensions, withStorage: true })
+
+const eventTag = (value: unknown) => {
+  const decoded = Schema.decodeUnknownOption(AgentEvent)(value)
+  return decoded._tag === "Some" ? decoded.value._tag : undefined
+}
+
+const makeFailingStorageLayer = (failFromSave: number): Layer.Layer<Storage> => {
+  let saveCount = 0
+  const failingStorage = Layer.effect(
+    Storage,
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      return {
+        ...storage,
+        saveExtensionState: (params) =>
+          Effect.gen(function* () {
+            saveCount += 1
+            if (saveCount >= failFromSave) {
+              return yield* new StorageError({
+                message: "injected extension state persistence failure",
+              })
+            }
+            return yield* storage.saveExtensionState(params)
+          }),
+      } satisfies StorageService
+    }),
+  )
+  return Layer.provideMerge(failingStorage, Storage.Test())
+}
+
+const makeFailureRuntimeLayer = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  failFromSave: number,
+) => {
+  const turnControl = ExtensionTurnControl.Test()
+  const storage = makeFailingStorageLayer(failFromSave)
+  return Layer.mergeAll(
+    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    storage,
+    turnControl,
+  )
+}
+
+const makeFailurePublisherLayer = (
+  extensions: ReadonlyArray<LoadedExtension>,
+  failFromSave: number,
+) => {
+  const turnControl = ExtensionTurnControl.Test()
+  const storage = makeFailingStorageLayer(failFromSave)
+  const recorderLayer = SequenceRecorder.Live
+  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const baseLayer = Layer.mergeAll(
+    MachineEngine.fromExtensions(extensions).pipe(Layer.provideMerge(turnControl)),
+    storage,
+    turnControl,
+    ExtensionRegistry.fromResolved(resolveExtensions(extensions)),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    recorderLayer,
+    eventStoreLayer,
+  )
+  return Layer.merge(baseLayer, Layer.provide(EventPublisherLive, baseLayer))
+}
 
 describe("Extension state persistence", () => {
   it.live("durability writes state to storage on transition", () => {
@@ -146,6 +213,89 @@ describe("Extension state persistence", () => {
         extensionId: "ephemeral",
       })
       expect(loaded).toBeUndefined()
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("state save failure fails the transition and marks the actor failed", () => {
+    const extensionId = "persist-fail"
+    const layer = makeFailureRuntimeLayer([makeCounterExtension(extensionId)], 1)
+
+    return Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId, branchId })
+
+      const transitioned = yield* runtime.publish(
+        TurnCompleted.make({ sessionId, branchId, durationMs: 100 }),
+        { sessionId, branchId },
+      )
+
+      const loaded = yield* storage.loadExtensionState({ sessionId, extensionId })
+      const statuses = yield* runtime.getActorStatuses(sessionId)
+
+      expect(transitioned).toEqual([])
+      expect(loaded).toBeUndefined()
+      expect(statuses).toEqual([
+        expect.objectContaining({
+          _tag: "failed",
+          extensionId,
+          sessionId,
+          branchId,
+          failurePhase: "runtime",
+          restartCount: 1,
+        }),
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("state save failure does not emit a successful transition pulse", () => {
+    const extensionId = "persist-pulse-fail"
+    const layer = makeFailurePublisherLayer([makeCounterExtension(extensionId)], 1)
+
+    return Effect.gen(function* () {
+      const publisher = yield* EventPublisher
+      const recorder = yield* SequenceRecorder
+      yield* ensureStorageParents({ sessionId, branchId })
+
+      yield* publisher.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 100 }))
+
+      const calls = yield* recorder.getCalls()
+      const publishedTags = calls
+        .filter((call) => call.service === "EventStore" && call.method === "publish")
+        .map((call) => eventTag(call.args))
+        .filter((tag): tag is string => tag !== undefined)
+
+      expect(publishedTags).not.toContain("ExtensionStateChanged")
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live("failed save preserves the last durable state", () => {
+    const extensionId = "persist-rollback"
+    const layer = makeFailureRuntimeLayer([makeCounterExtension(extensionId)], 2)
+
+    return Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId, branchId })
+
+      yield* runtime.publish(TurnCompleted.make({ sessionId, branchId, durationMs: 50 }), {
+        sessionId,
+        branchId,
+      })
+      const transitioned = yield* runtime.publish(
+        TurnCompleted.make({ sessionId, branchId, durationMs: 50 }),
+        { sessionId, branchId },
+      )
+
+      const loaded = yield* storage.loadExtensionState({ sessionId, extensionId })
+      expect(transitioned).toEqual([])
+      expect(loaded).toBeDefined()
+      const parsed = JSON.parse(loaded!.stateJson) as {
+        readonly _tag: "Active"
+        readonly value: CounterState
+      }
+      expect(parsed.value.count).toBe(1)
+      expect(loaded!.version).toBe(1)
     }).pipe(Effect.provide(layer))
   })
 })
