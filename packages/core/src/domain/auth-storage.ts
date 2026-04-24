@@ -24,6 +24,17 @@ export interface AuthStorageService {
 
 // Auth Storage Service Tag
 
+/**
+ * Raw result of a keychain shell invocation — exit code + stdout/stderr.
+ * Exposed so test layers can inject a fake `security` runner that drives
+ * classification logic without relying on the real macOS binary.
+ */
+export interface KeychainRunResult {
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+}
+
 export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService>()(
   "@gent/core/src/domain/auth-storage/AuthStorage",
 ) {
@@ -49,32 +60,100 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
           }),
         )
 
+  // Shape returned by the keychain shell boundary. Exported so tests can
+  // inject a custom runner and assert classification behavior without
+  // touching the real `security` binary.
+  static KeychainExitTag = {
+    Ok: "ok" as const,
+    ItemNotFound: "item-not-found" as const,
+    Failure: "failure" as const,
+  }
+
   // macOS Keychain implementation
-  static LiveKeychain = (serviceName: string = "gent"): Layer.Layer<AuthStorage> =>
+  static LiveKeychain = (
+    serviceName: string = "gent",
+    options: {
+      readonly runSecurity?: (args: ReadonlyArray<string>) => Promise<KeychainRunResult>
+    } = {},
+  ): Layer.Layer<AuthStorage> =>
     Layer.effect(
       AuthStorage,
       Effect.sync(() => {
-        const execSecurity = (args: string[]) =>
+        // `security` exits 44 (errSecItemNotFound) when the keychain item
+        // doesn't exist. Every other non-zero exit — 36 (locked keychain),
+        // 51 (denied access), 25308 (interaction not allowed), 127 (command
+        // not found), etc. — is a real operational failure that callers
+        // must see. Classify at the shell boundary so downstream code never
+        // has to re-infer "missing vs broken".
+        const ITEM_NOT_FOUND_EXIT = 44
+
+        type KeychainExit =
+          | { readonly _tag: "ok"; readonly stdout: string }
+          | { readonly _tag: "item-not-found" }
+          | { readonly _tag: "failure"; readonly exitCode: number; readonly stderr: string }
+
+        const defaultRunSecurity = async (args: ReadonlyArray<string>) => {
+          const proc = Bun.spawn(["security", ...args], {
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const stdout = await new Response(proc.stdout).text()
+          const exitCode = await proc.exited
+          const stderr = exitCode === 0 ? "" : await new Response(proc.stderr).text()
+          return { exitCode, stdout, stderr } satisfies KeychainRunResult
+        }
+
+        const runSecurityRaw = options.runSecurity ?? defaultRunSecurity
+
+        const runSecurity = (args: ReadonlyArray<string>): Effect.Effect<KeychainExit> =>
           Effect.tryPromise({
             try: async () => {
-              const proc = Bun.spawn(["security", ...args], {
-                stdout: "pipe",
-                stderr: "pipe",
-              })
-              const text = await new Response(proc.stdout).text()
-              const code = await proc.exited
-              if (code !== 0) {
-                const err = await new Response(proc.stderr).text()
-                throw new Error(err || `Exit code ${code}`)
-              }
-              return text.trim()
+              const result = await runSecurityRaw(args)
+              if (result.exitCode === 0)
+                return { _tag: "ok", stdout: result.stdout.trim() } as KeychainExit
+              if (result.exitCode === ITEM_NOT_FOUND_EXIT)
+                return { _tag: "item-not-found" } as KeychainExit
+              return {
+                _tag: "failure",
+                exitCode: result.exitCode,
+                stderr: result.stderr.trim(),
+              } as KeychainExit
             },
             catch: (e) =>
               new AuthStorageError({
-                message: `Keychain command failed: ${e instanceof Error ? e.message : String(e)}`,
+                message: `Keychain command spawn failed: ${e instanceof Error ? e.message : String(e)}`,
                 cause: e,
               }),
-          })
+          }).pipe(
+            // Spawn-level failures are rare (binary missing) — surface them
+            // as a generic shell-boundary failure so callers can classify
+            // uniformly instead of distinguishing spawn vs exit codes.
+            Effect.catchEager((e) =>
+              Effect.succeed({
+                _tag: "failure" as const,
+                exitCode: -1,
+                stderr: e.message,
+              } satisfies KeychainExit),
+            ),
+          )
+
+        const runSecurityRequireOk = (args: ReadonlyArray<string>) =>
+          runSecurity(args).pipe(
+            Effect.flatMap((result) => {
+              if (result._tag === "ok") return Effect.succeed(result.stdout)
+              if (result._tag === "item-not-found")
+                return Effect.fail(
+                  new AuthStorageError({
+                    message: `Keychain item not found for args: ${args.join(" ")}`,
+                  }),
+                )
+              return Effect.fail(
+                new AuthStorageError({
+                  message: `Keychain command failed (exit ${result.exitCode}): ${result.stderr || "unknown error"}`,
+                }),
+              )
+            }),
+          )
 
         const execShell = (cmd: string) =>
           Effect.tryPromise({
@@ -100,16 +179,29 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
 
         return {
           get: (provider) =>
-            execSecurity(["find-generic-password", "-s", serviceName, "-a", provider, "-w"]).pipe(
-              Effect.map((key) => (key.length > 0 ? key : undefined)),
-              Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
+            runSecurity(["find-generic-password", "-s", serviceName, "-a", provider, "-w"]).pipe(
+              Effect.flatMap((result) => {
+                if (result._tag === "ok")
+                  return Effect.succeed(
+                    result.stdout.length > 0 ? result.stdout : (undefined as string | undefined),
+                  )
+                if (result._tag === "item-not-found")
+                  return Effect.succeed(undefined as string | undefined)
+                return Effect.fail(
+                  new AuthStorageError({
+                    message: `Keychain get failed (exit ${result.exitCode}): ${result.stderr || "unknown error"}`,
+                  }),
+                )
+              }),
             ),
 
           set: (provider, key) =>
-            execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
-              Effect.catchEager(() => Effect.void), // Expected to fail if no existing entry
+            runSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
+              // Pre-delete is best-effort: item-not-found is expected, other
+              // failures are ignored because the subsequent add will surface
+              // a definitive error if the keychain is actually broken.
               Effect.flatMap(() =>
-                execSecurity([
+                runSecurityRequireOk([
                   "add-generic-password",
                   "-s",
                   serviceName,
@@ -123,9 +215,13 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
             ),
 
           delete: (provider) =>
-            execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
-              Effect.asVoid,
-            ),
+            runSecurityRequireOk([
+              "delete-generic-password",
+              "-s",
+              serviceName,
+              "-a",
+              provider,
+            ]).pipe(Effect.asVoid),
 
           list: () =>
             execShell(
@@ -137,7 +233,6 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
                   .map((s) => s.trim())
                   .filter((s) => s.length > 0),
               ),
-              Effect.catchEager(() => Effect.succeed([])),
             ),
         }
       }),

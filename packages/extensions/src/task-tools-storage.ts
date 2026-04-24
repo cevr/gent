@@ -150,26 +150,30 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
     const sql = yield* SqlClient.SqlClient
 
     // Extension-owned DDL — fatal if this fails
-    yield* Effect.all([
-      sql.unsafe(`
-          CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            branch_id TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            description TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            owner TEXT,
-            agent_type TEXT,
-            prompt TEXT,
-            cwd TEXT,
-            metadata TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-          )
-        `),
-      sql.unsafe(`
+    const tasksCreateSql = `
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        owner TEXT,
+        agent_type TEXT,
+        prompt TEXT,
+        cwd TEXT,
+        metadata TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+      )
+    `
+
+    yield* sql.unsafe(tasksCreateSql).pipe(Effect.orDie)
+    yield* sql
+      .unsafe(
+        `
           CREATE TABLE IF NOT EXISTS task_deps (
             task_id TEXT NOT NULL,
             blocked_by_id TEXT NOT NULL,
@@ -177,12 +181,52 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
             FOREIGN KEY (blocked_by_id) REFERENCES tasks(id) ON DELETE CASCADE
           )
-        `),
-      sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`),
-      sql.unsafe(
-        `CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`,
-      ),
-    ]).pipe(Effect.orDie)
+        `,
+      )
+      .pipe(Effect.orDie)
+    yield* sql
+      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
+      .pipe(Effect.orDie)
+    yield* sql
+      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`)
+      .pipe(Effect.orDie)
+
+    // One-shot migration: earlier schemas lacked the composite (branch_id,
+    // session_id) FK, so a branch delete cascaded messages but left orphan
+    // tasks. Detect the legacy shape via PRAGMA foreign_key_list and rebuild
+    // the table with the correct FKs, preserving rows whose branch still
+    // exists. Drops orphans whose branch is already gone.
+    interface ForeignKeyRow {
+      readonly table: string
+      readonly from: string
+    }
+    const fkRows = yield* sql
+      .unsafe<ForeignKeyRow>(`PRAGMA foreign_key_list(tasks)`)
+      .pipe(Effect.orDie)
+    const hasCompositeBranchFk = fkRows.some(
+      (row) => row.table === "branches" && row.from === "branch_id",
+    )
+
+    if (!hasCompositeBranchFk) {
+      yield* sql.unsafe(`PRAGMA foreign_keys = OFF`).pipe(Effect.orDie)
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql.unsafe(`DROP TABLE IF EXISTS tasks__legacy_fk_migration`)
+            yield* sql.unsafe(`ALTER TABLE tasks RENAME TO tasks__legacy_fk_migration`)
+            yield* sql.unsafe(tasksCreateSql)
+            yield* sql.unsafe(`
+              INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at)
+              SELECT legacy.id, legacy.session_id, legacy.branch_id, legacy.subject, legacy.description, legacy.status, legacy.owner, legacy.agent_type, legacy.prompt, legacy.cwd, legacy.metadata, legacy.created_at, legacy.updated_at
+              FROM tasks__legacy_fk_migration AS legacy
+              INNER JOIN branches ON branches.id = legacy.branch_id AND branches.session_id = legacy.session_id
+            `)
+            yield* sql.unsafe(`DROP TABLE tasks__legacy_fk_migration`)
+          }),
+        )
+        .pipe(Effect.orDie)
+      yield* sql.unsafe(`PRAGMA foreign_keys = ON`).pipe(Effect.orDie)
+    }
 
     return {
       createTask: Effect.fn("TaskStorage.createTask")(

@@ -196,6 +196,33 @@ describe("Task Dependencies", () => {
     }))
 })
 
+describe("Composite branch FK", () => {
+  test("deleting the parent branch cascades its tasks", () =>
+    Effect.gen(function* () {
+      const { storage } = yield* setup
+      const hostStorage = yield* Storage
+      yield* storage.createTask(makeTask("t1"))
+      yield* storage.createTask(makeTask("t2"))
+
+      yield* hostStorage.deleteBranch(BranchId.make("b1"))
+
+      const remaining = yield* storage.listTasks(SessionId.make("s1"))
+      expect(remaining.length).toBe(0)
+    }))
+
+  test("creating a task whose branch does not exist is rejected", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const taskStorage = yield* TaskStorage
+      const result = yield* Effect.flip(
+        taskStorage.createTask(makeTask("t1", { branchId: BranchId.make("nonexistent-branch") })),
+      )
+      expect(result._tag).toBe("TaskStorageError")
+      const present = yield* taskStorage.getTask(TaskId.make("t1"))
+      expect(present).toBeUndefined()
+    }))
+})
+
 describe("TaskStorageReadOnly", () => {
   test("TaskStorage.Live provides the read-only Tag with working read methods", () =>
     Effect.gen(function* () {

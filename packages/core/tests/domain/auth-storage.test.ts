@@ -1,13 +1,90 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { AuthStorage, type KeychainRunResult } from "@gent/core/domain/auth-storage"
 
 const encryptedFileLayer = (authPath: string, keyPath: string) =>
   AuthStorage.LiveEncryptedFile(authPath, keyPath).pipe(Layer.provide(BunServices.layer))
+
+describe("AuthStorage.LiveKeychain classification", () => {
+  // `LiveKeychain` accepts an injected `runSecurity` runner. The tests
+  // here stub it to drive classification behavior without touching the
+  // real macOS `security` binary.
+
+  const stubRunner = (result: KeychainRunResult) => () => Promise.resolve(result)
+
+  test("get returns undefined on exit 44 (item not found)", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* AuthStorage
+        return yield* storage.get("openai")
+      }).pipe(
+        Effect.provide(
+          AuthStorage.LiveKeychain("gent-test", {
+            runSecurity: stubRunner({
+              exitCode: 44,
+              stdout: "",
+              stderr: "security: The specified item could not be found in the keychain.",
+            }),
+          }),
+        ),
+      ),
+    )
+    expect(result).toBeUndefined()
+  })
+
+  test("get raises AuthStorageError on locked keychain (exit 36), not undefined", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const storage = yield* AuthStorage
+        return yield* storage.get("openai")
+      }).pipe(
+        Effect.provide(
+          AuthStorage.LiveKeychain("gent-test", {
+            runSecurity: stubRunner({
+              exitCode: 36,
+              stdout: "",
+              stderr: "SecKeychainSearchCopyNext: User interaction is not allowed.",
+            }),
+          }),
+        ),
+      ),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      const msg = String(exit.cause)
+      expect(msg).toContain("exit 36")
+      expect(msg).toContain("User interaction is not allowed")
+    }
+  })
+
+  test("delete raises AuthStorageError on missing item (exit 44)", async () => {
+    // delete must treat item-not-found as a real error — the caller asked
+    // to remove something that doesn't exist, which is an invariant
+    // violation worth surfacing, unlike `get` where missing is a valid
+    // "no credential stored" state.
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const storage = yield* AuthStorage
+        return yield* storage.delete("openai")
+      }).pipe(
+        Effect.provide(
+          AuthStorage.LiveKeychain("gent-test", {
+            runSecurity: stubRunner({
+              exitCode: 44,
+              stdout: "",
+              stderr: "",
+            }),
+          }),
+        ),
+      ),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+  })
+})
 
 describe("AuthStorage.LiveEncryptedFile", () => {
   test("corrupt auth files fail closed and do not get overwritten by writes", async () => {
