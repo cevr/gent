@@ -128,8 +128,13 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 
 // ── Provider Stream Parts ──
 
-export type ProviderStreamPart = Response.StreamPart<Record<string, AiTool.Any>>
-type ProviderStream = Stream.Stream<ProviderStreamPart, ProviderError>
+export type ProviderToolMap = Record<string, AiTool.Any>
+export type ProviderStreamPart<Tools extends ProviderToolMap = ProviderToolMap> =
+  Response.StreamPart<Tools>
+type ProviderStream<Tools extends ProviderToolMap = ProviderToolMap> = Stream.Stream<
+  ProviderStreamPart<Tools>,
+  ProviderError
+>
 
 let _streamPartIdCounter = 0
 const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
@@ -161,10 +166,9 @@ const finishPart = (params: {
 
 // ── Provider Request ──
 
-export interface ProviderRequest {
+interface ProviderRequestBase {
   readonly model: string
   readonly prompt: Prompt.RawInput
-  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
   readonly maxTokens?: number
   readonly temperature?: number
   readonly reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
@@ -176,7 +180,16 @@ export interface ProviderRequest {
   readonly driverId?: string
 }
 
-export interface ProviderMessageRequest extends Omit<ProviderRequest, "prompt"> {
+export interface ProviderRequest<
+  Tools extends ProviderToolMap = ProviderToolMap,
+> extends ProviderRequestBase {
+  readonly tools?: ReadonlyArray<AnyCapabilityContribution>
+  readonly toolkit?: AiToolkit.WithHandler<Tools>
+}
+
+export interface ProviderMessageRequest<
+  Tools extends ProviderToolMap = ProviderToolMap,
+> extends Omit<ProviderRequest<Tools>, "prompt"> {
   readonly messages: ReadonlyArray<Message>
   readonly systemPrompt?: string
 }
@@ -205,7 +218,15 @@ export interface GenerateRequest {
 // ── Provider Service ──
 
 export interface ProviderService {
-  readonly stream: (request: ProviderRequest) => Effect.Effect<ProviderStream, ProviderError>
+  readonly stream: {
+    <Tools extends ProviderToolMap>(
+      request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
+    ): Effect.Effect<ProviderStream<Tools>, ProviderError>
+    (
+      request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
+    ): Effect.Effect<ProviderStream, ProviderError>
+    (request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError>
+  }
 
   readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
 }
@@ -241,8 +262,8 @@ const makeAdvertiseOnlyToolkit = <Tools extends Record<string, AiTool.Any>>(
 
 function convertTools(
   tools: ReadonlyArray<AnyCapabilityContribution>,
-): AiToolkit.WithHandler<Record<string, AiTool.Any>> {
-  const toolsRecord: Record<string, AiTool.Any> = {}
+): AiToolkit.WithHandler<ProviderToolMap> {
+  const toolsRecord: ProviderToolMap = {}
 
   for (const capability of tools) {
     toolsRecord[capability.id] = toCapabilityTool(capability)
@@ -383,8 +404,15 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       const registry = yield* DriverRegistry
       const getModel = makeModelResolver(authStore, registry)
 
-      return {
-        stream: Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
+      function stream<Tools extends ProviderToolMap>(
+        request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
+      ): Effect.Effect<ProviderStream<Tools>, ProviderError>
+      function stream(
+        request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
+      ): Effect.Effect<ProviderStream, ProviderError>
+      function stream(request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError>
+      function stream(request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError> {
+        return Effect.gen(function* () {
           const hints: ProviderHints = {
             reasoning: request.reasoning,
             maxTokens: request.maxTokens,
@@ -399,7 +427,9 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
           const modelLayer = resolution.layer
 
           // Build tools
-          const withHandler = request.tools !== undefined ? convertTools(request.tools) : undefined
+          const withHandler =
+            request.toolkit ??
+            (request.tools !== undefined ? convertTools(request.tools) : undefined)
 
           // Create stream via LanguageModel service
           const rawStream =
@@ -425,7 +455,11 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
               ),
             ),
           )
-        }),
+        })
+      }
+
+      return {
+        stream,
 
         generate: Effect.fn("Provider.generate")(function* (request: GenerateRequest) {
           const hints: ProviderHints = { maxTokens: request.maxTokens }

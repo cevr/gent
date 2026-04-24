@@ -6,15 +6,20 @@ import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
-import { Provider, type ProviderResolution } from "@gent/core/providers/provider"
+import {
+  Provider,
+  type ProviderError,
+  type ProviderResolution,
+} from "@gent/core/providers/provider"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"
-import type * as AiTool from "effect/unstable/ai/Tool"
+import * as AiTool from "effect/unstable/ai/Tool"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import type * as Prompt from "effect/unstable/ai/Prompt"
+import type * as Response from "effect/unstable/ai/Response"
 
 const emptyAuthInfo: Record<string, AuthInfo> = {}
 const missingAuthInfo: AuthInfo | undefined = undefined
@@ -319,6 +324,90 @@ describe("Provider model resolution", () => {
       expect.objectContaining({
         type: "finish",
         reason: "tool-calls",
+      }),
+    )
+  })
+
+  test("request.toolkit preserves typed Effect tool maps through the live stream path", async () => {
+    const typedEchoTool = AiTool.dynamic("typedEcho", {
+      description: "Typed echo input",
+      parameters: Schema.Struct({ text: Schema.String }),
+    })
+    type TypedTools = { readonly typedEcho: typeof typedEchoTool }
+    const typedToolkit = {
+      tools: { typedEcho: typedEchoTool },
+      handle: (name) =>
+        Effect.fail(
+          AiError.make({
+            module: "Test",
+            method: "typedToolkit.handle",
+            reason: new AiError.ToolConfigurationError({
+              toolName: String(name),
+              description: "unused in provider advertising test",
+            }),
+          }),
+        ),
+    } satisfies AiToolkit.WithHandler<TypedTools>
+
+    let capturedToolkit: AiToolkit.WithHandler<TypedTools> | undefined
+
+    const streamingProvider: ModelDriverContribution = {
+      id: "typed-toolkit-live",
+      name: "TypedToolkitLive",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, {
+          generateText: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateText",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          generateObject: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateObject",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          streamText: (options) => {
+            capturedToolkit = options.toolkit
+            return Stream.fromIterable([
+              toolCallPart("typedEcho", { text: "hi" }, { toolCallId: "typed-tc-1" }),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 1, outputTokens: 1 },
+              }),
+            ])
+          },
+        } satisfies LanguageModel.Service),
+      }),
+    }
+
+    const layer = buildProviderLayer([makeExt("typed-toolkit-live-ext", [streamingProvider])])
+
+    const parts = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "typed-toolkit-live/gpt-5",
+          prompt: [],
+          toolkit: typedToolkit,
+        })
+        const typedStream: Stream.Stream<Response.StreamPart<TypedTools>, ProviderError> = stream
+        return yield* Stream.runCollect(typedStream)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(capturedToolkit).toBe(typedToolkit)
+    const collected = Array.from(parts)
+    expect(collected[0]).toEqual(
+      expect.objectContaining({
+        type: "tool-call",
+        name: "typedEcho",
+        params: { text: "hi" },
       }),
     )
   })
