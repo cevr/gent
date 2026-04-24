@@ -73,7 +73,19 @@ export interface ExtensionCommandDefinition<
   readonly make: MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
   readonly payloadSchema: Schema.Schema<PayloadType<F>>
   readonly schema: Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
+  /**
+   * Full-shape narrow: the message carries this command's `extensionId`/`_tag`
+   * AND its payload matches the declared fields. Use when the discriminator
+   * alone isn't a contract — e.g. routing a message to a handler that reads
+   * typed payload fields.
+   */
   readonly is: (message: AnyExtensionMessage) => message is ExtensionCommandMessage<Id, Tag, F>
+  /**
+   * Cheap envelope-only check — `extensionId` and `_tag` match, nothing
+   * about the payload. Use for routing decisions that do not read payload
+   * fields (dispatch tables, logging, metrics).
+   */
+  readonly hasEnvelopeTag: (message: AnyExtensionMessage) => boolean
 }
 
 export interface ExtensionRequestDefinition<
@@ -89,7 +101,10 @@ export interface ExtensionRequestDefinition<
   readonly replySchema: Schema.Codec<R, unknown, never, never>
   readonly replyDecoder: Schema.Decoder<R>
   readonly schema: Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
+  /** See {@link ExtensionCommandDefinition.is}. */
   readonly is: (message: AnyExtensionMessage) => message is ExtensionRequestMessage<Id, Tag, F, R>
+  /** See {@link ExtensionCommandDefinition.hasEnvelopeTag}. */
+  readonly hasEnvelopeTag: (message: AnyExtensionMessage) => boolean
 }
 
 export type AnyExtensionCommandDefinition = ExtensionCommandDefinition<
@@ -208,12 +223,13 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
 ): ExtensionCommandDefinition<Id, Tag, F> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-  const schema = Schema.Struct({
+  const rawSchema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
     ...fields,
-  }) as unknown as Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
+  })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
+  const schema = rawSchema as unknown as Schema.Decoder<ExtensionCommandMessage<Id, Tag, F>>
 
   const metadata: ExtensionCommandMetadata = {
     _tag: "command",
@@ -237,7 +253,10 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
     )
   }) as MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
 
+  const isFullShape = Schema.is(rawSchema)
   const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
+    isFullShape(message)
+  const hasEnvelopeTag = (message: AnyExtensionMessage) =>
     message.extensionId === extensionId && message._tag === tag
 
   return attachDefinitionMetadata(
@@ -248,6 +267,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
       payloadSchema,
       schema,
       is,
+      hasEnvelopeTag,
     },
     metadata,
   )
@@ -261,12 +281,13 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
 ): ExtensionRequestDefinition<Id, Tag, F, R> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-  const schema = Schema.Struct({
+  const rawSchema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
     ...fields,
-  }) as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
+  })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
+  const schema = rawSchema as unknown as Schema.Decoder<ExtensionRequestMessage<Id, Tag, F, R>>
 
   const replyDecoder: Schema.Decoder<R> = replySchema
 
@@ -294,7 +315,10 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
     )
   }) as MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>>
 
+  const isFullShape = Schema.is(rawSchema)
   const is = (message: AnyExtensionMessage): message is ExtensionRequestMessage<Id, Tag, F, R> =>
+    isFullShape(message)
+  const hasEnvelopeTag = (message: AnyExtensionMessage) =>
     message.extensionId === extensionId && message._tag === tag
 
   return attachDefinitionMetadata(
@@ -307,6 +331,7 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
       replyDecoder,
       schema,
       is,
+      hasEnvelopeTag,
     },
     metadata,
   )

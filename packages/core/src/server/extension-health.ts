@@ -1,35 +1,22 @@
-import type {
-  ExtensionActorStatusInfo as DomainExtensionActorStatusInfo,
-  ExtensionStatusInfo,
-} from "../domain/extension.js"
+import type { ExtensionActorStatusInfo, ExtensionStatusInfo } from "../domain/extension.js"
 import {
-  ExtensionActorStatusInfo,
   ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 } from "./transport-contract.js"
 
-const toTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
-  switch (status._tag) {
-    case "starting":
-      return ExtensionActorStatusInfo.Starting.make(status)
-    case "running":
-      return ExtensionActorStatusInfo.Running.make(status)
-    case "restarting":
-      return ExtensionActorStatusInfo.Restarting.make(status)
-    case "failed":
-      return ExtensionActorStatusInfo.Failed.make(status)
-  }
-}
-
-const toHealthyTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
-  const actor = toTransportActorStatus(status)
-  return actor._tag === "failed" ? undefined : actor
-}
+// `ExtensionActorStatusInfo` is a shared domain TaggedEnumClass — transport
+// re-exports the same identity rather than maintaining a parallel copy, so
+// no wire ↔ domain mapper is needed. For the healthy projections we just
+// drop the `failed` variant.
+const toHealthyActorStatus = (
+  status: ExtensionActorStatusInfo,
+): Exclude<ExtensionActorStatusInfo, { readonly _tag: "failed" }> | undefined =>
+  status._tag === "failed" ? undefined : status
 
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
-  actorStatuses: ReadonlyArray<DomainExtensionActorStatusInfo> = [],
+  actorStatuses: ReadonlyArray<ExtensionActorStatusInfo> = [],
 ): ExtensionHealthSnapshot => {
   const actorByExtension = new Map(
     actorStatuses.map((status) => [status.extensionId, status] as const),
@@ -37,7 +24,7 @@ export const buildExtensionHealthSnapshot = (
 
   const extensions = activationStatuses.map((status) => {
     const actorStatus = actorByExtension.get(status.manifest.id)
-    const actor = actorStatus !== undefined ? toHealthyTransportActorStatus(actorStatus) : undefined
+    const actor = actorStatus !== undefined ? toHealthyActorStatus(actorStatus) : undefined
     const schedulerFailures = status.scheduledJobFailures ?? []
     const actorFailure =
       actorStatus?._tag === "failed"

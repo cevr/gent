@@ -95,4 +95,44 @@ describe("extension protocol branding", () => {
       }),
     ).toThrow('protocol entry "Ping" is not a message definition')
   })
+
+  test("`.is` validates the full payload — tag-only envelope is rejected", () => {
+    // A command definition's type predicate is a contract: callers narrow to
+    // the full typed shape and read typed payload fields. An envelope with
+    // the right tag but a malformed/missing payload would otherwise be a
+    // typed lie — the handler reads `.taskId` and gets undefined.
+    const GetTask = ExtensionMessage.reply(
+      "@gent/task-tools",
+      "GetTask",
+      { taskId: Schema.String },
+      Schema.Struct({ status: Schema.String }),
+    )
+
+    const validRequest = GetTask.make({ taskId: "task-1" })
+    expect(GetTask.is(validRequest)).toBe(true)
+
+    // Envelope tag matches but payload is missing the required field.
+    const envelopeOnly = { extensionId: "@gent/task-tools", _tag: "GetTask" }
+    expect(GetTask.is(envelopeOnly)).toBe(false)
+    // Escape hatch: envelope-level predicate for cheap routing.
+    expect(GetTask.hasEnvelopeTag(envelopeOnly)).toBe(true)
+
+    // Wrong payload shape — numeric where string is required.
+    const badPayload = {
+      extensionId: "@gent/task-tools",
+      _tag: "GetTask",
+      taskId: 42,
+    }
+    expect(GetTask.is(badPayload)).toBe(false)
+    expect(GetTask.hasEnvelopeTag(badPayload)).toBe(true)
+
+    // Wrong extensionId even with a valid-looking payload.
+    const wrongExtension = {
+      extensionId: "@gent/other",
+      _tag: "GetTask",
+      taskId: "task-1",
+    }
+    expect(GetTask.is(wrongExtension)).toBe(false)
+    expect(GetTask.hasEnvelopeTag(wrongExtension)).toBe(false)
+  })
 })

@@ -129,6 +129,41 @@ describe("TaggedEnumClass — match / guards / isAnyOf", () => {
   })
 })
 
+describe("TaggedEnumClass — guards validate full payload shape", () => {
+  const Shape = TaggedEnumClass("FullShape", {
+    Circle: { radius: Schema.Number },
+    Rectangle: { width: Schema.Number, height: Schema.Number },
+  })
+
+  // The type signatures on `isAnyOf` / `match` / `guards` claim to narrow
+  // to a fully-typed variant. A spoofed `{ _tag: "Circle" }` with bad or
+  // missing payload would otherwise pass a tag-only check and reach code
+  // paths that trust the types.
+  const spoofed = { _tag: "Circle", radius: "not a number" }
+  const missingPayload = { _tag: "Circle" }
+
+  test("`guards.X` rejects spoofed tag with invalid payload", () => {
+    expect(Shape.guards.Circle(spoofed)).toBe(false)
+    expect(Shape.guards.Circle(missingPayload)).toBe(false)
+  })
+
+  test("`isAnyOf` rejects spoofed tag with invalid payload", () => {
+    const anyShape = Shape.isAnyOf(["Circle", "Rectangle"])
+    expect(anyShape(spoofed)).toBe(false)
+    expect(anyShape(missingPayload)).toBe(false)
+    expect(anyShape(Shape.Circle.make({ radius: 1 }))).toBe(true)
+  })
+
+  test("`match` throws before dispatching when payload fails schema", () => {
+    const handlers = {
+      Circle: (c: { readonly radius: number }) => c.radius,
+      Rectangle: (r: { readonly width: number; readonly height: number }) => r.width * r.height,
+    }
+    expect(() => Shape.match(handlers)(spoofed as never)).toThrow(/fails the variant schema/)
+    expect(() => Shape.match(handlers)(missingPayload as never)).toThrow(/fails the variant schema/)
+  })
+})
+
 describe("TaggedEnumClass — construction-time validation", () => {
   test("rejects empty variant map", () => {
     expect(() => TaggedEnumClass("Empty", {})).toThrow(/no variants/)

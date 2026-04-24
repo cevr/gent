@@ -74,7 +74,8 @@ export type ExtensionStatusInfo =
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
-export type ExtensionActorFailurePhase = "start" | "runtime"
+export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
+export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
 
 const ExtensionActorStatusFields = {
   extensionId: Schema.String,
@@ -95,7 +96,7 @@ export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInf
   Failed: TaggedEnumClass.variant("failed", {
     ...ExtensionActorStatusFields,
     error: Schema.String,
-    failurePhase: Schema.Literals(["start", "runtime"]),
+    failurePhase: ExtensionActorFailurePhase,
     restartCount: Schema.optional(Schema.Number),
   }),
 })

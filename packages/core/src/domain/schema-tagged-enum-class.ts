@@ -332,17 +332,34 @@ const makeTaggedEnumClass = <const V extends VariantsMap>(
   const union = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag"))
   Reflect.deleteProperty(union, "cases")
 
-  const guards = Object.fromEntries(
+  // Per-variant full-shape guards. Each is `Schema.is(Variant)`, so it
+  // validates the payload as well as the discriminator — not just
+  // `{ _tag: "X" }`.
+  const guardByMember = Object.fromEntries(
     Object.entries(variantClasses).map(([memberName, variant]) => [memberName, Schema.is(variant)]),
-  )
+  ) as Record<string, (u: unknown) => boolean>
+  const guards = guardByMember
+  // `isAnyOf` composes those per-variant guards — accepting either the
+  // member name or its wire tag — so a spoofed `{ _tag: "X" }` with the
+  // wrong payload shape fails instead of slipping through as a tag-only
+  // match. This matches the type signature, which claims to narrow to
+  // the full variant type.
   const isAnyOf = (members: ReadonlyArray<string>) => {
-    const allowedMembers = new Set(members)
-    const allowedWireTags = new Set(members.map((member) => memberToWireTag.get(member) ?? member))
+    const allowedMembers = new Set<string>()
+    for (const member of members) {
+      if (guardByMember[member] !== undefined) {
+        allowedMembers.add(member)
+        continue
+      }
+      const resolved = wireTagToMember.get(member)
+      if (resolved !== undefined) allowedMembers.add(resolved)
+    }
     return (u: unknown): boolean => {
-      if (typeof u !== "object" || u === null || !("_tag" in u)) return false
-      const tag = (u as { readonly _tag?: unknown })._tag
-      if (typeof tag !== "string") return false
-      return allowedWireTags.has(tag) || allowedMembers.has(wireTagToMember.get(tag) ?? "")
+      for (const member of allowedMembers) {
+        const guard = guardByMember[member]
+        if (guard !== undefined && guard(u)) return true
+      }
+      return false
     }
   }
   const getHandler = (
@@ -367,6 +384,16 @@ const makeTaggedEnumClass = <const V extends VariantsMap>(
       if (member === undefined) {
         throw new TaggedEnumClassConfigError({
           message: `TaggedEnumClass: "${identifier}" match received unknown _tag "${String(tag)}".`,
+        })
+      }
+      // Validate the full variant shape before dispatch — the handler
+      // type signature promises a fully-typed variant, not just a tag
+      // discriminator. A payload with the right tag but malformed
+      // fields would otherwise reach the handler as a typed lie.
+      const memberGuard = guardByMember[member]
+      if (memberGuard === undefined || !memberGuard(value)) {
+        throw new TaggedEnumClassConfigError({
+          message: `TaggedEnumClass: "${identifier}" match received value tagged "${String(tag)}" whose payload fails the variant schema.`,
         })
       }
       const handler = getHandler(handlers, member)

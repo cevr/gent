@@ -9,12 +9,17 @@ import {
 } from "../domain/auth-guard.js"
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
+import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
 import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { SessionRuntimeStateSchema } from "../runtime/session-runtime.js"
+
+// Re-export shared domain shapes — the transport contract is the same
+// identity as the domain-owned state, not a parallel copy.
+export { ExtensionActorFailurePhase, ExtensionActorStatusInfo }
 
 export const CreateSessionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -378,34 +383,6 @@ export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
 
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
-
-export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
-export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
-
-const ExtensionActorStatusFields = {
-  extensionId: Schema.String,
-  sessionId: SessionId,
-  branchId: Schema.optional(BranchId),
-}
-
-export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
-  Starting: TaggedEnumClass.variant("starting", ExtensionActorStatusFields),
-  Running: TaggedEnumClass.variant("running", {
-    ...ExtensionActorStatusFields,
-    restartCount: Schema.optional(Schema.Number),
-  }),
-  Restarting: TaggedEnumClass.variant("restarting", {
-    ...ExtensionActorStatusFields,
-    restartCount: Schema.Number,
-  }),
-  Failed: TaggedEnumClass.variant("failed", {
-    ...ExtensionActorStatusFields,
-    error: Schema.String,
-    failurePhase: ExtensionActorFailurePhase,
-    restartCount: Schema.optional(Schema.Number),
-  }),
-})
-export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 
 export const ExtensionManifestInfo = Schema.Struct({
   id: Schema.String,
