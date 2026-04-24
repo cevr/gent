@@ -119,17 +119,13 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
 
     const resolved = yield* Effect.try({
       try: () => extensionProvider.resolveModel(modelName, authParam, hints),
-      catch: (e) => {
+      catch: (e): ProviderError | ProviderAuthError => {
         // Drivers that fail closed at credential resolution throw a
-        // typed `ProviderAuthError`. Preserve that typing at the
-        // provider boundary so the caller sees an auth failure instead
-        // of a late HTTP error rendered as a generic `ProviderError`.
+        // typed `ProviderAuthError`. Re-raise it as-is so the tag
+        // survives across the RPC seam (`GentRpcError` has
+        // `ProviderAuthError` as a first-class union arm).
         if (Schema.is(ProviderAuthError)(e)) {
-          return new ProviderError({
-            message: `Extension provider "${providerName}" auth unavailable: ${e.message}`,
-            model: modelId,
-            cause: e,
-          })
+          return e
         }
         return new ProviderError({
           message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -245,14 +241,16 @@ export interface ProviderService {
   readonly stream: {
     <Tools extends ProviderToolMap>(
       request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
-    ): Effect.Effect<ProviderStream<Tools>, ProviderError>
+    ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
     (
       request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
-    ): Effect.Effect<ProviderStream, ProviderError>
-    (request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError>
+    ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
+    (request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
   }
 
-  readonly generate: (request: GenerateRequest) => Effect.Effect<string, ProviderError>
+  readonly generate: (
+    request: GenerateRequest,
+  ) => Effect.Effect<string, ProviderError | ProviderAuthError>
 }
 
 // ── Tool Conversion (Capability → canonical Tool / advertise-only Toolkit) ──
@@ -430,12 +428,16 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
 
       function stream<Tools extends ProviderToolMap>(
         request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
-      ): Effect.Effect<ProviderStream<Tools>, ProviderError>
+      ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
       function stream(
         request: ProviderRequest & { readonly tools: ReadonlyArray<AnyCapabilityContribution> },
-      ): Effect.Effect<ProviderStream, ProviderError>
-      function stream(request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError>
-      function stream(request: ProviderRequest): Effect.Effect<ProviderStream, ProviderError> {
+      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
+      function stream(
+        request: ProviderRequest,
+      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError>
+      function stream(
+        request: ProviderRequest,
+      ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError> {
         return Effect.gen(function* () {
           const hints: ProviderHints = {
             reasoning: request.reasoning,

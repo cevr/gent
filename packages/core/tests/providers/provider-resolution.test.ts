@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
@@ -167,11 +167,13 @@ describe("Provider model resolution", () => {
     expect(result._tag).toBe("Failure")
   })
 
-  test("driver ProviderAuthError preserves typed auth failure at the provider boundary", async () => {
+  test("driver ProviderAuthError surfaces typed at the provider boundary", async () => {
     // Drivers that fail closed at credential resolution throw
     // ProviderAuthError synchronously from `resolveModel`. The boundary
-    // must preserve that typing so callers see an auth failure (not a
-    // late HTTP error rendered as a generic ProviderError).
+    // must re-raise it as-is so `GentRpcError` (which has
+    // `ProviderAuthError` as a first-class union arm) receives the typed
+    // tag — not a generic `ProviderError` with the auth error demoted to
+    // a defect-encoded cause.
     const failingAuthProvider: ModelDriverContribution = {
       id: "auth-missing",
       name: "AuthMissing",
@@ -195,9 +197,15 @@ describe("Provider model resolution", () => {
 
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      const rendered = result.toString()
-      expect(rendered).toContain("auth unavailable")
-      expect(rendered).toContain("credentials unavailable")
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(errOpt._tag).toBe("Some")
+      if (errOpt._tag === "Some") {
+        const err = errOpt.value
+        expect(Schema.is(ProviderAuthError)(err)).toBe(true)
+        if (Schema.is(ProviderAuthError)(err)) {
+          expect(err.message).toContain("credentials unavailable")
+        }
+      }
     }
   })
 

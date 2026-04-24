@@ -102,7 +102,7 @@ import {
   type TurnControlEnvelope,
 } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
-import type { TurnError, TurnEvent } from "../../domain/driver.js"
+import type { ProviderAuthError, TurnError, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
 import { ResourceManager, type ResourceManagerService } from "../resource-manager.js"
 import { Permission, type PermissionService } from "../../domain/permission.js"
@@ -1106,11 +1106,14 @@ const runTurnBeforeHook = (
 type ModelTurnSource = {
   readonly driverKind: "model"
   readonly driverId?: string
-  readonly stream: Effect.Effect<Stream.Stream<ProviderStreamPart, ProviderError>, ProviderError>
+  readonly stream: Effect.Effect<
+    Stream.Stream<ProviderStreamPart, ProviderError>,
+    ProviderError | ProviderAuthError
+  >
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
-    effect: Effect.Effect<CollectedTurnResponse, ProviderError, R>,
-  ) => Effect.Effect<CollectedTurnResponse, never, R>
+    effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
+  ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R>
 }
 
 type ExternalTurnSource = {
@@ -1188,7 +1191,13 @@ const resolveTurnEventStream = (params: {
       driverKind: "model" as const,
       stream: streamEffect,
       formatStreamError: formatStreamErrorMessage,
-      collect: <R>(effect: Effect.Effect<CollectedTurnResponse, ProviderError, R>) =>
+      collect: <R>(
+        effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
+      ) =>
+        // `ProviderAuthError` is a fail-closed credential-absence signal —
+        // not retryable, not recoverable mid-turn. Let it escape so the RPC
+        // seam surfaces the typed auth failure; narrow the retry scope to
+        // transient `ProviderError` only.
         withRetry(effect, undefined, {
           onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
             params

@@ -2,6 +2,7 @@ import { Layer, Redacted } from "effect"
 import {
   defineExtension,
   AuthMethod,
+  ProviderAuthError,
   type ModelDriverContribution,
   type ProviderHints,
   type ProviderResolution,
@@ -34,10 +35,17 @@ export const MistralExtension = defineExtension({
           authInfo?.type === "api" && authInfo.key !== undefined ? authInfo.key : undefined
         const envApiKey = readEnv("MISTRAL_API_KEY")
         const apiKey = storedApiKey ?? envApiKey
-        const config = buildConfig(hints)
 
+        if (apiKey === undefined) {
+          throw new ProviderAuthError({
+            message:
+              "Mistral credentials unavailable: no stored API key or MISTRAL_API_KEY env var",
+          })
+        }
+
+        const config = buildConfig(hints)
         const clientLayer = OpenAiClient.layer({
-          ...(apiKey !== undefined ? { apiKey: Redacted.make(apiKey) } : {}),
+          apiKey: Redacted.make(apiKey),
           apiUrl: MISTRAL_COMPAT_URL,
         }).pipe(Layer.provide(FetchHttpClient.layer))
         const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(

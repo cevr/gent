@@ -1,5 +1,6 @@
 import { Cause, Effect, Schedule, Duration, Schema } from "effect"
 import { ProviderError } from "../providers/provider.js"
+import type { ProviderAuthError } from "../domain/driver.js"
 import * as AiError from "effect/unstable/ai/AiError"
 
 // Retry Config Schema
@@ -128,20 +129,37 @@ export interface RetryAttemptInfo {
   readonly error: ProviderError
 }
 
-// Retry wrapper for provider calls
+// Retry wrapper for provider calls.
+//
+// Accepts `ProviderError | ProviderAuthError` because driver credential
+// failures surface as `ProviderAuthError` — those are not transient and
+// must escape without retry. The schedule re-inspects the tag and only
+// retries transient `ProviderError` values.
+
+type ProviderOrAuthError = ProviderError | ProviderAuthError
 
 export const withRetry = <A, R, R2 = never>(
-  effect: Effect.Effect<A, ProviderError, R>,
+  effect: Effect.Effect<A, ProviderOrAuthError, R>,
   config: RetryConfig = DEFAULT_RETRY_CONFIG,
   options?: {
     readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
   },
-): Effect.Effect<A, ProviderError, R | R2> => {
+): Effect.Effect<A, ProviderOrAuthError, R | R2> => {
   // meta.attempt is 1-indexed: 1 after first failure, 2 after second, etc.
   // Allow retries while attempt < maxAttempts (i.e. maxAttempts-1 retries total)
-  const schedule = Schedule.fromStepWithMetadata<ProviderError, number, R2, never, never, never>(
-    Effect.succeed((meta: Schedule.InputMetadata<ProviderError>) => {
+  const schedule = Schedule.fromStepWithMetadata<
+    ProviderOrAuthError,
+    number,
+    R2,
+    never,
+    never,
+    never
+  >(
+    Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) => {
       if (meta.attempt >= config.maxAttempts) {
+        return Cause.done(meta.attempt)
+      }
+      if (!Schema.is(ProviderError)(meta.input)) {
         return Cause.done(meta.attempt)
       }
       const delayMs = getRetryDelay(meta.attempt - 1, meta.input, config)
