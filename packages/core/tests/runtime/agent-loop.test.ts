@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as fs from "node:fs"
@@ -47,7 +47,7 @@ import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/doma
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
@@ -152,6 +152,54 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     ResourceManagerLive,
     recorderLayer,
     eventStoreLayer,
+  )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
+}
+
+const failingCheckpointStorageLayer = (operation: "upsert" | "remove") =>
+  Layer.succeed(CheckpointStorage, {
+    upsert: (record) =>
+      operation === "upsert"
+        ? Effect.fail(
+            new StorageError({
+              message: "checkpoint upsert failed",
+            }),
+          )
+        : Effect.succeed(record),
+    get: () => Effect.succeed(undefined),
+    list: () => Effect.succeed([]),
+    remove: () =>
+      operation === "remove"
+        ? Effect.fail(
+            new StorageError({
+              message: "checkpoint remove failed",
+            }),
+          )
+        : Effect.void,
+  })
+
+const makeCheckpointFailureLayer = (operation: "upsert" | "remove") => {
+  const providerLayer = Layer.succeed(Provider, {
+    stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+    generate: () => Effect.succeed("test response"),
+  })
+  const deps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    failingCheckpointStorageLayer(operation),
+    providerLayer,
+    makeExtRegistry(),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    EventStore.Memory,
+    ToolRunner.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -1695,6 +1743,54 @@ describe("interaction", () => {
           yield* Fiber.join(fiber)
 
           expect(Ref.getUnsafe(providerCallsRef)).toBe(2)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+})
+
+// ============================================================================
+// checkpoint persistence
+// ============================================================================
+
+describe("checkpoint persistence", () => {
+  test("submit fails when saving the running checkpoint fails", async () => {
+    const layer = makeCheckpointFailureLayer("upsert")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const message = makeMessage("checkpoint-upsert-session", "b1", "persist")
+
+          const exit = yield* Effect.exit(agentLoop.submit(message))
+
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            expect(Cause.pretty(exit.cause)).toContain("Failed to persist agent loop checkpoint")
+            expect(Cause.pretty(exit.cause)).toContain("checkpoint upsert failed")
+          }
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("run fails when removing the completed checkpoint fails", async () => {
+    const layer = makeCheckpointFailureLayer("remove")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const message = makeMessage("checkpoint-remove-session", "b1", "persist")
+
+          const exit = yield* Effect.exit(agentLoop.run(message))
+
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            expect(Cause.pretty(exit.cause)).toContain("Failed to persist agent loop checkpoint")
+            expect(Cause.pretty(exit.cause)).toContain("checkpoint remove failed")
+          }
         }).pipe(Effect.provide(layer)),
       ),
     )
