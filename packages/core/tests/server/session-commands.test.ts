@@ -243,6 +243,53 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(failingSessionCommandsLayer())),
   )
 
+  it.live("rejects active branch switch to a branch outside the session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-switch-owner")
+      const otherSessionId = SessionId.make("session-switch-other")
+      const fromBranchId = BranchId.make("branch-switch-owner-from")
+      const toBranchId = BranchId.make("branch-switch-owner-foreign")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "switch owner",
+          activeBranchId: fromBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* sessions.createSession(
+        new Session({
+          id: otherSessionId,
+          name: "other",
+          activeBranchId: toBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: fromBranchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(
+        new Branch({ id: toBranchId, sessionId: otherSessionId, createdAt: now }),
+      )
+
+      const exit = yield* Effect.exit(
+        commands.switchActiveBranch({
+          sessionId,
+          fromBranchId,
+          toBranchId,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
+    }).pipe(Effect.provide(failingSessionCommandsLayer())),
+  )
+
   it.live("rolls back reasoning setting when event publication fails", () =>
     Effect.gen(function* () {
       const commands = yield* SessionCommands

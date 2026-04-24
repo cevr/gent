@@ -322,6 +322,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       }) {
         const session = yield* sessionStorage.getSession(input.sessionId)
         if (session === undefined) return yield* Effect.die("Current session not found")
+        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+        if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+          return yield* Effect.die(`Branch "${input.fromBranchId}" not found in current session`)
+        }
+        const toBranch = yield* branchStorage.getBranch(input.toBranchId)
+        if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
+          return yield* Effect.die(`Branch "${input.toBranchId}" not found in current session`)
+        }
         yield* transactWithEvent(
           sessionStorage.updateSession(
             new Session({
