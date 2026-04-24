@@ -185,12 +185,7 @@ const ClientActionContext = createContext<ClientActionValue>()
 
 const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
   extensions: [],
-  summary: {
-    status: "healthy",
-    failedExtensions: [],
-    failedActors: [],
-    failedScheduledJobs: [],
-  },
+  summary: { _tag: "healthy" },
 }
 
 const useRequiredContext = <T,>(ctx: T | undefined, name: string): T => {

@@ -406,7 +406,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "apps/tui/src/app.tsx:41 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/atom-solid/atom.ts:41 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/atom-solid/registry.ts:135 eslint:@typescript-eslint/no-unsafe-type-assertion",
-  "apps/tui/src/client/context.tsx:803 eslint:@typescript-eslint/no-non-null-assertion",
+  "apps/tui/src/client/context.tsx:798 eslint:@typescript-eslint/no-non-null-assertion",
   "apps/tui/src/components/composer.tsx:88 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "apps/tui/src/components/mermaid-viewer.tsx:60 eslint:no-control-regex",
   "apps/tui/src/components/tool-renderers/agent-tree.tsx:75 eslint:@typescript-eslint/no-unsafe-type-assertion",

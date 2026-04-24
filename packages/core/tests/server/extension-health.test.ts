@@ -36,7 +36,7 @@ describe("buildExtensionHealthSnapshot", () => {
     )
 
     expect(snapshot.summary).toEqual({
-      status: "degraded",
+      _tag: "degraded",
       subtitle: "extension activation degraded",
       failedExtensions: ["@gent/memory"],
       failedActors: ["@gent/plan"],
@@ -47,24 +47,23 @@ describe("buildExtensionHealthSnapshot", () => {
         manifest: { id: "@gent/memory" },
         scope: "builtin",
         sourcePath: "builtin",
-        status: "degraded",
+        _tag: "degraded",
         activation: {
-          status: "failed",
+          _tag: "failed",
           phase: "startup",
           error: "startup boom",
         },
         scheduler: {
-          status: "healthy",
-          failures: [],
+          _tag: "healthy",
         },
       },
       {
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
-        status: "degraded",
+        _tag: "degraded",
         activation: {
-          status: "active",
+          _tag: "active",
         },
         actor: {
           _tag: "failed",
@@ -75,45 +74,44 @@ describe("buildExtensionHealthSnapshot", () => {
           failurePhase: "runtime",
         },
         scheduler: {
-          status: "degraded",
+          _tag: "degraded",
           failures: [{ jobId: "reflect", error: "launchd boom" }],
         },
       },
     ])
   })
 
-  test("transport decodes legacy actor status and encodes tagged actors to legacy wire shape", () => {
-    const legacy = {
+  test("transport uses tagged extension health states", () => {
+    const wire = {
       extensions: [
         {
           manifest: { id: "@gent/plan" },
           scope: "builtin",
           sourcePath: "builtin",
-          status: "degraded",
-          activation: { status: "active" },
+          _tag: "degraded",
+          activation: { _tag: "active" },
           actor: {
+            _tag: "failed",
             extensionId: "@gent/plan",
             sessionId: "s1",
             branchId: "b1",
-            status: "failed",
             error: "actor boom",
             failurePhase: "runtime",
           },
           scheduler: {
-            status: "healthy",
-            failures: [],
+            _tag: "healthy",
           },
         },
       ],
       summary: {
-        status: "degraded",
+        _tag: "degraded",
         failedExtensions: [],
         failedActors: ["@gent/plan"],
         failedScheduledJobs: [],
       },
     }
 
-    const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(legacy)
+    const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(wire)
     expect(decoded.extensions[0]?.actor).toEqual({
       _tag: "failed",
       extensionId: "@gent/plan",
@@ -124,13 +122,42 @@ describe("buildExtensionHealthSnapshot", () => {
     })
 
     const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
-    expect(encoded.extensions[0]?.actor).toEqual({
-      extensionId: "@gent/plan",
-      sessionId: "s1",
-      branchId: "b1",
-      status: "failed",
-      error: "actor boom",
-      failurePhase: "runtime",
+    expect(encoded.extensions[0]).toMatchObject({
+      _tag: "degraded",
+      activation: { _tag: "active" },
+      actor: {
+        _tag: "failed",
+        extensionId: "@gent/plan",
+        sessionId: "s1",
+        branchId: "b1",
+        error: "actor boom",
+        failurePhase: "runtime",
+      },
+      scheduler: { _tag: "healthy" },
     })
+  })
+
+  test("transport rejects contradictory health state bags", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
+        extensions: [
+          {
+            manifest: { id: "@gent/memory" },
+            scope: "builtin",
+            sourcePath: "builtin",
+            _tag: "healthy",
+            activation: {
+              _tag: "active",
+              error: "should not fit active state",
+            },
+            scheduler: {
+              _tag: "degraded",
+              failures: [],
+            },
+          },
+        ],
+        summary: { _tag: "healthy", failedExtensions: ["@gent/memory"] },
+      }),
+    ).toThrow()
   })
 })

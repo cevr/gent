@@ -1,4 +1,4 @@
-import { Schema, SchemaGetter as Getter } from "effect"
+import { Schema } from "effect"
 import type { Effect } from "effect"
 import { RunSpecSchema, DriverRef, ReasoningEffort } from "../domain/agent.js"
 import { AuthAuthorization, AuthMethod } from "../domain/auth-method.js"
@@ -388,7 +388,7 @@ const ExtensionActorStatusFields = {
   branchId: Schema.optional(BranchId),
 }
 
-const ExtensionActorStatusState = TaggedEnumClass("ExtensionActorStatusInfo", {
+export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
   starting: ExtensionActorStatusFields,
   running: {
     ...ExtensionActorStatusFields,
@@ -405,115 +405,6 @@ const ExtensionActorStatusState = TaggedEnumClass("ExtensionActorStatusInfo", {
     restartCount: Schema.optional(Schema.Number),
   },
 })
-
-const ExtensionActorStatusWire = Schema.Union([
-  Schema.Struct({
-    ...ExtensionActorStatusFields,
-    status: Schema.Literal("starting"),
-  }),
-  Schema.Struct({
-    ...ExtensionActorStatusFields,
-    status: Schema.Literal("running"),
-    restartCount: Schema.optional(Schema.Number),
-  }),
-  Schema.Struct({
-    ...ExtensionActorStatusFields,
-    status: Schema.Literal("restarting"),
-    restartCount: Schema.Number,
-  }),
-  Schema.Struct({
-    ...ExtensionActorStatusFields,
-    status: Schema.Literal("failed"),
-    error: Schema.String,
-    failurePhase: ExtensionActorFailurePhase,
-    restartCount: Schema.optional(Schema.Number),
-  }),
-])
-
-type ExtensionActorStatusWire = typeof ExtensionActorStatusWire.Type
-type ExtensionActorStatusState = typeof ExtensionActorStatusState.Type
-type ExtensionActorStatusStateEncoded = typeof ExtensionActorStatusState.Encoded
-
-export const ExtensionActorStatusInfo = ExtensionActorStatusWire.pipe(
-  Schema.decodeTo(ExtensionActorStatusState, {
-    decode: Getter.transform((status: ExtensionActorStatusWire): ExtensionActorStatusState => {
-      const sessionId = SessionId.make(status.sessionId)
-      const branchId = status.branchId !== undefined ? BranchId.make(status.branchId) : undefined
-      switch (status.status) {
-        case "starting":
-          return ExtensionActorStatusState.cases.starting.make({
-            extensionId: status.extensionId,
-            sessionId,
-            ...(branchId !== undefined ? { branchId } : {}),
-          })
-        case "running":
-          return ExtensionActorStatusState.cases.running.make({
-            extensionId: status.extensionId,
-            sessionId,
-            ...(branchId !== undefined ? { branchId } : {}),
-            ...(status.restartCount !== undefined ? { restartCount: status.restartCount } : {}),
-          })
-        case "restarting":
-          return ExtensionActorStatusState.cases.restarting.make({
-            extensionId: status.extensionId,
-            sessionId,
-            ...(branchId !== undefined ? { branchId } : {}),
-            restartCount: status.restartCount,
-          })
-        case "failed":
-          return ExtensionActorStatusState.cases.failed.make({
-            extensionId: status.extensionId,
-            sessionId,
-            ...(branchId !== undefined ? { branchId } : {}),
-            error: status.error,
-            failurePhase: status.failurePhase,
-            ...(status.restartCount !== undefined ? { restartCount: status.restartCount } : {}),
-          })
-      }
-    }),
-    encode: Getter.transform(
-      (status: ExtensionActorStatusStateEncoded): ExtensionActorStatusWire => {
-        const sessionId = SessionId.make(status.sessionId)
-        const branchId = status.branchId !== undefined ? BranchId.make(status.branchId) : undefined
-        switch (status._tag) {
-          case "starting":
-            return {
-              status: "starting",
-              extensionId: status.extensionId,
-              sessionId,
-              ...(branchId !== undefined ? { branchId } : {}),
-            }
-          case "running":
-            return {
-              status: "running",
-              extensionId: status.extensionId,
-              sessionId,
-              ...(branchId !== undefined ? { branchId } : {}),
-              ...(status.restartCount !== undefined ? { restartCount: status.restartCount } : {}),
-            }
-          case "restarting":
-            return {
-              status: "restarting",
-              extensionId: status.extensionId,
-              sessionId,
-              ...(branchId !== undefined ? { branchId } : {}),
-              restartCount: status.restartCount,
-            }
-          case "failed":
-            return {
-              status: "failed",
-              extensionId: status.extensionId,
-              sessionId,
-              ...(branchId !== undefined ? { branchId } : {}),
-              error: status.error,
-              failurePhase: status.failurePhase,
-              ...(status.restartCount !== undefined ? { restartCount: status.restartCount } : {}),
-            }
-        }
-      },
-    ),
-  }),
-)
 export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 
 export const ExtensionManifestInfo = Schema.Struct({
@@ -528,36 +419,46 @@ export const ScheduledJobFailureInfo = Schema.Struct({
 })
 export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
 
-export const ExtensionActivationHealth = Schema.Struct({
-  status: Schema.Literals(["active", "failed"]),
-  phase: Schema.optional(ExtensionActivationPhase),
-  error: Schema.optional(Schema.String),
+export const ExtensionActivationHealth = TaggedEnumClass("ExtensionActivationHealth", {
+  active: {},
+  failed: {
+    phase: ExtensionActivationPhase,
+    error: Schema.String,
+  },
 })
 export type ExtensionActivationHealth = typeof ExtensionActivationHealth.Type
 
-export const ExtensionSchedulerHealth = Schema.Struct({
-  status: Schema.Literals(["healthy", "degraded"]),
-  failures: Schema.Array(ScheduledJobFailureInfo),
+export const ExtensionSchedulerHealth = TaggedEnumClass("ExtensionSchedulerHealth", {
+  healthy: {},
+  degraded: {
+    failures: Schema.NonEmptyArray(ScheduledJobFailureInfo),
+  },
 })
 export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
 
-export const ExtensionHealth = Schema.Struct({
+const ExtensionHealthFields = {
   manifest: ExtensionManifestInfo,
   scope: Schema.Literals(["builtin", "user", "project"]),
   sourcePath: Schema.String,
-  status: Schema.Literals(["healthy", "degraded"]),
   activation: ExtensionActivationHealth,
   actor: Schema.optional(ExtensionActorStatusInfo),
   scheduler: ExtensionSchedulerHealth,
+}
+
+export const ExtensionHealth = TaggedEnumClass("ExtensionHealth", {
+  healthy: ExtensionHealthFields,
+  degraded: ExtensionHealthFields,
 })
 export type ExtensionHealth = typeof ExtensionHealth.Type
 
-export const ExtensionHealthSummary = Schema.Struct({
-  status: Schema.Literals(["healthy", "degraded"]),
-  subtitle: Schema.optional(Schema.String),
-  failedExtensions: Schema.Array(Schema.String),
-  failedActors: Schema.Array(Schema.String),
-  failedScheduledJobs: Schema.Array(Schema.String),
+export const ExtensionHealthSummary = TaggedEnumClass("ExtensionHealthSummary", {
+  healthy: {},
+  degraded: {
+    subtitle: Schema.optional(Schema.String),
+    failedExtensions: Schema.Array(Schema.String),
+    failedActors: Schema.Array(Schema.String),
+    failedScheduledJobs: Schema.Array(Schema.String),
+  },
 })
 export type ExtensionHealthSummary = typeof ExtensionHealthSummary.Type
 

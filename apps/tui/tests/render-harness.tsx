@@ -121,12 +121,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       listStatus: () =>
         noRpcError({
           extensions: [],
-          summary: {
-            status: "healthy" as const,
-            failedExtensions: [],
-            failedActors: [],
-            failedScheduledJobs: [],
-          },
+          summary: { _tag: "healthy" as const },
         }),
     },
     actor: {

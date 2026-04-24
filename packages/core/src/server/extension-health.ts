@@ -1,50 +1,86 @@
-import type { ExtensionActorStatusInfo, ExtensionStatusInfo } from "../domain/extension.js"
-import type { ExtensionHealthSnapshot } from "./transport-contract.js"
+import type {
+  ExtensionActorStatusInfo as DomainExtensionActorStatusInfo,
+  ExtensionStatusInfo,
+} from "../domain/extension.js"
+import {
+  ExtensionActivationHealth,
+  ExtensionActorStatusInfo,
+  ExtensionHealth,
+  ExtensionHealthSummary,
+  ExtensionSchedulerHealth,
+  type ExtensionHealthSnapshot,
+  type ScheduledJobFailureInfo,
+} from "./transport-contract.js"
+
+const toTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
+  switch (status._tag) {
+    case "starting":
+      return ExtensionActorStatusInfo.cases.starting.make(status)
+    case "running":
+      return ExtensionActorStatusInfo.cases.running.make(status)
+    case "restarting":
+      return ExtensionActorStatusInfo.cases.restarting.make(status)
+    case "failed":
+      return ExtensionActorStatusInfo.cases.failed.make(status)
+  }
+}
 
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
-  actorStatuses: ReadonlyArray<ExtensionActorStatusInfo> = [],
+  actorStatuses: ReadonlyArray<DomainExtensionActorStatusInfo> = [],
 ): ExtensionHealthSnapshot => {
   const actorByExtension = new Map(
     actorStatuses.map((status) => [status.extensionId, status] as const),
   )
 
   const extensions = activationStatuses.map((status) => {
-    const actor = actorByExtension.get(status.manifest.id)
+    const actorStatus = actorByExtension.get(status.manifest.id)
+    const actor = actorStatus !== undefined ? toTransportActorStatus(actorStatus) : undefined
     const schedulerFailures = status.scheduledJobFailures ?? []
     const activation =
       status.status === "failed"
-        ? {
-            status: "failed" as const,
-            ...(status.phase !== undefined ? { phase: status.phase } : {}),
-            ...(status.error !== undefined ? { error: status.error } : {}),
-          }
-        : { status: "active" as const }
+        ? ExtensionActivationHealth.cases.failed.make({
+            phase: status.phase,
+            error: status.error,
+          })
+        : ExtensionActivationHealth.cases.active.make({})
     const degraded =
       status.status === "failed" || actor?._tag === "failed" || schedulerFailures.length > 0
+    const [
+      firstSchedulerFailure,
+      ...remainingSchedulerFailures
+    ]: ReadonlyArray<ScheduledJobFailureInfo> = schedulerFailures
+    const scheduler =
+      firstSchedulerFailure !== undefined
+        ? ExtensionSchedulerHealth.cases.degraded.make({
+            failures: [firstSchedulerFailure, ...remainingSchedulerFailures],
+          })
+        : ExtensionSchedulerHealth.cases.healthy.make({})
 
-    return {
+    const payload = {
       manifest: status.manifest,
       scope: status.scope,
       sourcePath: status.sourcePath,
-      status: degraded ? ("degraded" as const) : ("healthy" as const),
       activation,
       ...(actor !== undefined ? { actor } : {}),
-      scheduler: {
-        status: schedulerFailures.length > 0 ? ("degraded" as const) : ("healthy" as const),
-        failures: schedulerFailures,
-      },
+      scheduler,
     }
+
+    return degraded
+      ? ExtensionHealth.cases.degraded.make(payload)
+      : ExtensionHealth.cases.healthy.make(payload)
   })
 
   const failedExtensions = extensions
-    .filter((status) => status.activation.status === "failed")
+    .filter((status) => status.activation._tag === "failed")
     .map((status) => status.manifest.id)
   const failedActors = extensions
     .filter((status) => status.actor?._tag === "failed")
     .map((status) => status.manifest.id)
   const failedScheduledJobs = extensions.flatMap((status) =>
-    status.scheduler.failures.map((failure) => `${status.manifest.id}:${failure.jobId}`),
+    status.scheduler._tag === "degraded"
+      ? status.scheduler.failures.map((failure) => `${status.manifest.id}:${failure.jobId}`)
+      : [],
   )
 
   let subtitle: string | undefined
@@ -56,17 +92,18 @@ export const buildExtensionHealthSnapshot = (
     subtitle = "scheduled jobs degraded"
   }
 
+  const summary =
+    failedExtensions.length > 0 || failedActors.length > 0 || failedScheduledJobs.length > 0
+      ? ExtensionHealthSummary.cases.degraded.make({
+          ...(subtitle !== undefined ? { subtitle } : {}),
+          failedExtensions,
+          failedActors,
+          failedScheduledJobs,
+        })
+      : ExtensionHealthSummary.cases.healthy.make({})
+
   return {
     extensions,
-    summary: {
-      status:
-        failedExtensions.length > 0 || failedActors.length > 0 || failedScheduledJobs.length > 0
-          ? ("degraded" as const)
-          : ("healthy" as const),
-      ...(subtitle !== undefined ? { subtitle } : {}),
-      failedExtensions,
-      failedActors,
-      failedScheduledJobs,
-    },
+    summary,
   }
 }

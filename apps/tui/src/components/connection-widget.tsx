@@ -12,9 +12,21 @@ export function ConnectionWidget() {
     return state.reason
   }
   const healthSummary = () => client.extensionHealth().summary
-  const hasFailedExtensions = () => healthSummary().failedExtensions.length > 0
-  const hasFailedActors = () => healthSummary().failedActors.length > 0
-  const hasFailedScheduledJobs = () => healthSummary().failedScheduledJobs.length > 0
+  const failedExtensions = () => {
+    const summary = healthSummary()
+    return summary._tag === "degraded" ? summary.failedExtensions : []
+  }
+  const failedActors = () => {
+    const summary = healthSummary()
+    return summary._tag === "degraded" ? summary.failedActors : []
+  }
+  const failedScheduledJobs = () => {
+    const summary = healthSummary()
+    return summary._tag === "degraded" ? summary.failedScheduledJobs : []
+  }
+  const hasFailedExtensions = () => failedExtensions().length > 0
+  const hasFailedActors = () => failedActors().length > 0
+  const hasFailedScheduledJobs = () => failedScheduledJobs().length > 0
   const visible = () =>
     client.isReconnecting() ||
     client.connectionIssue() !== null ||
@@ -29,7 +41,8 @@ export function ConnectionWidget() {
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
-    if (healthSummary().subtitle !== undefined) return healthSummary().subtitle
+    const summary = healthSummary()
+    if (summary._tag === "degraded" && summary.subtitle !== undefined) return summary.subtitle
     if (disconnectedReason() !== null) return "runtime unavailable"
     return client.connectionIssue() ?? ""
   }
@@ -74,7 +87,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed extensions: {healthSummary().failedExtensions.join(", ")}
+                failed extensions: {failedExtensions().join(", ")}
               </span>
             </text>
           </Show>
@@ -82,7 +95,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed session actors: {healthSummary().failedActors.join(", ")}
+                failed session actors: {failedActors().join(", ")}
               </span>
             </text>
           </Show>
@@ -90,7 +103,7 @@ export function ConnectionWidget() {
             <text>
               <span style={{ fg: accent() }}>{"│ "}</span>
               <span style={{ fg: theme.text }}>
-                failed scheduled jobs: {healthSummary().failedScheduledJobs.join(", ")}
+                failed scheduled jobs: {failedScheduledJobs().join(", ")}
               </span>
             </text>
           </Show>
