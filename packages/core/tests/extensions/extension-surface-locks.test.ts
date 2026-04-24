@@ -37,6 +37,8 @@ import {
   type WriteRequestInput,
 } from "@gent/core/extensions/api"
 import type { BuiltinResourceMachine } from "../../src/extensions/internal"
+import type { SearchResult as StorageSearchResult } from "../../src/storage/search-storage"
+import { StorageError } from "../../src/storage/sqlite-storage"
 
 class WriteCapableService extends Context.Service<
   WriteCapableService,
@@ -252,11 +254,19 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("host session facet exposes host-domain errors/results, not storage types", () => {
-    type SearchEffect = ReturnType<ExtensionHostContext.SessionFacet["search"]>
-    type SearchResult = SearchEffect extends Effect.Effect<infer A, unknown, unknown> ? A : never
-    type SearchError = SearchEffect extends Effect.Effect<unknown, infer E, unknown> ? E : never
+    type MethodReturn<T> = T extends (...args: infer _Args) => infer R ? R : never
+    type EffectSuccess<T> =
+      MethodReturn<T> extends Effect.Effect<infer A, unknown, unknown> ? A : never
+    type EffectError<T> =
+      MethodReturn<T> extends Effect.Effect<unknown, infer E, unknown> ? E : never
+    type SessionErrors = {
+      readonly [K in keyof ExtensionHostContext.SessionFacet]: EffectError<
+        ExtensionHostContext.SessionFacet[K]
+      >
+    }[keyof ExtensionHostContext.SessionFacet]
+    type SearchResult = EffectSuccess<ExtensionHostContext.SessionFacet["search"]>
 
-    const error: SearchError = new ExtensionHostError({
+    const error: SessionErrors = new ExtensionHostError({
       operation: "session.search",
       message: "failed",
     })
@@ -267,14 +277,27 @@ describe("Effect-purity locks (compile-time)", () => {
       snippet: "match",
       createdAt: 1,
     }) satisfies SearchResult[number]
+    const storageResult: StorageSearchResult = {
+      sessionId: "session-id",
+      sessionName: null,
+      branchId: "branch-id",
+      snippet: "match",
+      createdAt: 1,
+    }
 
     // @ts-expect-error — storage-layer errors are not public extension authoring API
     type _BadStorageError = PublicExtensionApi.StorageError
     // @ts-expect-error — storage-layer search rows are not public extension authoring API
     type _BadStorageSearchResult = PublicExtensionApi.SearchResult
+    // @ts-expect-error — all session facet methods must map storage failures to host errors
+    const badSessionError: SessionErrors = new StorageError({ message: "storage failed" })
+    // @ts-expect-error — search results must expose branded host-domain ids, not raw storage rows
+    const badSearchResult: SearchResult = [storageResult]
 
     void error
     void result
+    void badSessionError
+    void badSearchResult
     expect(true).toBe(true)
   })
 
