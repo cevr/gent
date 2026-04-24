@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import {
   tool,
   headTailChars,
+  makeRunSpec,
   SessionId,
   type Message,
   type MessagePart,
@@ -140,7 +141,7 @@ export const ReadSessionTool = tool({
       const result = yield* ctx.agent.run({
         agent: summarizer,
         prompt,
-        runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
+        runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
       })
 
       if (result._tag === "error") {

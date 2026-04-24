@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, tool, type ToolContext } from "@gent/core/extensions/api"
+import { defineAgent, makeRunSpec, tool, type ToolContext } from "@gent/core/extensions/api"
 import { requireText } from "../workflow-helpers.js"
 import { fetchRepo, getRepoCachePath } from "../librarian/repo-explorer.js"
 
@@ -111,7 +111,7 @@ export const ResearchTool = tool({
         ctx.agent.run({
           agent: researchAgent,
           prompt: buildResearchPrompt(params.question, path, spec, params.focus),
-          runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
+          runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
         }),
       { concurrency: MAX_CONCURRENCY },
     )
@@ -141,11 +141,11 @@ export const ResearchTool = tool({
     const synthesisResult = yield* ctx.agent.run({
       agent: researchAgent,
       prompt: buildSynthesisPrompt(params.question, findings, params.focus),
-      runSpec: {
+      runSpec: makeRunSpec({
         persistence: "ephemeral",
         parentToolCallId: ctx.toolCallId,
         overrides: { modelId: modelB },
-      },
+      }),
     })
 
     const synthesis = yield* requireText(synthesisResult, "synthesis")

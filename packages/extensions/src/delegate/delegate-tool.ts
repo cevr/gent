@@ -3,6 +3,7 @@ import {
   tool,
   AgentName,
   getDurableAgentRunSessionId,
+  makeRunSpec,
   TaskId,
   type AgentRunError,
   type AgentRunResult,
@@ -111,7 +112,7 @@ export const DelegateTool = tool({
         const result = yield* ctx.agent.run({
           agent: resolvedAgent,
           prompt: task.prompt ?? task.subject,
-          runSpec: { persistence: "durable", parentToolCallId: ctx.toolCallId },
+          runSpec: makeRunSpec({ persistence: "durable", parentToolCallId: ctx.toolCallId }),
         })
 
         // Guard: if task was stopped/failed while running, don't overwrite terminal state
@@ -212,7 +213,7 @@ export const DelegateTool = tool({
         const result = yield* ctx.agent.run({
           agent: resolved.agent,
           prompt: taskWithContext,
-          runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
+          runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
         })
 
         results.push(result)
@@ -261,7 +262,7 @@ export const DelegateTool = tool({
             return ctx.agent.run({
               agent: resolved.agent,
               prompt: task.task,
-              runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
+              runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
             })
           }),
         )
@@ -292,7 +293,7 @@ export const DelegateTool = tool({
       const result = yield* ctx.agent.run({
         agent: resolved.agent,
         prompt: params.task ?? "",
-        runSpec: { persistence: "ephemeral", parentToolCallId: ctx.toolCallId },
+        runSpec: makeRunSpec({ persistence: "ephemeral", parentToolCallId: ctx.toolCallId }),
       })
 
       if (result._tag === "error") {

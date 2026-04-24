@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import { defineAgent, tool, type ToolContext } from "@gent/core/extensions/api"
+import { defineAgent, makeRunSpec, tool, type ToolContext } from "@gent/core/extensions/api"
 
 const COUNSEL_DEEP_PROMPT = `
 You are providing a thorough second opinion. Read widely, explore adjacent code,
@@ -63,7 +63,7 @@ export const CounselTool = tool({
     const result = yield* ctx.agent.run({
       agent: counselAgent,
       prompt,
-      runSpec: {
+      runSpec: makeRunSpec({
         persistence: "ephemeral",
         parentToolCallId: ctx.toolCallId,
         overrides: {
@@ -83,7 +83,7 @@ export const CounselTool = tool({
               }
             : { allowedTools: ["grep", "glob", "read", "memory_search"] as const }),
         },
-      },
+      }),
     })
 
     if (result._tag === "error") {
