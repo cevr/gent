@@ -502,7 +502,16 @@ describe("App auth gate", () => {
                 },
               ])
             }
-            return Effect.promise(() => staleSessionCheck)
+            if (sessionAuthChecks === 2) return Effect.promise(() => staleSessionCheck)
+            return Effect.succeed([
+              {
+                provider: "openai",
+                hasKey: hasOpenAiKey,
+                required: true,
+                source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
+                authType: undefined,
+              },
+            ])
           }
           return Effect.succeed([
             {

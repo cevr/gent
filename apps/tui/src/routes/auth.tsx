@@ -2,6 +2,7 @@ import { createSignal, createEffect, on, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { usePaste, useTerminalDimensions } from "@opentui/solid"
 import { Effect } from "effect"
+import type { SessionId } from "@gent/core/domain/ids.js"
 import { LinkOpener } from "../services/link-opener"
 import { useTheme } from "../theme/index"
 import { useRuntime } from "../hooks/use-runtime"
@@ -13,6 +14,7 @@ import { AuthState, transitionAuth, type AuthState as AuthRouteState } from "./a
 import { useScopedKeyboard } from "../keyboard/context"
 
 export interface AuthProps {
+  sessionId?: SessionId
   enforceAuth?: boolean
   onResolved?: () => void
   onClose?: () => void
@@ -34,7 +36,6 @@ export function Auth(props: AuthProps) {
   }
   const [autoPrompted, setAutoPrompted] = createSignal(false)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
-  const authSessionId = Bun.randomUUIDv7()
   let routeVersion = 0
   let loadVersion = 0
   let successTimer: ReturnType<typeof setTimeout> | undefined
@@ -81,6 +82,7 @@ export function Auth(props: AuthProps) {
       Effect.all([
         clientCtx.client.auth.listProviders({
           ...(agentName !== undefined ? { agentName } : {}),
+          ...(props.sessionId !== undefined ? { sessionId: props.sessionId } : {}),
         }),
         clientCtx.client.auth.listMethods(),
       ]).pipe(
@@ -217,11 +219,16 @@ export function Auth(props: AuthProps) {
       return
     }
 
+    if (props.sessionId === undefined) {
+      send({ _tag: "ActionFailed", error: "No active session for authorization" })
+      return
+    }
+
     send({ _tag: "StartOAuthAuthorization" })
     cast(
       clientCtx.client.auth
         .authorize({
-          sessionId: authSessionId,
+          sessionId: props.sessionId,
           provider: provider.provider,
           method: current.methodIndex,
         })
@@ -286,10 +293,15 @@ export function Auth(props: AuthProps) {
     _providerIndex: number,
     methodIndex: number,
   ) => {
+    if (props.sessionId === undefined) {
+      send({ _tag: "OAuthAutoFailed", error: "No active session for authorization" })
+      return
+    }
+
     cast(
       clientCtx.client.auth
         .callback({
-          sessionId: authSessionId,
+          sessionId: props.sessionId,
           provider: providerName,
           method: methodIndex,
           authorizationId,
@@ -327,13 +339,17 @@ export function Auth(props: AuthProps) {
     const trimmed = current.code.trim()
     const code = trimmed.length > 0 ? trimmed : undefined
     if (needsCode && code === undefined) return
+    if (props.sessionId === undefined) {
+      send({ _tag: "ActionFailed", error: "No active session for authorization" })
+      return
+    }
     const currentRouteVersion = invalidateRouteVersion()
     send({ _tag: "SubmitOAuthStarted" })
 
     cast(
       clientCtx.client.auth
         .callback({
-          sessionId: authSessionId,
+          sessionId: props.sessionId,
           provider: provider.provider,
           method: current.methodIndex,
           authorizationId: current.authorization.authorizationId,

@@ -233,6 +233,7 @@ export function Session(props: SessionProps) {
             case "auth":
               return (
                 <Auth
+                  sessionId={props.sessionId}
                   enforceAuth={overlay.enforceAuth}
                   onResolved={controller.resolveAuthGate}
                   onClose={controller.closeOverlay}

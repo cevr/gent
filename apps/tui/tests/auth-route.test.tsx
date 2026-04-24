@@ -7,6 +7,7 @@ import { Auth } from "../src/routes/auth"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import type { AgentName } from "@gent/core/domain/agent"
+import { SessionId } from "@gent/core/domain/ids"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
 import { waitForRenderedFrame } from "./helpers"
 import { onMount } from "solid-js"
@@ -41,11 +42,13 @@ const runtimeWithLinkOpener = (open: (url: string) => Effect.Effect<void, LinkOp
 }
 
 describe("Auth route", () => {
+  const activeSessionId = SessionId.make("session-auth")
+
   test("loads providers for the selected agent", async () => {
-    const calls: Array<{ agentName?: string }> = []
+    const calls: Array<{ agentName?: string; sessionId?: string }> = []
     const client = createMockClient({
       auth: {
-        listProviders: (input: { agentName?: string }) => {
+        listProviders: (input: { agentName?: string; sessionId?: string }) => {
           calls.push(input)
           return Effect.succeed([])
         },
@@ -54,13 +57,13 @@ describe("Auth route", () => {
     })
     const runtime = createMockRuntime()
 
-    const setup = await renderWithProviders(() => <Auth />, {
+    const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
       initialAgent: "helper:google" as AgentName,
     })
 
-    expect(calls).toEqual([{ agentName: "helper:google" }])
+    expect(calls).toEqual([{ agentName: "helper:google", sessionId: activeSessionId }])
     setup.renderer.destroy()
   })
 
@@ -93,7 +96,7 @@ describe("Auth route", () => {
       () => (
         <>
           <ClientProbe onReady={(c) => (ctx = c)} />
-          <Auth />
+          <Auth sessionId={activeSessionId} />
         </>
       ),
       {
@@ -179,7 +182,7 @@ describe("Auth route", () => {
       () => (
         <>
           <ClientProbe onReady={(c) => (ctx = c)} />
-          <Auth />
+          <Auth sessionId={activeSessionId} />
         </>
       ),
       {
@@ -290,7 +293,7 @@ describe("Auth route", () => {
       () => (
         <>
           <ClientProbe onReady={(c) => (ctx = c)} />
-          <Auth />
+          <Auth sessionId={activeSessionId} />
         </>
       ),
       {
@@ -329,7 +332,7 @@ describe("Auth route", () => {
 
     const client = createMockClient({
       auth: {
-        listProviders: (input: { agentName?: string }) =>
+        listProviders: (input: { agentName?: string; sessionId?: string }) =>
           Effect.sync(() => {
             calls.push(input)
             return input.agentName === "deepwork"
@@ -380,7 +383,7 @@ describe("Auth route", () => {
       () => (
         <>
           <ClientProbe onReady={(c) => (ctx = c)} />
-          <Auth />
+          <Auth sessionId={activeSessionId} />
         </>
       ),
       {
@@ -401,7 +404,7 @@ describe("Auth route", () => {
     ctx?.steer({ _tag: "SwitchAgent", agent: "deepwork" as AgentName })
     await Promise.resolve()
     await setup.renderOnce()
-    expect(calls.at(-1)).toEqual({ agentName: "deepwork" })
+    expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })
 
     rejectOpen?.(new LinkOpenerError({ message: "open failed" }))
     const frame = await waitForRenderedFrame(
@@ -452,7 +455,7 @@ describe("Auth route", () => {
       ),
     )
 
-    const setup = await renderWithProviders(() => <Auth />, {
+    const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
       client,
       runtime,
       initialAgent: "cowork" as AgentName,
