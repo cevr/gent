@@ -172,6 +172,58 @@ const makeSessionMutationsService: Effect.Effect<
     },
   )
 
+  const collectSessionTreeIds = Effect.fn("SessionMutations.collectSessionTreeIds")(function* (
+    rootSessionId: SessionId,
+  ) {
+    const sessionIds: SessionId[] = []
+    const queue: SessionId[] = [rootSessionId]
+    const seen = new Set<SessionId>()
+    let index = 0
+
+    while (index < queue.length) {
+      const sessionId = queue[index]
+      index += 1
+      if (sessionId === undefined || seen.has(sessionId)) continue
+      seen.add(sessionId)
+      sessionIds.push(sessionId)
+      const children = yield* storage.getChildSessions(sessionId)
+      for (const child of children) {
+        queue.push(child.id)
+      }
+    }
+
+    return sessionIds
+  })
+
+  const cleanupSessionRuntimeState = Effect.fn("SessionMutations.cleanupSessionRuntimeState")(
+    function* (sessionId: SessionId) {
+      yield* extensionStateRuntime.terminateAll(sessionId).pipe(
+        // Session deletion owns cleanup best-effort actor termination, then
+        // propagates durable store failures below.
+        Effect.catchDefect(() => Effect.void),
+      )
+      yield* eventPublisher.terminateSession(sessionId)
+      yield* eventStore.removeSession(sessionId)
+      yield* sessionCwdRegistry.forget(sessionId)
+    },
+  )
+
+  const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
+    sessionId: SessionId,
+  ) {
+    const sessionIds = yield* collectSessionTreeIds(sessionId)
+    yield* Effect.forEach(sessionIds, cleanupSessionRuntimeState, { discard: true })
+    yield* sessionStorage.deleteSession(sessionId)
+    yield* Effect.forEach(
+      sessionIds,
+      (deletedSessionId) =>
+        Effect.logInfo("session.deleted").pipe(
+          Effect.annotateLogs({ sessionId: deletedSessionId }),
+        ),
+      { discard: true },
+    )
+  })
+
   return {
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
       const trimmed = input.name.trim().slice(0, 80)
@@ -321,16 +373,7 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     deleteSession: Effect.fn("SessionMutations.deleteSession")(function* (sessionId) {
-      yield* extensionStateRuntime.terminateAll(sessionId).pipe(
-        // Session deletion owns cleanup best-effort actor termination, then
-        // propagates durable store failures below.
-        Effect.catchDefect(() => Effect.void),
-      )
-      yield* eventPublisher.terminateSession(sessionId)
-      yield* eventStore.removeSession(sessionId)
-      yield* sessionStorage.deleteSession(sessionId)
-      yield* sessionCwdRegistry.forget(sessionId)
-      yield* Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId }))
+      yield* deleteSessionCascade(sessionId)
     }),
 
     deleteBranch: Effect.fn("SessionMutations.deleteBranch")(function* (input) {
@@ -829,19 +872,62 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         )
       })
 
+      const collectSessionTreeIds = Effect.fn("SessionCommands.collectSessionTreeIds")(function* (
+        rootSessionId: SessionId,
+      ) {
+        const sessionIds: SessionId[] = []
+        const queue: SessionId[] = [rootSessionId]
+        const seen = new Set<SessionId>()
+        let index = 0
+
+        while (index < queue.length) {
+          const sessionId = queue[index]
+          index += 1
+          if (sessionId === undefined || seen.has(sessionId)) continue
+          seen.add(sessionId)
+          sessionIds.push(sessionId)
+          const children = yield* storage.getChildSessions(sessionId)
+          for (const child of children) {
+            queue.push(child.id)
+          }
+        }
+
+        return sessionIds
+      })
+
+      const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
+        function* (sessionId: SessionId) {
+          yield* extensionStateRuntime.terminateAll(sessionId).pipe(
+            // Session deletion owns cleanup best-effort actor termination, then
+            // propagates durable store failures below.
+            Effect.catchDefect(() => Effect.void),
+          )
+          yield* eventPublisher.terminateSession(sessionId)
+          yield* eventStore.removeSession(sessionId)
+          yield* sessionCwdRegistry.forget(sessionId)
+        },
+      )
+
+      const deleteSessionCascade = Effect.fn("SessionCommands.deleteSessionCascade")(function* (
+        sessionId: SessionId,
+      ) {
+        const sessionIds = yield* collectSessionTreeIds(sessionId)
+        yield* Effect.forEach(sessionIds, cleanupSessionRuntimeState, { discard: true })
+        yield* sessionStorage.deleteSession(sessionId)
+        yield* Effect.forEach(
+          sessionIds,
+          (deletedSessionId) =>
+            Effect.logInfo("session.deleted").pipe(
+              Effect.annotateLogs({ sessionId: deletedSessionId }),
+            ),
+          { discard: true },
+        )
+      })
+
       const deleteSessionOwned = Effect.fn("SessionCommands.deleteSession")(function* (
         sessionId: SessionId,
       ) {
-        yield* extensionStateRuntime.terminateAll(sessionId).pipe(
-          // Session deletion owns cleanup best-effort actor termination, then
-          // propagates durable store failures below.
-          Effect.catchDefect(() => Effect.void),
-        )
-        yield* eventPublisher.terminateSession(sessionId)
-        yield* eventStore.removeSession(sessionId)
-        yield* sessionStorage.deleteSession(sessionId)
-        yield* sessionCwdRegistry.forget(sessionId)
-        yield* Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId }))
+        yield* deleteSessionCascade(sessionId)
       })
 
       const deleteBranch = Effect.fn("SessionCommands.deleteBranch")(function* (input: {

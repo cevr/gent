@@ -225,6 +225,11 @@ describe("Storage", () => {
         )
         expect(wrongParentBranchExit._tag).toBe("Failure")
 
+        const danglingParentBranchExit = yield* Effect.exit(
+          sql`INSERT INTO sessions (id, parent_branch_id, created_at, updated_at) VALUES (${"dangling-parent-branch"}, ${"parent-a-branch"}, ${now.getTime()}, ${now.getTime()})`,
+        )
+        expect(danglingParentBranchExit._tag).toBe("Failure")
+
         const missingActiveBranchExit = yield* Effect.exit(
           sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"missing-active"}, ${"missing-branch"}, ${now.getTime()}, ${now.getTime()})`,
         )
@@ -635,8 +640,14 @@ describe("Storage", () => {
             const messageParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(messages)`
             const eventParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(events)`
             const sessionParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(sessions)`
+            const sessionSchema = yield* sql<{ sql: string | null }>`
+              SELECT sql FROM sqlite_schema WHERE type = ${"table"} AND name = ${"sessions"}
+            `
             expect(sessionParents.map((row) => row.table)).toEqual(
               expect.arrayContaining(["branches", "sessions"]),
+            )
+            expect(sessionSchema[0]?.sql ?? "").toContain(
+              "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)",
             )
             expect(branchParents.map((row) => row.table)).toContain("sessions")
             expect(branchParents.map((row) => row.table)).toContain("branches")
@@ -673,6 +684,11 @@ describe("Storage", () => {
               sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
             )
             expect(invalidSession._tag).toBe("Failure")
+
+            const danglingParentBranch = yield* Effect.exit(
+              sql`INSERT INTO sessions (id, parent_branch_id, created_at, updated_at) VALUES (${"new-dangling-parent-branch"}, ${"valid-branch"}, ${8}, ${8})`,
+            )
+            expect(danglingParentBranch._tag).toBe("Failure")
 
             const invalidBranch = yield* Effect.exit(
               sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"new-invalid-branch"}, ${"legacy-session"}, ${"other-branch"}, ${8})`,

@@ -5,7 +5,7 @@ import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
-import { EventStore, EventStoreError } from "@gent/core/domain/event"
+import { EventStore, EventStoreError, SessionStarted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { ProjectionContribution } from "@gent/core/domain/projection"
 import { Provider } from "@gent/core/providers/provider"
@@ -14,7 +14,10 @@ import {
   SessionRuntimeError,
   SessionRuntimeStateSchema,
 } from "../../src/runtime/session-runtime"
-import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import {
+  MachineEngine,
+  type MachineEngineService,
+} from "../../src/runtime/extensions/resource-host/machine-engine"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -165,6 +168,31 @@ const sessionCommandsLayer = () => {
     EventPublisher.Test(),
     Provider.Debug(),
     MachineEngine.Test(),
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
+const sessionCommandsLayerWithMachineProbe = (terminated: Array<SessionId>) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const machineProbeLayer = Layer.succeed(MachineEngine, {
+    publish: () => Effect.succeed([]),
+    send: () => Effect.void,
+    execute: () => Effect.die("unexpected machine request"),
+    getActorStatuses: () => Effect.succeed([]),
+    terminateAll: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  } satisfies MachineEngineService)
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    SessionRuntime.Test(),
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    machineProbeLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(SessionCommands.Live, deps)
@@ -778,6 +806,59 @@ describe("session.delete", () => {
       }),
     ),
   )
+
+  it.live("cleans runtime state for descendant sessions before durable cascade", () => {
+    const terminated: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const eventStore = yield* EventStore
+        const cwdRegistry = yield* SessionCwdRegistry
+
+        const parent = yield* commands.createSession({ cwd: "/tmp/delete-parent" })
+        const child = yield* commands.createChildSession({
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+          cwd: "/tmp/delete-child",
+        })
+        const grandchild = yield* commands.createChildSession({
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+          cwd: "/tmp/delete-grandchild",
+        })
+
+        const primeSessionStream = Effect.fn("primeSessionStream")(function* (
+          sessionId: SessionId,
+          branchId: BranchId,
+        ) {
+          const closed = collectSessionEvents(eventStore.subscribe({ sessionId }))
+          yield* eventStore.publish(SessionStarted.make({ sessionId, branchId }))
+          return yield* closed
+        })
+
+        const parentClosed = yield* primeSessionStream(parent.sessionId, parent.branchId)
+        const childClosed = yield* primeSessionStream(child.sessionId, child.branchId)
+        const grandchildClosed = yield* primeSessionStream(
+          grandchild.sessionId,
+          grandchild.branchId,
+        )
+
+        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBe("/tmp/delete-parent")
+        expect(yield* cwdRegistry.lookup(child.sessionId)).toBe("/tmp/delete-child")
+        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBe("/tmp/delete-grandchild")
+
+        yield* commands.deleteSession(parent.sessionId)
+
+        yield* Deferred.await(parentClosed).pipe(Effect.timeout("5 seconds"))
+        yield* Deferred.await(childClosed).pipe(Effect.timeout("5 seconds"))
+        yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
+        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBeUndefined()
+        expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
+        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
+        expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
+      }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated))),
+    )
+  })
 })
 
 describe("message.send", () => {

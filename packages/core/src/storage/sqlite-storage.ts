@@ -249,6 +249,12 @@ interface ForeignKeyListRow {
   match: string
 }
 
+const SESSION_PARENT_BRANCH_CHECK =
+  "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
+
+const hasSessionParentBranchCheck = (createSql: string): boolean =>
+  createSql.replace(/\s+/g, " ").toUpperCase().includes(SESSION_PARENT_BRANCH_CHECK.toUpperCase())
+
 const isReasoningEffort = Schema.is(ReasoningEffort)
 
 const sessionFromRow = (row: SessionRow) =>
@@ -539,13 +545,19 @@ const migrateTableForeignKeys = Effect.fn("Storage.migrateTableForeignKeys")(fun
   readonly expectedParents: ReadonlyArray<string>
   readonly createSql: string
   readonly shouldMigrate?: (foreignKeys: ReadonlyArray<ForeignKeyListRow>) => boolean
+  readonly shouldMigrateSql?: (createSql: string) => boolean
 }) {
   const sql = yield* SqlClient.SqlClient
   const keys = yield* foreignKeys(params.table)
   const parents = new Set(keys.map((row) => row.table))
+  const schemaRows = yield* sql<{ sql: string | null }>`
+    SELECT sql FROM sqlite_schema WHERE type = ${"table"} AND name = ${params.table}
+  `
+  const tableSql = schemaRows[0]?.sql ?? ""
   const needsMigration =
     params.expectedParents.some((parent) => !parents.has(parent)) ||
-    (params.shouldMigrate?.(keys) ?? false)
+    (params.shouldMigrate?.(keys) ?? false) ||
+    (params.shouldMigrateSql?.(tableSql) ?? false)
 
   if (!needsMigration) return
 
@@ -598,6 +610,7 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             parent_branch_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
+            ${SESSION_PARENT_BRANCH_CHECK},
             FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
             FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
@@ -610,6 +623,7 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
                 key.from === "parent_branch_id" &&
                 key.on_delete.toUpperCase() === "CASCADE",
             ),
+          shouldMigrateSql: (createSql) => !hasSessionParentBranchCheck(createSql),
         })
         yield* migrateTableForeignKeys({
           table: "branches",
@@ -867,6 +881,7 @@ const initSchema = Effect.gen(function* () {
       parent_branch_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      ${SESSION_PARENT_BRANCH_CHECK},
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
       FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
