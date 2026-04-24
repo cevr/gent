@@ -238,6 +238,10 @@ interface EventRow {
   trace_id: string | null
 }
 
+interface ForeignKeyListRow {
+  table: string
+}
+
 const isReasoningEffort = Schema.is(ReasoningEffort)
 
 const sessionFromRow = (row: SessionRow) =>
@@ -484,6 +488,310 @@ const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex
   yield* Effect.forEach(messages, (message) => indexMessageSearch(message), { discard: true })
 })
 
+const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(function* () {
+  const sql = yield* SqlClient.SqlClient
+
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DELETE FROM branches WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM messages WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM messages WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = messages.branch_id AND branches.session_id != messages.session_id)`
+      yield* sql`DELETE FROM message_chunks WHERE message_id NOT IN (SELECT id FROM messages)`
+      yield* sql`DELETE FROM message_chunks WHERE chunk_id NOT IN (SELECT id FROM content_chunks)`
+      yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+      yield* sql`DELETE FROM events WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND EXISTS (SELECT 1 FROM branches WHERE branches.id = events.branch_id AND branches.session_id != events.session_id)`
+      yield* sql`DELETE FROM actor_inbox WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM agent_loop_checkpoints WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM todos WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM interaction_requests WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM extension_state WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND active_branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IS NOT NULL AND parent_session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND parent_branch_id NOT IN (SELECT id FROM branches)`
+    }),
+  )
+})
+
+const foreignKeyParents = Effect.fn("Storage.foreignKeyParents")(function* (table: string) {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql.unsafe<ForeignKeyListRow>(`PRAGMA foreign_key_list(${table})`)
+  return new Set(rows.map((row) => row.table))
+})
+
+const migrateTableForeignKeys = Effect.fn("Storage.migrateTableForeignKeys")(function* (params: {
+  readonly table: string
+  readonly columns: ReadonlyArray<string>
+  readonly expectedParents: ReadonlyArray<string>
+  readonly createSql: string
+}) {
+  const sql = yield* SqlClient.SqlClient
+  const parents = yield* foreignKeyParents(params.table)
+  const needsMigration = params.expectedParents.some((parent) => !parents.has(parent))
+
+  if (!needsMigration) return
+
+  const legacyTable = `${params.table}__legacy_fk_migration`
+  const columnList = params.columns.join(", ")
+
+  yield* sql.unsafe(`DROP TABLE IF EXISTS ${legacyTable}`)
+  yield* sql.unsafe(`ALTER TABLE ${params.table} RENAME TO ${legacyTable}`)
+  yield* sql.unsafe(params.createSql)
+  yield* sql.unsafe(
+    `INSERT INTO ${params.table} (${columnList}) SELECT ${columnList} FROM ${legacyTable}`,
+  )
+  yield* sql.unsafe(`DROP TABLE ${legacyTable}`)
+})
+
+const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstraints")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient
+
+    yield* sql.unsafe(`PRAGMA foreign_keys = OFF`)
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* migrateTableForeignKeys({
+          table: "branches",
+          columns: [
+            "id",
+            "session_id",
+            "parent_branch_id",
+            "parent_message_id",
+            "name",
+            "summary",
+            "created_at",
+          ],
+          expectedParents: ["sessions"],
+          createSql: `
+          CREATE TABLE branches (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            parent_branch_id TEXT,
+            parent_message_id TEXT,
+            name TEXT,
+            summary TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* sql.unsafe(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
+        )
+        yield* migrateTableForeignKeys({
+          table: "messages",
+          columns: [
+            "id",
+            "session_id",
+            "branch_id",
+            "kind",
+            "role",
+            "parts",
+            "created_at",
+            "turn_duration_ms",
+            "metadata",
+          ],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            kind TEXT,
+            role TEXT NOT NULL,
+            parts TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            turn_duration_ms INTEGER,
+            metadata TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "message_chunks",
+          columns: ["message_id", "ordinal", "chunk_id"],
+          expectedParents: ["messages", "content_chunks"],
+          createSql: `
+          CREATE TABLE message_chunks (
+            message_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            PRIMARY KEY (message_id, ordinal),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (chunk_id) REFERENCES content_chunks(id)
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "events",
+          columns: [
+            "id",
+            "session_id",
+            "branch_id",
+            "event_tag",
+            "event_json",
+            "created_at",
+            "trace_id",
+          ],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE events (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT,
+            event_tag TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            trace_id TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "actor_inbox",
+          columns: [
+            "command_id",
+            "session_id",
+            "branch_id",
+            "command_kind",
+            "payload_json",
+            "status",
+            "attempts",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "completed_at",
+            "last_error",
+          ],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE actor_inbox (
+            command_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            command_kind TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            started_at INTEGER,
+            completed_at INTEGER,
+            last_error TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "agent_loop_checkpoints",
+          columns: ["session_id", "branch_id", "version", "state_tag", "state_json", "updated_at"],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE agent_loop_checkpoints (
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            state_tag TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (session_id, branch_id),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "todos",
+          columns: ["id", "branch_id", "content", "status", "priority", "created_at", "updated_at"],
+          expectedParents: ["branches"],
+          createSql: `
+          CREATE TABLE todos (
+            id TEXT PRIMARY KEY,
+            branch_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL,
+            priority TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "interaction_requests",
+          columns: [
+            "request_id",
+            "type",
+            "session_id",
+            "branch_id",
+            "params_json",
+            "status",
+            "created_at",
+          ],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE interaction_requests (
+            request_id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+          )
+        `,
+        })
+        yield* migrateTableForeignKeys({
+          table: "extension_state",
+          columns: ["session_id", "extension_id", "state_json", "version", "updated_at"],
+          expectedParents: ["sessions"],
+          createSql: `
+          CREATE TABLE extension_state (
+            session_id TEXT NOT NULL,
+            extension_id TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (session_id, extension_id),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+          )
+        `,
+        })
+      }),
+    )
+    yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
+  },
+)
+
+const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{
+    table: string
+    rowid: number | null
+    parent: string
+    fkid: number
+  }>`PRAGMA foreign_key_check`
+
+  if (rows.length === 0) return
+
+  const details = rows
+    .slice(0, 10)
+    .map((row) => `${row.table}:${row.rowid ?? "unknown"} -> ${row.parent}#${row.fkid}`)
+    .join(", ")
+  return yield* new StorageError({
+    message: `SQLite foreign key integrity check failed after repair: ${details}`,
+  })
+})
+
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
@@ -541,10 +849,14 @@ const initSchema = Effect.gen(function* () {
       parts TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       turn_duration_ms INTEGER,
-      FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 
+  yield* sql.unsafe(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
+  )
   yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN kind TEXT`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN metadata TEXT`).pipe(Effect.ignoreCause)
 
@@ -577,7 +889,8 @@ const initSchema = Effect.gen(function* () {
       event_tag TEXT NOT NULL,
       event_json TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 
@@ -598,7 +911,8 @@ const initSchema = Effect.gen(function* () {
       started_at INTEGER,
       completed_at INTEGER,
       last_error TEXT,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 
@@ -611,7 +925,8 @@ const initSchema = Effect.gen(function* () {
       state_json TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 
@@ -637,7 +952,8 @@ const initSchema = Effect.gen(function* () {
       params_json TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       created_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
 
@@ -652,6 +968,10 @@ const initSchema = Effect.gen(function* () {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `)
+
+  yield* repairForeignKeyOrphans()
+  yield* migrateForeignKeyConstraints()
+  yield* assertForeignKeyIntegrity()
 
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(branch_id)`)
   yield* sql.unsafe(

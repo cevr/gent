@@ -254,6 +254,202 @@ describe("Storage", () => {
         expect(fts[0]?.count).toBe(0)
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
+
+    test("migrates legacy storage tables to enforced foreign keys", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "gent-fk-migration-"))
+      const dbPath = join(dir, "gent.db")
+      try {
+        const db = new Database(dbPath)
+        db.run(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            cwd TEXT,
+            bypass INTEGER,
+            reasoning_level TEXT,
+            active_branch_id TEXT,
+            parent_session_id TEXT,
+            parent_branch_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE branches (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            parent_branch_id TEXT,
+            parent_message_id TEXT,
+            name TEXT,
+            created_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            parts TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            turn_duration_ms INTEGER
+          )
+        `)
+        db.run(`
+          CREATE TABLE content_chunks (
+            id TEXT PRIMARY KEY,
+            part_type TEXT NOT NULL,
+            part_json TEXT NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE message_chunks (
+            message_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            chunk_id TEXT NOT NULL,
+            PRIMARY KEY (message_id, ordinal)
+          )
+        `)
+        db.run(`
+          CREATE TABLE events (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT,
+            event_tag TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        `)
+        db.run(
+          `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["legacy-session", "legacy", "missing-active", "missing-parent", "missing-branch", 0, 0],
+        )
+        db.run(
+          `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["other-session", "other", null, null, null, 0, 0],
+        )
+        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
+          "valid-branch",
+          "legacy-session",
+          "main",
+          0,
+        ])
+        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
+          "orphan-branch",
+          "missing-session",
+          "orphan",
+          0,
+        ])
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "valid-message",
+            "legacy-session",
+            "valid-branch",
+            "user",
+            JSON.stringify([{ type: "text", text: "survives migration" }]),
+            1,
+            null,
+          ],
+        )
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["orphan-message", "legacy-session", "missing-branch", "user", "[]", 2, null],
+        )
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["mismatched-message", "other-session", "valid-branch", "user", "[]", 3, null],
+        )
+        db.run(`INSERT INTO content_chunks (id, part_type, part_json) VALUES (?, ?, ?)`, [
+          "orphan-chunk",
+          "text",
+          JSON.stringify({ type: "text", text: "orphan" }),
+        ])
+        db.run(`INSERT INTO message_chunks (message_id, ordinal, chunk_id) VALUES (?, ?, ?)`, [
+          "missing-message",
+          0,
+          "orphan-chunk",
+        ])
+        db.run(
+          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+          ["legacy-session", "valid-branch", "AgentSwitched", "{}", 4],
+        )
+        db.run(
+          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+          ["missing-session", null, "AgentSwitched", "{}", 5],
+        )
+        db.run(
+          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+          ["legacy-session", "missing-branch", "AgentSwitched", "{}", 6],
+        )
+        db.close()
+
+        const layer = Storage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const storage = yield* Storage
+            const sql = yield* SqlClient.SqlClient
+
+            const session = yield* storage.getSession(SessionId.make("legacy-session"))
+            expect(session?.activeBranchId).toBeUndefined()
+            expect(session?.parentSessionId).toBeUndefined()
+            expect(session?.parentBranchId).toBeUndefined()
+
+            const message = yield* storage.getMessage(MessageId.make("valid-message"))
+            expect(message?.parts).toEqual([
+              new TextPart({ type: "text", text: "survives migration" }),
+            ])
+
+            const fkCheck = yield* sql<{
+              table: string
+              rowid: number | null
+              parent: string
+              fkid: number
+            }>`PRAGMA foreign_key_check`
+            expect(fkCheck).toEqual([])
+
+            const branchParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(branches)`
+            const messageParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(messages)`
+            const eventParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(events)`
+            expect(branchParents.map((row) => row.table)).toContain("sessions")
+            expect(messageParents.map((row) => row.table)).toEqual(
+              expect.arrayContaining(["branches", "sessions"]),
+            )
+            expect(eventParents.map((row) => row.table)).toEqual(
+              expect.arrayContaining(["branches", "sessions"]),
+            )
+
+            const orphanBranches = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM branches WHERE id = ${"orphan-branch"}`
+            const orphanMessages = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM messages WHERE id IN (${"orphan-message"}, ${"mismatched-message"})`
+            const orphanChunks = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM content_chunks WHERE id = ${"orphan-chunk"}`
+            const orphanEvents = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM events WHERE created_at IN (${5}, ${6})`
+            expect(orphanBranches[0]?.count).toBe(0)
+            expect(orphanMessages[0]?.count).toBe(0)
+            expect(orphanChunks[0]?.count).toBe(0)
+            expect(orphanEvents[0]?.count).toBe(0)
+
+            const rejected = yield* Effect.exit(
+              sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
+            )
+            expect(rejected._tag).toBe("Failure")
+          }).pipe(Effect.provide(layer)),
+        )
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
   })
 
   describe("Events", () => {
@@ -1343,6 +1539,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
         yield* storage.appendEvent(SessionStarted.make({ sessionId, branchId }))
 
@@ -1372,6 +1569,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentCompleted', ${JSON.stringify({ _tag: "SubagentCompleted", sessionId, branchId })}, ${Date.now()})`
 
@@ -1400,6 +1598,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSpawned', ${JSON.stringify({ _tag: "SubagentSpawned", parentSessionId: sessionId, childSessionId, agentName: "reviewer", prompt: "inspect", branchId })}, ${Date.now()})`
 
@@ -1425,6 +1624,7 @@ describe("Storage", () => {
             updatedAt: new Date(),
           }),
         )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
         yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SubagentSucceeded', ${JSON.stringify({ _tag: "SubagentSucceeded", parentSessionId: sessionId, childSessionId, agentName: "reviewer", branchId })}, ${Date.now()})`
 
