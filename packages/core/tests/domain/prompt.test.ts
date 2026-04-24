@@ -7,7 +7,7 @@ import {
   sectionPatternFor,
   withSectionMarkers,
 } from "@gent/core/domain/prompt"
-import { buildTurnPrompt } from "@gent/core/runtime/agent/agent-loop.utils"
+import { buildTurnPrompt } from "../../src/runtime/agent/agent-loop.utils"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
 

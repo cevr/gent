@@ -17,8 +17,8 @@ import { toolPreset } from "../helpers/test-preset.js"
 import { TaskService } from "@gent/extensions/task-tools-service"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import { TaskStorage } from "@gent/extensions/task-tools-storage"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
+import { ExtensionRegistry } from "../../../src/runtime/extensions/registry"
 import type {
   CapabilityError,
   CapabilityNotFoundError,

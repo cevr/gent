@@ -8,7 +8,7 @@ import type {
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { defineResource } from "@gent/core/domain/contribution"
-import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
+import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 
 const stubCtx = {
   sessionId: "test-session",

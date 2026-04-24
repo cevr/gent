@@ -32,14 +32,14 @@ import {
   ReadOnlyBrand,
   withReadOnly,
 } from "@gent/core/extensions/api"
-import { ConfigService } from "@gent/core/runtime/config-service"
+import { ConfigService } from "../../src/runtime/config-service"
 import {
   buildExtensionLayers,
   compileBaseSections,
   resolveProfileRuntime,
   resolveRuntimeProfile,
-} from "@gent/core/runtime/profile"
-import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+} from "../../src/runtime/profile"
+import { ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 
 const fsLayer = Layer.mergeAll(

@@ -12,7 +12,7 @@ import { SessionToolsExtension } from "@gent/extensions/session-tools"
 import { Agents } from "@gent/extensions/all-agents"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
-import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
+import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 import { testSetupCtx } from "@gent/core/test-utils"
 
 const stubCtx = {} as unknown as ExtensionHostContext

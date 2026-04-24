@@ -8,7 +8,7 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   reconcileScheduledJobs,
   collectSchedules,
-} from "@gent/core/runtime/extensions/resource-host/schedule-engine"
+} from "../../src/runtime/extensions/resource-host/schedule-engine"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ResourceSchedule } from "@gent/core/domain/resource"
 

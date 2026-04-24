@@ -3,8 +3,8 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { GlobTool } from "@gent/extensions/fs-tools/glob"
 import type { ToolContext } from "@gent/core/domain/tool"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { FallbackFileIndexLive } from "@gent/core/runtime/file-index/index"
+import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
+import { FallbackFileIndexLive } from "../../../src/runtime/file-index/index"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const ctx: ToolContext = testToolContext({

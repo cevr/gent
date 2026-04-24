@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import {
   createExtensionStorage,
   type ExtensionStorage,
-} from "@gent/core/runtime/extensions/extension-storage"
+} from "../../src/runtime/extensions/extension-storage"
 
 const baseDir = join(tmpdir(), `gent-storage-test-${Date.now()}`)
 

@@ -7,22 +7,22 @@ import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { ConfigService } from "../../src/runtime/config-service"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import {
   AllowAllPermission,
   resolveSessionEnvironment,
   type SessionEnvironmentDefaults,
-} from "@gent/core/runtime/session-runtime-context"
-import { makeAmbientExtensionHostContextDeps } from "@gent/core/runtime/make-extension-host-context"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+} from "../../src/runtime/session-runtime-context"
+import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import {
   SessionProfileCache,
   type SessionProfile,
   type SessionProfileCacheService,
-} from "@gent/core/runtime/session-profile"
+} from "../../src/runtime/session-profile"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))

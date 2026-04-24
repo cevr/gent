@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
-import { compileToolPolicy } from "@gent/core/runtime/extensions/registry"
+import { compileToolPolicy } from "../../src/runtime/extensions/registry"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { SessionId, BranchId } from "@gent/core/domain/ids"
 

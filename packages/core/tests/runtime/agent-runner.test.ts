@@ -10,12 +10,12 @@ import {
   toolCallPart,
   type ProviderStreamPart,
 } from "@gent/core/debug/provider"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { InProcessRunner, getSessionDepth } from "@gent/core/runtime/agent/agent-runner"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { ExtensionTurnControl } from "@gent/core/runtime/extensions/turn-control"
-import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
+import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
+import { ConfigService } from "../../src/runtime/config-service"
+import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { Session, Branch, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import {
@@ -29,23 +29,23 @@ import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { ModelId } from "@gent/core/domain/model"
 import { EventStore } from "@gent/core/domain/event"
 import { Storage, type StorageService } from "@gent/core/storage/sqlite-storage"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { tool } from "@gent/core/extensions/api"
-import { EventStoreLive } from "@gent/core/runtime/event-store-live"
+import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { SequenceRecorder, RecordingEventStore, assertSequence } from "@gent/core/test-utils"
 import {
   MachineEngine,
   type MachineEngineService,
-} from "@gent/core/runtime/extensions/resource-host/machine-engine"
+} from "../../src/runtime/extensions/resource-host/machine-engine"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { ServerProfileService } from "@gent/core/runtime/scope-brands"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { ServerProfileService } from "../../src/runtime/scope-brands"
 import {
   SessionRuntime,
   SessionRuntimeStateSchema,
   type SessionRuntimeService,
-} from "@gent/core/runtime/session-runtime"
+} from "../../src/runtime/session-runtime"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { rmSync } from "node:fs"
 

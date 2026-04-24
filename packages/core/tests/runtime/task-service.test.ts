@@ -5,9 +5,9 @@ import { TaskStorage } from "@gent/extensions/task-tools-storage"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { EventStore } from "@gent/core/domain/event"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 
 const sessionId = SessionId.make("task-test-session")

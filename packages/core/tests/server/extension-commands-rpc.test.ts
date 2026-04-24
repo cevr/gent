@@ -6,18 +6,18 @@ import {
   ExtensionRegistry,
   listSlashCommands,
   resolveExtensions,
-} from "@gent/core/runtime/extensions/registry"
-import { setupExtension } from "@gent/core/runtime/extensions/loader"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
+} from "../../src/runtime/extensions/registry"
+import { setupExtension } from "../../src/runtime/extensions/loader"
+import { ApprovalService } from "../../src/runtime/approval-service"
 import { createToolTestLayer } from "@gent/core/test-utils/extension-harness"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { Gent } from "@gent/sdk"
 import { BunServices } from "@effect/platform-bun"
 import { CommandInfo } from "@gent/core/server/transport-contract"
 import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { SessionProfileCache, type SessionProfile } from "@gent/core/runtime/session-profile"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []

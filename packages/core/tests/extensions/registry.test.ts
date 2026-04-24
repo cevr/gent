@@ -9,8 +9,8 @@ import {
   ExtensionRegistry,
   listSlashCommands,
   resolveExtensions,
-} from "@gent/core/runtime/extensions/registry"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
+} from "../../src/runtime/extensions/registry"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import type { PromptSection } from "@gent/core/domain/prompt"
 
 // Test helper: build a no-op model Capability directly. Post-B11.5d the

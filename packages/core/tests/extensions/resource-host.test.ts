@@ -21,7 +21,7 @@ import {
   SubscriptionEngine,
   collectSubscriptions,
   buildResourceLayer,
-} from "@gent/core/runtime/extensions/resource-host"
+} from "../../src/runtime/extensions/resource-host"
 import type { AnyResourceContribution, ResourceBusEnvelope } from "@gent/core/domain/resource"
 import { defineResource } from "@gent/core/domain/contribution"
 import { defineExtension } from "@gent/core/extensions/api"

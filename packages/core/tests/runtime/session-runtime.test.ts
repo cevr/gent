@@ -20,18 +20,18 @@ import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { ConfigService } from "../../src/runtime/config-service"
+import { ApprovalService } from "../../src/runtime/approval-service"
 import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Permission } from "@gent/core/domain/permission"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.js"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import {
   SessionRuntime,
@@ -41,7 +41,7 @@ import {
   respondInteractionCommand,
   recordToolResultCommand,
   sendUserMessageCommand,
-} from "@gent/core/runtime/session-runtime"
+} from "../../src/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 
 const makeTestExtensions = (tools: AnyCapabilityContribution[] = []) => {

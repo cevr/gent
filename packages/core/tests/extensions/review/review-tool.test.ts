@@ -6,7 +6,7 @@ import { Agents } from "@gent/extensions/all-agents"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 import { SessionId } from "@gent/core/domain/ids"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 

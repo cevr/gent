@@ -155,13 +155,39 @@ describe("architecture policy", () => {
     expect(source).not.toMatch(/\bLayer\.succeed\(AgentLoop,\s*/)
   })
 
-  test("package exports do not expose agent-loop as a public subpath", () => {
+  test("package exports expose only approved runtime subpaths", () => {
     const file = pathResolve(ROOT, "packages/core/package.json")
     const source = readFileSync(file, "utf8")
+    const packageJson = JSON.parse(source) as { exports?: Record<string, unknown> }
+    const exports = packageJson.exports ?? {}
+    const runtimeExports = Object.fromEntries(
+      Object.entries(exports).filter(([key]) => key.startsWith("./runtime/")),
+    )
 
-    expect(source).toContain('"./runtime/agent/agent-loop": null')
-    expect(source).toContain('"./runtime/agent/agent-loop.js": null')
-    expect(source).toContain('"./runtime/agent/agent-loop.ts": null')
+    expect(exports["./runtime/*"]).toBeUndefined()
+    expect(runtimeExports).toEqual({
+      "./runtime/extensions/disabled": "./src/runtime/extensions/disabled.ts",
+      "./runtime/extensions/disabled.js": "./src/runtime/extensions/disabled.ts",
+      "./runtime/extensions/registry": "./src/runtime/extensions/registry.ts",
+      "./runtime/extensions/registry.js": "./src/runtime/extensions/registry.ts",
+      "./runtime/extensions/runtime-effect": null,
+      "./runtime/extensions/runtime-effect.js": null,
+      "./runtime/extensions/runtime-effect.ts": null,
+      "./runtime/extensions/turn-control": null,
+      "./runtime/extensions/turn-control.js": null,
+      "./runtime/extensions/turn-control.ts": null,
+      "./runtime/agent/agent-loop": null,
+      "./runtime/agent/agent-loop.js": null,
+      "./runtime/agent/agent-loop.ts": null,
+      "./runtime/log-paths": "./src/runtime/log-paths.ts",
+      "./runtime/log-paths.js": "./src/runtime/log-paths.ts",
+      "./runtime/logger": "./src/runtime/logger.ts",
+      "./runtime/logger.js": "./src/runtime/logger.ts",
+      "./runtime/runtime-platform": "./src/runtime/runtime-platform.ts",
+      "./runtime/runtime-platform.js": "./src/runtime/runtime-platform.ts",
+      "./runtime/tracer": "./src/runtime/tracer.ts",
+      "./runtime/tracer.js": "./src/runtime/tracer.ts",
+    })
   })
 
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {

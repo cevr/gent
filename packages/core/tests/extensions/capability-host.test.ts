@@ -28,7 +28,7 @@ import {
   CapabilityNotFoundError,
   type Audience,
 } from "@gent/core/domain/capability"
-import { compileCapabilities } from "@gent/core/runtime/extensions/capability-host"
+import { compileCapabilities } from "../../src/runtime/extensions/capability-host"
 
 // CapabilityContext extends ExtensionHostContext (large RPC surface). Tests
 // for the skeleton don't exercise extension RPC; cast a minimal shape.

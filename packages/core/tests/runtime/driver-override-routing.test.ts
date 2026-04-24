@@ -16,7 +16,7 @@ import {
   ModelDriverRef,
   resolveAgentDriver,
 } from "@gent/core/domain/agent"
-import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
+import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- AgentName is branded; tests build raw definitions.
 const cowork = AgentDefinition.make({ name: "cowork" as never })

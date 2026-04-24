@@ -6,8 +6,8 @@ import {
   FileIndexError,
   FallbackFileIndexLive,
   FileIndexLive,
-} from "@gent/core/runtime/file-index/index"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+} from "../../../src/runtime/file-index/index"
+import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 
 const PlatformLayer = BunServices.layer
 const TestRuntimePlatform = RuntimePlatform.Test({

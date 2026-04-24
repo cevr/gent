@@ -14,7 +14,7 @@ import type { ExtensionHostContext } from "@gent/core/domain/extension-host-cont
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { defineResource } from "@gent/core/domain/contribution"
-import { compileRuntimeSlots } from "@gent/core/runtime/extensions/runtime-slots"
+import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 
 const stubHostCtx = {
   sessionId: "test-session",

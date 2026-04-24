@@ -4,9 +4,9 @@ import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SessionProfileCache } from "@gent/core/runtime/session-profile"
-import { ConfigService } from "@gent/core/runtime/config-service"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { SessionProfileCache } from "../../src/runtime/session-profile"
+import { ConfigService } from "../../src/runtime/config-service"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 
 describe("SessionProfileCache", () => {
   it.live("keeps permission rules scoped to the session cwd instead of the launch cwd", () => {

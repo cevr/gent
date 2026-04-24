@@ -14,8 +14,8 @@
 
 import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
-import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host"
-import { interpretEffects } from "@gent/core/runtime/extensions/extension-actor-shared"
+import { SubscriptionEngine } from "../../src/runtime/extensions/resource-host"
+import { interpretEffects } from "../../src/runtime/extensions/extension-actor-shared"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import type { ExtensionEffect } from "../../src/domain/extension.js"
 import type { ResourceBusEnvelope } from "@gent/core/domain/resource"

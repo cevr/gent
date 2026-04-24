@@ -6,7 +6,7 @@ import {
   interruptPayloadToSteerCommand,
   sendUserMessageCommand,
   type RuntimeCommand,
-} from "@gent/core/runtime/session-runtime"
+} from "../../src/runtime/session-runtime"
 
 describe("actor RPC handlers", () => {
   test("sendUserMessage dispatches the tagged runtime command", async () => {

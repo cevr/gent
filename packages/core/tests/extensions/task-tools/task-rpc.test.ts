@@ -13,7 +13,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import { setupExtension } from "@gent/core/runtime/extensions/loader"
+import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import {
   TaskCreateRef,

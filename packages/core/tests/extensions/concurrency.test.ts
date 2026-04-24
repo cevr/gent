@@ -12,15 +12,15 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import {
   MachineEngine,
   type MachineEngineService,
-} from "@gent/core/runtime/extensions/resource-host/machine-engine"
+} from "../../src/runtime/extensions/resource-host/machine-engine"
 import {
   collectSubscriptions,
   SubscriptionEngine,
-} from "@gent/core/runtime/extensions/resource-host"
+} from "../../src/runtime/extensions/resource-host"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
-import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeSessionMailbox } from "../../src/runtime/extensions/resource-host/machine-mailbox"

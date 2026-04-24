@@ -20,7 +20,7 @@ import {
   ProjectionError,
 } from "@gent/core/domain/projection"
 import { type ReadOnly, ReadOnlyBrand, withReadOnly } from "@gent/core/domain/read-only"
-import { compileProjections } from "@gent/core/runtime/extensions/projection-registry"
+import { compileProjections } from "../../src/runtime/extensions/projection-registry"
 
 const ext = (
   id: string,

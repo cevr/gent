@@ -5,7 +5,7 @@ import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset.js"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { MachineEngine } from "../../../src/runtime/extensions/resource-host/machine-engine"
 import { SessionStarted } from "@gent/core/domain/event"
 import { ArtifactProtocol } from "@gent/extensions/artifacts-protocol"
 

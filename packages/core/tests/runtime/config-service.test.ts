@@ -10,8 +10,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
-import { ConfigService, UserConfig } from "@gent/core/runtime/config-service"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { ConfigService, UserConfig } from "../../src/runtime/config-service"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 
 describe("ConfigService", () => {
   describe("Test implementation", () => {

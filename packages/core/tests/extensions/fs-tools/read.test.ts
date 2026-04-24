@@ -3,7 +3,7 @@ import { Effect, FileSystem, Layer } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ReadTool } from "@gent/extensions/fs-tools/read"
 import type { ToolContext } from "@gent/core/domain/tool"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
+import { RuntimePlatform } from "../../../src/runtime/runtime-platform"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const ctx: ToolContext = testToolContext({

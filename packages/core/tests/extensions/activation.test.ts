@@ -14,7 +14,7 @@ import {
   setupBuiltinExtensions,
   setupDiscoveredExtensions,
   validateLoadedExtensions,
-} from "@gent/core/runtime/extensions/activation"
+} from "../../src/runtime/extensions/activation"
 import { defineResource } from "@gent/core/domain/contribution"
 import type { ExtensionContributions } from "@gent/core/domain/contribution"
 import { tool } from "@gent/core/extensions/api"

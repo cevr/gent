@@ -6,15 +6,15 @@ import * as Response from "effect/unstable/ai/Response"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { AgentLoop } from "@gent/core/runtime/agent/agent-loop"
-import { ResourceManagerLive } from "@gent/core/runtime/resource-manager"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
-import { DriverRegistry } from "@gent/core/runtime/extensions/driver-registry"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { ConfigService } from "@gent/core/runtime/config-service"
+import { AgentLoop } from "../../src/runtime/agent/agent-loop"
+import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { ConfigService } from "../../src/runtime/config-service"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
+import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Provider, ProviderError } from "@gent/core/providers/provider"
 import {
@@ -51,7 +51,7 @@ import {
   type AgentEvent,
 } from "@gent/core/domain/event"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
@@ -62,21 +62,21 @@ import {
   assistantDraftFromMessage,
   assistantMessageIdForTurn,
   toolResultMessageIdForTurn,
-} from "@gent/core/runtime/agent/agent-loop.utils"
+} from "../../src/runtime/agent/agent-loop.utils"
 import type { TurnError, TurnEvent } from "@gent/core/domain/driver"
 import {
   buildLoopCheckpointRecord,
   decodeLoopCheckpointState,
   type AgentLoopCheckpointRecord,
-} from "@gent/core/runtime/agent/agent-loop.checkpoint"
+} from "../../src/runtime/agent/agent-loop.checkpoint"
 import {
   appendFollowUpQueueState,
   appendSteeringItem,
   buildRunningState,
   emptyLoopQueueState,
   type LoopState,
-} from "@gent/core/runtime/agent/agent-loop.state"
-import { EventStoreLive } from "@gent/core/runtime/event-store-live"
+} from "../../src/runtime/agent/agent-loop.state"
+import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
 
 // ============================================================================

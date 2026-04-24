@@ -1,12 +1,12 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import { resolveExtensions, ExtensionRegistry } from "@gent/core/runtime/extensions/registry"
+import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { tool } from "@gent/core/extensions/api"
-import { ToolRunner } from "@gent/core/runtime/agent/tool-runner"
-import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { ToolRunner } from "../../src/runtime/agent/tool-runner"
+import { ApprovalService } from "../../src/runtime/approval-service"
 import { Permission, PermissionRule } from "@gent/core/domain/permission"
-import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
-import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
+import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 describe("ToolRunner", () => {

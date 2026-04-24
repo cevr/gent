@@ -18,9 +18,9 @@ import {
   type EphemeralProfile,
   type ServerProfile,
   ServerProfileService,
-} from "@gent/core/runtime/scope-brands"
-import { RuntimeComposer, ownService } from "@gent/core/runtime/composer"
-import { runWithBuiltLayer } from "@gent/core/runtime/run-with-built-layer"
+} from "../../src/runtime/scope-brands"
+import { RuntimeComposer, ownService } from "../../src/runtime/composer"
+import { runWithBuiltLayer } from "../../src/runtime/run-with-built-layer"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
 import { BranchStorage } from "@gent/core/storage/branch-storage"

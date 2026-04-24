@@ -10,7 +10,7 @@ import {
   estimateTokens,
   estimateContextPercent,
   getContextWindow,
-} from "@gent/core/runtime/context-estimation"
+} from "../../src/runtime/context-estimation"
 
 describe("Token Estimation", () => {
   test("estimateTokens calculates token count", () => {

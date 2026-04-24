@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import {
   makeExtensionHostContext,
   type MakeExtensionHostContextDeps,
-} from "@gent/core/runtime/make-extension-host-context"
+} from "../../src/runtime/make-extension-host-context"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart } from "@gent/core/domain/message"

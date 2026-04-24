@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { Schema, Effect } from "effect"
-import { formatSchemaError } from "@gent/core/runtime/format-schema-error"
+import { formatSchemaError } from "../../src/runtime/format-schema-error"
 
 const EditParams = Schema.Struct({
   file_path: Schema.String,

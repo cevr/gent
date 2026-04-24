@@ -5,7 +5,7 @@ import {
   getRetryAfter,
   DEFAULT_RETRY_CONFIG,
   withRetry,
-} from "@gent/core/runtime/retry"
+} from "../../src/runtime/retry"
 import { ProviderError } from "@gent/core/providers/provider"
 
 describe("getRetryAfter", () => {
