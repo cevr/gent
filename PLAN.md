@@ -156,6 +156,7 @@ not enforcing them. The durable model is lying.
 
 - `bun test packages/core/tests/storage/sqlite-storage.test.ts`
 - `bun run gate`
+- `bun run test:e2e`
 
 ---
 
@@ -272,6 +273,7 @@ and pulse clients even when durable state save fails.
 
 - `bun test packages/core/tests/extensions/persistence.test.ts packages/core/tests/extensions/concurrency.test.ts`
 - `bun run gate`
+- `bun run test:e2e`
 
 ---
 
