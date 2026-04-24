@@ -1,6 +1,10 @@
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
-import type { GentExtension, LoadedExtension } from "../../src/domain/extension.js"
+import {
+  ExtensionLoadError,
+  type GentExtension,
+  type LoadedExtension,
+} from "../../src/domain/extension.js"
 import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
   ExtensionRegistry,
@@ -171,6 +175,50 @@ describe("extension command RPCs", () => {
     )
 
     expect(invoked).toEqual([{ args: "rpc-world", sessionId: createdSessionId }])
+  })
+
+  test("RPC listStatus returns structurally tagged extension health", async () => {
+    const failingExtension: GentExtension = {
+      manifest: { id: "@test/failing-status" },
+      setup: () =>
+        Effect.fail(
+          new ExtensionLoadError({
+            extensionId: "@test/failing-status",
+            message: "setup boom",
+          }),
+        ),
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensionInputs: [failingExtension],
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: "/tmp" })
+
+          const status = yield* client.extension.listStatus({ sessionId })
+
+          expect(status._tag).toBe("degraded")
+          if (status._tag !== "degraded") return
+          expect(status.healthyExtensions).toEqual([])
+          expect(status.degradedExtensions).toHaveLength(1)
+          expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
+          expect(status.degradedExtensions[0]?.issues).toEqual([
+            {
+              _tag: "activation-failed",
+              phase: "setup",
+              error: "setup boom",
+            },
+          ])
+        }),
+      ),
+    )
   })
 
   test("model tool execution receives live session mutation capabilities", async () => {

@@ -11,18 +11,26 @@ export function ConnectionWidget() {
     if (state?._tag !== "disconnected" || state.reason === "stopped") return null
     return state.reason
   }
-  const healthSummary = () => client.extensionHealth().summary
+  const degradedExtensions = () => {
+    const health = client.extensionHealth()
+    return health._tag === "degraded" ? health.degradedExtensions : []
+  }
   const failedExtensions = () => {
-    const summary = healthSummary()
-    return summary._tag === "degraded" ? summary.failedExtensions : []
+    return degradedExtensions()
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "activation-failed"))
+      .map((extension) => extension.manifest.id)
   }
   const failedActors = () => {
-    const summary = healthSummary()
-    return summary._tag === "degraded" ? summary.failedActors : []
+    return degradedExtensions()
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "actor-failed"))
+      .map((extension) => extension.manifest.id)
   }
   const failedScheduledJobs = () => {
-    const summary = healthSummary()
-    return summary._tag === "degraded" ? summary.failedScheduledJobs : []
+    return degradedExtensions().flatMap((extension) =>
+      extension.issues.flatMap((issue) =>
+        issue._tag === "scheduled-job-failed" ? [`${extension.manifest.id}:${issue.jobId}`] : [],
+      ),
+    )
   }
   const hasFailedExtensions = () => failedExtensions().length > 0
   const hasFailedActors = () => failedActors().length > 0
@@ -41,8 +49,9 @@ export function ConnectionWidget() {
   }
   const subtitle = () => {
     if (client.isReconnecting()) return "worker reconnect in progress"
-    const summary = healthSummary()
-    if (summary._tag === "degraded" && summary.subtitle !== undefined) return summary.subtitle
+    if (hasFailedExtensions()) return "extension activation degraded"
+    if (hasFailedActors()) return "extension runtime degraded"
+    if (hasFailedScheduledJobs()) return "scheduled jobs degraded"
     if (disconnectedReason() !== null) return "runtime unavailable"
     return client.connectionIssue() ?? ""
   }

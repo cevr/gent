@@ -419,22 +419,24 @@ export const ScheduledJobFailureInfo = Schema.Struct({
 })
 export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
 
-export const ExtensionActivationHealth = TaggedEnumClass("ExtensionActivationHealth", {
-  Active: TaggedEnumClass.variant("active", {}),
-  Failed: TaggedEnumClass.variant("failed", {
+export const ExtensionHealthIssue = TaggedEnumClass("ExtensionHealthIssue", {
+  ActivationFailed: TaggedEnumClass.variant("activation-failed", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
   }),
-})
-export type ExtensionActivationHealth = typeof ExtensionActivationHealth.Type
-
-export const ExtensionSchedulerHealth = TaggedEnumClass("ExtensionSchedulerHealth", {
-  Healthy: TaggedEnumClass.variant("healthy", {}),
-  Degraded: TaggedEnumClass.variant("degraded", {
-    failures: Schema.NonEmptyArray(ScheduledJobFailureInfo),
+  ActorFailed: TaggedEnumClass.variant("actor-failed", {
+    sessionId: SessionId,
+    branchId: Schema.optional(BranchId),
+    error: Schema.String,
+    failurePhase: ExtensionActorFailurePhase,
+    restartCount: Schema.optional(Schema.Number),
+  }),
+  ScheduledJobFailed: TaggedEnumClass.variant("scheduled-job-failed", {
+    jobId: Schema.String,
+    error: Schema.String,
   }),
 })
-export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
+export type ExtensionHealthIssue = typeof ExtensionHealthIssue.Type
 
 const ExtensionHealthIdentityFields = {
   manifest: ExtensionManifestInfo,
@@ -448,68 +450,27 @@ const HealthyExtensionActorStatusInfo = Schema.Union([
   ExtensionActorStatusInfo.Restarting,
 ])
 
-const ExtensionHealthFields = {
-  ...ExtensionHealthIdentityFields,
-  activation: ExtensionActivationHealth,
-  actor: Schema.optional(ExtensionActorStatusInfo),
-  scheduler: ExtensionSchedulerHealth,
-}
-
-const HealthyExtensionHealthFields = {
-  ...ExtensionHealthIdentityFields,
-  activation: ExtensionActivationHealth.Active,
-  actor: Schema.optional(HealthyExtensionActorStatusInfo),
-  scheduler: ExtensionSchedulerHealth.Healthy,
-}
-
-const ExtensionHealthState = TaggedEnumClass("ExtensionHealth", {
-  Healthy: TaggedEnumClass.variant("healthy", HealthyExtensionHealthFields),
-  Degraded: TaggedEnumClass.variant("degraded", ExtensionHealthFields),
-})
-
-const isDegradedExtensionHealth = (health: typeof ExtensionHealthState.Type): boolean =>
-  health.activation._tag === "failed" ||
-  health.actor?._tag === "failed" ||
-  health.scheduler._tag === "degraded"
-
-export const ExtensionHealth = Object.assign(
-  ExtensionHealthState.pipe(
-    Schema.check(
-      Schema.makeFilter<typeof ExtensionHealthState.Type>(
-        (health) => {
-          if (health._tag === "healthy") return undefined
-          return isDegradedExtensionHealth(health)
-            ? undefined
-            : "degraded extension health must include failed activation, failed actor, or degraded scheduler"
-        },
-        { expected: "consistent extension health state" },
-      ),
-    ),
-  ),
-  {
-    Healthy: ExtensionHealthState.Healthy,
-    Degraded: ExtensionHealthState.Degraded,
-    guards: ExtensionHealthState.guards,
-    isAnyOf: ExtensionHealthState.isAnyOf,
-    match: ExtensionHealthState.match,
-  },
-)
-export type ExtensionHealth = typeof ExtensionHealth.Type
-
-export const ExtensionHealthSummary = TaggedEnumClass("ExtensionHealthSummary", {
-  Healthy: TaggedEnumClass.variant("healthy", {}),
+export const ExtensionHealth = TaggedEnumClass("ExtensionHealth", {
+  Healthy: TaggedEnumClass.variant("healthy", {
+    ...ExtensionHealthIdentityFields,
+    actor: Schema.optional(HealthyExtensionActorStatusInfo),
+  }),
   Degraded: TaggedEnumClass.variant("degraded", {
-    subtitle: Schema.optional(Schema.String),
-    failedExtensions: Schema.Array(Schema.String),
-    failedActors: Schema.Array(Schema.String),
-    failedScheduledJobs: Schema.Array(Schema.String),
+    ...ExtensionHealthIdentityFields,
+    actor: Schema.optional(HealthyExtensionActorStatusInfo),
+    issues: Schema.NonEmptyArray(ExtensionHealthIssue),
   }),
 })
-export type ExtensionHealthSummary = typeof ExtensionHealthSummary.Type
+export type ExtensionHealth = typeof ExtensionHealth.Type
 
-export const ExtensionHealthSnapshot = Schema.Struct({
-  extensions: Schema.Array(ExtensionHealth),
-  summary: ExtensionHealthSummary,
+export const ExtensionHealthSnapshot = TaggedEnumClass("ExtensionHealthSnapshot", {
+  Healthy: TaggedEnumClass.variant("healthy", {
+    extensions: Schema.Array(ExtensionHealth.Healthy),
+  }),
+  Degraded: TaggedEnumClass.variant("degraded", {
+    healthyExtensions: Schema.Array(ExtensionHealth.Healthy),
+    degradedExtensions: Schema.NonEmptyArray(ExtensionHealth.Degraded),
+  }),
 })
 export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 

@@ -22,6 +22,8 @@ import {
   type SessionRuntime,
   type SessionTreeNode,
   type CreateSessionResult,
+  type ExtensionHealth,
+  type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
 } from "@gent/core/server/transport-contract.js"
 import { stringifyOutput, summarizeOutput } from "@gent/core/domain/tool-output.js"
@@ -81,6 +83,8 @@ export type {
   SessionRuntime,
   SessionTreeNode,
   CreateSessionResult,
+  ExtensionHealth,
+  ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 }
 export { GentConnectionError }

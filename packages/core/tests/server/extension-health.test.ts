@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { buildExtensionHealthSnapshot } from "../../src/server/extension-health"
-import { ExtensionHealthSnapshot } from "@gent/core/server/transport-contract"
+import {
+  ExtensionHealth,
+  ExtensionHealthIssue,
+  ExtensionHealthSnapshot,
+} from "@gent/core/server/transport-contract"
 
 describe("buildExtensionHealthSnapshot", () => {
-  test("merges activation, actor, and scheduler failures into one server-owned summary", () => {
+  test("merges activation, actor, and scheduler failures into typed issue rows", () => {
     const snapshot = buildExtensionHealthSnapshot(
       [
         {
@@ -35,86 +39,151 @@ describe("buildExtensionHealthSnapshot", () => {
       ],
     )
 
-    expect(snapshot.summary).toEqual({
-      _tag: "degraded",
-      subtitle: "extension activation degraded",
-      failedExtensions: ["@gent/memory"],
-      failedActors: ["@gent/plan"],
-      failedScheduledJobs: ["@gent/plan:reflect"],
-    })
-    expect(snapshot.extensions).toEqual([
+    expect(snapshot._tag).toBe("degraded")
+    if (snapshot._tag !== "degraded") return
+
+    expect(snapshot.healthyExtensions).toEqual([])
+    expect(snapshot.degradedExtensions).toEqual([
       {
         manifest: { id: "@gent/memory" },
         scope: "builtin",
         sourcePath: "builtin",
         _tag: "degraded",
-        activation: {
-          _tag: "failed",
-          phase: "startup",
-          error: "startup boom",
-        },
-        scheduler: {
-          _tag: "healthy",
-        },
+        issues: [
+          {
+            _tag: "activation-failed",
+            phase: "startup",
+            error: "startup boom",
+          },
+        ],
       },
       {
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
         _tag: "degraded",
-        activation: {
-          _tag: "active",
-        },
-        actor: {
-          _tag: "failed",
-          extensionId: "@gent/plan",
-          sessionId: "s1",
-          branchId: "b1",
-          error: "actor boom",
-          failurePhase: "runtime",
-        },
-        scheduler: {
-          _tag: "degraded",
-          failures: [{ jobId: "reflect", error: "launchd boom" }],
-        },
-      },
-    ])
-  })
-
-  test("transport uses tagged extension health states", () => {
-    const wire = {
-      extensions: [
-        {
-          manifest: { id: "@gent/plan" },
-          scope: "builtin",
-          sourcePath: "builtin",
-          _tag: "degraded",
-          activation: { _tag: "active" },
-          actor: {
-            _tag: "failed",
-            extensionId: "@gent/plan",
+        issues: [
+          {
+            _tag: "actor-failed",
             sessionId: "s1",
             branchId: "b1",
             error: "actor boom",
             failurePhase: "runtime",
           },
-          scheduler: {
-            _tag: "healthy",
+          {
+            _tag: "scheduled-job-failed",
+            jobId: "reflect",
+            error: "launchd boom",
           },
+        ],
+      },
+    ])
+  })
+
+  test("returns a healthy snapshot when every extension has no issues", () => {
+    const snapshot = buildExtensionHealthSnapshot([
+      {
+        manifest: { id: "@gent/memory" },
+        scope: "builtin",
+        sourcePath: "builtin",
+        status: "active",
+      },
+    ])
+
+    expect(snapshot).toEqual({
+      _tag: "healthy",
+      extensions: [
+        {
+          _tag: "healthy",
+          manifest: { id: "@gent/memory" },
+          scope: "builtin",
+          sourcePath: "builtin",
         },
       ],
-      summary: {
-        _tag: "degraded",
-        failedExtensions: [],
-        failedActors: ["@gent/plan"],
-        failedScheduledJobs: [],
-      },
+    })
+  })
+
+  test("health issue constructors preserve typed failure categories", () => {
+    expect(
+      ExtensionHealthIssue.ActivationFailed.make({
+        phase: "startup",
+        error: "startup boom",
+      }),
+    ).toEqual({
+      _tag: "activation-failed",
+      phase: "startup",
+      error: "startup boom",
+    })
+    expect(
+      ExtensionHealthIssue.ScheduledJobFailed.make({
+        jobId: "reflect",
+        error: "launchd boom",
+      }),
+    ).toEqual({
+      _tag: "scheduled-job-failed",
+      jobId: "reflect",
+      error: "launchd boom",
+    })
+  })
+
+  test("degraded constructor requires non-empty issues", () => {
+    expect(
+      ExtensionHealth.Degraded.make({
+        manifest: { id: "@gent/plan" },
+        scope: "builtin",
+        sourcePath: "builtin",
+        issues: [
+          ExtensionHealthIssue.ActorFailed.make({
+            sessionId: "s1" as never,
+            error: "actor boom",
+            failurePhase: "runtime",
+          }),
+        ],
+      }),
+    ).toEqual({
+      _tag: "degraded",
+      manifest: { id: "@gent/plan" },
+      scope: "builtin",
+      sourcePath: "builtin",
+      issues: [
+        {
+          _tag: "actor-failed",
+          sessionId: "s1",
+          error: "actor boom",
+          failurePhase: "runtime",
+        },
+      ],
+    })
+  })
+
+  test("transport uses tagged extension health states and issues", () => {
+    const wire = {
+      _tag: "degraded",
+      healthyExtensions: [],
+      degradedExtensions: [
+        {
+          manifest: { id: "@gent/plan" },
+          scope: "builtin",
+          sourcePath: "builtin",
+          _tag: "degraded",
+          issues: [
+            {
+              _tag: "actor-failed",
+              sessionId: "s1",
+              branchId: "b1",
+              error: "actor boom",
+              failurePhase: "runtime",
+            },
+          ],
+        },
+      ],
     }
 
     const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(wire)
-    expect(decoded.extensions[0]?.actor).toEqual({
-      _tag: "failed",
-      extensionId: "@gent/plan",
+    expect(decoded._tag).toBe("degraded")
+    if (decoded._tag !== "degraded") return
+    expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
+      _tag: "actor-failed",
       sessionId: "s1",
       branchId: "b1",
       error: "actor boom",
@@ -122,59 +191,66 @@ describe("buildExtensionHealthSnapshot", () => {
     })
 
     const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
-    expect(encoded.extensions[0]).toMatchObject({
+    expect(encoded).toMatchObject({
       _tag: "degraded",
-      activation: { _tag: "active" },
-      actor: {
-        _tag: "failed",
-        extensionId: "@gent/plan",
-        sessionId: "s1",
-        branchId: "b1",
-        error: "actor boom",
-        failurePhase: "runtime",
-      },
-      scheduler: { _tag: "healthy" },
+      degradedExtensions: [
+        {
+          _tag: "degraded",
+          issues: [
+            {
+              _tag: "actor-failed",
+              sessionId: "s1",
+              branchId: "b1",
+              error: "actor boom",
+              failurePhase: "runtime",
+            },
+          ],
+        },
+      ],
     })
   })
 
-  test("transport rejects contradictory health state bags", () => {
+  test("transport rejects healthy snapshots containing degraded rows", () => {
     expect(() =>
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
-        extensions: [
-          {
-            manifest: { id: "@gent/memory" },
-            scope: "builtin",
-            sourcePath: "builtin",
-            _tag: "healthy",
-            activation: {
-              _tag: "failed",
-              phase: "startup",
-              error: "startup boom",
-            },
-            scheduler: {
-              _tag: "healthy",
-            },
-          },
-        ],
-        summary: { _tag: "healthy" },
-      }),
-    ).toThrow()
-  })
-
-  test("transport rejects degraded health without a degraded component", () => {
-    expect(() =>
-      Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
+        _tag: "healthy",
         extensions: [
           {
             manifest: { id: "@gent/memory" },
             scope: "builtin",
             sourcePath: "builtin",
             _tag: "degraded",
-            activation: { _tag: "active" },
-            scheduler: { _tag: "healthy" },
+            issues: [{ _tag: "activation-failed", phase: "startup", error: "startup boom" }],
           },
         ],
-        summary: { _tag: "healthy" },
+      }),
+    ).toThrow()
+  })
+
+  test("transport rejects degraded snapshots without degraded rows", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
+        _tag: "degraded",
+        healthyExtensions: [],
+        degradedExtensions: [],
+      }),
+    ).toThrow()
+  })
+
+  test("transport rejects degraded rows without issues", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
+        _tag: "degraded",
+        healthyExtensions: [],
+        degradedExtensions: [
+          {
+            manifest: { id: "@gent/memory" },
+            scope: "builtin",
+            sourcePath: "builtin",
+            _tag: "degraded",
+            issues: [],
+          },
+        ],
       }),
     ).toThrow()
   })

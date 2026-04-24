@@ -3,13 +3,10 @@ import type {
   ExtensionStatusInfo,
 } from "../domain/extension.js"
 import {
-  ExtensionActivationHealth,
   ExtensionActorStatusInfo,
   ExtensionHealth,
-  ExtensionHealthSummary,
-  ExtensionSchedulerHealth,
-  type ExtensionHealthSnapshot,
-  type ScheduledJobFailureInfo,
+  ExtensionHealthIssue,
+  ExtensionHealthSnapshot,
 } from "./transport-contract.js"
 
 const toTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
@@ -25,6 +22,11 @@ const toTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
   }
 }
 
+const toHealthyTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
+  const actor = toTransportActorStatus(status)
+  return actor._tag === "failed" ? undefined : actor
+}
+
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
   actorStatuses: ReadonlyArray<DomainExtensionActorStatusInfo> = [],
@@ -35,73 +37,62 @@ export const buildExtensionHealthSnapshot = (
 
   const extensions = activationStatuses.map((status) => {
     const actorStatus = actorByExtension.get(status.manifest.id)
-    const actor = actorStatus !== undefined ? toTransportActorStatus(actorStatus) : undefined
+    const actor = actorStatus !== undefined ? toHealthyTransportActorStatus(actorStatus) : undefined
     const schedulerFailures = status.scheduledJobFailures ?? []
-    const activation =
+    const actorFailure =
+      actorStatus?._tag === "failed"
+        ? ExtensionHealthIssue.ActorFailed.make({
+            sessionId: actorStatus.sessionId,
+            ...(actorStatus.branchId !== undefined ? { branchId: actorStatus.branchId } : {}),
+            error: actorStatus.error,
+            failurePhase: actorStatus.failurePhase,
+            ...(actorStatus.restartCount !== undefined
+              ? { restartCount: actorStatus.restartCount }
+              : {}),
+          })
+        : undefined
+    const activationFailure =
       status.status === "failed"
-        ? ExtensionActivationHealth.Failed.make({
+        ? ExtensionHealthIssue.ActivationFailed.make({
             phase: status.phase,
             error: status.error,
           })
-        : ExtensionActivationHealth.Active.make({})
-    const degraded =
-      status.status === "failed" || actor?._tag === "failed" || schedulerFailures.length > 0
-    const [
-      firstSchedulerFailure,
-      ...remainingSchedulerFailures
-    ]: ReadonlyArray<ScheduledJobFailureInfo> = schedulerFailures
-    const scheduler =
-      firstSchedulerFailure !== undefined
-        ? ExtensionSchedulerHealth.Degraded.make({
-            failures: [firstSchedulerFailure, ...remainingSchedulerFailures],
-          })
-        : ExtensionSchedulerHealth.Healthy.make({})
+        : undefined
+    const issues = [
+      ...(activationFailure !== undefined ? [activationFailure] : []),
+      ...(actorFailure !== undefined ? [actorFailure] : []),
+      ...schedulerFailures.map((failure) =>
+        ExtensionHealthIssue.ScheduledJobFailed.make({
+          jobId: failure.jobId,
+          error: failure.error,
+        }),
+      ),
+    ]
 
     const payload = {
       manifest: status.manifest,
       scope: status.scope,
       sourcePath: status.sourcePath,
-      activation,
       ...(actor !== undefined ? { actor } : {}),
-      scheduler,
     }
 
-    return degraded ? ExtensionHealth.Degraded.make(payload) : ExtensionHealth.Healthy.make(payload)
+    const [firstIssue, ...remainingIssues] = issues
+    return firstIssue === undefined
+      ? ExtensionHealth.Healthy.make(payload)
+      : ExtensionHealth.Degraded.make({
+          ...payload,
+          issues: [firstIssue, ...remainingIssues],
+        })
   })
 
-  const failedExtensions = extensions
-    .filter((status) => status.activation._tag === "failed")
-    .map((status) => status.manifest.id)
-  const failedActors = extensions
-    .filter((status) => status.actor?._tag === "failed")
-    .map((status) => status.manifest.id)
-  const failedScheduledJobs = extensions.flatMap((status) =>
-    status.scheduler._tag === "degraded"
-      ? status.scheduler.failures.map((failure) => `${status.manifest.id}:${failure.jobId}`)
-      : [],
-  )
+  const healthyExtensions = extensions.filter(ExtensionHealth.guards.Healthy)
+  const degradedExtensions = extensions.filter(ExtensionHealth.guards.Degraded)
+  const [firstDegraded, ...remainingDegraded] = degradedExtensions
 
-  let subtitle: string | undefined
-  if (failedExtensions.length > 0) {
-    subtitle = "extension activation degraded"
-  } else if (failedActors.length > 0) {
-    subtitle = "extension runtime degraded"
-  } else if (failedScheduledJobs.length > 0) {
-    subtitle = "scheduled jobs degraded"
-  }
-
-  const summary =
-    failedExtensions.length > 0 || failedActors.length > 0 || failedScheduledJobs.length > 0
-      ? ExtensionHealthSummary.Degraded.make({
-          ...(subtitle !== undefined ? { subtitle } : {}),
-          failedExtensions,
-          failedActors,
-          failedScheduledJobs,
-        })
-      : ExtensionHealthSummary.Healthy.make({})
-
-  return {
-    extensions,
-    summary,
-  }
+  return firstDegraded === undefined
+    ? ExtensionHealthSnapshot.Healthy.make({ extensions: healthyExtensions })
+    : ExtensionHealthSnapshot.Degraded.make({
+        healthyExtensions,
+        degradedExtensions: [firstDegraded, ...remainingDegraded],
+      })
 }

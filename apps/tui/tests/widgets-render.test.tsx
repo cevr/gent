@@ -67,8 +67,12 @@ const HealthControlsProbe = (props: {
     clearSession: () => client.clearSession(),
   })
   const failedActors = () => {
-    const summary = client.extensionHealth().summary
-    return summary._tag === "degraded" ? summary.failedActors : []
+    const health = client.extensionHealth()
+    return health._tag === "degraded"
+      ? health.degradedExtensions
+          .filter((extension) => extension.issues.some((issue) => issue._tag === "actor-failed"))
+          .map((extension) => extension.manifest.id)
+      : []
   }
   return <text>{failedActors().join(",")}</text>
 }
@@ -218,27 +222,23 @@ describe("TUI renderer surfaces", () => {
         extension: {
           listStatus: () =>
             Effect.succeed({
-              extensions: [
+              _tag: "degraded" as const,
+              healthyExtensions: [],
+              degradedExtensions: [
                 {
                   manifest: { id: "@gent/memory" },
                   scope: "builtin" as const,
                   sourcePath: "builtin",
                   _tag: "degraded" as const,
-                  activation: {
-                    _tag: "failed" as const,
-                    phase: "startup" as const,
-                    error: "startup boom",
-                  },
-                  scheduler: { _tag: "healthy" as const },
+                  issues: [
+                    {
+                      _tag: "activation-failed" as const,
+                      phase: "startup" as const,
+                      error: "startup boom",
+                    },
+                  ],
                 },
               ],
-              summary: {
-                _tag: "degraded" as const,
-                subtitle: "extension activation degraded",
-                failedExtensions: ["@gent/memory"],
-                failedActors: [],
-                failedScheduledJobs: [],
-              },
             }),
         },
       }),
@@ -258,31 +258,25 @@ describe("TUI renderer surfaces", () => {
           listStatus: ({ sessionId }: { sessionId?: SessionId }) => {
             expect(sessionId).toBe(testSession.id)
             return Effect.succeed({
-              extensions: [
+              _tag: "degraded" as const,
+              healthyExtensions: [],
+              degradedExtensions: [
                 {
                   manifest: { id: "@gent/plan" },
                   scope: "builtin" as const,
                   sourcePath: "builtin",
                   _tag: "degraded" as const,
-                  activation: { _tag: "active" as const },
-                  actor: {
-                    _tag: "failed" as const,
-                    extensionId: "@gent/plan",
-                    sessionId: testSession.id,
-                    branchId: testSession.branchId,
-                    error: "actor boom",
-                    failurePhase: "runtime" as const,
-                  },
-                  scheduler: { _tag: "healthy" as const },
+                  issues: [
+                    {
+                      _tag: "actor-failed" as const,
+                      sessionId: testSession.id,
+                      branchId: testSession.branchId,
+                      error: "actor boom",
+                      failurePhase: "runtime" as const,
+                    },
+                  ],
                 },
               ],
-              summary: {
-                _tag: "degraded" as const,
-                subtitle: "extension runtime degraded",
-                failedExtensions: [],
-                failedActors: ["@gent/plan"],
-                failedScheduledJobs: [],
-              },
             })
           },
         },
@@ -301,26 +295,23 @@ describe("TUI renderer surfaces", () => {
         extension: {
           listStatus: () =>
             Effect.succeed({
-              extensions: [
+              _tag: "degraded" as const,
+              healthyExtensions: [],
+              degradedExtensions: [
                 {
                   manifest: { id: "@gent/memory" },
                   scope: "builtin" as const,
                   sourcePath: "builtin",
                   _tag: "degraded" as const,
-                  activation: { _tag: "active" as const },
-                  scheduler: {
-                    _tag: "degraded" as const,
-                    failures: [{ jobId: "reflect", error: "launchd registration failed" }],
-                  },
+                  issues: [
+                    {
+                      _tag: "scheduled-job-failed" as const,
+                      jobId: "reflect",
+                      error: "launchd registration failed",
+                    },
+                  ],
                 },
               ],
-              summary: {
-                _tag: "degraded" as const,
-                subtitle: "scheduled jobs degraded",
-                failedExtensions: [],
-                failedActors: [],
-                failedScheduledJobs: ["@gent/memory:reflect"],
-              },
             }),
         },
       }),
@@ -336,31 +327,25 @@ describe("TUI renderer surfaces", () => {
     const lifecycle = createMutableRuntime({ _tag: "connected", generation: 0 })
     let callCount = 0
     let currentHealth: ExtensionHealthSnapshot = {
-      extensions: [
+      _tag: "degraded",
+      healthyExtensions: [],
+      degradedExtensions: [
         {
           manifest: { id: "@gent/plan" },
           scope: "builtin" as const,
           sourcePath: "builtin",
           _tag: "degraded" as const,
-          activation: { _tag: "active" as const },
-          actor: {
-            _tag: "failed" as const,
-            extensionId: "@gent/plan",
-            sessionId: testSession.id,
-            branchId: testSession.branchId,
-            error: "actor boom",
-            failurePhase: "runtime" as const,
-          },
-          scheduler: { _tag: "healthy" as const },
+          issues: [
+            {
+              _tag: "actor-failed" as const,
+              sessionId: testSession.id,
+              branchId: testSession.branchId,
+              error: "actor boom",
+              failurePhase: "runtime" as const,
+            },
+          ],
         },
       ],
-      summary: {
-        _tag: "degraded" as const,
-        subtitle: "extension runtime degraded",
-        failedExtensions: [],
-        failedActors: ["@gent/plan"],
-        failedScheduledJobs: [],
-      },
     }
 
     const setup = await renderWithProviders(() => <ConnectionWidget />, {
@@ -381,8 +366,8 @@ describe("TUI renderer surfaces", () => {
     expect(callCount).toBe(1)
 
     currentHealth = {
+      _tag: "healthy",
       extensions: [],
-      summary: { _tag: "healthy" as const },
     }
     lifecycle.emit({ _tag: "reconnecting", attempt: 1, generation: 1 })
     await Promise.resolve()
@@ -416,35 +401,29 @@ describe("TUI renderer surfaces", () => {
               Effect.succeed(
                 sessionId === testSession.id
                   ? {
-                      extensions: [
+                      _tag: "degraded" as const,
+                      healthyExtensions: [],
+                      degradedExtensions: [
                         {
                           manifest: { id: "@gent/plan" },
                           scope: "builtin" as const,
                           sourcePath: "builtin",
                           _tag: "degraded" as const,
-                          activation: { _tag: "active" as const },
-                          actor: {
-                            _tag: "failed" as const,
-                            extensionId: "@gent/plan",
-                            sessionId: testSession.id,
-                            branchId: testSession.branchId,
-                            error: "actor boom",
-                            failurePhase: "runtime" as const,
-                          },
-                          scheduler: { _tag: "healthy" as const },
+                          issues: [
+                            {
+                              _tag: "actor-failed" as const,
+                              sessionId: testSession.id,
+                              branchId: testSession.branchId,
+                              error: "actor boom",
+                              failurePhase: "runtime" as const,
+                            },
+                          ],
                         },
                       ],
-                      summary: {
-                        _tag: "degraded" as const,
-                        subtitle: "extension runtime degraded",
-                        failedExtensions: [],
-                        failedActors: ["@gent/plan"],
-                        failedScheduledJobs: [],
-                      },
                     }
                   : {
+                      _tag: "healthy" as const,
                       extensions: [],
-                      summary: { _tag: "healthy" as const },
                     },
               ),
           },
@@ -489,35 +468,29 @@ describe("TUI renderer surfaces", () => {
               Effect.succeed(
                 sessionId === testSession.id
                   ? {
-                      extensions: [
+                      _tag: "degraded" as const,
+                      healthyExtensions: [],
+                      degradedExtensions: [
                         {
                           manifest: { id: "@gent/plan" },
                           scope: "builtin" as const,
                           sourcePath: "builtin",
                           _tag: "degraded" as const,
-                          activation: { _tag: "active" as const },
-                          actor: {
-                            _tag: "failed" as const,
-                            extensionId: "@gent/plan",
-                            sessionId: testSession.id,
-                            branchId: testSession.branchId,
-                            error: "actor boom",
-                            failurePhase: "runtime" as const,
-                          },
-                          scheduler: { _tag: "healthy" as const },
+                          issues: [
+                            {
+                              _tag: "actor-failed" as const,
+                              sessionId: testSession.id,
+                              branchId: testSession.branchId,
+                              error: "actor boom",
+                              failurePhase: "runtime" as const,
+                            },
+                          ],
                         },
                       ],
-                      summary: {
-                        _tag: "degraded" as const,
-                        subtitle: "extension runtime degraded",
-                        failedExtensions: [],
-                        failedActors: ["@gent/plan"],
-                        failedScheduledJobs: [],
-                      },
                     }
                   : {
+                      _tag: "healthy" as const,
                       extensions: [],
-                      summary: { _tag: "healthy" as const },
                     },
               ),
           },

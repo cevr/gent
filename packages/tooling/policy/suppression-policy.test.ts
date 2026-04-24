@@ -721,7 +721,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/extensions/src/openai/codex-transform.ts:252 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/extensions/src/task-tools-service.ts:91 effect:effectSucceedWithVoid:off",
   "packages/extensions/src/task-tools-service.ts:94 effect:effectSucceedWithVoid:off",
-  "packages/sdk/src/client.ts:248 eslint:@typescript-eslint/no-empty-object-type",
+  "packages/sdk/src/client.ts:252 eslint:@typescript-eslint/no-empty-object-type",
   "packages/sdk/src/server-registry.ts:10 effect:nodeBuiltinImport:off",
   "packages/sdk/src/server-registry.ts:12 effect:nodeBuiltinImport:off",
   "packages/sdk/src/server-registry.ts:183 eslint:@typescript-eslint/no-unsafe-type-assertion",

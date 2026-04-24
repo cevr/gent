@@ -88,7 +88,7 @@ export {
   ExtensionActorStatusInfo,
   ExtensionHealth,
   ExtensionHealthSnapshot,
-  ExtensionHealthSummary,
+  ExtensionHealthIssue,
   ExtensionManifestInfo,
 } from "./transport-contract.js"
 

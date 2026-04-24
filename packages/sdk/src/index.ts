@@ -16,6 +16,8 @@ export type {
   BranchTreeNode,
   SessionRuntime,
   CreateSessionResult,
+  ExtensionHealth,
+  ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   SteerCommand,
   SessionTreeNode,
