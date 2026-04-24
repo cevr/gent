@@ -1084,6 +1084,21 @@ const makeStorage = Effect.gen(function* () {
     // Sessions
     createSession: Effect.fn("Storage.createSession")(
       function* (session) {
+        if (session.parentBranchId !== undefined && session.parentSessionId === undefined) {
+          return yield* new StorageError({
+            message: "Cannot create session with parentBranchId without parentSessionId",
+          })
+        }
+        if (session.parentBranchId !== undefined && session.parentSessionId !== undefined) {
+          const parentRows = yield* sql<{
+            id: BranchId
+          }>`SELECT id FROM branches WHERE id = ${session.parentBranchId} AND session_id = ${session.parentSessionId}`
+          if (parentRows.length === 0) {
+            return yield* new StorageError({
+              message: `Parent branch not found in parent session: ${session.parentBranchId}`,
+            })
+          }
+        }
         yield* sql`INSERT INTO sessions (id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${session.id}, ${session.name ?? null}, ${session.cwd ?? null}, ${session.reasoningLevel ?? null}, ${session.activeBranchId ?? null}, ${session.parentSessionId ?? null}, ${session.parentBranchId ?? null}, ${session.createdAt.getTime()}, ${session.updatedAt.getTime()})`
         return session
       },
@@ -1177,6 +1192,16 @@ const makeStorage = Effect.gen(function* () {
     // Branches
     createBranch: Effect.fn("Storage.createBranch")(
       function* (branch) {
+        if (branch.parentBranchId !== undefined) {
+          const parentRows = yield* sql<{
+            id: BranchId
+          }>`SELECT id FROM branches WHERE id = ${branch.parentBranchId} AND session_id = ${branch.sessionId}`
+          if (parentRows.length === 0) {
+            return yield* new StorageError({
+              message: `Parent branch not found in session: ${branch.parentBranchId}`,
+            })
+          }
+        }
         yield* sql`INSERT INTO branches (id, session_id, parent_branch_id, parent_message_id, name, summary, created_at) VALUES (${branch.id}, ${branch.sessionId}, ${branch.parentBranchId ?? null}, ${branch.parentMessageId ?? null}, ${branch.name ?? null}, ${branch.summary ?? null}, ${branch.createdAt.getTime()})`
         return branch
       },
@@ -1210,12 +1235,42 @@ const makeStorage = Effect.gen(function* () {
         Effect.withSpan("Storage.updateBranchSummary"),
       ),
 
-    deleteBranch: (id) =>
-      sql`DELETE FROM branches WHERE id = ${id}`.pipe(
-        Effect.asVoid,
-        Effect.mapError(mapError("Failed to delete branch")),
-        Effect.withSpan("Storage.deleteBranch"),
-      ),
+    deleteBranch: Effect.fn("Storage.deleteBranch")(
+      function* (id) {
+        const childBranches = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM branches WHERE parent_branch_id = ${id}`
+        if ((childBranches[0]?.count ?? 0) > 0) {
+          return yield* new StorageError({
+            message: `Cannot delete branch with child branches: ${id}`,
+          })
+        }
+
+        const childSessions = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM sessions WHERE parent_branch_id = ${id}`
+        if ((childSessions[0]?.count ?? 0) > 0) {
+          return yield* new StorageError({
+            message: `Cannot delete branch with child sessions: ${id}`,
+          })
+        }
+
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const messageRows = yield* sql<{
+              id: MessageId
+            }>`SELECT id FROM messages WHERE branch_id = ${id}`
+            const messageIds = messageRows.map((row) => row.id)
+            if (messageIds.length > 0) {
+              yield* sql`DELETE FROM messages_fts WHERE message_id IN ${sql.in(messageIds)}`
+            }
+            yield* sql`DELETE FROM branches WHERE id = ${id}`
+            yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+          }),
+        )
+      },
+      Effect.mapError(mapError("Failed to delete branch")),
+    ),
 
     countMessages: Effect.fn("Storage.countMessages")(
       function* (branchId) {

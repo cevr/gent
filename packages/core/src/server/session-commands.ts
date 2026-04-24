@@ -159,6 +159,19 @@ const makeSessionMutationsService: Effect.Effect<
     },
   )
 
+  const validateBranchDeletion = Effect.fn("SessionMutations.validateBranchDeletion")(
+    function* (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) {
+      const branches = yield* branchStorage.listBranches(input.sessionId)
+      if (branches.some((branch) => branch.parentBranchId === input.branchId)) {
+        return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child branches`)
+      }
+      const childSessions = yield* storage.getChildSessions(input.sessionId)
+      if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
+        return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child sessions`)
+      }
+    },
+  )
+
   return {
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
       const trimmed = input.name.trim().slice(0, 80)
@@ -335,6 +348,7 @@ const makeSessionMutationsService: Effect.Effect<
       if (branch === undefined || branch.sessionId !== input.sessionId) {
         return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
       }
+      yield* validateBranchDeletion(input)
       yield* branchStorage.deleteBranch(input.branchId)
     }),
 
@@ -439,12 +453,27 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         input: CreateSessionInput,
       ) {
         const sessionId = SessionId.make(Bun.randomUUIDv7())
+        if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
+          return yield* new NotFoundError({
+            message: "parentBranchId requires parentSessionId",
+            entity: "session",
+          })
+        }
         if (input.parentSessionId !== undefined) {
           const parent = yield* sessionStorage.getSession(input.parentSessionId)
           if (parent === undefined) {
             return yield* new NotFoundError({
               message: `Parent session not found: ${input.parentSessionId}`,
               entity: "session",
+            })
+          }
+        }
+        if (input.parentBranchId !== undefined && input.parentSessionId !== undefined) {
+          const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
+          if (parentBranch === undefined || parentBranch.sessionId !== input.parentSessionId) {
+            return yield* new NotFoundError({
+              message: `Parent branch not found in parent session: ${input.parentBranchId}`,
+              entity: "branch",
             })
           }
         }
@@ -833,6 +862,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         const branch = yield* branchStorage.getBranch(input.branchId)
         if (branch === undefined || branch.sessionId !== input.sessionId) {
           return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+        }
+        const branches = yield* branchStorage.listBranches(input.sessionId)
+        if (branches.some((candidate) => candidate.parentBranchId === input.branchId)) {
+          return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child branches`)
+        }
+        const childSessions = yield* storage.getChildSessions(input.sessionId)
+        if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
+          return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child sessions`)
         }
         yield* branchStorage.deleteBranch(input.branchId)
       })

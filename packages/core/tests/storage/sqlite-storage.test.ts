@@ -237,6 +237,110 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
+    it.live("rejects parent branch without parent session through storage service", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+
+        const exit = yield* Effect.exit(
+          storage.createSession(
+            new Session({
+              id: "storage-dangling-parent-branch",
+              parentBranchId: "missing-parent-branch",
+              createdAt: now,
+              updatedAt: now,
+            }),
+          ),
+        )
+
+        expect(exit._tag).toBe("Failure")
+        expect(yield* storage.getSession("storage-dangling-parent-branch")).toBeUndefined()
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("rejects branch creation with a parent branch outside the same session", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+
+        yield* storage.createSession(
+          new Session({ id: "branch-parent-a", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createSession(
+          new Session({ id: "branch-parent-b", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "branch-parent-a-root", sessionId: "branch-parent-a", createdAt: now }),
+        )
+
+        const exit = yield* Effect.exit(
+          storage.createBranch(
+            new Branch({
+              id: "branch-parent-b-child",
+              sessionId: "branch-parent-b",
+              parentBranchId: "branch-parent-a-root",
+              createdAt: now,
+            }),
+          ),
+        )
+
+        expect(exit._tag).toBe("Failure")
+        expect(yield* storage.getBranch("branch-parent-b-child")).toBeUndefined()
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("rejects deleting branches that own child branches or child sessions", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const now = new Date()
+
+        yield* storage.createSession(
+          new Session({ id: "delete-parent-session", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "delete-parent-root",
+            sessionId: "delete-parent-session",
+            createdAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "delete-parent-child",
+            sessionId: "delete-parent-session",
+            parentBranchId: "delete-parent-root",
+            createdAt: now,
+          }),
+        )
+
+        const childBranchExit = yield* Effect.exit(storage.deleteBranch("delete-parent-root"))
+        expect(childBranchExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch("delete-parent-root")).toBeDefined()
+
+        yield* storage.createSession(
+          new Session({
+            id: "delete-child-session",
+            parentSessionId: "delete-parent-session",
+            parentBranchId: "delete-parent-child",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: "delete-child-session-branch",
+            sessionId: "delete-child-session",
+            createdAt: now,
+          }),
+        )
+
+        const childSessionExit = yield* Effect.exit(storage.deleteBranch("delete-parent-child"))
+        expect(childSessionExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch("delete-parent-child")).toBeDefined()
+        expect(yield* storage.getSession("delete-child-session")).toBeDefined()
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
     it.live("deletes session children and storage projections", () =>
       Effect.gen(function* () {
         const storage = yield* Storage

@@ -457,6 +457,104 @@ describe("session command persistence", () => {
     }).pipe(Effect.provide(sessionCommandsLayer())),
   )
 
+  it.live("rejects session creation with parent branch but no parent session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+
+      const exit = yield* Effect.exit(
+        commands.createSession({
+          parentBranchId: BranchId.make("dangling-parent-branch"),
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* sessions.listSessions()).toHaveLength(0)
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("rejects deleting a branch with child branches", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-delete-parent-branch")
+      const activeBranchId = BranchId.make("branch-delete-parent-active")
+      const parentBranchId = BranchId.make("branch-delete-parent")
+      const childBranchId = BranchId.make("branch-delete-child")
+      const now = new Date()
+
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: activeBranchId,
+        now,
+        name: "delete parent branch",
+      })
+      yield* branches.createBranch(new Branch({ id: parentBranchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(
+        new Branch({
+          id: childBranchId,
+          sessionId,
+          parentBranchId,
+          createdAt: now,
+        }),
+      )
+
+      const exit = yield* Effect.exit(
+        commands.deleteBranch({
+          sessionId,
+          currentBranchId: activeBranchId,
+          branchId: parentBranchId,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
+      expect(yield* branches.getBranch(childBranchId)).toBeDefined()
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  it.live("rejects deleting a branch with child sessions", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const sessionId = SessionId.make("session-delete-child-session-parent")
+      const activeBranchId = BranchId.make("branch-delete-child-session-active")
+      const parentBranchId = BranchId.make("branch-delete-child-session-parent")
+      const now = new Date()
+
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: activeBranchId,
+        now,
+        name: "delete child session parent",
+      })
+      yield* branches.createBranch(new Branch({ id: parentBranchId, sessionId, createdAt: now }))
+      const child = yield* commands.createChildSession({
+        parentSessionId: sessionId,
+        parentBranchId,
+        name: "child",
+      })
+
+      const exit = yield* Effect.exit(
+        commands.deleteBranch({
+          sessionId,
+          currentBranchId: activeBranchId,
+          branchId: parentBranchId,
+        }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
+      expect(yield* sessions.getSession(child.sessionId)).toBeDefined()
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
   it.live("rejects deleting the active branch even when it is not the caller branch", () =>
     Effect.gen(function* () {
       const commands = yield* SessionCommands
