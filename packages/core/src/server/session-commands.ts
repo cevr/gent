@@ -1,4 +1,4 @@
-import { DateTime, Effect, Layer, Context, Stream } from "effect"
+import { DateTime, Effect, Layer, Context, Ref, Stream } from "effect"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import {
@@ -52,6 +52,37 @@ import type {
 
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
 
+interface SessionRuntimeTerminatorService {
+  readonly register: (runtime: SessionRuntimeService) => Effect.Effect<void>
+  readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
+  readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void>
+}
+
+class SessionRuntimeTerminator extends Context.Service<
+  SessionRuntimeTerminator,
+  SessionRuntimeTerminatorService
+>()("@gent/core/src/server/session-commands/SessionRuntimeTerminator") {
+  static Live = Layer.effect(
+    SessionRuntimeTerminator,
+    Effect.gen(function* () {
+      const runtimeRef = yield* Ref.make<SessionRuntimeService | undefined>(undefined)
+      const withRuntime = <A>(f: (runtime: SessionRuntimeService) => Effect.Effect<A>) =>
+        Effect.gen(function* () {
+          const runtime = yield* Ref.get(runtimeRef)
+          if (runtime === undefined) return
+          yield* f(runtime)
+        })
+
+      return {
+        register: (runtime) => Ref.set(runtimeRef, runtime),
+        terminateSession: (sessionId) =>
+          withRuntime((runtime) => runtime.terminateSession(sessionId)),
+        restoreSession: (sessionId) => withRuntime((runtime) => runtime.restoreSession(sessionId)),
+      } satisfies SessionRuntimeTerminatorService
+    }),
+  )
+}
+
 const terminateSessionMachineRuntime = Effect.fn("SessionCommands.terminateSessionMachineRuntime")(
   function* (input: {
     readonly sessionId: SessionId
@@ -93,20 +124,37 @@ const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRunt
     readonly sessionStorage: SessionStorageService
     readonly ambientRuntime: MachineEngineService
     readonly profileCache?: SessionProfileCacheService
-    readonly sessionRuntime?: SessionRuntimeService
+    readonly sessionRuntimeTerminator: SessionRuntimeTerminatorService
     readonly eventPublisher: EventPublisherService
     readonly eventStore: EventStoreService
     readonly sessionCwdRegistry: SessionCwdRegistryService
   }) {
-    if (input.sessionRuntime !== undefined) {
-      yield* input.sessionRuntime.terminateSession(input.sessionId)
-    }
+    yield* input.sessionRuntimeTerminator.terminateSession(input.sessionId)
     yield* terminateSessionMachineRuntime(input)
-    yield* input.eventPublisher.terminateSession(input.sessionId)
-    yield* input.eventStore.removeSession(input.sessionId)
-    yield* input.sessionCwdRegistry.forget(input.sessionId)
   },
 )
+
+const restoreSessionRuntimeState = Effect.fn("SessionCommands.restoreSessionRuntimeState")(
+  function* (input: {
+    readonly sessionId: SessionId
+    readonly sessionRuntimeTerminator: SessionRuntimeTerminatorService
+  }) {
+    yield* input.sessionRuntimeTerminator.restoreSession(input.sessionId)
+  },
+)
+
+const forgetDeletedSessionRuntimeState = Effect.fn(
+  "SessionCommands.forgetDeletedSessionRuntimeState",
+)(function* (input: {
+  readonly sessionId: SessionId
+  readonly eventPublisher: EventPublisherService
+  readonly eventStore: EventStoreService
+  readonly sessionCwdRegistry: SessionCwdRegistryService
+}) {
+  yield* input.eventPublisher.terminateSession(input.sessionId)
+  yield* input.eventStore.removeSession(input.sessionId)
+  yield* input.sessionCwdRegistry.forget(input.sessionId)
+})
 
 export interface SessionCommandsService {
   readonly createSession: (
@@ -180,6 +228,7 @@ const makeSessionMutationsService: Effect.Effect<
   | MessageStorage
   | MachineEngine
   | SessionCwdRegistry
+  | SessionRuntimeTerminator
 > = Effect.gen(function* () {
   const storage = yield* Storage
   const sessionStorage = yield* SessionStorage
@@ -189,9 +238,9 @@ const makeSessionMutationsService: Effect.Effect<
   const eventPublisher = yield* EventPublisher
   const extensionStateRuntime = yield* MachineEngine
   const sessionCwdRegistry = yield* SessionCwdRegistry
+  const sessionRuntimeTerminator = yield* SessionRuntimeTerminator
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
-  const sessionRuntimeOpt = yield* Effect.serviceOption(SessionRuntime)
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -271,7 +320,24 @@ const makeSessionMutationsService: Effect.Effect<
       sessionStorage,
       ambientRuntime: extensionStateRuntime,
       ...(profileCache !== undefined ? { profileCache } : {}),
-      ...(sessionRuntimeOpt._tag === "Some" ? { sessionRuntime: sessionRuntimeOpt.value } : {}),
+      sessionRuntimeTerminator,
+      eventPublisher,
+      eventStore,
+      sessionCwdRegistry,
+    })
+  })
+
+  const restoreSessionRuntimeStateForMutation = Effect.fn(
+    "SessionMutations.restoreSessionRuntimeState",
+  )(function* (sessionId: SessionId) {
+    yield* restoreSessionRuntimeState({ sessionId, sessionRuntimeTerminator })
+  })
+
+  const forgetDeletedSessionRuntimeStateForMutation = Effect.fn(
+    "SessionMutations.forgetDeletedSessionRuntimeState",
+  )(function* (sessionId: SessionId) {
+    yield* forgetDeletedSessionRuntimeState({
+      sessionId,
       eventPublisher,
       eventStore,
       sessionCwdRegistry,
@@ -283,7 +349,16 @@ const makeSessionMutationsService: Effect.Effect<
   ) {
     const sessionIds = yield* collectSessionTreeIds(sessionId)
     yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForMutation, { discard: true })
-    yield* sessionStorage.deleteSession(sessionId)
+    yield* sessionStorage
+      .deleteSession(sessionId)
+      .pipe(
+        Effect.onError(() =>
+          Effect.forEach(sessionIds, restoreSessionRuntimeStateForMutation, { discard: true }),
+        ),
+      )
+    yield* Effect.forEach(sessionIds, forgetDeletedSessionRuntimeStateForMutation, {
+      discard: true,
+    })
     yield* Effect.forEach(
       sessionIds,
       (deletedSessionId) =>
@@ -487,6 +562,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const messageStorage = yield* MessageStorage
       const storage = yield* Storage
       const sessionRuntime = yield* SessionRuntime
+      const sessionRuntimeTerminator = yield* SessionRuntimeTerminator
+      yield* sessionRuntimeTerminator.register(sessionRuntime)
       const eventStore = yield* EventStore
       const eventPublisher = yield* EventPublisher
       const provider = yield* Provider
@@ -975,7 +1052,24 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           sessionStorage,
           ambientRuntime: extensionStateRuntime,
           ...(profileCache !== undefined ? { profileCache } : {}),
-          sessionRuntime,
+          sessionRuntimeTerminator,
+          eventPublisher,
+          eventStore,
+          sessionCwdRegistry,
+        })
+      })
+
+      const restoreSessionRuntimeStateForCommand = Effect.fn(
+        "SessionCommands.restoreSessionRuntimeState",
+      )(function* (sessionId: SessionId) {
+        yield* restoreSessionRuntimeState({ sessionId, sessionRuntimeTerminator })
+      })
+
+      const forgetDeletedSessionRuntimeStateForCommand = Effect.fn(
+        "SessionCommands.forgetDeletedSessionRuntimeState",
+      )(function* (sessionId: SessionId) {
+        yield* forgetDeletedSessionRuntimeState({
+          sessionId,
           eventPublisher,
           eventStore,
           sessionCwdRegistry,
@@ -987,7 +1081,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       ) {
         const sessionIds = yield* collectSessionTreeIds(sessionId)
         yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForCommand, { discard: true })
-        yield* sessionStorage.deleteSession(sessionId)
+        yield* sessionStorage
+          .deleteSession(sessionId)
+          .pipe(
+            Effect.onError(() =>
+              Effect.forEach(sessionIds, restoreSessionRuntimeStateForCommand, { discard: true }),
+            ),
+          )
+        yield* Effect.forEach(sessionIds, forgetDeletedSessionRuntimeStateForCommand, {
+          discard: true,
+        })
         yield* Effect.forEach(
           sessionIds,
           (deletedSessionId) =>
@@ -1085,4 +1188,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
   )
 
   static SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMutationsService)
+
+  static SessionRuntimeTerminatorLive = SessionRuntimeTerminator.Live
+
+  static RegisterSessionRuntimeTerminatorLive = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const terminator = yield* SessionRuntimeTerminator
+      const runtime = yield* SessionRuntime
+      yield* terminator.register(runtime)
+    }),
+  )
 }

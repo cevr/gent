@@ -151,6 +151,7 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     ephemeralParentDeps,
   )
   const sessionMutationsLayer = Layer.provide(
@@ -215,6 +216,8 @@ const sessionRuntimeStub = (runPrompt: SessionRuntimeService["runPrompt"] = () =
         getMetrics: () =>
           Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
         watchState: () => Effect.succeed(SubscriptionRef.changes(runtimeState)),
+        terminateSession: () => Effect.void,
+        restoreSession: () => Effect.void,
       } satisfies SessionRuntimeService
     }),
   )

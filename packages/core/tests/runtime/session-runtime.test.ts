@@ -99,6 +99,7 @@ const makeRuntimeLayer = (
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
   )
   const baseDeps =
     profileCacheLayer === undefined
@@ -140,6 +141,7 @@ const makeRuntimeLayerWithEventPublisher = (
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
   const sessionMutationsLayer = Layer.provide(

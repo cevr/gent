@@ -236,6 +236,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         // Test variant — there is no SessionProfileCache wired here, so
         // the eventual router will fall back to its primary-cwd path.
         SessionCwdRegistry.Test(),
+        SessionCommands.SessionRuntimeTerminatorLive,
         ...(config.sessionProfileCacheLayer !== undefined ? [config.sessionProfileCacheLayer] : []),
         ...extensionLayers,
         ...(config.extraLayers ?? []),

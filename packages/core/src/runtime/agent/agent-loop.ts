@@ -2043,6 +2043,7 @@ export interface AgentLoopService {
     branchId: BranchId
   }) => Effect.Effect<Stream.Stream<LoopRuntimeState>, AgentLoopError>
   readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
+  readonly restoreSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
@@ -2947,6 +2948,19 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           })
         })
 
+        const restoreSession = Effect.fn("AgentLoop.restoreSession")(function* (
+          sessionId: SessionId,
+        ) {
+          yield* loopsSemaphore.withPermits(1)(
+            Ref.update(terminatedSessionsRef, (terminated) => {
+              if (!terminated.has(sessionId)) return terminated
+              const next = new Set(terminated)
+              next.delete(sessionId)
+              return next
+            }),
+          )
+        })
+
         const turnControlOwnerFor = (
           loop: LoopHandle,
           sessionId: SessionId,
@@ -3517,6 +3531,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             }),
 
           terminateSession,
+          restoreSession,
         }
 
         const failTurnControlCommand = (
@@ -3595,6 +3610,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       recordToolResult: () => Effect.void,
       invokeTool: () => Effect.void,
       terminateSession: () => Effect.void,
+      restoreSession: () => Effect.void,
       getState: () =>
         Effect.succeed(
           LoopRuntimeStateSchema.Idle.make({

@@ -26,12 +26,13 @@ import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
 import { MessageStorage } from "@gent/core/storage/message-storage"
 import { SessionStorage } from "@gent/core/storage/session-storage"
-import { Storage, subTagLayers } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError, subTagLayers } from "@gent/core/storage/sqlite-storage"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../extensions/helpers/test-preset"
 import type { LoadedExtension } from "../../src/domain/extension"
+import { SessionMutations } from "../../src/domain/session-mutations"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
@@ -67,6 +68,7 @@ const failingSessionCommandsLayer = () => {
     storageLayer,
     subTagLayers(storageLayer),
     SessionRuntime.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     failingPublisherLayer,
     Provider.Debug(),
@@ -100,6 +102,7 @@ const postCommitFailingSessionCommandsLayer = () => {
     storageLayer,
     subTagLayers(storageLayer),
     SessionRuntime.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     eventStoreLayer,
     postCommitFailingPublisherLayer,
     Provider.Debug(),
@@ -148,11 +151,13 @@ const sendFailingSessionCommandsLayer = () => {
       Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
     watchState: () => Effect.succeed(Stream.empty),
     terminateSession: () => Effect.void,
+    restoreSession: () => Effect.void,
   })
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
     failingRuntimeLayer,
+    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -168,6 +173,7 @@ const sessionCommandsLayer = () => {
     storageLayer,
     subTagLayers(storageLayer),
     SessionRuntime.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -177,7 +183,7 @@ const sessionCommandsLayer = () => {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
-const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
+const sessionRuntimeProbeLayer = (terminated: Array<SessionId>, restored?: Array<SessionId>) =>
   Layer.succeed(SessionRuntime, {
     dispatch: () => Effect.void,
     runPrompt: () => Effect.void,
@@ -197,11 +203,16 @@ const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
       Effect.sync(() => {
         terminated.push(sessionId)
       }),
+    restoreSession: (sessionId) =>
+      Effect.sync(() => {
+        restored?.push(sessionId)
+      }),
   })
 
 const sessionCommandsLayerWithMachineProbe = (
   terminated: Array<SessionId>,
   runtimeTerminated?: Array<SessionId>,
+  runtimeRestored?: Array<SessionId>,
 ) => {
   const storageLayer = Storage.MemoryWithSql()
   const machineProbeLayer = Layer.succeed(MachineEngine, {
@@ -219,7 +230,85 @@ const sessionCommandsLayerWithMachineProbe = (
     subTagLayers(storageLayer),
     runtimeTerminated === undefined
       ? SessionRuntime.Test()
-      : sessionRuntimeProbeLayer(runtimeTerminated),
+      : sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
+    SessionCommands.SessionRuntimeTerminatorLive,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    machineProbeLayer,
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
+const sessionMutationsLayerWithMachineProbe = (
+  terminated: Array<SessionId>,
+  runtimeTerminated: Array<SessionId>,
+) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const runtimeLayer = sessionRuntimeProbeLayer(runtimeTerminated)
+  const machineProbeLayer = Layer.succeed(MachineEngine, {
+    publish: () => Effect.succeed([]),
+    send: () => Effect.void,
+    execute: () => Effect.die("unexpected machine request"),
+    getActorStatuses: () => Effect.succeed([]),
+    terminateAll: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  } satisfies MachineEngineService)
+  const terminatorRegistrationLayer = Layer.provide(
+    SessionCommands.RegisterSessionRuntimeTerminatorLive,
+    Layer.mergeAll(runtimeLayer, SessionCommands.SessionRuntimeTerminatorLive),
+  )
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    runtimeLayer,
+    SessionCommands.SessionRuntimeTerminatorLive,
+    terminatorRegistrationLayer,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    machineProbeLayer,
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
+}
+
+const failingDeleteSessionCommandsLayerWithMachineProbe = (
+  terminated: Array<SessionId>,
+  runtimeTerminated: Array<SessionId>,
+  runtimeRestored: Array<SessionId>,
+) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const baseSessionStorage = subTagLayers(storageLayer)
+  const failingSessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      return {
+        ...sessions,
+        deleteSession: () => Effect.fail(new StorageError({ message: "delete failed" })),
+      }
+    }),
+  ).pipe(Layer.provide(baseSessionStorage))
+  const machineProbeLayer = Layer.succeed(MachineEngine, {
+    publish: () => Effect.succeed([]),
+    send: () => Effect.void,
+    execute: () => Effect.die("unexpected machine request"),
+    getActorStatuses: () => Effect.succeed([]),
+    terminateAll: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  } satisfies MachineEngineService)
+  const deps = Layer.mergeAll(
+    storageLayer,
+    baseSessionStorage,
+    failingSessionStorageLayer,
+    sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
+    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -296,6 +385,7 @@ const sessionCommandsLayerWithProfileMachineProbes = (params: {
     storageLayer,
     subTagLayers(storageLayer),
     SessionRuntime.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -995,6 +1085,74 @@ describe("session.delete", () => {
         expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
         expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated))),
+    )
+  })
+
+  it.live("cleans runtime state for mutation deletes used by extension hosts", () => {
+    const terminated: Array<SessionId> = []
+    const runtimeTerminated: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const now = new Date("2026-01-01T00:00:00.000Z")
+        const parent = {
+          sessionId: SessionId.make("mutation-delete-parent"),
+          branchId: BranchId.make("mutation-delete-parent-branch"),
+        }
+
+        yield* createActiveSessionFixture({ ...parent, sessions, branches, now })
+        const child = yield* mutations.createChildSession({
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+          cwd: "/tmp/mutation-delete-child",
+        })
+
+        yield* mutations.deleteSession(parent.sessionId)
+
+        expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId])
+        expect(terminated).toEqual([parent.sessionId, child.sessionId])
+      }).pipe(Effect.provide(sessionMutationsLayerWithMachineProbe(terminated, runtimeTerminated))),
+    )
+  })
+
+  it.live("restores runtime tombstones when durable delete fails", () => {
+    const terminated: Array<SessionId> = []
+    const runtimeTerminated: Array<SessionId> = []
+    const runtimeRestored: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const sessionId = SessionId.make("delete-failure-session")
+        const branchId = BranchId.make("delete-failure-branch")
+
+        yield* createActiveSessionFixture({
+          sessions,
+          branches,
+          sessionId,
+          branchId,
+          now: new Date("2026-01-01T00:00:00.000Z"),
+        })
+
+        const exit = yield* Effect.exit(commands.deleteSession(sessionId))
+
+        expect(exit._tag).toBe("Failure")
+        expect(runtimeTerminated).toEqual([sessionId])
+        expect(runtimeRestored).toEqual([sessionId])
+        expect(terminated).toEqual([sessionId])
+        expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
+      }).pipe(
+        Effect.provide(
+          failingDeleteSessionCommandsLayerWithMachineProbe(
+            terminated,
+            runtimeTerminated,
+            runtimeRestored,
+          ),
+        ),
+      ),
     )
   })
 

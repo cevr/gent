@@ -5,6 +5,7 @@ import { SessionQueries } from "./session-queries.js"
 
 const BaseAppServicesLive = Layer.mergeAll(
   SessionQueries.Live,
+  SessionCommands.SessionRuntimeTerminatorLive,
   SessionCommands.Live,
   SessionCommands.SessionMutationsLive,
 )

@@ -97,6 +97,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     // SessionCwdRegistry — fast (sessionId → cwd) cache used by the
     // per-cwd EventPublisher router (B11.6c). In-memory Test variant.
     SessionCwdRegistry.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
     ...(config.extraLayers ?? []),
   )
 

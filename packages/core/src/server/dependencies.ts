@@ -204,6 +204,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     fileLockServiceLive,
     providerLive,
     Layer.provide(FileIndexLive, runtimePlatformLive),
+    SessionCommands.SessionRuntimeTerminatorLive,
     FetchHttpClient.layer,
   )
 
@@ -318,6 +319,10 @@ export const createDependencies = (config: DependenciesConfig) => {
     sessionProfileCacheLive,
     sessionMutationsLive,
     sessionRuntimeLive,
+    Layer.provide(
+      SessionCommands.RegisterSessionRuntimeTerminatorLive,
+      Layer.mergeAll(allDeps, sessionRuntimeLive),
+    ),
   )
 
   const agentRuntimeLive = Layer.provide(

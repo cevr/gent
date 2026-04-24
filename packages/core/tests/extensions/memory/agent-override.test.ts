@@ -64,6 +64,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     BunServices.layer,
     ResourceManagerLive,
     SessionCwdRegistry.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
   const sessionMutationsLayer = Layer.provide(
