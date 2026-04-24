@@ -11,6 +11,7 @@ import {
   withTinyContextWindow,
   trackingApprovalService,
 } from "@gent/core/test-utils/e2e-layer"
+import { ensureStorageParents } from "@gent/core/test-utils"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
@@ -67,6 +68,7 @@ const runE2ETest = (
 
     yield* Effect.gen(function* () {
       const stateRuntime = yield* MachineEngine
+      yield* ensureStorageParents({ sessionId, branchId })
       yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
         sessionId,
         branchId,
@@ -247,6 +249,8 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
+        yield* ensureStorageParents({ sessionId, branchId })
+
         yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
@@ -290,6 +294,8 @@ describe("Auto extension E2E", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
+
+        yield* ensureStorageParents({ sessionId, branchId })
 
         yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
@@ -363,6 +369,8 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
+        yield* ensureStorageParents({ sessionId, branchId })
+
         yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
@@ -416,6 +424,8 @@ describe("Auto extension E2E", () => {
         const agentLoop = yield* AgentLoop
         const stateRuntime = yield* MachineEngine
 
+        yield* ensureStorageParents({ sessionId, branchId })
+
         yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
           sessionId,
           branchId,
@@ -460,6 +470,8 @@ describe("Auto extension E2E", () => {
           yield* Effect.gen(function* () {
             const agentLoop = yield* AgentLoop
             const stateRuntime = yield* MachineEngine
+
+            yield* ensureStorageParents({ sessionId, branchId })
 
             yield* stateRuntime.publish(SessionStarted.make({ sessionId, branchId }), {
               sessionId,

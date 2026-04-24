@@ -1,9 +1,11 @@
-import { Clock, Context, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { Clock, Context, DateTime, Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ExtensionSetupContext } from "../domain/extension.js"
-import type { ToolCallId } from "../domain/ids.js"
+import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
+import { Branch, Session } from "../domain/message.js"
+import { Storage } from "../storage/sqlite-storage.js"
 import { Provider } from "../providers/provider.js"
 import {
   finishPart,
@@ -225,6 +227,45 @@ export const mockToolCallResponse = (
   toolCallPart(toolName, input, { toolCallId }),
   finishPart({ finishReason: "tool-calls" }),
 ]
+
+export const ensureStorageParents = (input: {
+  readonly sessionId: SessionId | string
+  readonly branchId?: BranchId | string | undefined
+}) =>
+  Effect.gen(function* () {
+    const storage = yield* Storage
+    const sessionId = SessionId.make(input.sessionId)
+    const branchId = input.branchId === undefined ? undefined : BranchId.make(input.branchId)
+    const now = yield* DateTime.nowAsDate
+
+    const session = yield* storage.getSession(sessionId)
+    if (session === undefined) {
+      yield* storage
+        .createSession(
+          new Session({
+            id: sessionId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        .pipe(Effect.ignore)
+    }
+
+    if (branchId !== undefined) {
+      const branch = yield* storage.getBranch(branchId)
+      if (branch === undefined) {
+        yield* storage
+          .createBranch(
+            new Branch({
+              id: branchId,
+              sessionId,
+              createdAt: now,
+            }),
+          )
+          .pipe(Effect.ignore)
+      }
+    }
+  })
 
 // E2E test layer
 export {

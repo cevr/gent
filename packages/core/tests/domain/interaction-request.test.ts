@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test"
 import { Effect } from "effect"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { InteractionStorage } from "@gent/core/storage/interaction-storage"
+import { ensureStorageParents } from "@gent/core/test-utils"
 import {
   makeInteractionService,
   type InteractionRequestRecord,
@@ -34,6 +35,7 @@ describe("Interaction Request", () => {
           onPresent: () => Effect.void,
           storage: storageCallbacks,
         })
+        yield* ensureStorageParents({ sessionId: "s1", branchId: "b1" })
 
         // present() should fail with InteractionPendingError
         const error = yield* Effect.flip(
@@ -72,6 +74,7 @@ describe("Interaction Request", () => {
           status: "pending",
           createdAt: Date.now(),
         }
+        yield* ensureStorageParents({ sessionId: record.sessionId, branchId: record.branchId })
         yield* is.persist(record)
 
         // Verify it's pending
@@ -92,6 +95,8 @@ describe("Interaction Request", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const is = yield* InteractionStorage
+        yield* ensureStorageParents({ sessionId: "s3", branchId: "b3" })
+        yield* ensureStorageParents({ sessionId: "s3", branchId: "b4" })
 
         // Insert requests for two different branches
         yield* is.persist({
@@ -192,6 +197,7 @@ describe("Interaction Request", () => {
 
         const sessionId = SessionId.make("s-cold-resume")
         const branchId = BranchId.make("b-cold-resume")
+        yield* ensureStorageParents({ sessionId, branchId })
 
         // Phase 1: original service — present() persists and throws
         const service1 = makeInteractionService({

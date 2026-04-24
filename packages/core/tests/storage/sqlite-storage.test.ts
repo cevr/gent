@@ -155,6 +155,105 @@ describe("Storage", () => {
         expect(retrieved).toBeUndefined()
       }).pipe(Effect.provide(Storage.Test())),
     )
+
+    it.live("enables sqlite foreign key enforcement", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        const rows = yield* sql<{ foreign_keys: number }>`PRAGMA foreign_keys`
+
+        expect(rows[0]?.foreign_keys).toBe(1)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("rejects orphan branch, message, and event rows", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const now = Date.now()
+
+        const branchExit = yield* Effect.exit(
+          sql`INSERT INTO branches (id, session_id, name, created_at) VALUES (${"orphan-branch"}, ${"missing-session"}, ${null}, ${now})`,
+        )
+        expect(branchExit._tag).toBe("Failure")
+
+        yield* storage.createSession(
+          new Session({
+            id: "fk-session",
+            createdAt: new Date(now),
+            updatedAt: new Date(now),
+          }),
+        )
+
+        const messageExit = yield* Effect.exit(
+          sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"orphan-message"}, ${"fk-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${now}, ${null})`,
+        )
+        expect(messageExit._tag).toBe("Failure")
+
+        const eventExit = yield* Effect.exit(
+          sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${"missing-session"}, NULL, ${"SessionStarted"}, ${"{}"}, ${now})`,
+        )
+        expect(eventExit._tag).toBe("Failure")
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
+    it.live("deletes session children and storage projections", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const now = new Date()
+        const sessionId = SessionId.make("cascade-session")
+        const branchId = BranchId.make("cascade-branch")
+
+        yield* storage.createSession(
+          new Session({
+            id: sessionId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: branchId,
+            sessionId,
+            createdAt: now,
+          }),
+        )
+        yield* storage.createMessage(
+          Message.cases.regular.make({
+            id: MessageId.make("cascade-message"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "cascade projection" })],
+            createdAt: now,
+          }),
+        )
+        yield* storage.appendEvent(
+          AgentSwitched.make({
+            sessionId,
+            branchId,
+            fromAgent: "cowork",
+            toAgent: "deepwork",
+          }),
+        )
+
+        yield* storage.deleteSession(sessionId)
+
+        const branches = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM branches`
+        const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
+        const events = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM events`
+        const refs = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM message_chunks`
+        const chunks = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM content_chunks`
+        const fts = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages_fts`
+
+        expect(branches[0]?.count).toBe(0)
+        expect(messages[0]?.count).toBe(0)
+        expect(events[0]?.count).toBe(0)
+        expect(refs[0]?.count).toBe(0)
+        expect(chunks[0]?.count).toBe(0)
+        expect(fts[0]?.count).toBe(0)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
   })
 
   describe("Events", () => {

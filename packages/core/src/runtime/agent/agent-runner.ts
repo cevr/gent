@@ -18,6 +18,11 @@ import {
   AgentRunFailed,
   AgentRunSpawned,
   EventStore,
+  StreamEnded,
+  StreamStarted,
+  ToolCallFailed,
+  ToolCallStarted,
+  ToolCallSucceeded,
   getEventBranchId,
   getEventSessionId,
   type AgentEvent,
@@ -562,6 +567,52 @@ const shouldMirrorEphemeralChildEvent = (event: AgentEvent): boolean => {
   }
 }
 
+const reparentEphemeralChildEvent = (
+  event: AgentEvent,
+  parentSessionId: SessionId,
+  parentBranchId: BranchId,
+): AgentEvent => {
+  switch (event._tag) {
+    case "StreamStarted":
+      return StreamStarted.make({ sessionId: parentSessionId, branchId: parentBranchId })
+    case "StreamEnded":
+      return StreamEnded.make({
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+        ...(event.usage !== undefined ? { usage: event.usage } : {}),
+        ...(event.interrupted !== undefined ? { interrupted: event.interrupted } : {}),
+      })
+    case "ToolCallStarted":
+      return ToolCallStarted.make({
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        ...(event.input !== undefined ? { input: event.input } : {}),
+      })
+    case "ToolCallSucceeded":
+      return ToolCallSucceeded.make({
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        ...(event.summary !== undefined ? { summary: event.summary } : {}),
+        ...(event.output !== undefined ? { output: event.output } : {}),
+      })
+    case "ToolCallFailed":
+      return ToolCallFailed.make({
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        ...(event.summary !== undefined ? { summary: event.summary } : {}),
+        ...(event.output !== undefined ? { output: event.output } : {}),
+      })
+    default:
+      return event
+  }
+}
+
 const runEphemeralAgent = (params: {
   runnerConfig: AgentRunnerConfig
   shared: ReturnType<typeof makeSharedRunnerHelpers>
@@ -645,8 +696,18 @@ const runEphemeralAgent = (params: {
       localEventStore.subscribe({ sessionId }).pipe(
         Stream.runForEach((envelope) =>
           shouldMirrorEphemeralChildEvent(envelope.event)
-            ? params.parentBaseEventStore.publish(envelope.event).pipe(
-                Effect.tap(() => params.notifyMirroredEventObservers(envelope.event)),
+            ? Effect.sync(() =>
+                reparentEphemeralChildEvent(
+                  envelope.event,
+                  params.parentSessionId,
+                  params.parentBranchId,
+                ),
+              ).pipe(
+                Effect.flatMap((event) =>
+                  params.parentBaseEventStore
+                    .publish(event)
+                    .pipe(Effect.tap(() => params.notifyMirroredEventObservers(event))),
+                ),
                 Effect.catchEager(() => Effect.void),
               )
             : Effect.void,

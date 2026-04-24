@@ -486,6 +486,7 @@ const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex
 
 const initSchema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -787,11 +788,19 @@ const makeStorage = Effect.gen(function* () {
     ),
 
     deleteSession: (id) =>
-      sql`DELETE FROM sessions WHERE id = ${id}`.pipe(
-        Effect.asVoid,
-        Effect.mapError(mapError("Failed to delete session")),
-        Effect.withSpan("Storage.deleteSession"),
-      ),
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM messages_fts WHERE session_id = ${id}`
+            yield* sql`DELETE FROM sessions WHERE id = ${id}`
+            yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
+          }),
+        )
+        .pipe(
+          Effect.asVoid,
+          Effect.mapError(mapError("Failed to delete session")),
+          Effect.withSpan("Storage.deleteSession"),
+        ),
 
     // Branches
     createBranch: Effect.fn("Storage.createBranch")(

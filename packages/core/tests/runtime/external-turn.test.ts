@@ -28,6 +28,7 @@ import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { ConfigService } from "../../src/runtime/config-service"
 import { Agents } from "@gent/extensions/all-agents"
+import { ensureStorageParents } from "@gent/core/test-utils"
 
 // ── Helpers ──
 
@@ -43,6 +44,20 @@ const makeMessage = (text: string) =>
     parts: [new TextPart({ type: "text", text })],
     createdAt: new Date(),
   })
+
+const runAgentLoop = (
+  agentLoop: AgentLoop,
+  message: Message,
+  options?: Parameters<AgentLoop["run"]>[1],
+) =>
+  ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
+    Effect.flatMap(() => agentLoop.run(message, options)),
+  )
+
+const runAgentLoopOnce = (agentLoop: AgentLoop, input: Parameters<AgentLoop["runOnce"]>[0]) =>
+  ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
+    Effect.flatMap(() => agentLoop.runOnce(input)),
+  )
 
 /** Create a TurnExecutor that emits a sequence of TurnEvents. */
 const makeMockExecutor = (events: TurnEvent[]): TurnExecutor => ({
@@ -154,7 +169,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("test"), {
+          yield* runAgentLoop(agentLoop, makeMessage("test"), {
             agentOverride: "test-external",
           })
 
@@ -184,7 +199,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("read a file"), {
+          yield* runAgentLoop(agentLoop, makeMessage("read a file"), {
             agentOverride: "test-external",
           })
 
@@ -212,7 +227,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("run something"), {
+          yield* runAgentLoop(agentLoop, makeMessage("run something"), {
             agentOverride: "test-external",
           })
 
@@ -234,7 +249,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("test error"), {
+          yield* runAgentLoop(agentLoop, makeMessage("test error"), {
             agentOverride: "test-external",
           })
 
@@ -262,7 +277,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("test no tool re-exec"), {
+          yield* runAgentLoop(agentLoop, makeMessage("test no tool re-exec"), {
             agentOverride: "test-external",
           })
 
@@ -324,7 +339,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("model turn"))
+          yield* runAgentLoop(agentLoop, makeMessage("model turn"))
 
           const events = yield* Ref.get(eventsRef)
           const tags = events.map((e) => e._tag)
@@ -350,7 +365,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("context check"), {
+          yield* runAgentLoop(agentLoop, makeMessage("context check"), {
             agentOverride: "test-external",
           })
         }).pipe(Effect.provide(layer)),
@@ -377,7 +392,7 @@ describe("external turn execution", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.run(makeMessage("reason test"), {
+          yield* runAgentLoop(agentLoop, makeMessage("reason test"), {
             agentOverride: "test-external",
           })
 
@@ -469,7 +484,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
-          yield* agentLoop.runOnce({
+          yield* runAgentLoopOnce(agentLoop, {
             sessionId: e2eSessionId,
             branchId: e2eBranchId,
             agentName: "my-test-agent",

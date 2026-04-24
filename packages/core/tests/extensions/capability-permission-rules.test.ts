@@ -13,6 +13,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, type Layer, Ref, Stream, Schema } from "effect"
 import { createSequenceProvider, toolCallStep, textStep } from "@gent/core/debug/provider"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
+import { ensureStorageParents } from "@gent/core/test-utils"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { EventStore, type EventEnvelope } from "@gent/core/domain/event"
 import { Message, TextPart } from "@gent/core/domain/message"
@@ -105,6 +106,7 @@ describe("capability permissionRules E2E", () => {
         yield* Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const eventStore = yield* EventStore
+          yield* ensureStorageParents({ sessionId, branchId })
 
           // Subscribe to events before running so we catch everything
           const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
@@ -158,6 +160,7 @@ describe("capability permissionRules E2E", () => {
         yield* Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const eventStore = yield* EventStore
+          yield* ensureStorageParents({ sessionId, branchId })
 
           const envelopesRef = yield* Ref.make<EventEnvelope[]>([])
           yield* Effect.forkChild(

@@ -6,6 +6,7 @@ import type { LoadedExtension, ReduceResult } from "../../src/domain/extension.j
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { defineResource } from "@gent/core/domain/contribution"
+import { ensureStorageParents } from "@gent/core/test-utils"
 import { reducerActor } from "./helpers/reducer-actor"
 import { makeActorRuntimeLayer } from "./helpers/actor-runtime-layer"
 
@@ -153,6 +154,7 @@ describe("Extension state storage", () => {
   it.live("saveExtensionState + loadExtensionState round-trip", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId })
 
       yield* storage.saveExtensionState({
         sessionId,
@@ -185,6 +187,7 @@ describe("Extension state storage", () => {
   it.live("saveExtensionState upserts on conflict", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId })
 
       yield* storage.saveExtensionState({
         sessionId,
@@ -234,6 +237,7 @@ describe("Persistence edge cases", () => {
 
     return Effect.gen(function* () {
       const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId, branchId })
 
       // Seed with invalid JSON
       yield* storage.saveExtensionState({
@@ -285,6 +289,7 @@ describe("Persistence edge cases", () => {
 
     return Effect.gen(function* () {
       const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId, branchId })
 
       // Seed with schema-invalid JSON (wrong shape)
       yield* storage.saveExtensionState({

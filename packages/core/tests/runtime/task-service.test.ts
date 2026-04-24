@@ -9,6 +9,7 @@ import { MachineEngine } from "../../src/runtime/extensions/resource-host/machin
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { ensureStorageParents } from "@gent/core/test-utils"
 
 const sessionId = SessionId.make("task-test-session")
 const branchId = BranchId.make("task-test-branch")
@@ -37,6 +38,7 @@ describe("TaskService", () => {
       const layer = makeLayer()
 
       yield* Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId })
         const taskService = yield* TaskService
         const created = yield* taskService.create({
           sessionId,
@@ -55,6 +57,7 @@ describe("TaskService", () => {
       const layer = makeLayer()
 
       yield* Effect.gen(function* () {
+        yield* ensureStorageParents({ sessionId, branchId })
         const taskService = yield* TaskService
         const task = yield* taskService.create({
           sessionId,

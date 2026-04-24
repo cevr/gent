@@ -55,7 +55,7 @@ import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
-import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
+import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import {
@@ -117,6 +117,24 @@ const makeMessage = (sessionId: string, branchId: string, text: string) =>
     parts: [new TextPart({ type: "text", text })],
     createdAt: new Date(),
   })
+
+const runAgentLoop = (
+  agentLoop: AgentLoop,
+  message: Message,
+  options?: Parameters<AgentLoop["run"]>[1],
+) =>
+  ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
+    Effect.flatMap(() => agentLoop.run(message, options)),
+  )
+
+const submitAgentLoop = (
+  agentLoop: AgentLoop,
+  message: Message,
+  options?: Parameters<AgentLoop["submit"]>[1],
+) =>
+  ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
+    Effect.flatMap(() => agentLoop.submit(message, options)),
+  )
 
 const makeLayer = (
   providerLayer: Layer.Layer<Provider>,
@@ -498,9 +516,9 @@ describe("streaming", () => {
           const messageA = makeMessage("s1", "b1", "hello")
           const messageB = makeMessage("s2", "b2", "world")
 
-          const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
+          const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
           yield* Deferred.await(firstStarted)
-          const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
+          const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
 
           const finishedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(finishedB._tag).toBe("Some")
@@ -577,9 +595,13 @@ describe("streaming", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
 
-          const fiberA = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "first")))
+          const fiberA = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeMessage("s1", "b1", "first")),
+          )
           yield* Deferred.await(firstStarted)
-          const fiberB = yield* Effect.forkChild(agentLoop.run(makeMessage("s1", "b1", "second")))
+          const fiberB = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeMessage("s1", "b1", "second")),
+          )
           const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
 
           expect(queuedB._tag).toBe("Some")
@@ -629,8 +651,8 @@ describe("streaming", () => {
           const messageA = makeMessage("s1", "b1", "alpha")
           const messageB = makeMessage("s2", "b2", "beta")
 
-          const fiberA = yield* Effect.forkChild(agentLoop.run(messageA))
-          const fiberB = yield* Effect.forkChild(agentLoop.run(messageB))
+          const fiberA = yield* Effect.forkChild(runAgentLoop(agentLoop, messageA))
+          const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
 
           yield* Deferred.await(startedA)
           yield* Deferred.await(startedB)
@@ -686,10 +708,10 @@ describe("streaming", () => {
           const second = makeMessage("s1", "b1", "second")
           const third = makeMessage("s1", "b1", "third")
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* agentLoop.run(second)
-          yield* agentLoop.run(third)
+          yield* runAgentLoop(agentLoop, second)
+          yield* runAgentLoop(agentLoop, third)
 
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber)
@@ -724,7 +746,7 @@ describe("streaming", () => {
           const agentLoop = yield* AgentLoop
           const recorder = yield* SequenceRecorder
 
-          yield* agentLoop.run(makeMessage("s1", "b1", "inspect me"))
+          yield* runAgentLoop(agentLoop, makeMessage("s1", "b1", "inspect me"))
 
           const calls = yield* recorder.getCalls()
           const publishedEvents = calls
@@ -761,7 +783,7 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
 
-        const exit = yield* Effect.exit(agentLoop.run(message))
+        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
         const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
 
         expect(exit._tag).toBe("Failure")
@@ -792,7 +814,7 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
 
-        const exit = yield* Effect.exit(agentLoop.run(message))
+        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
         const user = yield* storage.getMessage(message.id)
 
         expect(exit._tag).toBe("Failure")
@@ -817,13 +839,13 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("retry-assistant-session", "retry-assistant-branch", "hello")
 
-        const firstExit = yield* Effect.exit(agentLoop.run(message))
+        const firstExit = yield* Effect.exit(runAgentLoop(agentLoop, message))
         yield* waitForPhase(
           agentLoop,
           { sessionId: message.sessionId, branchId: message.branchId },
           "Idle",
         )
-        yield* agentLoop.run(message)
+        yield* runAgentLoop(agentLoop, message)
 
         const events = yield* storage.listEvents({
           sessionId: message.sessionId,
@@ -849,7 +871,7 @@ describe("streaming", () => {
       const agentLoop = yield* AgentLoop
       const message = makeMessage("image-session", "image-branch", "show image")
 
-      yield* agentLoop.run(message)
+      yield* runAgentLoop(agentLoop, message)
 
       const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
       expect(assistant).toBeDefined()
@@ -925,9 +947,9 @@ describe("streaming", () => {
           const first = makeMessage("s1", "b1", "first")
           const queued = makeMessage("s1", "b1", "queued")
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* agentLoop.run(queued)
+          yield* runAgentLoop(agentLoop, queued)
           yield* agentLoop.steer({
             _tag: "Interject",
             sessionId: "s1",
@@ -985,10 +1007,10 @@ describe("streaming", () => {
           const queuedA = makeMessage("s1", "b1", "queued a")
           const queuedB = makeMessage("s1", "b1", "queued b")
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* agentLoop.run(queuedA)
-          yield* agentLoop.run(queuedB)
+          yield* runAgentLoop(agentLoop, queuedA)
+          yield* runAgentLoop(agentLoop, queuedB)
           yield* agentLoop.steer({
             _tag: "Interject",
             sessionId: "s1",
@@ -1063,9 +1085,9 @@ describe("streaming", () => {
           const first = makeMessage("s1", "b1", "first")
           const queued = makeMessage("s1", "b1", "queued after failure")
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(first))
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(firstStarted)
-          yield* agentLoop.run(queued)
+          yield* runAgentLoop(agentLoop, queued)
 
           const snapshotWhileRunning = yield* agentLoop.getQueue({
             sessionId: "s1",
@@ -1110,7 +1132,7 @@ describe("streaming", () => {
         const storage = yield* Storage
         const message = makeMessage("native-error-session", "native-error-branch", "fail natively")
 
-        yield* agentLoop.run(message)
+        yield* runAgentLoop(agentLoop, message)
 
         const events = yield* Ref.get(eventsRef)
         const tags = events.map((event) => event._tag)
@@ -1337,7 +1359,7 @@ describe("continuation", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        yield* agentLoop.run(makeContMessage("test auto-continue"))
+        yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
 
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
@@ -1352,7 +1374,7 @@ describe("continuation", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        yield* agentLoop.run(makeContMessage("text only"))
+        yield* runAgentLoop(agentLoop, makeContMessage("text only"))
 
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone()
@@ -1370,7 +1392,7 @@ describe("continuation", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        yield* agentLoop.run(makeContMessage("multi-hop"))
+        yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
 
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone()
@@ -1390,7 +1412,7 @@ describe("continuation", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
 
-        yield* agentLoop.run(makeContMessage("turn-events"))
+        yield* runAgentLoop(agentLoop, makeContMessage("turn-events"))
 
         expect(yield* controls.callCount).toBe(3)
 
@@ -1412,7 +1434,9 @@ describe("continuation", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
 
-        const fiber = yield* Effect.forkChild(agentLoop.run(makeContMessage("interrupt test")))
+        const fiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, makeContMessage("interrupt test")),
+        )
 
         yield* controls.waitForCall(1)
 
@@ -1447,7 +1471,7 @@ describe("continuation", () => {
 
       yield* Effect.gen(function* () {
         const agentLoop = yield* AgentLoop
-        yield* agentLoop.run(makeContMessage("structural guard"))
+        yield* runAgentLoop(agentLoop, makeContMessage("structural guard"))
 
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone()
@@ -1470,7 +1494,7 @@ describe("continuation", () => {
         const storage = yield* Storage
         const msg = makeContMessage("multi-hop persistence")
 
-        yield* agentLoop.run(msg)
+        yield* runAgentLoop(agentLoop, msg)
 
         const a1 = yield* storage.getMessage(assistantMessageIdForTurn(msg.id, 1))
         const t1 = yield* storage.getMessage(toolResultMessageIdForTurn(msg.id, 1))
@@ -1514,13 +1538,13 @@ describe("continuation", () => {
         const followUp = makeContMessage("follow-up after interrupt")
 
         // Start first turn — tool call auto-continues to gated step
-        yield* Effect.forkChild(agentLoop.run(first))
+        yield* Effect.forkChild(runAgentLoop(agentLoop, first))
 
         // Wait for the gated step (second stream call) to start
         yield* controls.waitForCall(1)
 
         // Queue a follow-up while step 1 is gated
-        yield* agentLoop.run(followUp)
+        yield* runAgentLoop(agentLoop, followUp)
 
         // Interrupt the current turn
         yield* agentLoop.steer({
@@ -1579,7 +1603,7 @@ describe("turn stream parity", () => {
         const storage = yield* Storage
         const message = makeMessage("model-parity-session", "model-parity-branch", "hello")
 
-        yield* agentLoop.run(message)
+        yield* runAgentLoop(agentLoop, message)
 
         const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
@@ -1607,7 +1631,7 @@ describe("turn stream parity", () => {
         const storage = yield* Storage
         const message = makeMessage("external-parity-session", "external-parity-branch", "hello")
 
-        yield* agentLoop.run(message, { agentOverride: "test-external-parity" as never })
+        yield* runAgentLoop(agentLoop, message, { agentOverride: "test-external-parity" as never })
 
         const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
@@ -1758,7 +1782,7 @@ describe("interaction", () => {
           const recorder = yield* SequenceRecorder
 
           const fiber = yield* Effect.forkChild(
-            agentLoop.run(makeIntMessage("trigger interaction")),
+            runAgentLoop(agentLoop, makeIntMessage("trigger interaction")),
           )
 
           const state = yield* waitForPhase(
@@ -1802,7 +1826,9 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(makeIntMessage("interrupt test")))
+          const fiber = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeIntMessage("interrupt test")),
+          )
 
           yield* waitForPhase(
             agentLoop,
@@ -1860,7 +1886,7 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
 
-          yield* agentLoop.run(makeIntMessage("no interaction"))
+          yield* runAgentLoop(agentLoop, makeIntMessage("no interaction"))
 
           yield* agentLoop.respondInteraction({
             sessionId: intSessionId,
@@ -1917,7 +1943,9 @@ describe("interaction", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
 
-          const fiber = yield* Effect.forkChild(agentLoop.run(makeIntMessage("guard interaction")))
+          const fiber = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeIntMessage("guard interaction")),
+          )
 
           yield* waitForPhase(
             agentLoop,
@@ -1957,7 +1985,7 @@ describe("checkpoint persistence", () => {
           const agentLoop = yield* AgentLoop
           const message = makeMessage("checkpoint-upsert-session", "b1", "persist")
 
-          const exit = yield* Effect.exit(agentLoop.submit(message))
+          const exit = yield* Effect.exit(submitAgentLoop(agentLoop, message))
 
           expect(exit._tag).toBe("Failure")
           if (exit._tag === "Failure") {
@@ -1978,7 +2006,7 @@ describe("checkpoint persistence", () => {
           const agentLoop = yield* AgentLoop
           const message = makeMessage("checkpoint-remove-session", "b1", "persist")
 
-          const exit = yield* Effect.exit(agentLoop.run(message))
+          const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
 
           expect(exit._tag).toBe("Failure")
           if (exit._tag === "Failure") {
@@ -2025,11 +2053,11 @@ describe("checkpoint persistence", () => {
           const agentLoop = yield* AgentLoop
 
           const failed = yield* Effect.exit(
-            agentLoop.submit(makeMessage("checkpoint-recreate-session", "b1", "first")),
+            submitAgentLoop(agentLoop, makeMessage("checkpoint-recreate-session", "b1", "first")),
           )
           expect(failed._tag).toBe("Failure")
 
-          yield* agentLoop.run(makeMessage("checkpoint-recreate-session", "b1", "second"))
+          yield* runAgentLoop(agentLoop, makeMessage("checkpoint-recreate-session", "b1", "second"))
 
           expect(providerCalls).toBe(1)
         }).pipe(Effect.provide(layer)),
@@ -2077,12 +2105,12 @@ describe("checkpoint persistence", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const fiber = yield* Effect.forkChild(
-            agentLoop.run(makeMessage("checkpoint-queue-session", "b1", "first")),
+            runAgentLoop(agentLoop, makeMessage("checkpoint-queue-session", "b1", "first")),
           )
           yield* Deferred.await(firstStarted)
 
           const queued = yield* Effect.exit(
-            agentLoop.submit(makeMessage("checkpoint-queue-session", "b1", "queued")),
+            submitAgentLoop(agentLoop, makeMessage("checkpoint-queue-session", "b1", "queued")),
           )
           expect(queued._tag).toBe("Failure")
 
@@ -2139,10 +2167,10 @@ describe("checkpoint persistence", () => {
         Effect.gen(function* () {
           const agentLoop = yield* AgentLoop
           const fiber = yield* Effect.forkChild(
-            agentLoop.run(makeMessage("checkpoint-drain-session", "b1", "first")),
+            runAgentLoop(agentLoop, makeMessage("checkpoint-drain-session", "b1", "first")),
           )
           yield* Deferred.await(firstStarted)
-          yield* agentLoop.submit(makeMessage("checkpoint-drain-session", "b1", "queued"))
+          yield* submitAgentLoop(agentLoop, makeMessage("checkpoint-drain-session", "b1", "queued"))
 
           const drained = yield* Effect.exit(
             agentLoop.drainQueue({

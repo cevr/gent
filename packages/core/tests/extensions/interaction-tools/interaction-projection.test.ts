@@ -23,6 +23,7 @@ import { InteractionProjection } from "@gent/extensions/interaction-tools/projec
 import { encodeInteractionParams } from "@gent/core/domain/interaction-request"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import type { ProjectionUiContext } from "@gent/core/domain/projection"
+import { ensureStorageParents } from "@gent/core/test-utils"
 
 // `Storage.MemoryWithSql()` provides `InteractionStorage` AND
 // `InteractionPendingReader` (the read-only seam used by the projection).
@@ -52,6 +53,7 @@ describe("InteractionProjection", () => {
   it.live("one pending interaction populates model", () =>
     Effect.gen(function* () {
       const storage = yield* InteractionStorage
+      yield* ensureStorageParents({ sessionId: sid1, branchId: bid1 })
       const paramsJson = yield* encodeInteractionParams({
         text: "Deploy?",
         metadata: { type: "prompt", mode: "confirm" },
@@ -76,6 +78,7 @@ describe("InteractionProjection", () => {
   it.live("resolved interactions are filtered out", () =>
     Effect.gen(function* () {
       const storage = yield* InteractionStorage
+      yield* ensureStorageParents({ sessionId: sid1, branchId: bid1 })
       const paramsJson = yield* encodeInteractionParams({ text: "Approve?" })
       yield* storage.persist({
         requestId: "req-2",
@@ -100,6 +103,7 @@ describe("InteractionProjection", () => {
   it.live("scoped — pending in another session does not leak in", () =>
     Effect.gen(function* () {
       const storage = yield* InteractionStorage
+      yield* ensureStorageParents({ sessionId: sid2, branchId: bid2 })
       const paramsJson = yield* encodeInteractionParams({ text: "Other session" })
       yield* storage.persist({
         requestId: "req-other",
@@ -118,6 +122,7 @@ describe("InteractionProjection", () => {
   it.live("pending without metadata: model has no metadata key (not metadata: undefined)", () =>
     Effect.gen(function* () {
       const storage = yield* InteractionStorage
+      yield* ensureStorageParents({ sessionId: sid1, branchId: bid1 })
       const paramsJson = yield* encodeInteractionParams({ text: "no meta" })
       yield* storage.persist({
         requestId: "req-no-meta",

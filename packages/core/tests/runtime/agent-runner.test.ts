@@ -594,7 +594,7 @@ describe("AgentRunner", () => {
           return { runResult, childTags: [] as string[] }
         }
 
-        const childEvents = yield* storage.listEvents({ sessionId: runResult.sessionId })
+        const childEvents = yield* storage.listEvents({ sessionId: session.id })
         return {
           runResult,
           childTags: childEvents.map((event) => event.event._tag),

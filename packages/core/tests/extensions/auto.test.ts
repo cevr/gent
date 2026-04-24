@@ -13,7 +13,7 @@ import { AutoProjection } from "@gent/extensions/auto-projection"
 import { AutoJournal, type JournalRow } from "@gent/extensions/auto-journal"
 import { AutoProtocol, type AutoSnapshotReply } from "@gent/extensions/auto-protocol"
 import { Session } from "@gent/core/domain/message"
-import { testSetupCtx } from "@gent/core/test-utils"
+import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -30,12 +30,40 @@ const autoExtension: LoadedExtension = {
   contributions: Effect.runSync(AutoExtension.setup(testSetupCtx())),
 }
 
-const makeLayer = () =>
-  Layer.mergeAll(
-    MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
-    EventStore.Memory,
-    Storage.Test(),
-  )
+const seededMachineLayer = (extraLayers: ReadonlyArray<Layer.Layer<never>> = []) => {
+  const turnControl = ExtensionTurnControl.Test()
+  const storage = Storage.Test()
+  const machine = MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(turnControl))
+  const seededMachine = Layer.effect(
+    MachineEngine,
+    Effect.gen(function* () {
+      const runtime = yield* MachineEngine
+      return {
+        publish: (event, ctx) =>
+          ensureStorageParents({ sessionId: ctx.sessionId, branchId: ctx.branchId }).pipe(
+            Effect.flatMap(() => runtime.publish(event, ctx)),
+          ),
+        send: (targetSessionId, message, targetBranchId) =>
+          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.flatMap(() => runtime.send(targetSessionId, message, targetBranchId)),
+          ),
+        execute: (targetSessionId, message, targetBranchId) =>
+          ensureStorageParents({ sessionId: targetSessionId, branchId: targetBranchId }).pipe(
+            Effect.flatMap(() => runtime.execute(targetSessionId, message, targetBranchId)),
+          ),
+        getActorStatuses: (targetSessionId) =>
+          ensureStorageParents({ sessionId: targetSessionId }).pipe(
+            Effect.flatMap(() => runtime.getActorStatuses(targetSessionId)),
+          ),
+        terminateAll: runtime.terminateAll,
+      } satisfies typeof runtime
+    }),
+  ).pipe(Layer.provide(Layer.mergeAll(machine, storage, ...extraLayers)))
+
+  return Layer.mergeAll(seededMachine, EventStore.Memory, turnControl, storage, ...extraLayers)
+}
+
+const makeLayer = () => seededMachineLayer()
 
 const getSnapshot = (runtime: MachineEngine) =>
   Effect.gen(function* () {
@@ -357,6 +385,7 @@ describe("Auto runtime integration", () => {
   it.live("persistence: state survives actor hydration", () =>
     Effect.gen(function* () {
       const storage = yield* Storage
+      yield* ensureStorageParents({ sessionId, branchId })
 
       const autoState: AutoState = {
         _tag: "Working",
@@ -455,12 +484,7 @@ describe("Auto JSONL replay via onInit", () => {
     })
 
   const makeReplayLayer = (rows: JournalRow[], originSessionId?: string) =>
-    Layer.mergeAll(
-      MachineEngine.Live([autoExtension]).pipe(Layer.provideMerge(ExtensionTurnControl.Test())),
-      EventStore.Memory,
-      Storage.Test(),
-      mockJournal(rows, originSessionId),
-    )
+    seededMachineLayer([mockJournal(rows, originSessionId)])
 
   const getAutoSnapshot = (runtime: MachineEngine) =>
     Effect.gen(function* () {
