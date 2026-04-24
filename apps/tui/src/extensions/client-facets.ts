@@ -330,8 +330,3 @@ function standaloneClientModule<R extends ClientRuntimeServices = ClientDeps>(
 
 /** Create a TUI client extension module with typed contributions. */
 export const defineClientExtension = standaloneClientModule
-
-/** @deprecated Use `defineClientExtension` directly. */
-export const ExtensionPackage = {
-  tui: standaloneClientModule,
-}

@@ -123,7 +123,10 @@ Upstream Effect receipts:
 - `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/sql/SqlClient.ts`
 - `/Users/cvr/.cache/repo/effect-ts/effect-smol/packages/effect/src/unstable/persistence/Persistence.ts`
 
-## Current Receipts
+## Initial Audit Receipts
+
+These receipts are historical inputs used to write the batches below. They are
+kept to show the trail, not as a description of the final codebase.
 
 | Finding                                                                                                                          | Receipts                                                                                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -962,6 +965,7 @@ Fresh audit commands:
 - `rg "SessionRuntimeService\\[\\\"runPrompt\\\"\\]|sessionRuntimeStub|build.*RpcHandlers|AgentLoop\\.Test|runOnce\\(" packages/core/tests -n`
 - `rg "content_address|content-address|chunk|message_chunks|MessageChunk|chunked|partJsons|message_parts|parts_json" packages/core/src packages/core/tests -n`
 - `rg "transaction|withTransaction|sql\\.withTransaction|BEGIN|COMMIT|ROLLBACK" packages/core/src/storage packages/core/src/runtime -n`
+- `rg "ExtensionPackage" apps/tui packages -n`
 
 Audit result:
 
@@ -972,6 +976,7 @@ Audit result:
 - Message parts are backed by `content_chunks` / `message_chunks`, with legacy blob backfill covered.
 - Multi-step message and deletion writes use `sql.withTransaction`.
 - Remaining direct `runOnce` usage is in tests whose subject is the agent loop implementation, not the public session runtime.
+- The deprecated TUI `ExtensionPackage.tui` compatibility alias was removed after final review; `rg "ExtensionPackage" apps/tui packages -n` returns no matches.
 
 Final gate:
 
