@@ -1,34 +1,15 @@
-import {
-  Cause,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Queue,
-  Ref,
-  Schema,
-  Scope,
-  Semaphore,
-  Stream,
-} from "effect"
-import type { GentRpcClient } from "@gent/core/server/rpcs.js"
+import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore } from "effect"
+import { RpcClient } from "effect/unstable/rpc"
+import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
 import {
   GentConnectionError,
   type ConnectionState,
   type GentLifecycle,
 } from "@gent/core/server/transport-contract.js"
-import {
-  makeFlatRpcClient,
-  makeNamespacedClient,
-  type GentNamespacedClient,
-} from "./namespaced-client.js"
+import { makeNamespacedClient, type GentNamespacedClient } from "./namespaced-client.js"
 import { runSupervisorRestart } from "./supervisor-boundary.js"
 
 type BuildLocalRpcClient<E, R> = (scope: Scope.Closeable) => Effect.Effect<GentRpcClient, E, R>
-type StreamOptions = {
-  readonly asQueue?: boolean | undefined
-  readonly streamBufferSize?: number | undefined
-}
 
 interface LocalSupervisor {
   readonly client: GentNamespacedClient
@@ -39,46 +20,81 @@ interface LocalSupervisorResource extends LocalSupervisor {
   readonly stop: Effect.Effect<void>
 }
 
-const isStreamQueueRequest = (value: unknown): value is StreamOptions =>
-  value !== null && typeof value === "object" && "asQueue" in value && value.asQueue === true
+const unavailableError = (stateRef: Ref.Ref<ConnectionState>): GentConnectionError => {
+  const state = Ref.getUnsafe(stateRef)
+  const reason =
+    state._tag === "disconnected"
+      ? state.reason
+      : `local runtime unavailable (state: ${state._tag})`
 
-const disconnectedStreamResult = (args: ReadonlyArray<unknown>, error: GentConnectionError) => {
-  if (isStreamQueueRequest(args[1])) {
-    return Effect.gen(function* () {
-      const queue = yield* Queue.make<never, GentConnectionError | Cause.Done>()
-      yield* Queue.fail(queue, error)
-      return Queue.asDequeue(queue)
-    })
-  }
-  return Stream.fail(error)
+  return new GentConnectionError({ message: reason })
 }
+
+const makeUnavailableClient = (
+  stateRef: Ref.Ref<ConnectionState>,
+): Effect.Effect<GentRpcClient, never, Scope.Scope> =>
+  RpcClient.makeNoSerialization(GentRpcs, {
+    supportsAck: true,
+    disableTracing: true,
+    onFromClient: () => Effect.fail(unavailableError(stateRef)),
+  }).pipe(Effect.map(({ client }) => client))
 
 const makeSwappableClient = (
   clientRef: Ref.Ref<GentRpcClient | undefined>,
-  stateRef: Ref.Ref<ConnectionState>,
+  unavailableClient: GentRpcClient,
 ): GentNamespacedClient => {
-  const route = <K extends keyof GentRpcClient>(key: K): GentRpcClient[K] => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-    return ((...args: ReadonlyArray<unknown>) => {
-      const client = Ref.getUnsafe(clientRef)
-      if (client === undefined) {
-        const state = Ref.getUnsafe(stateRef)
-        const reason =
-          state._tag === "disconnected"
-            ? state.reason
-            : `local runtime unavailable (state: ${state._tag})`
-        const error = new GentConnectionError({ message: reason })
-        return key === "session.events" || key === "session.watchRuntime"
-          ? disconnectedStreamResult(args, error)
-          : Effect.fail(error)
-      }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-      const method = client[key] as (...methodArgs: ReadonlyArray<unknown>) => unknown
-      return method(...args)
-    }) as GentRpcClient[K]
-  }
+  const current = () => Ref.getUnsafe(clientRef) ?? unavailableClient
 
-  const flatClient = makeFlatRpcClient(route)
+  const flatClient: GentRpcClient = {
+    "actor.sendUserMessage": (input, options) => current()["actor.sendUserMessage"](input, options),
+    "actor.sendToolResult": (input, options) => current()["actor.sendToolResult"](input, options),
+    "actor.invokeTool": (input, options) => current()["actor.invokeTool"](input, options),
+    "actor.interrupt": (input, options) => current()["actor.interrupt"](input, options),
+    "actor.getState": (input, options) => current()["actor.getState"](input, options),
+    "actor.getMetrics": (input, options) => current()["actor.getMetrics"](input, options),
+    "auth.listProviders": (input, options) => current()["auth.listProviders"](input, options),
+    "auth.setKey": (input, options) => current()["auth.setKey"](input, options),
+    "auth.deleteKey": (input, options) => current()["auth.deleteKey"](input, options),
+    "auth.listMethods": (input, options) => current()["auth.listMethods"](input, options),
+    "auth.authorize": (input, options) => current()["auth.authorize"](input, options),
+    "auth.callback": (input, options) => current()["auth.callback"](input, options),
+    "branch.list": (input, options) => current()["branch.list"](input, options),
+    "branch.create": (input, options) => current()["branch.create"](input, options),
+    "branch.getTree": (input, options) => current()["branch.getTree"](input, options),
+    "branch.switch": (input, options) => current()["branch.switch"](input, options),
+    "branch.fork": (input, options) => current()["branch.fork"](input, options),
+    "driver.list": (input, options) => current()["driver.list"](input, options),
+    "driver.set": (input, options) => current()["driver.set"](input, options),
+    "driver.clear": (input, options) => current()["driver.clear"](input, options),
+    "extension.send": (input, options) => current()["extension.send"](input, options),
+    "extension.ask": (input, options) => current()["extension.ask"](input, options),
+    "extension.request": (input, options) => current()["extension.request"](input, options),
+    "extension.listStatus": (input, options) => current()["extension.listStatus"](input, options),
+    "extension.listCommands": (input, options) =>
+      current()["extension.listCommands"](input, options),
+    "interaction.respondInteraction": (input, options) =>
+      current()["interaction.respondInteraction"](input, options),
+    "message.send": (input, options) => current()["message.send"](input, options),
+    "message.list": (input, options) => current()["message.list"](input, options),
+    "model.list": (input, options) => current()["model.list"](input, options),
+    "permission.listRules": (input, options) => current()["permission.listRules"](input, options),
+    "permission.deleteRule": (input, options) => current()["permission.deleteRule"](input, options),
+    "queue.drain": (input, options) => current()["queue.drain"](input, options),
+    "queue.get": (input, options) => current()["queue.get"](input, options),
+    "server.status": (input, options) => current()["server.status"](input, options),
+    "session.create": (input, options) => current()["session.create"](input, options),
+    "session.list": (input, options) => current()["session.list"](input, options),
+    "session.get": (input, options) => current()["session.get"](input, options),
+    "session.delete": (input, options) => current()["session.delete"](input, options),
+    "session.getChildren": (input, options) => current()["session.getChildren"](input, options),
+    "session.getTree": (input, options) => current()["session.getTree"](input, options),
+    "session.getSnapshot": (input, options) => current()["session.getSnapshot"](input, options),
+    "session.updateReasoningLevel": (input, options) =>
+      current()["session.updateReasoningLevel"](input, options),
+    "session.events": (input, options) => current()["session.events"](input, options),
+    "session.watchRuntime": (input, options) => current()["session.watchRuntime"](input, options),
+    "steer.command": (input, options) => current()["steer.command"](input, options),
+  }
 
   return makeNamespacedClient(flatClient)
 }
@@ -246,8 +262,10 @@ export const startLocalSupervisor = <E, R>(
         )
         .pipe(Effect.catchEager(() => Effect.void))
 
+      const unavailableClient = yield* makeUnavailableClient(stateRef)
+
       return {
-        client: makeSwappableClient(clientRef, stateRef),
+        client: makeSwappableClient(clientRef, unavailableClient),
         lifecycle,
         stop,
       } satisfies LocalSupervisorResource

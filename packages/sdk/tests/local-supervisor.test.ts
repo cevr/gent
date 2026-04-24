@@ -101,7 +101,7 @@ describe("local supervisor", () => {
     )
   })
 
-  test("disconnected stream queue overload fails through the returned queue", async () => {
+  test("disconnected effect methods and stream queue overloads fail with connection errors", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -117,6 +117,13 @@ describe("local supervisor", () => {
           )
 
           yield* supervisor.lifecycle.waitForReady
+
+          const createError = yield* Effect.flip(
+            supervisor.client.session.create({ cwd: repoRoot }),
+          )
+
+          expect(createError).toBeInstanceOf(GentConnectionError)
+          expect(createError.message).toBe("boot boom")
 
           const queue = yield* supervisor.client.session.events(
             { sessionId: SessionId.make("session-test") },

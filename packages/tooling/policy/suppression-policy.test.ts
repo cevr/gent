@@ -174,7 +174,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "effect:nodeBuiltinImport:off": 3,
       "eslint:@typescript-eslint/no-empty-object-type": 1,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 16,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 14,
     },
   },
   {
@@ -726,8 +726,6 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/extensions/src/task-tools-service.ts:91 effect:effectSucceedWithVoid:off",
   "packages/extensions/src/task-tools-service.ts:94 effect:effectSucceedWithVoid:off",
   "packages/sdk/src/client.ts:248 eslint:@typescript-eslint/no-empty-object-type",
-  "packages/sdk/src/local-supervisor.ts:61 eslint:@typescript-eslint/no-unsafe-type-assertion",
-  "packages/sdk/src/local-supervisor.ts:75 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/sdk/src/server-registry.ts:10 effect:nodeBuiltinImport:off",
   "packages/sdk/src/server-registry.ts:12 effect:nodeBuiltinImport:off",
   "packages/sdk/src/server-registry.ts:183 eslint:@typescript-eslint/no-unsafe-type-assertion",
