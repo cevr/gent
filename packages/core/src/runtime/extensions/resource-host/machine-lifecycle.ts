@@ -4,8 +4,11 @@ import { ExtensionActorStatusInfo, type ExtensionRef } from "../../../domain/ext
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type { ExtensionProtocolError } from "../../../domain/extension-protocol.js"
 import { ExtensionPersistenceFailure, spawnMachineExtensionRef } from "../spawn-machine-ref.js"
-import type { ExtensionTurnControlService } from "../turn-control.js"
-import { ExtensionTurnControl } from "../turn-control.js"
+import {
+  ExtensionTurnControl,
+  TurnControlError,
+  type ExtensionTurnControlService,
+} from "../turn-control.js"
 import { getProtocolFailure, type ActorEntry, type ActorSpawnSpec } from "./machine-protocol.js"
 
 type ActorSlot =
@@ -55,6 +58,10 @@ export const makeMachineLifecycle = (params: {
       return die !== undefined && Schema.is(ExtensionPersistenceFailure)(die.defect)
         ? die.defect
         : undefined
+    }
+    const getTurnControlFailure = (cause: Cause.Cause<unknown>) => {
+      const die = cause.reasons.find(Cause.isDieReason)
+      return die !== undefined && Schema.is(TurnControlError)(die.defect) ? die.defect : undefined
     }
 
     const setActorStatus = (status: ExtensionActorStatusInfo) =>
@@ -391,6 +398,23 @@ export const makeMachineLifecycle = (params: {
                 sessionId,
                 branchId,
                 operation,
+                error,
+              }),
+            )
+            yield* failActorWithoutRestart(sessionId, branchId, current, error)
+            return { _tag: "terminal", error } as const
+          }
+
+          const turnControlFailure = getTurnControlFailure(exit.cause)
+          if (turnControlFailure !== undefined) {
+            const error = turnControlFailure.message
+            yield* Effect.logWarning("extension.actor.turn-control.failed").pipe(
+              Effect.annotateLogs({
+                extensionId: current.ref.id,
+                sessionId,
+                branchId,
+                operation,
+                command: turnControlFailure.command,
                 error,
               }),
             )

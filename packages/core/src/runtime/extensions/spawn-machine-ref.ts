@@ -165,6 +165,7 @@ export const spawnMachineExtensionRef = <
               Effect.annotateLogs({ extensionId, defect: String(defect) }),
             ),
           ),
+          Effect.catchTag("TurnControlError", (error) => Effect.die(error)),
         )
 
       const dispatch = (

@@ -95,7 +95,11 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "../extensions/resource-host/machine-engine.js"
-import { ExtensionTurnControl } from "../extensions/turn-control.js"
+import {
+  ExtensionTurnControl,
+  TurnControlError,
+  type TurnControlEnvelope,
+} from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
 import type { TurnError, TurnEvent } from "../../domain/driver.js"
 import { ToolRunner, type ToolRunnerService } from "./tool-runner"
@@ -3211,33 +3215,53 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             }),
         }
 
+        const failTurnControlCommand = (
+          command: TurnControlEnvelope,
+          cause: Cause.Cause<unknown>,
+        ) =>
+          Deferred.fail(
+            command.ack,
+            new TurnControlError({
+              command: command._tag,
+              message: `Failed to apply ${command._tag} turn-control command`,
+              cause: Cause.squash(cause),
+            }),
+          ).pipe(Effect.asVoid)
+
         yield* Stream.runForEach(extensionTurnControl.commands, (command) =>
           Effect.gen(function* () {
-            switch (command._tag) {
-              case "QueueFollowUp": {
-                const message = Message.cases.regular.make({
-                  id: MessageId.make(Bun.randomUUIDv7()),
-                  sessionId: command.sessionId,
-                  branchId: command.branchId,
-                  role: "user",
-                  parts: [new TextPart({ type: "text", text: command.content })],
-                  createdAt: yield* DateTime.nowAsDate,
-                  metadata: command.metadata,
-                })
-                yield* enqueueFollowUp(message).pipe(Effect.catchEager(() => Effect.void))
-                return
-              }
-              case "Interject":
-                yield* service
-                  .steer({
-                    _tag: "Interject",
-                    sessionId: command.sessionId,
-                    branchId: command.branchId,
-                    message: command.content,
-                  })
-                  .pipe(Effect.catchEager(() => Effect.void))
-                return
+            const applied = yield* Effect.exit(
+              Effect.gen(function* () {
+                switch (command._tag) {
+                  case "QueueFollowUp": {
+                    const message = Message.cases.regular.make({
+                      id: MessageId.make(Bun.randomUUIDv7()),
+                      sessionId: command.sessionId,
+                      branchId: command.branchId,
+                      role: "user",
+                      parts: [new TextPart({ type: "text", text: command.content })],
+                      createdAt: yield* DateTime.nowAsDate,
+                      metadata: command.metadata,
+                    })
+                    yield* enqueueFollowUp(message)
+                    return
+                  }
+                  case "Interject":
+                    yield* service.steer({
+                      _tag: "Interject",
+                      sessionId: command.sessionId,
+                      branchId: command.branchId,
+                      message: command.content,
+                    })
+                    return
+                }
+              }),
+            )
+            if (applied._tag === "Success") {
+              yield* Deferred.succeed(command.ack, undefined).pipe(Effect.asVoid)
+              return
             }
+            yield* failTurnControlCommand(command, applied.cause)
           }),
         ).pipe(Effect.forkScoped)
 

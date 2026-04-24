@@ -4,7 +4,7 @@ import { Effect, Schema, Context } from "effect"
 import type { RuntimeExtensionEffect } from "./runtime-effect.js"
 import type { AnyExtensionCommandMessage } from "../../domain/extension-protocol.js"
 import type { BranchId, SessionId } from "../../domain/ids.js"
-import type { ExtensionTurnControlService } from "./turn-control.js"
+import type { ExtensionTurnControlService, TurnControlError } from "./turn-control.js"
 
 export class CurrentExtensionSession extends Context.Service<
   CurrentExtensionSession,
@@ -28,8 +28,9 @@ export const makePersistCodec = <S>(schema: Schema.Schema<S>) => {
 
 /**
  * Interpret extension effects.
- * Each effect is wrapped in catchDefect to prevent one bad effect from
- * crashing the actor.
+ * Defects are isolated per effect. Typed turn-control failures propagate so
+ * builtin queue mutations remain causally tied to the transition that emitted
+ * them.
  */
 export interface InterpretEffectsServices {
   readonly turnControl: ExtensionTurnControlService
@@ -42,7 +43,7 @@ export const interpretEffects = (
   sessionId: SessionId,
   branchId: BranchId | undefined,
   services: InterpretEffectsServices,
-): Effect.Effect<void> =>
+): Effect.Effect<void, TurnControlError> =>
   Effect.withSpan("interpretEffects")(
     Effect.gen(function* () {
       for (const effect of effects) {

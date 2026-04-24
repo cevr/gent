@@ -129,6 +129,14 @@ export const makeMachineEngine = (
               }),
               Effect.as(false),
             )
+          } else if (result._tag === "terminal") {
+            actorChanged = yield* Effect.logWarning("extension.publish.terminal").pipe(
+              Effect.annotateLogs({
+                actorId: entry.ref.id,
+                error: result.error,
+              }),
+              Effect.as(false),
+            )
           }
           if (actorChanged) transitioned.push(entry.ref.id)
         }

@@ -13,7 +13,7 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ConfigService } from "../../src/runtime/config-service"
-import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
+import { ExtensionTurnControl, TurnControlError } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import { Provider, ProviderError } from "@gent/core/providers/provider"
@@ -2136,6 +2136,80 @@ describe("checkpoint persistence", () => {
 
           const snapshot = yield* agentLoop.getQueue({
             sessionId: "checkpoint-queue-session",
+            branchId: "b1",
+          })
+          expect(snapshot).toEqual(emptyQueueSnapshot())
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* Fiber.join(fiber)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("turn-control follow-up fails only after durable queue mutation fails", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
+          ),
+        ),
+      generate: () => Effect.succeed("test response"),
+    })
+    const turnControlLayer = ExtensionTurnControl.Live
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      checkpointStorageLayer({ failUpsertOn: 2 }),
+      providerLayer,
+      makeExtRegistry(),
+      MachineEngine.Test(),
+      turnControlLayer,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      EventStore.Memory,
+      ToolRunner.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, Layer.provide(EventPublisherLive, deps)),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const turnControl = yield* ExtensionTurnControl
+          const fiber = yield* Effect.forkChild(
+            runAgentLoop(agentLoop, makeMessage("turn-control-checkpoint-session", "b1", "first")),
+          )
+          yield* Deferred.await(firstStarted)
+
+          const queued = yield* Effect.exit(
+            turnControl.queueFollowUp({
+              sessionId: SessionId.make("turn-control-checkpoint-session"),
+              branchId: BranchId.make("b1"),
+              content: "queued",
+            }),
+          )
+          expect(queued._tag).toBe("Failure")
+          if (queued._tag === "Failure") {
+            const error = Cause.squash(queued.cause)
+            expect(error).toBeInstanceOf(TurnControlError)
+            expect((error as TurnControlError).command).toBe("QueueFollowUp")
+            expect((error as TurnControlError).message).toContain("Failed to apply QueueFollowUp")
+          }
+
+          const snapshot = yield* agentLoop.getQueue({
+            sessionId: "turn-control-checkpoint-session",
             branchId: "b1",
           })
           expect(snapshot).toEqual(emptyQueueSnapshot())
