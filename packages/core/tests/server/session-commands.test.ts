@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Cause, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
@@ -18,6 +18,9 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "../../src/runtime/extensions/resource-host/machine-engine"
+import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
+import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
 import { BranchStorage } from "@gent/core/storage/branch-storage"
@@ -193,6 +196,83 @@ const sessionCommandsLayerWithMachineProbe = (terminated: Array<SessionId>) => {
     EventPublisher.Test(),
     Provider.Debug(),
     machineProbeLayer,
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
+const makeMachineProbe = (terminated: Array<SessionId>): MachineEngineService => ({
+  publish: () => Effect.succeed([]),
+  send: () => Effect.void,
+  execute: () => Effect.die("unexpected machine request"),
+  getActorStatuses: () => Effect.succeed([]),
+  terminateAll: (sessionId) =>
+    Effect.sync(() => {
+      terminated.push(sessionId)
+    }),
+})
+
+const makeProfile = (cwd: string, machine: MachineEngineService): SessionProfile => {
+  const resolved = resolveExtensions([])
+  const layerContext = Effect.runSync(
+    Layer.build(
+      Layer.mergeAll(
+        ExtensionRegistry.fromResolved(resolved),
+        DriverRegistry.fromResolved({
+          modelDrivers: resolved.modelDrivers,
+          externalDrivers: resolved.externalDrivers,
+        }),
+        Layer.succeed(MachineEngine, machine),
+      ),
+    ).pipe(Effect.scoped),
+  )
+
+  return {
+    cwd,
+    extensions: [],
+    resolved,
+    layerContext,
+    permissionService: {
+      check: () => Effect.succeed("allowed"),
+      addRule: () => Effect.void,
+      removeRule: () => Effect.void,
+      getRules: () => Effect.succeed([]),
+    },
+    registryService: Context.get(layerContext, ExtensionRegistry),
+    driverRegistryService: Context.get(layerContext, DriverRegistry),
+    extensionStateRuntime: Context.get(layerContext, MachineEngine),
+    subscriptionEngine: undefined,
+    baseSections: [],
+    instructions: "",
+  }
+}
+
+const sessionCommandsLayerWithProfileMachineProbes = (params: {
+  readonly primaryTerminated: Array<SessionId>
+  readonly profileTerminated: Map<string, Array<SessionId>>
+}) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const primaryMachineLayer = Layer.succeed(
+    MachineEngine,
+    makeMachineProbe(params.primaryTerminated),
+  )
+  const profileCacheLayer = SessionProfileCache.Test(
+    new Map(
+      [...params.profileTerminated].map(([cwd, terminated]) => [
+        cwd,
+        makeProfile(cwd, makeMachineProbe(terminated)),
+      ]),
+    ),
+  )
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    SessionRuntime.Test(),
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    primaryMachineLayer,
+    profileCacheLayer,
     SessionCwdRegistry.Test(),
   )
   return Layer.provideMerge(SessionCommands.Live, deps)
@@ -857,6 +937,53 @@ describe("session.delete", () => {
         expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
         expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
       }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated))),
+    )
+  })
+
+  it.live("terminates descendant sessions through their owning cwd profile runtime", () => {
+    const primaryTerminated: Array<SessionId> = []
+    const profileTerminated = new Map<string, Array<SessionId>>([
+      ["/tmp/delete-profile-parent", []],
+      ["/tmp/delete-profile-child", []],
+      ["/tmp/delete-profile-grandchild", []],
+    ])
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const cwdRegistry = yield* SessionCwdRegistry
+
+        const parent = yield* commands.createSession({ cwd: "/tmp/delete-profile-parent" })
+        const child = yield* commands.createChildSession({
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+          cwd: "/tmp/delete-profile-child",
+        })
+        const grandchild = yield* commands.createChildSession({
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+          cwd: "/tmp/delete-profile-grandchild",
+        })
+
+        yield* commands.deleteSession(parent.sessionId)
+
+        expect(primaryTerminated).toEqual([])
+        expect(profileTerminated.get("/tmp/delete-profile-parent")).toEqual([parent.sessionId])
+        expect(profileTerminated.get("/tmp/delete-profile-child")).toEqual([child.sessionId])
+        expect(profileTerminated.get("/tmp/delete-profile-grandchild")).toEqual([
+          grandchild.sessionId,
+        ])
+        expect(yield* cwdRegistry.lookup(parent.sessionId)).toBeUndefined()
+        expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
+        expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
+      }).pipe(
+        Effect.provide(
+          sessionCommandsLayerWithProfileMachineProbes({
+            primaryTerminated,
+            profileTerminated,
+          }),
+        ),
+      ),
     )
   })
 })

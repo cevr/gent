@@ -1,7 +1,10 @@
 import { DateTime, Effect, Layer, Context, Stream } from "effect"
-import { EventPublisher } from "../domain/event-publisher.js"
+import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
-import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
+import {
+  SessionCwdRegistry,
+  type SessionCwdRegistryService,
+} from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
 import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
@@ -16,13 +19,18 @@ import {
   SessionSettingsUpdated,
   type AgentEvent,
   type EventStoreError,
+  type EventStoreService,
 } from "../domain/event.js"
-import { SessionStorage } from "../storage/session-storage.js"
+import { SessionStorage, type SessionStorageService } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
 import { MessageStorage } from "../storage/message-storage.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
 import { Provider, providerRequestFromMessages } from "../providers/provider.js"
-import { MachineEngine } from "../runtime/extensions/resource-host/machine-engine.js"
+import {
+  MachineEngine,
+  type MachineEngineService,
+} from "../runtime/extensions/resource-host/machine-engine.js"
+import { SessionProfileCache, type SessionProfileCacheService } from "../runtime/session-profile.js"
 import {
   SessionRuntime,
   applySteerCommand,
@@ -42,6 +50,58 @@ import type {
 } from "./transport-contract.js"
 
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
+
+const terminateSessionMachineRuntime = Effect.fn("SessionCommands.terminateSessionMachineRuntime")(
+  function* (input: {
+    readonly sessionId: SessionId
+    readonly sessionStorage: SessionStorageService
+    readonly ambientRuntime: MachineEngineService
+    readonly profileCache?: SessionProfileCacheService
+  }) {
+    const session = yield* input.sessionStorage.getSession(input.sessionId)
+    const runtime =
+      session?.cwd !== undefined && input.profileCache !== undefined
+        ? yield* input.profileCache.resolve(session.cwd).pipe(
+            Effect.map((profile) => profile.extensionStateRuntime),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("session.delete.profileRuntimeLookupFailed").pipe(
+                Effect.annotateLogs({
+                  sessionId: input.sessionId,
+                  cwd: session.cwd,
+                  error: String(cause),
+                }),
+                Effect.as(undefined),
+              ),
+            ),
+          )
+        : input.ambientRuntime
+
+    if (runtime === undefined) return
+
+    yield* runtime.terminateAll(input.sessionId).pipe(
+      // Session deletion owns cleanup best-effort actor termination, then
+      // propagates durable store failures below.
+      Effect.catchDefect(() => Effect.void),
+    )
+  },
+)
+
+const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
+  function* (input: {
+    readonly sessionId: SessionId
+    readonly sessionStorage: SessionStorageService
+    readonly ambientRuntime: MachineEngineService
+    readonly profileCache?: SessionProfileCacheService
+    readonly eventPublisher: EventPublisherService
+    readonly eventStore: EventStoreService
+    readonly sessionCwdRegistry: SessionCwdRegistryService
+  }) {
+    yield* terminateSessionMachineRuntime(input)
+    yield* input.eventPublisher.terminateSession(input.sessionId)
+    yield* input.eventStore.removeSession(input.sessionId)
+    yield* input.sessionCwdRegistry.forget(input.sessionId)
+  },
+)
 
 export interface SessionCommandsService {
   readonly createSession: (
@@ -124,6 +184,8 @@ const makeSessionMutationsService: Effect.Effect<
   const eventPublisher = yield* EventPublisher
   const extensionStateRuntime = yield* MachineEngine
   const sessionCwdRegistry = yield* SessionCwdRegistry
+  const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+  const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -195,24 +257,25 @@ const makeSessionMutationsService: Effect.Effect<
     return sessionIds
   })
 
-  const cleanupSessionRuntimeState = Effect.fn("SessionMutations.cleanupSessionRuntimeState")(
-    function* (sessionId: SessionId) {
-      yield* extensionStateRuntime.terminateAll(sessionId).pipe(
-        // Session deletion owns cleanup best-effort actor termination, then
-        // propagates durable store failures below.
-        Effect.catchDefect(() => Effect.void),
-      )
-      yield* eventPublisher.terminateSession(sessionId)
-      yield* eventStore.removeSession(sessionId)
-      yield* sessionCwdRegistry.forget(sessionId)
-    },
-  )
+  const cleanupSessionRuntimeStateForMutation = Effect.fn(
+    "SessionMutations.cleanupSessionRuntimeState",
+  )(function* (sessionId: SessionId) {
+    yield* cleanupSessionRuntimeState({
+      sessionId,
+      sessionStorage,
+      ambientRuntime: extensionStateRuntime,
+      ...(profileCache !== undefined ? { profileCache } : {}),
+      eventPublisher,
+      eventStore,
+      sessionCwdRegistry,
+    })
+  })
 
   const deleteSessionCascade = Effect.fn("SessionMutations.deleteSessionCascade")(function* (
     sessionId: SessionId,
   ) {
     const sessionIds = yield* collectSessionTreeIds(sessionId)
-    yield* Effect.forEach(sessionIds, cleanupSessionRuntimeState, { discard: true })
+    yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForMutation, { discard: true })
     yield* sessionStorage.deleteSession(sessionId)
     yield* Effect.forEach(
       sessionIds,
@@ -422,6 +485,8 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const provider = yield* Provider
       const extensionStateRuntime = yield* MachineEngine
       const sessionCwdRegistry = yield* SessionCwdRegistry
+      const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
+      const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
@@ -895,24 +960,25 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return sessionIds
       })
 
-      const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRuntimeState")(
-        function* (sessionId: SessionId) {
-          yield* extensionStateRuntime.terminateAll(sessionId).pipe(
-            // Session deletion owns cleanup best-effort actor termination, then
-            // propagates durable store failures below.
-            Effect.catchDefect(() => Effect.void),
-          )
-          yield* eventPublisher.terminateSession(sessionId)
-          yield* eventStore.removeSession(sessionId)
-          yield* sessionCwdRegistry.forget(sessionId)
-        },
-      )
+      const cleanupSessionRuntimeStateForCommand = Effect.fn(
+        "SessionCommands.cleanupSessionRuntimeState",
+      )(function* (sessionId: SessionId) {
+        yield* cleanupSessionRuntimeState({
+          sessionId,
+          sessionStorage,
+          ambientRuntime: extensionStateRuntime,
+          ...(profileCache !== undefined ? { profileCache } : {}),
+          eventPublisher,
+          eventStore,
+          sessionCwdRegistry,
+        })
+      })
 
       const deleteSessionCascade = Effect.fn("SessionCommands.deleteSessionCascade")(function* (
         sessionId: SessionId,
       ) {
         const sessionIds = yield* collectSessionTreeIds(sessionId)
-        yield* Effect.forEach(sessionIds, cleanupSessionRuntimeState, { discard: true })
+        yield* Effect.forEach(sessionIds, cleanupSessionRuntimeStateForCommand, { discard: true })
         yield* sessionStorage.deleteSession(sessionId)
         yield* Effect.forEach(
           sessionIds,

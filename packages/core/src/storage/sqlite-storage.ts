@@ -517,11 +517,15 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
       yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM events WHERE branch_id IS NOT NULL AND EXISTS (SELECT 1 FROM branches WHERE branches.id = events.branch_id AND branches.session_id != events.session_id)`
       yield* sql`DELETE FROM actor_inbox WHERE session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`DELETE FROM actor_inbox WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM actor_inbox WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = actor_inbox.branch_id AND branches.session_id != actor_inbox.session_id)`
       yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`DELETE FROM agent_loop_checkpoints WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM agent_loop_checkpoints WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = agent_loop_checkpoints.branch_id AND branches.session_id != agent_loop_checkpoints.session_id)`
       yield* sql`DELETE FROM todos WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM interaction_requests WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`DELETE FROM interaction_requests WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = interaction_requests.branch_id AND branches.session_id != interaction_requests.session_id)`
       yield* sql`DELETE FROM extension_state WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND active_branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.active_branch_id AND branches.session_id = sessions.id)`

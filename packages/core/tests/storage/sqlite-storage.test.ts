@@ -520,6 +520,44 @@ describe("Storage", () => {
             created_at INTEGER NOT NULL
           )
         `)
+        db.run(`
+          CREATE TABLE actor_inbox (
+            command_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            command_kind TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            started_at INTEGER,
+            completed_at INTEGER,
+            last_error TEXT
+          )
+        `)
+        db.run(`
+          CREATE TABLE agent_loop_checkpoints (
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            state_tag TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (session_id, branch_id)
+          )
+        `)
+        db.run(`
+          CREATE TABLE interaction_requests (
+            request_id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL
+          )
+        `)
         db.run(
           `INSERT INTO sessions (id, name, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           ["legacy-session", "legacy", "missing-active", "missing-parent", "missing-branch", 0, 0],
@@ -596,6 +634,70 @@ describe("Storage", () => {
           `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
           ["legacy-session", "missing-branch", "AgentSwitched", "{}", 6],
         )
+        db.run(
+          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ["valid-command", "legacy-session", "valid-branch", "test", "{}", "pending", 0, 7, 7],
+        )
+        db.run(
+          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "missing-branch-command",
+            "legacy-session",
+            "missing-branch",
+            "test",
+            "{}",
+            "pending",
+            0,
+            8,
+            8,
+          ],
+        )
+        db.run(
+          `INSERT INTO actor_inbox (command_id, session_id, branch_id, command_kind, payload_json, status, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "mismatched-command",
+            "legacy-session",
+            "other-branch",
+            "test",
+            "{}",
+            "pending",
+            0,
+            9,
+            9,
+          ],
+        )
+        db.run(
+          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ["legacy-session", "valid-branch", 1, "Idle", "{}", 10],
+        )
+        db.run(
+          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ["legacy-session", "missing-branch", 1, "Idle", "{}", 11],
+        )
+        db.run(
+          `INSERT INTO agent_loop_checkpoints (session_id, branch_id, version, state_tag, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ["other-session", "valid-branch", 1, "Idle", "{}", 12],
+        )
+        db.run(
+          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["valid-request", "approval", "legacy-session", "valid-branch", "{}", "pending", 13],
+        )
+        db.run(
+          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "missing-branch-request",
+            "approval",
+            "legacy-session",
+            "missing-branch",
+            "{}",
+            "pending",
+            14,
+          ],
+        )
+        db.run(
+          `INSERT INTO interaction_requests (request_id, type, session_id, branch_id, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ["mismatched-request", "approval", "legacy-session", "other-branch", "{}", "pending", 15],
+        )
         db.close()
 
         const layer = Storage.LiveWithSql(dbPath).pipe(
@@ -670,10 +772,22 @@ describe("Storage", () => {
             const orphanEvents = yield* sql<{
               count: number
             }>`SELECT COUNT(*) as count FROM events WHERE created_at IN (${5}, ${6})`
+            const orphanActorInbox = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM actor_inbox WHERE command_id IN (${"missing-branch-command"}, ${"mismatched-command"})`
+            const orphanCheckpoints = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM agent_loop_checkpoints WHERE updated_at IN (${11}, ${12})`
+            const orphanInteractions = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM interaction_requests WHERE request_id IN (${"missing-branch-request"}, ${"mismatched-request"})`
             expect(orphanBranches[0]?.count).toBe(0)
             expect(orphanMessages[0]?.count).toBe(0)
             expect(orphanChunks[0]?.count).toBe(0)
             expect(orphanEvents[0]?.count).toBe(0)
+            expect(orphanActorInbox[0]?.count).toBe(0)
+            expect(orphanCheckpoints[0]?.count).toBe(0)
+            expect(orphanInteractions[0]?.count).toBe(0)
 
             const rejected = yield* Effect.exit(
               sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
