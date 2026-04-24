@@ -6,7 +6,7 @@ import { Effect } from "effect"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
-import { Route, useRouter, type RouterContextValue } from "../src/router"
+import { Route } from "../src/router"
 import { useClient } from "../src/client"
 import type { ClientContextValue } from "../src/client/context"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness"
@@ -37,14 +37,6 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   const client = useClient()
   onMount(() => {
     props.onReady(client)
-  })
-  return <box />
-}
-
-function RouterProbe(props: { readonly onReady: (router: RouterContextValue) => void }) {
-  const router = useRouter()
-  onMount(() => {
-    props.onReady(router)
   })
   return <box />
 }
@@ -203,122 +195,6 @@ describe("App auth gate", () => {
     setup.renderer.destroy()
   })
 
-  test("branch resume with a prompt waits for auth before sending the first turn", async () => {
-    let ctx: ClientContextValue | undefined
-    let router: RouterContextValue | undefined
-    let resolveProviders:
-      | ((
-          providers: Array<{
-            provider: string
-            hasKey: boolean
-            required: boolean
-            source: "none"
-            authType: undefined
-          }>,
-        ) => void)
-      | undefined
-    const calls: Array<{ agentName?: string }> = []
-    const sentMessages: Array<{ content: string }> = []
-    const providersPromise = new Promise<
-      Array<{
-        provider: string
-        hasKey: boolean
-        required: boolean
-        source: "none"
-        authType: undefined
-      }>
-    >((resolve) => {
-      resolveProviders = resolve
-    })
-    const client = createMockClient({
-      session: {
-        getSnapshot: () =>
-          Effect.succeed({
-            sessionId: SessionId.make("session-a"),
-            branchId: BranchId.make("branch-b"),
-            messages: [],
-            lastEventId: null,
-            reasoningLevel: undefined,
-            runtime: {
-              _tag: "Idle" as const,
-              agent: "deepwork" as const,
-              queue: emptyQueueSnapshot(),
-            },
-          }),
-      },
-      auth: {
-        listProviders: (input: { agentName?: string }) => {
-          calls.push(input)
-          return Effect.promise(() => providersPromise)
-        },
-        listMethods: () =>
-          Effect.succeed({
-            openai: [{ label: "API key", type: "api" as const }],
-          }),
-      },
-      branch: {
-        getTree: () =>
-          Effect.succeed([
-            { id: BranchId.make("branch-a"), name: "Main", messageCount: 3, children: [] },
-            { id: BranchId.make("branch-b"), name: "Side", messageCount: 1, children: [] },
-          ]),
-      },
-      message: {
-        send: (input: { content: string }) =>
-          Effect.sync(() => {
-            sentMessages.push(input)
-          }),
-      },
-    })
-    const runtime = createMockRuntime()
-
-    const setup = await renderWithProviders(
-      () => (
-        <>
-          <App missingAuthProviders={[]} />
-          <ClientProbe onReady={(value) => (ctx = value)} />
-          <RouterProbe onReady={(value) => (router = value)} />
-        </>
-      ),
-      {
-        client,
-        runtime,
-        initialRoute: Route.branchPicker(SessionId.make("session-a"), "Session A", [
-          { id: BranchId.make("branch-a"), sessionId: SessionId.make("session-a"), createdAt: 0 },
-          { id: BranchId.make("branch-b"), sessionId: SessionId.make("session-a"), createdAt: 1 },
-        ]),
-      },
-    )
-    if (ctx === undefined || router === undefined) {
-      throw new Error("client or router context not ready")
-    }
-
-    ctx.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "Session A")
-    router.navigateToSession(SessionId.make("session-a"), BranchId.make("branch-b"), "ship it")
-
-    // Auth gate should be checking — prompt must not be sent yet
-    expect(sentMessages).toEqual([])
-
-    resolveProviders?.([
-      {
-        provider: "openai",
-        hasKey: false,
-        required: true,
-        source: "none",
-        authType: undefined,
-      },
-    ])
-
-    const authFrame = await waitForRenderedFrame(
-      setup,
-      (next) => next.includes("API Keys"),
-      "auth gate",
-    )
-    expect(authFrame).toContain("API Keys")
-    expect(sentMessages).toEqual([])
-    setup.renderer.destroy()
-  })
-
   test("cold start with prompt and missing auth defers the prompt until auth resolves", async () => {
     let resolveProviders:
       | ((
@@ -405,7 +281,7 @@ describe("App auth gate", () => {
     setup.renderer.destroy()
   })
 
-  test("auth-gated session route can search prompt history after auth resolves", async () => {
+  test("branch resume route gates auth, sends deferred prompt, and searches prompt history", async () => {
     let hasOpenAiKey = false
     const sentMessages: Array<{
       sessionId: SessionId
@@ -416,6 +292,7 @@ describe("App auth gate", () => {
 
     const alphaSessionId = SessionId.make("session-alpha")
     const alphaBranchId = BranchId.make("branch-alpha")
+    const betaBranchId = BranchId.make("branch-beta")
     const initialPrompt = "deferred route-flow prompt"
     const historyPrompt = "batch eighteen prompt search route flow"
 
@@ -440,6 +317,13 @@ describe("App auth gate", () => {
               queue: emptyQueueSnapshot(),
             },
           }),
+      },
+      branch: {
+        getTree: () =>
+          Effect.succeed([
+            { id: alphaBranchId, name: "Main", messageCount: 3, children: [] },
+            { id: betaBranchId, name: "Side", messageCount: 1, children: [] },
+          ]),
       },
       auth: {
         listProviders: () =>
@@ -492,11 +376,28 @@ describe("App auth gate", () => {
           createdAt: 0,
           updatedAt: 1,
         },
-        initialRoute: Route.session(alphaSessionId, alphaBranchId, initialPrompt),
+        initialRoute: Route.branchPicker(
+          alphaSessionId,
+          "Alpha",
+          [
+            { id: alphaBranchId, sessionId: alphaSessionId, name: "Main", createdAt: 0 },
+            { id: betaBranchId, sessionId: alphaSessionId, name: "Side", createdAt: 1 },
+          ],
+          initialPrompt,
+        ),
         width: 100,
         height: 30,
       },
     )
+
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Resume: Alpha") && frame.includes("Side (1)"),
+      "branch picker",
+    )
+    setup.mockInput.pressArrow("down")
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
 
     await waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
     expect(sentMessages).toEqual([])
@@ -518,7 +419,7 @@ describe("App auth gate", () => {
     await waitForMessage(setup, sentMessages, initialPrompt)
     expect(sentMessages.find((message) => message.content === initialPrompt)).toMatchObject({
       sessionId: alphaSessionId,
-      branchId: alphaBranchId,
+      branchId: betaBranchId,
     })
 
     await setup.mockInput.typeText(historyPrompt)
