@@ -41,7 +41,7 @@ const makeIO = (state: IOState): OpenAICredentialIO => ({
 
 interface PersistState {
   lastWritten: { access: string; refresh: string; expires: number; accountId?: string } | undefined
-  failNext: boolean
+  failNext: boolean | "typed"
 }
 
 const makeAuthInfo = (
@@ -56,7 +56,11 @@ const makeAuthInfo = (
   persist: (updated) =>
     Effect.suspend(() => {
       if (state.failNext) {
+        const failure = state.failNext
         state.failNext = false
+        if (failure === "typed") {
+          return Effect.fail(new ProviderAuthError({ message: "typed persist failure" }))
+        }
         return Effect.die(new Error("simulated persist failure"))
       }
       state.lastWritten = updated
@@ -396,13 +400,55 @@ describe("OpenAICredentialService — durable persist failure", () => {
     }
     expect(persistState.lastWritten).toBeUndefined()
   })
+
+  test("typed write-back failure retries pending persist before API use", async () => {
+    const fresh = makeCreds("fresh", FAR_FUTURE)
+    let refreshCount = 0
+    const state: IOState = {
+      refreshResult: () => {
+        refreshCount += 1
+        return Effect.succeed(fresh)
+      },
+    }
+    const persistState: PersistState = { lastWritten: undefined, failNext: "typed" }
+    const layer = OpenAICredentialService.layerFromIO(
+      makeIO(state),
+      makeAuthInfo(persistState, {
+        access: "seed-access",
+        refresh: "seed-refresh",
+        expires: 30_000,
+      }),
+    )
+
+    await runWithTestClock(
+      Effect.gen(function* () {
+        const svc = yield* OpenAICredentialService
+
+        const failure = yield* Effect.exit(svc.getFresh)
+        expect(failure._tag).toBe("Failure")
+        if (failure._tag === "Failure") {
+          const errOpt = Cause.findErrorOption(failure.cause)
+          expect(Option.isSome(errOpt)).toBe(true)
+          if (Option.isSome(errOpt)) {
+            expect(errOpt.value.message).toContain("typed persist failure")
+          }
+        }
+
+        const retry = yield* svc.getFresh
+        expect(retry.access).toBe("fresh-access")
+        expect(refreshCount).toBe(1)
+        expect(persistState.lastWritten?.refresh).toBe("fresh-refresh")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
 })
 
 describe("OpenAICredentialService — invalidate preserves durable refresh token", () => {
-  test("failed durable write does not install rotated refresh token", async () => {
-    // If the durable AuthStore write fails, the cache must not claim
-    // the rotated refresh token is installed. That keeps in-memory
-    // state aligned with the persisted auth record.
+  test("failed durable write preserves pending rotated refresh token through invalidate", async () => {
+    // A failed durable write must fail the current request, but OpenAI
+    // refresh-token rotation means the newly-issued refresh token is the
+    // only future recovery path. Keep it pending, then retry persist
+    // before any API use.
     const callTokens: string[] = []
     let phase: "first" | "after-invalidate" = "first"
     const state: IOState = {
@@ -451,12 +497,10 @@ describe("OpenAICredentialService — invalidate preserves durable refresh token
         expect(callTokens[0]).toBe("seed-refresh")
         expect(persistState.lastWritten).toBeUndefined()
 
-        // Since the rotated token never became durable, invalidate
-        // should still preserve the last durable refresh token.
         yield* svc.invalidate
         const second = yield* svc.getFresh
         expect(second.access).toBe("post-invalidate-access")
-        expect(callTokens[1]).toBe("seed-refresh")
+        expect(callTokens[1]).toBe("rotated-refresh")
       }).pipe(Effect.provide(layer)),
     )
   })

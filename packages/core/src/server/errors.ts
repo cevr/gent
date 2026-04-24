@@ -1,8 +1,8 @@
 import { Schema } from "effect"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { EventStoreError } from "../domain/event.js"
+import { ProviderAuthError } from "../domain/driver.js"
 import { ProviderError } from "../providers/provider.js"
-import { ProviderAuthError } from "../providers/provider-auth.js"
 import { SessionRuntimeErrorSchema, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
 

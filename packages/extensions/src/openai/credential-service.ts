@@ -36,12 +36,48 @@ const freshEnoughForUse = (creds: OpenAICredentials, now: number): boolean =>
 
 // ── Internal cache cell ──
 
-export interface CredentialCacheCell {
-  readonly creds: OpenAICredentials | null
-  readonly at: number
-}
+export type CredentialCacheCell =
+  | {
+      readonly _tag: "Empty"
+      readonly creds: null
+      readonly at: 0
+    }
+  | {
+      readonly _tag: "Durable"
+      readonly creds: OpenAICredentials
+      readonly at: number
+      readonly invalidated: boolean
+    }
+  | {
+      readonly _tag: "PendingPersist"
+      readonly creds: OpenAICredentials
+      readonly at: number
+      readonly invalidated: boolean
+    }
 
-export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = { creds: null, at: 0 }
+export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = { _tag: "Empty", creds: null, at: 0 }
+
+const durableCell = (
+  creds: OpenAICredentials,
+  at: number,
+  invalidated: boolean,
+): CredentialCacheCell => ({
+  _tag: "Durable",
+  creds,
+  at,
+  invalidated,
+})
+
+const pendingPersistCell = (
+  creds: OpenAICredentials,
+  at: number,
+  invalidated: boolean,
+): CredentialCacheCell => ({
+  _tag: "PendingPersist",
+  creds,
+  at,
+  invalidated,
+})
 
 // ── Service interface ──
 
@@ -177,11 +213,18 @@ export class OpenAICredentialService extends Context.Service<
       const getFresh: Effect.Effect<OpenAICredentials, ProviderAuthError> = Effect.gen(
         function* () {
           const now = yield* Clock.currentTimeMillis
-          const cell = yield* Ref.get(cellRef)
+          let cell = yield* Ref.get(cellRef)
+
+          if (cell._tag === "PendingPersist") {
+            yield* persistRefreshed(cell.creds)
+            cell = durableCell(cell.creds, now, cell.invalidated)
+            yield* Ref.set(cellRef, cell)
+          }
 
           // Cache hit: still warm AND >60s before expiry
           if (
-            cell.creds !== null &&
+            cell._tag === "Durable" &&
+            !cell.invalidated &&
             now - cell.at < CREDENTIAL_CACHE_TTL_MS &&
             freshEnoughForUse(cell.creds, now)
           ) {
@@ -191,8 +234,8 @@ export class OpenAICredentialService extends Context.Service<
           // If we still have creds in the cell that are fresh enough
           // (cache TTL elapsed but not yet stale), update the timestamp
           // and return them — no need to spend a refresh round-trip.
-          if (cell.creds !== null && freshEnoughForUse(cell.creds, now)) {
-            yield* Ref.set(cellRef, { creds: cell.creds, at: now })
+          if (cell._tag === "Durable" && !cell.invalidated && freshEnoughForUse(cell.creds, now)) {
+            yield* Ref.set(cellRef, durableCell(cell.creds, now, false))
             return cell.creds
           }
 
@@ -230,8 +273,9 @@ export class OpenAICredentialService extends Context.Service<
               : {}),
           }
 
+          yield* Ref.set(cellRef, pendingPersistCell(merged, now, false))
           yield* persistRefreshed(merged)
-          yield* Ref.set(cellRef, { creds: merged, at: now })
+          yield* Ref.set(cellRef, durableCell(merged, now, false))
           return merged
         },
       )
@@ -245,24 +289,17 @@ export class OpenAICredentialService extends Context.Service<
       // the OAuth server may have already revoked when it issued the
       // rotation.
       //
-      // Instead: zero out the access token so the cache hit and
-      // freshness branches both miss, and reset `at` so TTL fires
-      // immediately. The refresh path then uses `cell.creds.refresh`
-      // (the rotated token) and gets a new access token. If creds is
-      // already null nothing to invalidate — keep the cell empty so
-      // the next `getFresh` falls through to its missing-refresh
-      // branch and reports a typed error.
+      // Instead: mark the cell invalidated. The refresh path then uses
+      // `cell.creds.refresh` (the rotated token) and gets a new access
+      // token. Pending persisted credentials keep their actual access
+      // payload so the next `getFresh` can first make the rotation
+      // durable, then honor the invalidation by refreshing before use.
       const invalidate: Effect.Effect<void> = Ref.update(cellRef, (cell) => {
         if (cell.creds === null) return cell
-        return {
-          creds: {
-            access: "",
-            refresh: cell.creds.refresh,
-            expires: 0,
-            ...(cell.creds.accountId !== undefined ? { accountId: cell.creds.accountId } : {}),
-          },
-          at: 0,
+        if (cell._tag === "PendingPersist") {
+          return pendingPersistCell(cell.creds, cell.at, true)
         }
+        return durableCell(cell.creds, cell.at, true)
       })
 
       return OpenAICredentialService.of({ getFresh, invalidate })
@@ -276,15 +313,14 @@ const seedCellFromAuthInfo = (authInfo: ProviderAuthInfo): CredentialCacheCell =
   if (access.length === 0 && refresh.length === 0) {
     return EMPTY_CREDENTIAL_CELL
   }
-  return {
-    creds: {
+  return durableCell(
+    {
       access,
       refresh,
       expires,
       ...(authInfo.accountId !== undefined ? { accountId: authInfo.accountId } : {}),
     },
-    // Seed with at: 0 so the cache TTL check fires immediately on first
-    // get and the freshness gate decides whether to refresh.
-    at: 0,
-  }
+    0,
+    false,
+  )
 }

@@ -21,6 +21,7 @@ import { buildOpenAIModelDriver } from "@gent/extensions/openai"
 import {
   EMPTY_CREDENTIAL_CELL,
   type CredentialCacheCell,
+  type OpenAICredentials,
 } from "@gent/extensions/openai/credential-service"
 import type { ProviderAuthInfo } from "@gent/core/extensions/api"
 import {
@@ -44,6 +45,13 @@ const makeOAuthInfo = (): ProviderAuthInfo => ({
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
   type: "api",
   key,
+})
+
+const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell => ({
+  _tag: "Durable",
+  creds,
+  at: Date.now(),
+  invalidated: false,
 })
 
 const noopCallbacks = () => new Map()
@@ -86,14 +94,14 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     // of seeing this seed. Asserting the captured Authorization header
     // reflects the seed pins the Ref-sharing semantics.
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: {
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({
           access: "seeded-bearer-token",
           refresh: "r",
           expires: FAR_FUTURE_MS(),
-        },
-        at: Date.now(),
-      }),
+        }),
+      ),
     )
 
     const { layer } = driver.resolveModel("gpt-5.4", makeOAuthInfo())
@@ -108,10 +116,10 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   test("OAuth resolveModel layer rewrites URL to Codex backend + sets responses=experimental beta", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { access: "t", refresh: "r", expires: FAR_FUTURE_MS() },
-        at: Date.now(),
-      }),
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({ access: "t", refresh: "r", expires: FAR_FUTURE_MS() }),
+      ),
     )
 
     const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
@@ -134,10 +142,10 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
   test("OAuth resolveModel layer omits x-api-key (no SDK-injected Bearer placeholder)", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { access: "t", refresh: "r", expires: FAR_FUTURE_MS() },
-        at: Date.now(),
-      }),
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({ access: "t", refresh: "r", expires: FAR_FUTURE_MS() }),
+      ),
     )
 
     const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
@@ -162,10 +170,10 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
 
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { access: "first-token", refresh: "r", expires: FAR_FUTURE_MS() },
-        at: Date.now(),
-      }),
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({ access: "first-token", refresh: "r", expires: FAR_FUTURE_MS() }),
+      ),
     )
 
     const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
@@ -181,10 +189,10 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
     // "first-token". Asserting the second request observes "second-token"
     // pins the Ref-sharing semantics that survives across resolveModel.
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { access: "second-token", refresh: "r", expires: FAR_FUTURE_MS() },
-        at: Date.now(),
-      }),
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({ access: "second-token", refresh: "r", expires: FAR_FUTURE_MS() }),
+      ),
     )
 
     const layer2 = driver.resolveModel("gpt-5.4", makeOAuthInfo()).layer
@@ -210,22 +218,14 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
   //      `mapRequestEffect` runs through the rewired
   //      `OpenAiClient.layer({ transformClient })` path)
   //   2. after the 401, invalidate fires on the closure-owned cell —
-  //      `.access` cleared, `.refresh` preserved, `.expires` zeroed
-  //
-  // Does NOT prove: the retry actually re-attempts with a refreshed
-  // token. The production driver wires `OpenAICredentialService.layerFromRef`
-  // with `realIO` (live `refreshOpenAIOauth`), so simulating a successful
-  // post-invalidate refresh would require an IO seam the driver does not
-  // expose. Full success path is covered by the codex-transform leaf
-  // test (`401 → invalidate → retry succeeds with refreshed token`).
-
+  //      the cell is marked invalidated and refresh token is preserved
   test("401 fires invalidate on the closure-owned cell via OpenAiClient.layer({ transformClient })", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
     Effect.runSync(
-      Ref.set(credentialCellRef, {
-        creds: { access: "stale-token", refresh: "r", expires: FAR_FUTURE_MS() },
-        at: Date.now(),
-      }),
+      Ref.set(
+        credentialCellRef,
+        makeDurableCell({ access: "stale-token", refresh: "r", expires: FAR_FUTURE_MS() }),
+      ),
     )
 
     const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
@@ -233,14 +233,14 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
     const fetchState = makeFakeFetchState()
 
     // 401 triggers tapError(invalidate). The retry's preprocess sees
-    // the invalidated cell and attempts a live refresh, which fails
-    // (no IO seam in the production driver) — Effect.exit preserves
+    // the invalidated cell and attempts a live refresh. Effect.exit preserves
     // the failure so the post-condition assertions still run.
     const responder = (req: CapturedRequest) => {
       void req
       return { status: 401, body: "unauthorized", headers: { "content-type": "text/plain" } }
     }
 
+    // Test boundary: the resolved layer is intentionally provided here.
     await Effect.runPromise(
       // @effect-diagnostics-next-line strictEffectProvide:off test entry point
       oneGenerate(layer, fetchState, responder).pipe(Effect.exit),
@@ -255,15 +255,15 @@ describe("buildOpenAIModelDriver — 401 invalidate seam fires through the rewir
 
     // Driver-level seam: invalidate fired on the closure-owned cell
     // after the 401:
-    //   - .access cleared (so the next request would have to re-auth)
+    //   - invalidated marked true (so the next request refreshes)
     //   - .refresh preserved (rotated refresh token survives invalidate)
-    //   - .expires zeroed (forces refresh on next getFresh)
     // If transformResponse weren't wired into the production layer,
-    // the cell would still hold the original "stale-token".
+    // the cell would not be marked invalidated.
     const finalCell = Ref.getUnsafe(credentialCellRef)
-    expect(finalCell.creds?.access).toBe("")
+    expect(finalCell._tag).toBe("Durable")
+    expect(finalCell._tag === "Durable" ? finalCell.invalidated : false).toBe(true)
+    expect(finalCell.creds?.access).toBe("stale-token")
     expect(finalCell.creds?.refresh).toBe("r")
-    expect(finalCell.creds?.expires).toBe(0)
   })
 })
 
