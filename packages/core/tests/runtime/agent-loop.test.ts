@@ -481,6 +481,26 @@ const waitForPhase = (
 // streaming
 // ============================================================================
 
+describe("run completion", () => {
+  test("run returns after a fast turn completes before the caller awaits idle", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* createSequenceProvider([textStep("fast reply")])
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const sessionId = SessionId.make("fast-run-session")
+        const branchId = BranchId.make("fast-run-branch")
+
+        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "fast")).pipe(
+          Effect.timeout("2 seconds"),
+        )
+
+        const state = yield* agentLoop.getState({ sessionId, branchId })
+        expect(state._tag).toBe("Idle")
+      }).pipe(Effect.provide(makeLayer(providerLayer)))
+    }).pipe(Effect.runPromise))
+})
+
 describe("streaming", () => {
   test("concurrent sessions run independently", async () => {
     const gate = await Effect.runPromise(Deferred.make<void>())

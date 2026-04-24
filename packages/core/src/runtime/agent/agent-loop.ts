@@ -2813,29 +2813,29 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const runTurn = Effect.fn("AgentLoop.runTurn")(function* (command: RunTurnCommand) {
           const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
           const item = buildQueuedTurnItem(command)
-          const started = yield* loop.queueMutationSemaphore.withPermits(1)(
+          const start = yield* loop.queueMutationSemaphore.withPermits(1)(
             Effect.gen(function* () {
               const initialState = yield* loop.actor.snapshot
               if (initialState._tag !== "Idle") {
                 const nextQueue = appendFollowUpQueueState(yield* Ref.get(loop.queueRef), item)
                 yield* loop.persistQueueState(nextQueue)
-                return false
+                return undefined
               }
+              const idlePersistedBaseline = yield* SubscriptionRef.get(loop.idlePersistedRef)
+              const turnFailureBaseline = (yield* SubscriptionRef.get(loop.turnFailureRef)).count
               yield* loop.actor.send(AgentLoopEvent.Start({ item }))
-              return true
+              return { idlePersistedBaseline, turnFailureBaseline }
             }),
           )
-          if (!started) {
+          if (start === undefined) {
             return
           }
 
-          const idlePersistedBaseline = yield* SubscriptionRef.get(loop.idlePersistedRef)
-          const turnFailureBaseline = (yield* SubscriptionRef.get(loop.turnFailureRef)).count
           yield* Effect.raceFirst(
             Effect.raceFirst(
               Effect.raceFirst(
-                awaitIdlePersisted(loop, idlePersistedBaseline),
-                awaitTurnFailure(loop, turnFailureBaseline),
+                awaitIdlePersisted(loop, start.idlePersistedBaseline),
+                awaitTurnFailure(loop, start.turnFailureBaseline),
               ),
               loop.persistenceFailure,
             ),
@@ -2851,7 +2851,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               ),
             ),
           )
-          yield* failIfTurnFailedSince(loop, turnFailureBaseline)
+          yield* failIfTurnFailedSince(loop, start.turnFailureBaseline)
         })
 
         const applySteer = Effect.fn("AgentLoop.applySteer")(function* (
@@ -3183,11 +3183,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop !== undefined) {
-                const state = runtimeStateFromLoopState(
-                  yield* loop.actor.snapshot,
-                  yield* Ref.get(loop.queueRef),
+                const state = yield* loop.queueMutationSemaphore.withPermits(1)(
+                  Effect.gen(function* () {
+                    const state = runtimeStateFromLoopState(
+                      yield* loop.actor.snapshot,
+                      yield* Ref.get(loop.queueRef),
+                    )
+                    yield* SubscriptionRef.set(loop.runtimeStateRef, state)
+                    return state
+                  }),
                 )
-                yield* SubscriptionRef.set(loop.runtimeStateRef, state)
                 return state
               }
 
