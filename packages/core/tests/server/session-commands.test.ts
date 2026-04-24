@@ -1,14 +1,19 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
+import { emptyQueueSnapshot } from "@gent/core/domain/queue"
 import { EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import type { ProjectionContribution } from "@gent/core/domain/projection"
 import { Provider } from "@gent/core/providers/provider"
-import { SessionRuntime } from "../../src/runtime/session-runtime"
+import {
+  SessionRuntime,
+  SessionRuntimeError,
+  SessionRuntimeStateSchema,
+} from "../../src/runtime/session-runtime"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../src/server/session-commands"
@@ -98,6 +103,37 @@ const postCommitFailingSessionCommandsLayer = () => {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
+const sendFailingSessionCommandsLayer = () => {
+  const storageLayer = Storage.MemoryWithSql()
+  const failingRuntimeLayer = Layer.succeed(SessionRuntime, {
+    dispatch: () => Effect.fail(new SessionRuntimeError({ message: "runtime failed" })),
+    runPrompt: () => Effect.void,
+    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+    getState: () =>
+      Effect.succeed(
+        SessionRuntimeStateSchema.cases.Idle.make({
+          agent: "cowork" as const,
+          queue: emptyQueueSnapshot(),
+        }),
+      ),
+    getMetrics: () =>
+      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+    watchState: () => Effect.succeed(Stream.empty),
+  })
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    failingRuntimeLayer,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    MachineEngine.Test(),
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
 const parentToolCallProbeProjection: ProjectionContribution<string | undefined> = {
   id: "parent-tool-call-probe",
   query: (ctx) => Effect.succeed(ctx.turn.parentToolCallId),
@@ -121,6 +157,41 @@ const parentToolCallProbeExtension: LoadedExtension = {
 }
 
 describe("session command persistence", () => {
+  it.live("sendMessage surfaces runtime failure and does not log message sent", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const logMessages: string[] = []
+      const captureLogger = Logger.make(({ message }) => {
+        logMessages.push(
+          Array.isArray(message)
+            ? message.map((entry) => String(entry)).join(" ")
+            : String(message),
+        )
+      })
+
+      const exit = yield* Effect.exit(
+        commands
+          .sendMessage({
+            sessionId: SessionId.make("send-runtime-failure"),
+            branchId: BranchId.make("send-runtime-failure-branch"),
+            content: "fail loudly",
+          })
+          .pipe(Effect.provide(Logger.layer([captureLogger]))),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const error = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(error)).toBe(true)
+        if (Option.isSome(error)) {
+          expect(error.value).toBeInstanceOf(SessionRuntimeError)
+          expect(error.value.message).toBe("runtime failed")
+        }
+      }
+      expect(logMessages).not.toContain("session.messageSent")
+    }).pipe(Effect.provide(sendFailingSessionCommandsLayer())),
+  )
+
   it.live("rolls back session and branch creation when event publication fails", () =>
     Effect.gen(function* () {
       const commands = yield* SessionCommands

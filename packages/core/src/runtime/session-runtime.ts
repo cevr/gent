@@ -335,8 +335,8 @@ const makeLiveSessionRuntime: Effect.Effect<
             ...(command.runSpec !== undefined ? { runSpec: command.runSpec } : {}),
           })
           .pipe(
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+            Effect.tapCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.void
               return Effect.gen(function* () {
                 if (Cause.hasDies(cause)) {
                   yield* eventPublisher.publish(
@@ -358,7 +358,17 @@ const makeLiveSessionRuntime: Effect.Effect<
                 yield* Effect.logWarning("agent loop submission failed").pipe(
                   Effect.annotateLogs({ error: Cause.pretty(cause) }),
                 )
-              }).pipe(Effect.catchEager(() => Effect.void))
+              }).pipe(
+                Effect.catchCause((diagnosticCause) =>
+                  Effect.logWarning("agent loop submission failure diagnostics failed").pipe(
+                    Effect.annotateLogs({
+                      error: Cause.pretty(diagnosticCause),
+                      originalError: Cause.pretty(cause),
+                    }),
+                    Effect.catchEager(() => Effect.void),
+                  ),
+                ),
+              )
             }),
           )
         yield* Effect.logInfo("session-runtime.message.submitted").pipe(
