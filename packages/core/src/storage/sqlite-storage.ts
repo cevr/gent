@@ -239,7 +239,14 @@ interface EventRow {
 }
 
 interface ForeignKeyListRow {
+  id: number
+  seq: number
   table: string
+  from: string
+  to: string | null
+  on_update: string
+  on_delete: string
+  match: string
 }
 
 const isReasoningEffort = Schema.is(ReasoningEffort)
@@ -516,14 +523,14 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
       yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_session_id IS NULL`
       yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND parent_branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.parent_branch_id AND branches.session_id = sessions.parent_session_id)`
+      yield* sql`UPDATE branches SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches AS parent WHERE parent.id = branches.parent_branch_id AND parent.session_id = branches.session_id)`
     }),
   )
 })
 
-const foreignKeyParents = Effect.fn("Storage.foreignKeyParents")(function* (table: string) {
+const foreignKeys = Effect.fn("Storage.foreignKeys")(function* (table: string) {
   const sql = yield* SqlClient.SqlClient
-  const rows = yield* sql.unsafe<ForeignKeyListRow>(`PRAGMA foreign_key_list(${table})`)
-  return new Set(rows.map((row) => row.table))
+  return yield* sql.unsafe<ForeignKeyListRow>(`PRAGMA foreign_key_list(${table})`)
 })
 
 const migrateTableForeignKeys = Effect.fn("Storage.migrateTableForeignKeys")(function* (params: {
@@ -531,10 +538,14 @@ const migrateTableForeignKeys = Effect.fn("Storage.migrateTableForeignKeys")(fun
   readonly columns: ReadonlyArray<string>
   readonly expectedParents: ReadonlyArray<string>
   readonly createSql: string
+  readonly shouldMigrate?: (foreignKeys: ReadonlyArray<ForeignKeyListRow>) => boolean
 }) {
   const sql = yield* SqlClient.SqlClient
-  const parents = yield* foreignKeyParents(params.table)
-  const needsMigration = params.expectedParents.some((parent) => !parents.has(parent))
+  const keys = yield* foreignKeys(params.table)
+  const parents = new Set(keys.map((row) => row.table))
+  const needsMigration =
+    params.expectedParents.some((parent) => !parents.has(parent)) ||
+    (params.shouldMigrate?.(keys) ?? false)
 
   if (!needsMigration) return
 
@@ -589,9 +600,16 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             updated_at INTEGER NOT NULL,
             FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
             FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
-            FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+            FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
           )
         `,
+          shouldMigrate: (keys) =>
+            keys.some(
+              (key) =>
+                key.table === "branches" &&
+                key.from === "parent_branch_id" &&
+                key.on_delete.toUpperCase() === "CASCADE",
+            ),
         })
         yield* migrateTableForeignKeys({
           table: "branches",
@@ -604,7 +622,7 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             "summary",
             "created_at",
           ],
-          expectedParents: ["sessions"],
+          expectedParents: ["sessions", "branches"],
           createSql: `
           CREATE TABLE branches (
             id TEXT PRIMARY KEY,
@@ -614,7 +632,9 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             name TEXT,
             summary TEXT,
             created_at INTEGER NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            UNIQUE (id, session_id),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
           )
         `,
         })
@@ -849,7 +869,7 @@ const initSchema = Effect.gen(function* () {
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
-      FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+      FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
     )
   `)
 
@@ -876,7 +896,9 @@ const initSchema = Effect.gen(function* () {
       name TEXT,
       summary TEXT,
       created_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      UNIQUE (id, session_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
     )
   `)
 
@@ -1237,26 +1259,26 @@ const makeStorage = Effect.gen(function* () {
 
     deleteBranch: Effect.fn("Storage.deleteBranch")(
       function* (id) {
-        const childBranches = yield* sql<{
-          count: number
-        }>`SELECT COUNT(*) as count FROM branches WHERE parent_branch_id = ${id}`
-        if ((childBranches[0]?.count ?? 0) > 0) {
-          return yield* new StorageError({
-            message: `Cannot delete branch with child branches: ${id}`,
-          })
-        }
-
-        const childSessions = yield* sql<{
-          count: number
-        }>`SELECT COUNT(*) as count FROM sessions WHERE parent_branch_id = ${id}`
-        if ((childSessions[0]?.count ?? 0) > 0) {
-          return yield* new StorageError({
-            message: `Cannot delete branch with child sessions: ${id}`,
-          })
-        }
-
         yield* sql.withTransaction(
           Effect.gen(function* () {
+            const childBranches = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM branches WHERE parent_branch_id = ${id}`
+            if ((childBranches[0]?.count ?? 0) > 0) {
+              return yield* new StorageError({
+                message: `Cannot delete branch with child branches: ${id}`,
+              })
+            }
+
+            const childSessions = yield* sql<{
+              count: number
+            }>`SELECT COUNT(*) as count FROM sessions WHERE parent_branch_id = ${id}`
+            if ((childSessions[0]?.count ?? 0) > 0) {
+              return yield* new StorageError({
+                message: `Cannot delete branch with child sessions: ${id}`,
+              })
+            }
+
             const messageRows = yield* sql<{
               id: MessageId
             }>`SELECT id FROM messages WHERE branch_id = ${id}`

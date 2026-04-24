@@ -261,6 +261,7 @@ describe("Storage", () => {
     it.live("rejects branch creation with a parent branch outside the same session", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
         const now = new Date()
 
         yield* storage.createSession(
@@ -286,12 +287,18 @@ describe("Storage", () => {
 
         expect(exit._tag).toBe("Failure")
         expect(yield* storage.getBranch("branch-parent-b-child")).toBeUndefined()
+
+        const directInsertExit = yield* Effect.exit(
+          sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"branch-parent-b-direct-child"}, ${"branch-parent-b"}, ${"branch-parent-a-root"}, ${now.getTime()})`,
+        )
+        expect(directInsertExit._tag).toBe("Failure")
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
     it.live("rejects deleting branches that own child branches or child sessions", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
         const now = new Date()
 
         yield* storage.createSession(
@@ -317,6 +324,12 @@ describe("Storage", () => {
         expect(childBranchExit._tag).toBe("Failure")
         expect(yield* storage.getBranch("delete-parent-root")).toBeDefined()
 
+        const directChildBranchExit = yield* Effect.exit(
+          sql`DELETE FROM branches WHERE id = ${"delete-parent-root"}`,
+        )
+        expect(directChildBranchExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch("delete-parent-root")).toBeDefined()
+
         yield* storage.createSession(
           new Session({
             id: "delete-child-session",
@@ -336,6 +349,13 @@ describe("Storage", () => {
 
         const childSessionExit = yield* Effect.exit(storage.deleteBranch("delete-parent-child"))
         expect(childSessionExit._tag).toBe("Failure")
+        expect(yield* storage.getBranch("delete-parent-child")).toBeDefined()
+        expect(yield* storage.getSession("delete-child-session")).toBeDefined()
+
+        const directChildSessionExit = yield* Effect.exit(
+          sql`DELETE FROM branches WHERE id = ${"delete-parent-child"}`,
+        )
+        expect(directChildSessionExit._tag).toBe("Failure")
         expect(yield* storage.getBranch("delete-parent-child")).toBeDefined()
         expect(yield* storage.getSession("delete-child-session")).toBeDefined()
       }).pipe(Effect.provide(Storage.TestWithSql())),
@@ -510,6 +530,20 @@ describe("Storage", () => {
           0,
         ])
         db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
+          "other-branch",
+          "other-session",
+          "other",
+          0,
+        ])
+        db.run(
+          `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+          ["missing-parent-child", "legacy-session", "missing-parent-branch", "child", 0],
+        )
+        db.run(
+          `INSERT INTO branches (id, session_id, parent_branch_id, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+          ["cross-session-child", "legacy-session", "other-branch", "cross", 0],
+        )
+        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
           "orphan-branch",
           "missing-session",
           "orphan",
@@ -574,6 +608,16 @@ describe("Storage", () => {
             expect(session?.parentSessionId).toBeUndefined()
             expect(session?.parentBranchId).toBeUndefined()
 
+            const repairedBranches = yield* storage.listBranches(SessionId.make("legacy-session"))
+            expect(
+              repairedBranches.find((branch) => branch.id === "missing-parent-child")
+                ?.parentBranchId,
+            ).toBeUndefined()
+            expect(
+              repairedBranches.find((branch) => branch.id === "cross-session-child")
+                ?.parentBranchId,
+            ).toBeUndefined()
+
             const message = yield* storage.getMessage(MessageId.make("valid-message"))
             expect(message?.parts).toEqual([
               new TextPart({ type: "text", text: "survives migration" }),
@@ -595,6 +639,7 @@ describe("Storage", () => {
               expect.arrayContaining(["branches", "sessions"]),
             )
             expect(branchParents.map((row) => row.table)).toContain("sessions")
+            expect(branchParents.map((row) => row.table)).toContain("branches")
             expect(messageParents.map((row) => row.table)).toEqual(
               expect.arrayContaining(["branches", "sessions"]),
             )
@@ -628,6 +673,11 @@ describe("Storage", () => {
               sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
             )
             expect(invalidSession._tag).toBe("Failure")
+
+            const invalidBranch = yield* Effect.exit(
+              sql`INSERT INTO branches (id, session_id, parent_branch_id, created_at) VALUES (${"new-invalid-branch"}, ${"legacy-session"}, ${"other-branch"}, ${8})`,
+            )
+            expect(invalidBranch._tag).toBe("Failure")
 
             yield* sql.withTransaction(
               Effect.gen(function* () {
