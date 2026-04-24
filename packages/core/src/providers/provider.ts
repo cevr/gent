@@ -119,11 +119,23 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
 
     const resolved = yield* Effect.try({
       try: () => extensionProvider.resolveModel(modelName, authParam, hints),
-      catch: (e) =>
-        new ProviderError({
+      catch: (e) => {
+        // Drivers that fail closed at credential resolution throw a
+        // typed `ProviderAuthError`. Preserve that typing at the
+        // provider boundary so the caller sees an auth failure instead
+        // of a late HTTP error rendered as a generic `ProviderError`.
+        if (Schema.is(ProviderAuthError)(e)) {
+          return new ProviderError({
+            message: `Extension provider "${providerName}" auth unavailable: ${e.message}`,
+            model: modelId,
+            cause: e,
+          })
+        }
+        return new ProviderError({
           message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
           model: modelId,
-        }),
+        })
+      },
     })
 
     return resolved

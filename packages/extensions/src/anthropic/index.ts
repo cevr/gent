@@ -153,6 +153,20 @@ export const buildAnthropicModelDriver = (
       return { layer: makeApiKeyAnthropicLayer(modelName, config, apiKey) }
     }
 
+    // Fail closed — no stored API key, no env var, and no stored OAuth.
+    // (The OAuth layer builds over `authInfo` — with `authInfo` absent
+    // it builds an unauthenticated client that fails late as a generic
+    // HTTP error, masking the real auth failure for non-TUI callers.
+    // Keychain fallback is handled by the extension's `authorize` flow
+    // upstream; by the time we reach `resolveModel`, any valid creds
+    // have already been staged into `authInfo`.)
+    if (authInfo?.type !== "oauth") {
+      throw new ProviderAuthError({
+        message:
+          "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+      })
+    }
+
     // OAuth path: per-resolveModel layer build wires the
     // extension-closure-owned cache cells into a fresh credential
     // service + beta cache layer pair. The Refs are shared across all

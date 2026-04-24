@@ -17,6 +17,7 @@ import {
   providerRequestFromMessages,
   type ProviderResolution,
 } from "@gent/core/providers/provider"
+import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
 import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
@@ -164,6 +165,40 @@ describe("Provider model resolution", () => {
       }).pipe(Effect.provide(layer)),
     )
     expect(result._tag).toBe("Failure")
+  })
+
+  test("driver ProviderAuthError preserves typed auth failure at the provider boundary", async () => {
+    // Drivers that fail closed at credential resolution throw
+    // ProviderAuthError synchronously from `resolveModel`. The boundary
+    // must preserve that typing so callers see an auth failure (not a
+    // late HTTP error rendered as a generic ProviderError).
+    const failingAuthProvider: ModelDriverContribution = {
+      id: "auth-missing",
+      name: "AuthMissing",
+      resolveModel: () => {
+        throw new ProviderAuthError({
+          message: "credentials unavailable: no OAuth, API key, or env var",
+        })
+      },
+    }
+    const layer = buildProviderLayer([makeExt("auth-missing-ext", [failingAuthProvider])])
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        yield* provider.stream({
+          model: "auth-missing/model",
+          prompt: [],
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const rendered = result.toString()
+      expect(rendered).toContain("auth unavailable")
+      expect(rendered).toContain("credentials unavailable")
+    }
   })
 
   test("auth store read failures fail closed before resolving the model", async () => {

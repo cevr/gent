@@ -136,13 +136,14 @@ export const buildOpenAIModelDriver = (
       return { layer: makeApiKeyOpenAILayer(modelName, config, apiKey) }
     }
 
-    // No auth available — try unauthenticated (will fail at API call time)
-    const clientLayer = OpenAiClient.layer({}).pipe(Layer.provide(FetchHttpClient.layer))
-    return {
-      layer: OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
-        Layer.provide(clientLayer),
-      ),
-    }
+    // Fail closed — no stored OAuth, no stored API key, no env var.
+    // Previous versions fell through to `OpenAiClient.layer({})` and let
+    // the unauthenticated request fail late as a generic HTTP error,
+    // masking the real auth failure for non-TUI callers.
+    throw new ProviderAuthError({
+      message:
+        "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
+    })
   },
   listModels: (baseCatalog, authInfo) => {
     // When OAuth is active, filter to allowed models + zero pricing
