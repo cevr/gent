@@ -1,5 +1,10 @@
 import { Effect, Layer, PubSub, Stream } from "effect"
-import { EventStore, EventStoreError, getEventSessionId } from "../domain/event.js"
+import {
+  EventStore,
+  EventStoreError,
+  getEventBranchId,
+  getEventSessionId,
+} from "../domain/event.js"
 import type { EventEnvelope, EventStoreService } from "../domain/event.js"
 import type { SessionId, BranchId } from "../domain/ids.js"
 import { Storage, type StorageError } from "../storage/sqlite-storage.js"
@@ -22,8 +27,7 @@ const getOrCreateSessionPubSub = (
 
 const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
   if (branchId === undefined) return true
-  const eventBranchId =
-    "branchId" in env.event ? (env.event.branchId as BranchId | undefined) : undefined
+  const eventBranchId = getEventBranchId(env.event)
   return eventBranchId === branchId || eventBranchId === undefined
 }
 

@@ -44,6 +44,19 @@ const waitForAssistantTurn = (
     (messages) => messages.some((message) => message.role === "assistant"),
   )
 
+const waitForUserMessage = (
+  client: {
+    message: {
+      list: (input: { branchId: string }) => Effect.Effect<readonly { role: string }[], unknown>
+    }
+  },
+  branchId: string,
+) =>
+  waitFor(
+    client.message.list({ branchId }).pipe(Effect.mapError((error) => new Error(String(error)))),
+    (messages) => messages.some((message) => message.role === "user"),
+  )
+
 const waitForCompletedTurn = (events: Ref.Ref<EventEnvelope[]>) =>
   waitFor(Ref.get(events), (current) =>
     current.some((envelope) => envelope.event._tag === "TurnCompleted"),
@@ -155,6 +168,51 @@ describe("event stream contracts", () => {
                   envelope.event._tag === "BranchCreated",
               ),
             ).toBe(true)
+          }),
+        )
+      },
+      timeoutMs,
+    )
+
+    test(
+      `${transport.name} branch-scoped live stream excludes sibling branch messages`,
+      async () => {
+        await transport.run(({ client }) =>
+          Effect.gen(function* () {
+            const created = yield* client.session
+              .create({ cwd: process.cwd() })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const sibling = yield* client.branch
+              .create({ sessionId: created.sessionId, name: "stream-sibling-branch" })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+            const snapshot = yield* client.session
+              .getSnapshot({ sessionId: created.sessionId, branchId: created.branchId })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+
+            const live = yield* startCollecting(client, {
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+              ...(snapshot.lastEventId !== null ? { after: snapshot.lastEventId } : {}),
+            })
+
+            yield* client.message
+              .send({
+                sessionId: created.sessionId,
+                branchId: sibling.branchId,
+                content: "sibling-only",
+              })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
+
+            yield* waitForUserMessage(client, sibling.branchId)
+
+            const seen = yield* Ref.get(live.events)
+            expect(
+              seen.some(
+                (envelope) =>
+                  envelope.event._tag === "MessageReceived" &&
+                  envelope.event.message.branchId === sibling.branchId,
+              ),
+            ).toBe(false)
           }),
         )
       },
