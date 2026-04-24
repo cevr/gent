@@ -478,6 +478,48 @@
       "@gent/extensions/task-tools/task-update.js": [
         "./packages/extensions/src/task-tools/task-update.ts"
       ],
+      "@gent/extensions/agents": ["./packages/extensions/src/agents.ts"],
+      "@gent/extensions/agents.js": ["./packages/extensions/src/agents.ts"],
+      "@gent/extensions/artifacts": ["./packages/extensions/src/artifacts/index.ts"],
+      "@gent/extensions/artifacts.js": ["./packages/extensions/src/artifacts/index.ts"],
+      "@gent/extensions/audit": ["./packages/extensions/src/audit/index.ts"],
+      "@gent/extensions/audit.js": ["./packages/extensions/src/audit/index.ts"],
+      "@gent/extensions/auto-checkpoint": ["./packages/extensions/src/auto-checkpoint.ts"],
+      "@gent/extensions/auto-checkpoint.js": ["./packages/extensions/src/auto-checkpoint.ts"],
+      "@gent/extensions/bedrock": ["./packages/extensions/src/bedrock/index.ts"],
+      "@gent/extensions/bedrock.js": ["./packages/extensions/src/bedrock/index.ts"],
+      "@gent/extensions/counsel": ["./packages/extensions/src/counsel/index.ts"],
+      "@gent/extensions/counsel.js": ["./packages/extensions/src/counsel/index.ts"],
+      "@gent/extensions/delegate": ["./packages/extensions/src/delegate/index.ts"],
+      "@gent/extensions/delegate.js": ["./packages/extensions/src/delegate/index.ts"],
+      "@gent/extensions/exec-tools": ["./packages/extensions/src/exec-tools/index.ts"],
+      "@gent/extensions/exec-tools.js": ["./packages/extensions/src/exec-tools/index.ts"],
+      "@gent/extensions/executor": ["./packages/extensions/src/executor/index.ts"],
+      "@gent/extensions/executor.js": ["./packages/extensions/src/executor/index.ts"],
+      "@gent/extensions/fs-tools": ["./packages/extensions/src/fs-tools/index.ts"],
+      "@gent/extensions/fs-tools.js": ["./packages/extensions/src/fs-tools/index.ts"],
+      "@gent/extensions/google": ["./packages/extensions/src/google/index.ts"],
+      "@gent/extensions/google.js": ["./packages/extensions/src/google/index.ts"],
+      "@gent/extensions/interaction-tools": [
+        "./packages/extensions/src/interaction-tools/index.ts"
+      ],
+      "@gent/extensions/interaction-tools.js": [
+        "./packages/extensions/src/interaction-tools/index.ts"
+      ],
+      "@gent/extensions/librarian": ["./packages/extensions/src/librarian/index.ts"],
+      "@gent/extensions/librarian.js": ["./packages/extensions/src/librarian/index.ts"],
+      "@gent/extensions/mistral": ["./packages/extensions/src/mistral/index.ts"],
+      "@gent/extensions/mistral.js": ["./packages/extensions/src/mistral/index.ts"],
+      "@gent/extensions/network-tools": ["./packages/extensions/src/network-tools/index.ts"],
+      "@gent/extensions/network-tools.js": ["./packages/extensions/src/network-tools/index.ts"],
+      "@gent/extensions/principles": ["./packages/extensions/src/principles/index.ts"],
+      "@gent/extensions/principles.js": ["./packages/extensions/src/principles/index.ts"],
+      "@gent/extensions/research": ["./packages/extensions/src/research/index.ts"],
+      "@gent/extensions/research.js": ["./packages/extensions/src/research/index.ts"],
+      "@gent/extensions/review": ["./packages/extensions/src/review/index.ts"],
+      "@gent/extensions/review.js": ["./packages/extensions/src/review/index.ts"],
+      "@gent/extensions/workflow-helpers": ["./packages/extensions/src/workflow-helpers.ts"],
+      "@gent/extensions/workflow-helpers.js": ["./packages/extensions/src/workflow-helpers.ts"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"]
     }
   },
