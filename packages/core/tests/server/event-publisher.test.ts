@@ -6,7 +6,7 @@ import { SubscriptionEngine } from "../../src/runtime/extensions/resource-host/s
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { CurrentExtensionSession } from "../../src/runtime/extensions/extension-actor-shared"
-import { EventPublisherLive, makeEventPublisherRouter } from "@gent/core/server/event-publisher"
+import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/event-publisher"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"

@@ -38,7 +38,7 @@ import {
   MachineEngine,
   type MachineEngineService,
 } from "../../src/runtime/extensions/resource-host/machine-engine"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ServerProfileService } from "../../src/runtime/scope-brands"

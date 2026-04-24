@@ -19,7 +19,7 @@ import {
 } from "../../src/runtime/extensions/resource-host"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"

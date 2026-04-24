@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { buildExtensionHealthSnapshot } from "@gent/core/server/extension-health"
+import { buildExtensionHealthSnapshot } from "../../src/server/extension-health"
 import { ExtensionHealthSnapshot } from "@gent/core/server/transport-contract"
 
 describe("buildExtensionHealthSnapshot", () => {

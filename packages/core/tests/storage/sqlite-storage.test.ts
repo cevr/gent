@@ -21,7 +21,7 @@ import {
 
 import { AgentSwitched, SessionStarted } from "@gent/core/domain/event"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
-import { messageToInfo } from "@gent/core/server/session-utils"
+import { messageToInfo } from "../../src/server/session-utils"
 
 describe("Storage", () => {
   describe("Sessions", () => {

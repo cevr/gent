@@ -14,9 +14,89 @@
     "noEmit": true,
     "paths": {
       "@gent/core/debug/*": ["./packages/core/src/debug/*"],
-      "@gent/core/domain/*": ["./packages/core/src/domain/*"],
+      "@gent/core/domain/agent": ["./packages/core/src/domain/agent.ts"],
+      "@gent/core/domain/agent.js": ["./packages/core/src/domain/agent.ts"],
+      "@gent/core/domain/auth-guard": ["./packages/core/src/domain/auth-guard.ts"],
+      "@gent/core/domain/auth-guard.js": ["./packages/core/src/domain/auth-guard.ts"],
+      "@gent/core/domain/auth-method": ["./packages/core/src/domain/auth-method.ts"],
+      "@gent/core/domain/auth-method.js": ["./packages/core/src/domain/auth-method.ts"],
+      "@gent/core/domain/auth-storage": ["./packages/core/src/domain/auth-storage.ts"],
+      "@gent/core/domain/auth-storage.js": ["./packages/core/src/domain/auth-storage.ts"],
+      "@gent/core/domain/auth-store": ["./packages/core/src/domain/auth-store.ts"],
+      "@gent/core/domain/auth-store.js": ["./packages/core/src/domain/auth-store.ts"],
+      "@gent/core/domain/capability": ["./packages/core/src/domain/capability.ts"],
+      "@gent/core/domain/capability.js": ["./packages/core/src/domain/capability.ts"],
+      "@gent/core/domain/contribution": ["./packages/core/src/domain/contribution.ts"],
+      "@gent/core/domain/contribution.js": ["./packages/core/src/domain/contribution.ts"],
+      "@gent/core/domain/driver": ["./packages/core/src/domain/driver.ts"],
+      "@gent/core/domain/driver.js": ["./packages/core/src/domain/driver.ts"],
+      "@gent/core/domain/event": ["./packages/core/src/domain/event.ts"],
+      "@gent/core/domain/event.js": ["./packages/core/src/domain/event.ts"],
+      "@gent/core/domain/event-publisher": ["./packages/core/src/domain/event-publisher.ts"],
+      "@gent/core/domain/event-publisher.js": ["./packages/core/src/domain/event-publisher.ts"],
+      "@gent/core/domain/extension-host-context": [
+        "./packages/core/src/domain/extension-host-context.ts"
+      ],
+      "@gent/core/domain/extension-host-context.js": [
+        "./packages/core/src/domain/extension-host-context.ts"
+      ],
+      "@gent/core/domain/extension-protocol": ["./packages/core/src/domain/extension-protocol.ts"],
+      "@gent/core/domain/extension-protocol.js": [
+        "./packages/core/src/domain/extension-protocol.ts"
+      ],
+      "@gent/core/domain/file-lock": ["./packages/core/src/domain/file-lock.ts"],
+      "@gent/core/domain/file-lock.js": ["./packages/core/src/domain/file-lock.ts"],
+      "@gent/core/domain/guards": ["./packages/core/src/domain/guards.ts"],
+      "@gent/core/domain/guards.js": ["./packages/core/src/domain/guards.ts"],
+      "@gent/core/domain/ids": ["./packages/core/src/domain/ids.ts"],
+      "@gent/core/domain/ids.js": ["./packages/core/src/domain/ids.ts"],
+      "@gent/core/domain/interaction-request": [
+        "./packages/core/src/domain/interaction-request.ts"
+      ],
+      "@gent/core/domain/interaction-request.js": [
+        "./packages/core/src/domain/interaction-request.ts"
+      ],
+      "@gent/core/domain/message": ["./packages/core/src/domain/message.ts"],
+      "@gent/core/domain/message.js": ["./packages/core/src/domain/message.ts"],
+      "@gent/core/domain/model": ["./packages/core/src/domain/model.ts"],
+      "@gent/core/domain/model.js": ["./packages/core/src/domain/model.ts"],
+      "@gent/core/domain/output-buffer": ["./packages/core/src/domain/output-buffer.ts"],
+      "@gent/core/domain/output-buffer.js": ["./packages/core/src/domain/output-buffer.ts"],
+      "@gent/core/domain/permission": ["./packages/core/src/domain/permission.ts"],
+      "@gent/core/domain/permission.js": ["./packages/core/src/domain/permission.ts"],
+      "@gent/core/domain/projection": ["./packages/core/src/domain/projection.ts"],
+      "@gent/core/domain/projection.js": ["./packages/core/src/domain/projection.ts"],
+      "@gent/core/domain/prompt": ["./packages/core/src/domain/prompt.ts"],
+      "@gent/core/domain/prompt.js": ["./packages/core/src/domain/prompt.ts"],
+      "@gent/core/domain/queue": ["./packages/core/src/domain/queue.ts"],
+      "@gent/core/domain/queue.js": ["./packages/core/src/domain/queue.ts"],
+      "@gent/core/domain/read-only": ["./packages/core/src/domain/read-only.ts"],
+      "@gent/core/domain/read-only.js": ["./packages/core/src/domain/read-only.ts"],
+      "@gent/core/domain/resource": ["./packages/core/src/domain/resource.ts"],
+      "@gent/core/domain/resource.js": ["./packages/core/src/domain/resource.ts"],
+      "@gent/core/domain/schema-tagged-enum-class": [
+        "./packages/core/src/domain/schema-tagged-enum-class.ts"
+      ],
+      "@gent/core/domain/schema-tagged-enum-class.js": [
+        "./packages/core/src/domain/schema-tagged-enum-class.ts"
+      ],
+      "@gent/core/domain/session-deleter": ["./packages/core/src/domain/session-deleter.ts"],
+      "@gent/core/domain/session-deleter.js": ["./packages/core/src/domain/session-deleter.ts"],
+      "@gent/core/domain/task": ["./packages/core/src/domain/task.ts"],
+      "@gent/core/domain/task.js": ["./packages/core/src/domain/task.ts"],
+      "@gent/core/domain/tool": ["./packages/core/src/domain/tool.ts"],
+      "@gent/core/domain/tool.js": ["./packages/core/src/domain/tool.ts"],
+      "@gent/core/domain/tool-output": ["./packages/core/src/domain/tool-output.ts"],
+      "@gent/core/domain/tool-output.js": ["./packages/core/src/domain/tool-output.ts"],
+      "@gent/core/domain/windowing": ["./packages/core/src/domain/windowing.ts"],
+      "@gent/core/domain/windowing.js": ["./packages/core/src/domain/windowing.ts"],
       "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
-      "@gent/core/providers/*": ["./packages/core/src/providers/*"],
+      "@gent/core/providers/ai-transcript": ["./packages/core/src/providers/ai-transcript.ts"],
+      "@gent/core/providers/ai-transcript.js": ["./packages/core/src/providers/ai-transcript.ts"],
+      "@gent/core/providers/provider": ["./packages/core/src/providers/provider.ts"],
+      "@gent/core/providers/provider.js": ["./packages/core/src/providers/provider.ts"],
+      "@gent/core/providers/provider-auth": ["./packages/core/src/providers/provider-auth.ts"],
+      "@gent/core/providers/provider-auth.js": ["./packages/core/src/providers/provider-auth.ts"],
       "@gent/core/runtime/extensions/disabled": [
         "./packages/core/src/runtime/extensions/disabled.ts"
       ],
@@ -37,8 +117,64 @@
       "@gent/core/runtime/runtime-platform.js": ["./packages/core/src/runtime/runtime-platform.ts"],
       "@gent/core/runtime/tracer": ["./packages/core/src/runtime/tracer.ts"],
       "@gent/core/runtime/tracer.js": ["./packages/core/src/runtime/tracer.ts"],
-      "@gent/core/server/*": ["./packages/core/src/server/*"],
-      "@gent/core/storage/*": ["./packages/core/src/storage/*"],
+      "@gent/core/server/build-fingerprint": ["./packages/core/src/server/build-fingerprint.ts"],
+      "@gent/core/server/build-fingerprint.js": ["./packages/core/src/server/build-fingerprint.ts"],
+      "@gent/core/server/connection-tracker": ["./packages/core/src/server/connection-tracker.ts"],
+      "@gent/core/server/connection-tracker.js": [
+        "./packages/core/src/server/connection-tracker.ts"
+      ],
+      "@gent/core/server/dependencies": ["./packages/core/src/server/dependencies.ts"],
+      "@gent/core/server/dependencies.js": ["./packages/core/src/server/dependencies.ts"],
+      "@gent/core/server/index": ["./packages/core/src/server/index.ts"],
+      "@gent/core/server/index.js": ["./packages/core/src/server/index.ts"],
+      "@gent/core/server/rpc-handlers": ["./packages/core/src/server/rpc-handlers.ts"],
+      "@gent/core/server/rpc-handlers.js": ["./packages/core/src/server/rpc-handlers.ts"],
+      "@gent/core/server/rpcs": ["./packages/core/src/server/rpcs.ts"],
+      "@gent/core/server/rpcs.js": ["./packages/core/src/server/rpcs.ts"],
+      "@gent/core/server/server-identity": ["./packages/core/src/server/server-identity.ts"],
+      "@gent/core/server/server-identity.js": ["./packages/core/src/server/server-identity.ts"],
+      "@gent/core/server/server-routes": ["./packages/core/src/server/server-routes.ts"],
+      "@gent/core/server/server-routes.js": ["./packages/core/src/server/server-routes.ts"],
+      "@gent/core/server/transport-contract": ["./packages/core/src/server/transport-contract.ts"],
+      "@gent/core/server/transport-contract.js": [
+        "./packages/core/src/server/transport-contract.ts"
+      ],
+      "@gent/core/storage/branch-storage": ["./packages/core/src/storage/branch-storage.ts"],
+      "@gent/core/storage/branch-storage.js": ["./packages/core/src/storage/branch-storage.ts"],
+      "@gent/core/storage/checkpoint-storage": [
+        "./packages/core/src/storage/checkpoint-storage.ts"
+      ],
+      "@gent/core/storage/checkpoint-storage.js": [
+        "./packages/core/src/storage/checkpoint-storage.ts"
+      ],
+      "@gent/core/storage/event-storage": ["./packages/core/src/storage/event-storage.ts"],
+      "@gent/core/storage/event-storage.js": ["./packages/core/src/storage/event-storage.ts"],
+      "@gent/core/storage/extension-state-storage": [
+        "./packages/core/src/storage/extension-state-storage.ts"
+      ],
+      "@gent/core/storage/extension-state-storage.js": [
+        "./packages/core/src/storage/extension-state-storage.ts"
+      ],
+      "@gent/core/storage/interaction-storage": [
+        "./packages/core/src/storage/interaction-storage.ts"
+      ],
+      "@gent/core/storage/interaction-storage.js": [
+        "./packages/core/src/storage/interaction-storage.ts"
+      ],
+      "@gent/core/storage/message-storage": ["./packages/core/src/storage/message-storage.ts"],
+      "@gent/core/storage/message-storage.js": ["./packages/core/src/storage/message-storage.ts"],
+      "@gent/core/storage/relationship-storage": [
+        "./packages/core/src/storage/relationship-storage.ts"
+      ],
+      "@gent/core/storage/relationship-storage.js": [
+        "./packages/core/src/storage/relationship-storage.ts"
+      ],
+      "@gent/core/storage/search-storage": ["./packages/core/src/storage/search-storage.ts"],
+      "@gent/core/storage/search-storage.js": ["./packages/core/src/storage/search-storage.ts"],
+      "@gent/core/storage/session-storage": ["./packages/core/src/storage/session-storage.ts"],
+      "@gent/core/storage/session-storage.js": ["./packages/core/src/storage/session-storage.ts"],
+      "@gent/core/storage/sqlite-storage": ["./packages/core/src/storage/sqlite-storage.ts"],
+      "@gent/core/storage/sqlite-storage.js": ["./packages/core/src/storage/sqlite-storage.ts"],
       "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
       "@gent/core/test-utils/*": ["./packages/core/src/test-utils/*"],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],

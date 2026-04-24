@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Ref } from "effect"
-import { buildActorRpcHandlers } from "@gent/core/server/rpc-handler-groups/actor"
+import { buildActorRpcHandlers } from "../../src/server/rpc-handler-groups/actor"
 import {
   applySteerCommand,
   interruptPayloadToSteerCommand,

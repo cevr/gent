@@ -22,7 +22,7 @@ import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/dri
 import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"

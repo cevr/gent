@@ -17,7 +17,7 @@ import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/
 import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
 import { Provider } from "@gent/core/providers/provider"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
 import { ConfigService } from "../../src/runtime/config-service"

@@ -43,6 +43,90 @@ const importProbe = (specifier: string) =>
     stderr: "pipe",
   })
 
+const exportEntries = (
+  prefix: string,
+  sourceDir: string,
+  names: ReadonlyArray<string>,
+): Record<string, string> =>
+  Object.fromEntries(
+    names.flatMap((name) => [
+      [`./${prefix}/${name}`, `./src/${sourceDir}/${name}.ts`],
+      [`./${prefix}/${name}.js`, `./src/${sourceDir}/${name}.ts`],
+    ]),
+  )
+
+const pathEntries = (
+  prefix: string,
+  sourceDir: string,
+  names: ReadonlyArray<string>,
+): Record<string, ReadonlyArray<string>> =>
+  Object.fromEntries(
+    names.flatMap((name) => [
+      [`@gent/core/${prefix}/${name}`, [`./packages/core/src/${sourceDir}/${name}.ts`]],
+      [`@gent/core/${prefix}/${name}.js`, [`./packages/core/src/${sourceDir}/${name}.ts`]],
+    ]),
+  )
+
+const approvedPublicCoreSubpaths = {
+  domain: [
+    "agent",
+    "auth-guard",
+    "auth-method",
+    "auth-storage",
+    "auth-store",
+    "capability",
+    "contribution",
+    "driver",
+    "event",
+    "event-publisher",
+    "extension-host-context",
+    "extension-protocol",
+    "file-lock",
+    "guards",
+    "ids",
+    "interaction-request",
+    "message",
+    "model",
+    "output-buffer",
+    "permission",
+    "projection",
+    "prompt",
+    "queue",
+    "read-only",
+    "resource",
+    "schema-tagged-enum-class",
+    "session-deleter",
+    "task",
+    "tool",
+    "tool-output",
+    "windowing",
+  ],
+  providers: ["ai-transcript", "provider", "provider-auth"],
+  server: [
+    "build-fingerprint",
+    "connection-tracker",
+    "dependencies",
+    "index",
+    "rpc-handlers",
+    "rpcs",
+    "server-identity",
+    "server-routes",
+    "transport-contract",
+  ],
+  storage: [
+    "branch-storage",
+    "checkpoint-storage",
+    "event-storage",
+    "extension-state-storage",
+    "interaction-storage",
+    "message-storage",
+    "relationship-storage",
+    "search-storage",
+    "session-storage",
+    "sqlite-storage",
+  ],
+} as const
+
 const isCommentLine = (text: string) => {
   const trimmed = text.trim()
   return (
@@ -231,6 +315,62 @@ describe("architecture policy", () => {
     expect(paths["@gent/core/runtime/*"]).toBeUndefined()
     expect(runtimeExports).toEqual(approvedRuntimePackageExports)
     expect(runtimePaths).toEqual(approvedRuntimeTsconfigPaths)
+  })
+
+  test("package exports expose only approved domain, provider, server, and storage subpaths", () => {
+    const packageFile = pathResolve(ROOT, "packages/core/package.json")
+    const tsconfigFile = pathResolve(ROOT, "tsconfig.json")
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8")) as {
+      exports?: Record<string, unknown>
+    }
+    const tsconfig = JSON.parse(readFileSync(tsconfigFile, "utf8")) as {
+      compilerOptions?: { paths?: Record<string, unknown> }
+    }
+    const exports = packageJson.exports ?? {}
+    const paths = tsconfig.compilerOptions?.paths ?? {}
+    const scopedExports = (prefix: keyof typeof approvedPublicCoreSubpaths) =>
+      Object.fromEntries(Object.entries(exports).filter(([key]) => key.startsWith(`./${prefix}/`)))
+    const scopedPaths = (prefix: keyof typeof approvedPublicCoreSubpaths) =>
+      Object.fromEntries(
+        Object.entries(paths).filter(([key]) => key.startsWith(`@gent/core/${prefix}/`)),
+      )
+
+    expect(exports["./domain/*"]).toBeUndefined()
+    expect(exports["./providers/*"]).toBeUndefined()
+    expect(exports["./server/*"]).toBeUndefined()
+    expect(exports["./storage/*"]).toBeUndefined()
+    expect(paths["@gent/core/domain/*"]).toBeUndefined()
+    expect(paths["@gent/core/providers/*"]).toBeUndefined()
+    expect(paths["@gent/core/server/*"]).toBeUndefined()
+    expect(paths["@gent/core/storage/*"]).toBeUndefined()
+
+    expect(scopedExports("domain")).toEqual({
+      ...exportEntries("domain", "domain", approvedPublicCoreSubpaths.domain),
+      "./domain/extension": null,
+      "./domain/extension.js": null,
+      "./domain/extension.ts": null,
+    })
+    expect(scopedExports("providers")).toEqual(
+      exportEntries("providers", "providers", approvedPublicCoreSubpaths.providers),
+    )
+    expect(scopedExports("server")).toEqual(
+      exportEntries("server", "server", approvedPublicCoreSubpaths.server),
+    )
+    expect(scopedExports("storage")).toEqual(
+      exportEntries("storage", "storage", approvedPublicCoreSubpaths.storage),
+    )
+    expect(scopedPaths("domain")).toEqual(
+      pathEntries("domain", "domain", approvedPublicCoreSubpaths.domain),
+    )
+    expect(scopedPaths("providers")).toEqual(
+      pathEntries("providers", "providers", approvedPublicCoreSubpaths.providers),
+    )
+    expect(scopedPaths("server")).toEqual(
+      pathEntries("server", "server", approvedPublicCoreSubpaths.server),
+    )
+    expect(scopedPaths("storage")).toEqual(
+      pathEntries("storage", "storage", approvedPublicCoreSubpaths.storage),
+    )
   })
 
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {

@@ -53,7 +53,7 @@ import {
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import { EventPublisherLive } from "@gent/core/server/event-publisher"
+import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore, ensureStorageParents } from "@gent/core/test-utils"
 import { emptyQueueSnapshot } from "@gent/core/domain/queue"
