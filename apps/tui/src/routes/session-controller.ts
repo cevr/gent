@@ -141,6 +141,8 @@ const pickRandom = <T>(arr: readonly T[]): T => {
 const getTreeOverlay = (state: ReturnType<typeof SessionUiState.initial>["overlay"]) =>
   state._tag === "tree" ? state.tree : null
 
+type AuthGateState = "checking" | "open" | "closed" | "error"
+
 export function createSessionController(props: {
   sessionId: SessionId
   branchId: BranchId
@@ -169,7 +171,6 @@ export function createSessionController(props: {
   const tick = useSpinnerClock()
 
   // ── Auth gate ──
-  type AuthGateState = "checking" | "open" | "closed" | "error"
   const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
     !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
   )
@@ -233,9 +234,8 @@ export function createSessionController(props: {
     for (const effect of result.effects) handleSessionUiEffect(effect)
   }
 
-  // Open auth overlay when auth gate detects missing keys
   createEffect(() => {
-    if (authGateState() === "open" && uiState().overlay._tag !== "auth") {
+    if (isBlockingAuthGate(authGateState()) && uiState().overlay._tag !== "auth") {
       dispatchSessionUi({ _tag: "OpenAuth", enforceAuth: true })
     }
   })
@@ -833,6 +833,8 @@ export function createSessionController(props: {
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
 }
+
+const isBlockingAuthGate = (state: AuthGateState): boolean => state === "open" || state === "error"
 
 const formatAuthGateError = (error: unknown): string => {
   if (error instanceof Error) return error.message

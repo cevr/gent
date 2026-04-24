@@ -124,9 +124,8 @@ export function Auth(props: AuthProps) {
   createEffect(() => {
     const current = state()
     if (current._tag !== "List") return
-    if (current.providers.length === 0) return
 
-    if (props.enforceAuth === true) {
+    if (props.enforceAuth === true && current.error === undefined) {
       const missing = current.providers.filter((p) => p.required && !p.hasKey)
       if (missing.length === 0) {
         props.onResolved?.()
@@ -134,6 +133,8 @@ export function Auth(props: AuthProps) {
         return
       }
     }
+
+    if (current.providers.length === 0) return
 
     if (autoPrompted()) return
     const missing = current.providers.filter((p) => p.required && !p.hasKey).map((p) => p.provider)
@@ -484,6 +485,10 @@ export function Auth(props: AuthProps) {
       props.onClose?.()
       return true
     }
+    if (e.name === "r" && current.error !== undefined) {
+      loadAuth(nextRouteVersion())
+      return true
+    }
     if (current.providers.length === 0) return false
     if (e.name === "up") {
       const next =
@@ -651,7 +656,9 @@ export function Auth(props: AuthProps) {
                 when={state()._tag === "Method"}
                 fallback={
                   <box paddingLeft={1} paddingRight={1} flexGrow={1}>
-                    <text style={{ fg: theme.textMuted }}>Loading providers...</text>
+                    <text style={{ fg: theme.textMuted }}>
+                      {state().error !== undefined ? "Press r to retry." : "Loading providers..."}
+                    </text>
                   </box>
                 }
               >
@@ -725,7 +732,11 @@ export function Auth(props: AuthProps) {
         </Show>
 
         <ChromePanel.Footer>
-          <Show when={state()._tag === "List"}>Up/Down | Enter=select | d=delete | Esc</Show>
+          <Show when={state()._tag === "List"}>
+            {state().error !== undefined
+              ? "r=retry | Esc"
+              : "Up/Down | Enter=select | d=delete | Esc"}
+          </Show>
           <Show when={state()._tag === "Method"}>Up/Down | Enter=choose | Esc</Show>
           <Show when={state()._tag === "Key"}>Enter=save | Esc=cancel</Show>
           <Show when={state()._tag === "OAuth"}>Enter=continue | Esc=cancel</Show>

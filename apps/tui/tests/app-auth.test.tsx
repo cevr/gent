@@ -334,6 +334,100 @@ describe("App auth gate", () => {
     setup.renderer.destroy()
   })
 
+  test("cold start with prompt recovers after a transient auth check failure", async () => {
+    let authChecks = 0
+    const sentMessages: Array<{ content: string }> = []
+    const client = createMockClient({
+      auth: {
+        listProviders: () =>
+          Effect.sync(() => {
+            authChecks += 1
+          }).pipe(
+            Effect.flatMap(() =>
+              authChecks === 1
+                ? Effect.fail(new ProviderAuthError({ message: "temporary auth lookup failed" }))
+                : Effect.succeed([]),
+            ),
+          ),
+        listMethods: () => Effect.succeed({}),
+      },
+      message: {
+        send: (input: { content: string }) =>
+          Effect.sync(() => {
+            sentMessages.push(input)
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
+      client,
+      runtime,
+      initialAgent: "cowork",
+      initialSession: {
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
+        name: "A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      initialRoute: Route.session(
+        SessionId.make("session-a"),
+        BranchId.make("branch-a"),
+        "send after retry",
+      ),
+    })
+
+    await waitForMessage(setup, sentMessages, "send after retry")
+    expect(authChecks).toBeGreaterThan(1)
+    setup.renderer.destroy()
+  })
+
+  test("enforced auth overlay can retry failed provider loads", async () => {
+    let authChecks = 0
+    const client = createMockClient({
+      auth: {
+        listProviders: () =>
+          Effect.sync(() => {
+            authChecks += 1
+          }).pipe(
+            Effect.flatMap(() =>
+              authChecks < 3
+                ? Effect.fail(new ProviderAuthError({ message: "temporary auth lookup failed" }))
+                : Effect.succeed([]),
+            ),
+          ),
+        listMethods: () => Effect.succeed({}),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
+      client,
+      runtime,
+      initialAgent: "cowork",
+      initialSession: {
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
+        name: "A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      initialRoute: Route.session(SessionId.make("session-a"), BranchId.make("branch-a")),
+    })
+
+    await waitForRenderedFrame(
+      setup,
+      (frame) =>
+        frame.includes("temporary auth lookup failed") && frame.includes("Press r to retry"),
+      "retryable auth error",
+    )
+    setup.mockInput.pressKey("r")
+    await waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth retry resolved")
+    expect(authChecks).toBe(3)
+    setup.renderer.destroy()
+  })
+
   test("branch resume route gates auth, sends deferred prompt, and searches prompt history", async () => {
     let hasOpenAiKey = false
     let initialAuthCheckResolved = false
