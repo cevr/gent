@@ -13,14 +13,16 @@ import {
   toolCallPart,
   type ProviderStreamPart,
 } from "@gent/core/debug/provider"
+import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
 import { Provider } from "@gent/core/providers/provider"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { RecordingEventStore, SequenceRecorder, type CallRecord } from "@gent/core/test-utils"
 import { ConfigService } from "@gent/core/runtime/config-service"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Permission } from "@gent/core/domain/permission"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ExtensionRegistry, resolveExtensions } from "@gent/core/runtime/extensions/registry"
@@ -37,6 +39,7 @@ import {
   interruptPayloadToSteerCommand,
   invokeToolCommand,
   respondInteractionCommand,
+  recordToolResultCommand,
   sendUserMessageCommand,
 } from "@gent/core/runtime/session-runtime"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
@@ -90,6 +93,37 @@ const makeRuntimeLayer = (
     ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  return Layer.provideMerge(
+    SessionRuntime.Live({ baseSections: [] }),
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
+}
+
+const makeRuntimeLayerWithEventPublisher = (
+  providerLayer: Layer.Layer<Provider>,
+  eventPublisherLayer: Layer.Layer<EventPublisher>,
+) => {
+  const resolvedExtensions = makeTestExtensions()
+  const recorderLayer = SequenceRecorder.Live
+  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
+  const baseDeps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    ExtensionRegistry.fromResolved(resolvedExtensions),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolvedExtensions.modelDrivers,
+      externalDrivers: resolvedExtensions.externalDrivers,
+    }),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    eventStoreLayer,
+    recorderLayer,
+    ToolRunner.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
     Layer.merge(baseDeps, eventPublisherLayer),
@@ -317,6 +351,81 @@ describe("SessionRuntime", () => {
         expect(queue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
         expect(eventTags(calls)).toContain("ToolCallStarted")
         expect(eventTags(calls)).toContain("ToolCallSucceeded")
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("recordToolResult rolls back the tool message when durable event append fails", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const failingPublisherLayer = Layer.succeed(EventPublisher, {
+      append: (event: AgentEvent) =>
+        event._tag === "ToolCallSucceeded"
+          ? Effect.fail(new EventStoreError({ message: "append failed" }))
+          : Effect.succeed(
+              EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
+            ),
+      deliver: () => Effect.void,
+      publish: () => Effect.void,
+      terminateSession: () => Effect.void,
+    })
+    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, failingPublisherLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+        const commandId = ActorCommandId.make("record-tool-atomicity")
+
+        const exit = yield* Effect.exit(
+          sessionRuntime.dispatch(
+            recordToolResultCommand({
+              commandId,
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("tool-call-atomicity"),
+              toolName: "read",
+              output: { ok: true },
+            }),
+          ),
+        )
+        const message = yield* storage.getMessage(MessageId.make(`${commandId}:tool-result`))
+
+        expect(exit._tag).toBe("Failure")
+        expect(message).toBeUndefined()
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("recordToolResult retry does not duplicate the durable event", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const layer = makeRuntimeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const recorder = yield* SequenceRecorder
+        const { sessionId, branchId } = yield* createSessionBranch
+        const commandId = ActorCommandId.make("record-tool-idempotent")
+        const command = recordToolResultCommand({
+          commandId,
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("tool-call-idempotent"),
+          toolName: "read",
+          output: { ok: true },
+        })
+
+        yield* sessionRuntime.dispatch(command)
+        yield* sessionRuntime.dispatch(command)
+
+        const messages = yield* storage.listMessages(branchId)
+        const calls = yield* recorder.getCalls()
+        const toolSucceeded = eventTags(calls).filter((tag) => tag === "ToolCallSucceeded")
+
+        expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
+        expect(toolSucceeded).toHaveLength(1)
       }).pipe(Effect.provide(layer)),
     )
   })

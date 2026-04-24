@@ -43,9 +43,16 @@ import {
   type AnyResourceContribution,
 } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
-import { EventEnvelope, EventId, EventStore, type AgentEvent } from "@gent/core/domain/event"
+import {
+  EventEnvelope,
+  EventId,
+  EventStore,
+  EventStoreError,
+  type AgentEvent,
+} from "@gent/core/domain/event"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
+import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import { SequenceRecorder, RecordingEventStore } from "@gent/core/test-utils"
@@ -298,6 +305,29 @@ const makeLayerWithEvents = (
     ResourceManagerLive,
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
+}
+
+const makeLayerWithEventPublisher = (
+  providerLayer: Layer.Layer<Provider>,
+  eventPublisherLayer: Layer.Layer<EventPublisher>,
+) => {
+  const deps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    makeExtRegistry(),
+    MachineEngine.Test(),
+    ExtensionTurnControl.Test(),
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    EventStore.Memory,
+    ToolRunner.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
     Layer.merge(deps, eventPublisherLayer),
@@ -664,6 +694,66 @@ describe("streaming", () => {
           expect(publishedEvents).toContain("TurnCompleted")
         }).pipe(Effect.provide(layer)),
       ),
+    )
+  })
+
+  test("rolls back assistant message when durable MessageReceived append fails", async () => {
+    const providerLayer = scriptedProvider([
+      [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
+    ])
+    const failingPublisherLayer = Layer.succeed(EventPublisher, {
+      append: (event: AgentEvent) =>
+        event._tag === "MessageReceived" && event.role === "assistant"
+          ? Effect.fail(new EventStoreError({ message: "append failed" }))
+          : Effect.succeed(
+              EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
+            ),
+      deliver: () => Effect.void,
+      publish: () => Effect.void,
+      terminateSession: () => Effect.void,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("atomic-assistant-session", "atomic-assistant-branch", "hello")
+
+        yield* agentLoop.run(message)
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+
+        expect(assistant).toBeUndefined()
+      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer))),
+    )
+  })
+
+  test("rolls back turn duration when TurnCompleted append fails", async () => {
+    const providerLayer = scriptedProvider([
+      [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
+    ])
+    const failingPublisherLayer = Layer.succeed(EventPublisher, {
+      append: (event: AgentEvent) =>
+        event._tag === "TurnCompleted"
+          ? Effect.fail(new EventStoreError({ message: "append failed" }))
+          : Effect.succeed(
+              EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
+            ),
+      deliver: () => Effect.void,
+      publish: () => Effect.void,
+      terminateSession: () => Effect.void,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("atomic-turn-session", "atomic-turn-branch", "hello")
+
+        yield* agentLoop.run(message)
+        const user = yield* storage.getMessage(message.id)
+
+        expect(user?.turnDurationMs).toBeUndefined()
+      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer))),
     )
   })
 

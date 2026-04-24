@@ -53,8 +53,9 @@ import {
   TurnRecoveryApplied,
   MachineInspected,
   type AgentEvent,
+  type EventEnvelope,
 } from "../../domain/event.js"
-import { EventPublisher } from "../../domain/event-publisher.js"
+import { EventPublisher, type EventPublisherService } from "../../domain/event-publisher.js"
 import {
   Message,
   TextPart,
@@ -168,6 +169,48 @@ const toResponseFinishReason = (stopReason: string): Response.FinishReason => {
 }
 
 type PublishEvent = (event: AgentEvent) => Effect.Effect<void, never>
+type CommittedEvent<A> =
+  | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
+  | { readonly _tag: "unchanged"; readonly result: A }
+
+const commitWithEvent = <A, E, R>(params: {
+  storage: StorageService
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
+  mutation: Effect.Effect<CommittedEvent<A>, E, R>
+}) =>
+  Effect.gen(function* () {
+    const committed = yield* params.storage.withTransaction(params.mutation)
+    if (committed._tag === "changed") {
+      yield* params.eventPublisher.deliver(committed.envelope)
+    }
+    return committed.result
+  })
+
+const persistMessageReceived = (params: {
+  storage: StorageService
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
+  message: Message
+  role: Message["role"]
+}) =>
+  commitWithEvent({
+    storage: params.storage,
+    eventPublisher: params.eventPublisher,
+    mutation: Effect.gen(function* () {
+      const existing = yield* params.storage.getMessage(params.message.id)
+      if (existing !== undefined) return { _tag: "unchanged" as const, result: existing }
+
+      yield* params.storage.createMessageIfAbsent(params.message)
+      const envelope = yield* params.eventPublisher.append(
+        MessageReceived.make({
+          sessionId: params.message.sessionId,
+          branchId: params.message.branchId,
+          messageId: params.message.id,
+          role: params.role,
+        }),
+      )
+      return { _tag: "changed" as const, result: params.message, envelope }
+    }),
+  })
 
 export type ActiveStreamHandle = {
   abortController: AbortController
@@ -212,7 +255,7 @@ const toolCallsFromAssistantParts = (
 
 const persistMessageParts = (params: {
   storage: StorageService
-  publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -235,23 +278,17 @@ const persistMessageParts = (params: {
     const existing = yield* params.storage.getMessage(message.id)
     if (existing !== undefined) return existing
 
-    yield* params.storage.createMessageIfAbsent(message)
-    yield* params
-      .publishEvent(
-        MessageReceived.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          messageId: message.id,
-          role: params.role,
-        }),
-      )
-      .pipe(Effect.orDie)
-    return message
+    return yield* persistMessageReceived({
+      storage: params.storage,
+      eventPublisher: params.eventPublisher,
+      message,
+      role: params.role,
+    })
   })
 
 const persistAssistantParts = (params: {
   storage: StorageService
-  publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -280,7 +317,7 @@ const persistAssistantParts = (params: {
 
     return yield* persistMessageParts({
       storage: params.storage,
-      publishEvent: params.publishEvent,
+      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.messageId,
@@ -292,7 +329,7 @@ const persistAssistantParts = (params: {
 
 const persistToolParts = (params: {
   storage: StorageService
-  publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   messageId: MessageId
@@ -301,7 +338,7 @@ const persistToolParts = (params: {
 }) =>
   persistMessageParts({
     storage: params.storage,
-    publishEvent: params.publishEvent,
+    eventPublisher: params.eventPublisher,
     sessionId: params.sessionId,
     branchId: params.branchId,
     messageId: params.messageId,
@@ -845,6 +882,7 @@ const resolveTurnPhase = (params: {
   driverRegistry: DriverRegistryService
   sessionId: SessionId
   publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   baseSections: ReadonlyArray<PromptSection>
   interactive?: boolean
   hostCtx: ExtensionHostContext
@@ -852,17 +890,12 @@ const resolveTurnPhase = (params: {
   Effect.gen(function* () {
     const existing = yield* params.storage.getMessage(params.message.id)
     if (existing === undefined) {
-      yield* params.storage.createMessageIfAbsent(params.message)
-      yield* params
-        .publishEvent(
-          MessageReceived.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: params.message.id,
-            role: "user",
-          }),
-        )
-        .pipe(Effect.orDie)
+      yield* persistMessageReceived({
+        storage: params.storage,
+        eventPublisher: params.eventPublisher,
+        message: params.message,
+        role: "user",
+      })
     }
 
     const resolved = yield* resolveTurnContext(params)
@@ -1025,6 +1058,7 @@ const runTurnStreamPhase = (params: {
   resolved: ResolvedTurnContext
   provider: ProviderService
   publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
@@ -1041,7 +1075,7 @@ const runTurnStreamPhase = (params: {
     ) =>
       persistAssistantParts({
         storage: params.storage,
-        publishEvent: params.publishEvent,
+        eventPublisher: params.eventPublisher,
         sessionId: params.sessionId,
         branchId: params.branchId,
         messageId: assistantMessageIdForTurn(params.messageId, params.step),
@@ -1055,7 +1089,7 @@ const runTurnStreamPhase = (params: {
     const persistToolPartsLocal = (parts: ReadonlyArray<ToolResultPart>, createdAt?: Date) =>
       persistToolParts({
         storage: params.storage,
-        publishEvent: params.publishEvent,
+        eventPublisher: params.eventPublisher,
         sessionId: params.sessionId,
         branchId: params.branchId,
         messageId: toolResultMessageIdForTurn(params.messageId, params.step),
@@ -1178,6 +1212,7 @@ const executeToolsPhase = (params: {
   step: number
   toolCalls: ReadonlyArray<ToolCallPart>
   publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
@@ -1198,7 +1233,7 @@ const executeToolsPhase = (params: {
     const toolResults = yield* executeToolCalls(params)
     yield* persistToolParts({
       storage: params.storage,
-      publishEvent: params.publishEvent,
+      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: toolResultMessageId,
@@ -1213,6 +1248,7 @@ export const invokeToolPhase = (params: {
   toolName: string
   input: unknown
   publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   currentTurnAgent: AgentNameType
@@ -1235,7 +1271,7 @@ export const invokeToolPhase = (params: {
 
     yield* persistAssistantParts({
       storage: params.storage,
-      publishEvent: params.publishEvent,
+      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.assistantMessageId,
@@ -1262,7 +1298,7 @@ export const invokeToolPhase = (params: {
     })
     yield* persistToolParts({
       storage: params.storage,
-      publishEvent: params.publishEvent,
+      eventPublisher: params.eventPublisher,
       sessionId: params.sessionId,
       branchId: params.branchId,
       messageId: params.toolResultMessageId,
@@ -1272,7 +1308,7 @@ export const invokeToolPhase = (params: {
 
 const finalizeTurnPhase = (params: {
   storage: StorageService
-  publishEvent: PublishEvent
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   sessionId: SessionId
   branchId: BranchId
   startedAtMs: number
@@ -1291,17 +1327,20 @@ const finalizeTurnPhase = (params: {
     const turnEndTime = yield* DateTime.now
     const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
 
-    yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
-    yield* params
-      .publishEvent(
-        TurnCompleted.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          durationMs: Number(turnDurationMs),
-          ...(params.turnInterrupted ? { interrupted: true } : {}),
-        }),
-      )
-      .pipe(Effect.orDie)
+    const envelope = yield* params.storage.withTransaction(
+      Effect.gen(function* () {
+        yield* params.storage.updateMessageTurnDuration(params.messageId, turnDurationMs)
+        return yield* params.eventPublisher.append(
+          TurnCompleted.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            durationMs: Number(turnDurationMs),
+            ...(params.turnInterrupted ? { interrupted: true } : {}),
+          }),
+        )
+      }),
+    )
+    yield* params.eventPublisher.deliver(envelope)
 
     yield* Effect.logDebug("finalize.turn-after.start")
     yield* params.extensionRegistry.runtimeSlots.emitTurnAfter(
@@ -2017,6 +2056,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       step: resumeStep,
                       toolCalls,
                       publishEvent: publishEventOrDie,
+                      eventPublisher,
                       sessionId,
                       branchId,
                       currentTurnAgent,
@@ -2080,6 +2120,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   driverRegistry: turnDriverRegistry,
                   sessionId,
                   publishEvent: publishEventOrDie,
+                  eventPublisher,
                   baseSections: turnBaseSections,
                   interactive: state.interactive,
                   hostCtx: turnHostCtx,
@@ -2126,6 +2167,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   driverRegistry: turnDriverRegistry,
                   hostCtx: turnHostCtx,
                   publishEvent: publishEventOrDie,
+                  eventPublisher,
                   storage,
                   sessionId,
                   branchId,
@@ -2152,6 +2194,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   step,
                   toolCalls,
                   publishEvent: publishEventOrDie,
+                  eventPublisher,
                   sessionId,
                   branchId,
                   currentTurnAgent: resolved.currentTurnAgent,
@@ -2184,7 +2227,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               // Finalize — TurnCompleted fires once per turn
               yield* finalizeTurnPhase({
                 storage,
-                publishEvent: publishEventOrDie,
+                eventPublisher,
                 sessionId,
                 branchId,
                 startedAtMs: state.startedAtMs,
@@ -2656,33 +2699,20 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               createdAt: yield* DateTime.nowAsDate,
             })
 
-            yield* storage.createMessage(userMessage).pipe(
+            yield* persistMessageReceived({
+              storage,
+              eventPublisher,
+              message: userMessage,
+              role: "user",
+            }).pipe(
               Effect.mapError(
                 (cause) =>
                   new AgentRunError({
-                    message: `Failed to create user message for ${input.sessionId}`,
+                    message: `Failed to persist user message for ${input.sessionId}`,
                     cause,
                   }),
               ),
             )
-            yield* eventPublisher
-              .publish(
-                MessageReceived.make({
-                  sessionId: input.sessionId,
-                  branchId: input.branchId,
-                  messageId: userMessage.id,
-                  role: "user",
-                }),
-              )
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new AgentRunError({
-                      message: `Failed to publish MessageReceived for ${input.sessionId}`,
-                      cause,
-                    }),
-                ),
-              )
 
             return yield* service
               .run(userMessage, {

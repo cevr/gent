@@ -7,13 +7,14 @@ import {
   ErrorOccurred,
   ToolCallFailed,
   ToolCallSucceeded,
+  type EventEnvelope,
 } from "../domain/event.js"
-import { EventPublisher } from "../domain/event-publisher.js"
+import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
 import { Message, TextPart, ToolResultPart } from "../domain/message.js"
 import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { Storage } from "../storage/sqlite-storage.js"
+import { Storage, type StorageService } from "../storage/sqlite-storage.js"
 import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
 import { ToolRunner } from "./agent/tool-runner.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
@@ -206,6 +207,23 @@ export interface SessionRuntimeService {
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new SessionRuntimeError({ message, cause })
+
+type RuntimeCommittedEvent<A> =
+  | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
+  | { readonly _tag: "unchanged"; readonly result: A }
+
+const commitRuntimeMutationWithEvent = <A, E, R>(params: {
+  storage: StorageService
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
+  mutation: Effect.Effect<RuntimeCommittedEvent<A>, E, R>
+}) =>
+  Effect.gen(function* () {
+    const committed = yield* params.storage.withTransaction(params.mutation)
+    if (committed._tag === "changed") {
+      yield* params.eventPublisher.deliver(committed.envelope)
+    }
+    return committed.result
+  })
 
 const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
@@ -408,7 +426,6 @@ const makeLiveSessionRuntime: Effect.Effect<
           createdAt: yield* DateTime.nowAsDate,
         })
 
-        yield* storage.createMessageIfAbsent(message)
         const isError = command.isError ?? false
         const toolCallFields = {
           sessionId: command.sessionId,
@@ -418,9 +435,22 @@ const makeLiveSessionRuntime: Effect.Effect<
           summary: summarizeToolOutput(part),
           output: stringifyOutput(part.output.value),
         }
-        yield* eventPublisher.publish(
-          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
-        )
+        yield* commitRuntimeMutationWithEvent({
+          storage,
+          eventPublisher,
+          mutation: Effect.gen(function* () {
+            const existing = yield* storage.getMessage(message.id)
+            if (existing !== undefined) return { _tag: "unchanged" as const, result: existing }
+
+            const result = yield* storage.createMessageIfAbsent(message)
+            const envelope = yield* eventPublisher.append(
+              isError
+                ? ToolCallFailed.make(toolCallFields)
+                : ToolCallSucceeded.make(toolCallFields),
+            )
+            return { _tag: "changed" as const, result, envelope }
+          }),
+        })
         return
       }
       case "InvokeTool": {
@@ -448,6 +478,7 @@ const makeLiveSessionRuntime: Effect.Effect<
           input: command.input,
           publishEvent: (event) =>
             eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+          eventPublisher,
           sessionId: command.sessionId,
           branchId: command.branchId,
           currentTurnAgent,
