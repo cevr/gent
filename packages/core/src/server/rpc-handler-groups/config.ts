@@ -97,10 +97,20 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
   "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersInput) =>
     Effect.gen(function* () {
       let cwd: string | undefined
-      if (sessionId !== undefined && deps.storage !== undefined) {
-        const session = yield* deps.storage
-          .getSession(SessionId.make(sessionId))
-          .pipe(Effect.orElseSucceed(() => undefined))
+      if (sessionId !== undefined) {
+        if (deps.storage === undefined) {
+          return yield* new NotFoundError({
+            entity: "session",
+            message: "Session not found",
+          })
+        }
+        const session = yield* deps.storage.getSession(SessionId.make(sessionId))
+        if (session === undefined) {
+          return yield* new NotFoundError({
+            entity: "session",
+            message: "Session not found",
+          })
+        }
         cwd = session?.cwd
       }
       const config = yield* deps.configService.get(cwd)

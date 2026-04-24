@@ -152,6 +152,27 @@ describe("auth.listProviders", () => {
         }),
       ),
   )
+
+  it.live("rejects auth provider listing for a deleted session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+
+        const session = yield* client.session.create({})
+        yield* client.session.delete({ sessionId: session.sessionId })
+
+        const exit = yield* Effect.exit(
+          client.auth.listProviders({
+            agentName: "cowork",
+            sessionId: session.sessionId,
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("Session not found")
+      }),
+    ),
+  )
 })
 
 describe("auth persistence RPC failures", () => {

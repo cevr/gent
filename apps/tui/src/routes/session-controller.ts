@@ -169,8 +169,7 @@ export function createSessionController(props: {
   const tick = useSpinnerClock()
 
   // ── Auth gate ──
-  // Moved from App — session owns auth gating so initialPrompt is deferred until auth resolves.
-  type AuthGateState = "checking" | "open" | "closed"
+  type AuthGateState = "checking" | "open" | "closed" | "error"
   const [authGateState, setAuthGateState] = createSignal<AuthGateState>(
     !props.debugMode && (props.missingAuthProviders?.length ?? 0) > 0 ? "open" : "closed",
   )
@@ -194,11 +193,12 @@ export function createSessionController(props: {
                 setAuthGateState(missing ? "open" : "closed")
               }),
             ),
-            Effect.catchEager(() =>
+            Effect.catchEager((error) =>
               Effect.sync(() => {
                 if (version !== authCheckVersion) return
-                setValidatedAgent(agentName)
-                setAuthGateState("closed")
+                setValidatedAgent(undefined)
+                setAuthGateState("error")
+                client.setError(`Authentication check failed: ${formatAuthGateError(error)}`)
               }),
             ),
           ),
@@ -832,6 +832,15 @@ export function createSessionController(props: {
     onForkSelect,
     onPromptSearchEvent: (event) => promptSearch.onEvent(event),
   }
+}
+
+const formatAuthGateError = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  if (error !== null && typeof error === "object" && "message" in error) {
+    const message = error.message
+    if (typeof message === "string") return message
+  }
+  return String(error)
 }
 
 // ── Context ──

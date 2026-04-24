@@ -237,8 +237,12 @@ describe("Auth route", () => {
         }) => void)
       | undefined
     const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
-    const callbackCalls: Array<{ provider: string; authorizationId: string; sessionId: string }> =
-      []
+    const callbackCalls: Array<{
+      provider: string
+      method: number
+      authorizationId: string
+      sessionId: string
+    }> = []
 
     const client = createMockClient({
       auth: {
@@ -285,7 +289,12 @@ describe("Auth route", () => {
               }),
           )
         },
-        callback: (input: { provider: string; authorizationId: string; sessionId: string }) =>
+        callback: (input: {
+          provider: string
+          method: number
+          authorizationId: string
+          sessionId: string
+        }) =>
           Effect.sync(() => {
             callbackCalls.push(input)
           }),
@@ -329,6 +338,81 @@ describe("Auth route", () => {
       { provider: "anthropic", method: 0, sessionId: activeSessionId },
     ])
     expect(callbackCalls).toEqual([])
+    setup.renderer.destroy()
+  })
+
+  test("threads the active session through successful auto OAuth callbacks", async () => {
+    const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
+    const callbackCalls: Array<{
+      provider: string
+      method: number
+      authorizationId: string
+      sessionId: string
+    }> = []
+
+    const client = createMockClient({
+      auth: {
+        listProviders: () =>
+          Effect.succeed([
+            {
+              provider: "anthropic",
+              hasKey: false,
+              required: false,
+              source: "none",
+              authType: undefined,
+            },
+          ]),
+        listMethods: () =>
+          Effect.succeed({
+            anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
+          }),
+        authorize: (input: { provider: string; method: number; sessionId: string }) =>
+          Effect.sync(() => {
+            authorizeCalls.push(input)
+            return {
+              authorizationId: "auth-active",
+              url: "https://example.com/oauth",
+              method: "auto" as const,
+            }
+          }),
+        callback: (input: {
+          provider: string
+          method: number
+          authorizationId: string
+          sessionId: string
+        }) =>
+          Effect.sync(() => {
+            callbackCalls.push(input)
+          }),
+      },
+    })
+    const runtime = runtimeWithLinkOpener(() => Effect.void)
+
+    const setup = await renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
+      client,
+      runtime,
+      initialAgent: "cowork" as AgentName,
+    })
+
+    await waitForRenderedFrame(setup, (frame) => frame.includes("anthropic"))
+
+    setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    setup.mockInput.pressEnter()
+
+    await waitForRenderedFrame(setup, () => callbackCalls.length === 1, "successful OAuth callback")
+
+    expect(authorizeCalls).toEqual([
+      { provider: "anthropic", method: 0, sessionId: activeSessionId },
+    ])
+    expect(callbackCalls).toEqual([
+      {
+        provider: "anthropic",
+        method: 0,
+        authorizationId: "auth-active",
+        sessionId: activeSessionId,
+      },
+    ])
     setup.renderer.destroy()
   })
 

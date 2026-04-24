@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { Effect } from "effect"
+import { ProviderAuthError } from "@gent/core/domain/driver"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { App } from "../src/app"
@@ -277,6 +278,58 @@ describe("App auth gate", () => {
     )
     expect(authFrame).toContain("API Keys")
     // Prompt still not sent while auth overlay is open
+    expect(sentMessages).toEqual([])
+    setup.renderer.destroy()
+  })
+
+  test("cold start with prompt does not continue when auth checking fails", async () => {
+    let authChecks = 0
+    const sentMessages: Array<{ content: string }> = []
+    const client = createMockClient({
+      auth: {
+        listProviders: () =>
+          Effect.sync(() => {
+            authChecks += 1
+          }).pipe(
+            Effect.flatMap(() =>
+              Effect.fail(new ProviderAuthError({ message: "session auth lookup failed" })),
+            ),
+          ),
+        listMethods: () =>
+          Effect.succeed({
+            openai: [{ label: "API key", type: "api" as const }],
+          }),
+      },
+      message: {
+        send: (input: { content: string }) =>
+          Effect.sync(() => {
+            sentMessages.push(input)
+          }),
+      },
+    })
+    const runtime = createMockRuntime()
+
+    const setup = await renderWithProviders(() => <App missingAuthProviders={[]} />, {
+      client,
+      runtime,
+      initialAgent: "cowork",
+      initialSession: {
+        id: SessionId.make("session-a"),
+        branchId: BranchId.make("branch-a"),
+        name: "A",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      initialRoute: Route.session(
+        SessionId.make("session-a"),
+        BranchId.make("branch-a"),
+        "must not send",
+      ),
+    })
+
+    await waitForRenderedFrame(setup, () => authChecks > 0, "auth check failure")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await setup.renderOnce()
     expect(sentMessages).toEqual([])
     setup.renderer.destroy()
   })
