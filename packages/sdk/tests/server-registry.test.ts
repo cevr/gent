@@ -4,6 +4,7 @@ import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { hostname, tmpdir } from "node:os"
+import { Gent } from "../src/client"
 import {
   ServerRegistryEntry,
   computeLocalFingerprint,
@@ -14,6 +15,8 @@ import {
   listRegistryEntries,
   validateRegistryEntry,
   isPidAlive,
+  registryIdentityOf,
+  canSignalRegistryEntry,
   acquireLock,
   releaseLock,
   withLock,
@@ -232,6 +235,72 @@ describe("Validate Registry Entry", () => {
     const result = validateRegistryEntry(entry)
     expect(result.valid).toBe(false)
     expect(result.reason).toBe("dead-pid")
+  })
+})
+
+describe("Registry Process Ownership", () => {
+  let home: string
+
+  beforeEach(() => {
+    home = makeTmpHome()
+  })
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  test("registryIdentityOf returns the owned identity tuple", () => {
+    const entry = makeEntry()
+    expect(registryIdentityOf(entry)).toEqual({
+      serverId: entry.serverId,
+      dbPath: entry.dbPath,
+      buildFingerprint: entry.buildFingerprint,
+    })
+  })
+
+  test("canSignalRegistryEntry requires same host and live PID", () => {
+    expect(canSignalRegistryEntry(makeEntry())).toBe(true)
+    expect(canSignalRegistryEntry(makeEntry({ hostname: "other-host" }))).toBe(false)
+    expect(canSignalRegistryEntry(makeEntry({ pid: 99999999 }))).toBe(false)
+  })
+
+  test("PID-reused stale registry entries are removed without SIGTERM", async () => {
+    const dbPath = join(home, "pid-reuse.db")
+    const entry = makeEntry({
+      pid: process.pid,
+      rpcUrl: "http://127.0.0.1:9/rpc",
+      dbPath,
+      buildFingerprint: "stale-fingerprint",
+    })
+    writeRegistryEntry(home, entry)
+
+    const signals: Array<{ pid: number; signal: string | number | undefined }> = []
+    const originalKill = Reflect.get(process, "kill") as typeof process.kill
+    const replacement = ((pid: number, signal?: string | number) => {
+      if (signal === "SIGTERM") {
+        signals.push({ pid, signal })
+        return true
+      }
+      return originalKill(pid, signal)
+    }) as typeof process.kill
+
+    process.kill = replacement
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Gent.server({
+            cwd: process.cwd(),
+            state: Gent.state.sqlite({ home, dbPath }),
+            provider: Gent.provider.mock(),
+          }),
+        ),
+      )
+    } finally {
+      process.kill = originalKill
+    }
+
+    expect(signals).toEqual([])
+    expect(readRegistryEntry(home, dbPath)?.serverId).not.toBe(entry.serverId)
   })
 })
 

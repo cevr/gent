@@ -36,10 +36,10 @@ import {
   ServerRegistryEntry,
   withLock,
   computeLocalFingerprint,
-  isPidAlive,
+  registryIdentityOf,
+  canSignalRegistryEntry,
 } from "./server-registry.js"
 import { findOpenPort } from "./supervisor.js"
-
 // ── Types ──
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
@@ -333,8 +333,11 @@ export const resolveServer = (
           return { _tag: "attached" as const, url: existing.rpcUrl }
         }
       }
-      // Stale — kill and clean up
-      if (existing.hostname === os.hostname() && isPidAlive(existing.pid)) {
+      // Stale — only signal when the live process proves it owns this registry identity.
+      const ownsRegistryIdentity = validation.valid
+        ? yield* probeServer(existing.rpcUrl, registryIdentityOf(existing))
+        : false
+      if (ownsRegistryIdentity && canSignalRegistryEntry(existing)) {
         yield* Effect.try({
           try: () => process.kill(existing.pid, "SIGTERM"),
           catch: () => undefined,

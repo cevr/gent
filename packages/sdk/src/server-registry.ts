@@ -222,6 +222,23 @@ export const acquireLock = (home: string, dbPath: string): boolean => {
   return true
 }
 
+export interface ServerRegistryIdentity {
+  readonly serverId: string
+  readonly dbPath: string
+  readonly buildFingerprint: string
+}
+
+/** Identity tuple a live gent server must report before its PID can be signaled. */
+export const registryIdentityOf = (entry: ServerRegistryEntry): ServerRegistryIdentity => ({
+  serverId: entry.serverId,
+  dbPath: entry.dbPath,
+  buildFingerprint: entry.buildFingerprint,
+})
+
+/** Local liveness precondition for signaling; not sufficient ownership proof by itself. */
+export const canSignalRegistryEntry = (entry: ServerRegistryEntry): boolean =>
+  entry.hostname === hostname() && isPidAlive(entry.pid)
+
 /** Release a cross-process lock. Only releases if we own it (PID match). */
 export const releaseLock = (home: string, dbPath: string): void => {
   const lockDir = join(ensureRegistryDir(home), `${registryHash(dbPath)}.lock`)
