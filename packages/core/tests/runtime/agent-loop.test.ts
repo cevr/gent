@@ -305,6 +305,13 @@ const scriptedProvider = (
   })
 }
 
+const retryableStreamError = () =>
+  new ProviderError({
+    message: "rate limit exceeded (429)",
+    model: "test",
+    cause: { headers: new Headers({ "retry-after": "0" }) },
+  })
+
 const makeLiveToolLayer = (
   providerLayer: Layer.Layer<Provider>,
   tools: AnyCapabilityContribution[] = [],
@@ -1177,6 +1184,83 @@ describe("streaming", () => {
       ),
     )
   })
+
+  test("retries retryable provider stream-consumption failures before output", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      let streamCalls = 0
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.sync(() => {
+            streamCalls += 1
+            if (streamCalls === 1) {
+              return Stream.fail(retryableStreamError())
+            }
+            return Stream.fromIterable([
+              textDeltaPart("after retry"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        generate: () => Effect.succeed("test response"),
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("stream-retry-session", "stream-retry-branch", "retry")
+
+        yield* runAgentLoop(agentLoop, message)
+
+        const events = yield* Ref.get(eventsRef)
+        const tags = events.map((event) => event._tag)
+        expect(streamCalls).toBe(2)
+        expect(tags).toContain("ProviderRetrying")
+        expect(tags).not.toContain("ErrorOccurred")
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "after retry" })])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
+
+  test("does not retry retryable provider stream failures after partial output", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      let streamCalls = 0
+      const providerLayer = Layer.succeed(Provider, {
+        stream: () =>
+          Effect.sync(() => {
+            streamCalls += 1
+            if (streamCalls === 1) {
+              return Stream.concat(
+                Stream.fromIterable([textDeltaPart("partial answer")]),
+                Stream.fail(retryableStreamError()),
+              )
+            }
+            return Stream.fromIterable([
+              textDeltaPart("duplicate answer"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        generate: () => Effect.succeed("test response"),
+      })
+
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* AgentLoop
+        const storage = yield* Storage
+        const message = makeMessage("stream-no-retry-session", "stream-no-retry-branch", "retry")
+
+        yield* runAgentLoop(agentLoop, message)
+
+        const events = yield* Ref.get(eventsRef)
+        const tags = events.map((event) => event._tag)
+        expect(streamCalls).toBe(1)
+        expect(tags).not.toContain("ProviderRetrying")
+        expect(tags).toContain("ErrorOccurred")
+
+        const assistant = yield* storage.getMessage(assistantMessageIdForTurn(message.id, 1))
+        expect(assistant?.parts).toEqual([new TextPart({ type: "text", text: "partial answer" })])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
+    }).pipe(Effect.runPromise))
 
   test("native response error parts fail the stream and preserve partial output", () =>
     Effect.gen(function* () {
