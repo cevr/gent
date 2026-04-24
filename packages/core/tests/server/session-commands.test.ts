@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Context, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { createSequenceProvider, createSignalProvider, textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
@@ -147,6 +147,7 @@ const sendFailingSessionCommandsLayer = () => {
     getMetrics: () =>
       Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
     watchState: () => Effect.succeed(Stream.empty),
+    terminateSession: () => Effect.void,
   })
   const deps = Layer.mergeAll(
     storageLayer,
@@ -176,7 +177,32 @@ const sessionCommandsLayer = () => {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
-const sessionCommandsLayerWithMachineProbe = (terminated: Array<SessionId>) => {
+const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
+  Layer.succeed(SessionRuntime, {
+    dispatch: () => Effect.void,
+    runPrompt: () => Effect.void,
+    drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+    getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
+    getState: () =>
+      Effect.succeed(
+        SessionRuntimeStateSchema.Idle.make({
+          agent: "cowork" as const,
+          queue: emptyQueueSnapshot(),
+        }),
+      ),
+    getMetrics: () =>
+      Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
+    watchState: () => Effect.succeed(Stream.empty),
+    terminateSession: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  })
+
+const sessionCommandsLayerWithMachineProbe = (
+  terminated: Array<SessionId>,
+  runtimeTerminated?: Array<SessionId>,
+) => {
   const storageLayer = Storage.MemoryWithSql()
   const machineProbeLayer = Layer.succeed(MachineEngine, {
     publish: () => Effect.succeed([]),
@@ -191,7 +217,9 @@ const sessionCommandsLayerWithMachineProbe = (terminated: Array<SessionId>) => {
   const deps = Layer.mergeAll(
     storageLayer,
     subTagLayers(storageLayer),
-    SessionRuntime.Test(),
+    runtimeTerminated === undefined
+      ? SessionRuntime.Test()
+      : sessionRuntimeProbeLayer(runtimeTerminated),
     EventStore.Memory,
     EventPublisher.Test(),
     Provider.Debug(),
@@ -872,6 +900,34 @@ describe("session.delete", () => {
     ),
   )
 
+  it.live("closes runtime streams and interrupts active loops on public delete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* createSignalProvider("delete me later")
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({ cwd: process.cwd() })
+        const runtimeClosed = yield* collectSessionEvents(
+          client.session.watchRuntime({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+          }),
+        )
+
+        yield* client.message.send({
+          sessionId: created.sessionId,
+          branchId: created.branchId,
+          content: "start an active loop before delete",
+        })
+        yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
+
+        yield* client.session.delete({ sessionId: created.sessionId })
+        yield* Deferred.await(runtimeClosed).pipe(Effect.timeout("5 seconds"))
+
+        expect(yield* client.session.get({ sessionId: created.sessionId })).toBeNull()
+      }),
+    ),
+  )
+
   it.live("is idempotent when deleting an already deleted session", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -889,6 +945,7 @@ describe("session.delete", () => {
 
   it.live("cleans runtime state for descendant sessions before durable cascade", () => {
     const terminated: Array<SessionId> = []
+    const runtimeTerminated: Array<SessionId> = []
     return Effect.scoped(
       Effect.gen(function* () {
         const commands = yield* SessionCommands
@@ -935,8 +992,9 @@ describe("session.delete", () => {
         expect(yield* cwdRegistry.lookup(parent.sessionId)).toBeUndefined()
         expect(yield* cwdRegistry.lookup(child.sessionId)).toBeUndefined()
         expect(yield* cwdRegistry.lookup(grandchild.sessionId)).toBeUndefined()
+        expect(runtimeTerminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
         expect(terminated).toEqual([parent.sessionId, child.sessionId, grandchild.sessionId])
-      }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated))),
+      }).pipe(Effect.provide(sessionCommandsLayerWithMachineProbe(terminated, runtimeTerminated))),
     )
   })
 

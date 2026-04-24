@@ -33,6 +33,7 @@ import {
 import { SessionProfileCache, type SessionProfileCacheService } from "../runtime/session-profile.js"
 import {
   SessionRuntime,
+  type SessionRuntimeService,
   applySteerCommand,
   sendUserMessageCommand,
 } from "../runtime/session-runtime.js"
@@ -92,10 +93,14 @@ const cleanupSessionRuntimeState = Effect.fn("SessionCommands.cleanupSessionRunt
     readonly sessionStorage: SessionStorageService
     readonly ambientRuntime: MachineEngineService
     readonly profileCache?: SessionProfileCacheService
+    readonly sessionRuntime?: SessionRuntimeService
     readonly eventPublisher: EventPublisherService
     readonly eventStore: EventStoreService
     readonly sessionCwdRegistry: SessionCwdRegistryService
   }) {
+    if (input.sessionRuntime !== undefined) {
+      yield* input.sessionRuntime.terminateSession(input.sessionId)
+    }
     yield* terminateSessionMachineRuntime(input)
     yield* input.eventPublisher.terminateSession(input.sessionId)
     yield* input.eventStore.removeSession(input.sessionId)
@@ -186,6 +191,7 @@ const makeSessionMutationsService: Effect.Effect<
   const sessionCwdRegistry = yield* SessionCwdRegistry
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
+  const sessionRuntimeOpt = yield* Effect.serviceOption(SessionRuntime)
 
   const transactWithEvent = <A, E, R>(
     mutation: Effect.Effect<A, E, R>,
@@ -265,6 +271,7 @@ const makeSessionMutationsService: Effect.Effect<
       sessionStorage,
       ambientRuntime: extensionStateRuntime,
       ...(profileCache !== undefined ? { profileCache } : {}),
+      ...(sessionRuntimeOpt._tag === "Some" ? { sessionRuntime: sessionRuntimeOpt.value } : {}),
       eventPublisher,
       eventStore,
       sessionCwdRegistry,
@@ -968,6 +975,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           sessionStorage,
           ambientRuntime: extensionStateRuntime,
           ...(profileCache !== undefined ? { profileCache } : {}),
+          sessionRuntime,
           eventPublisher,
           eventStore,
           sessionCwdRegistry,

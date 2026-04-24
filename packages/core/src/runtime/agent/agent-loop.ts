@@ -1755,6 +1755,7 @@ type LoopHandle = {
   persistQueueCurrentState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   persistQueueState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   resourceManager: ResourceManagerService
+  closed: Deferred.Deferred<void>
   scope: Scope.Closeable
 }
 
@@ -2041,6 +2042,7 @@ export interface AgentLoopService {
     sessionId: SessionId
     branchId: BranchId
   }) => Effect.Effect<Stream.Stream<LoopRuntimeState>, AgentLoopError>
+  readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
@@ -2082,6 +2084,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const configServiceForRun = yield* ConfigService
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
+        const terminatedSessionsRef = yield* Ref.make<Set<SessionId>>(new Set())
         const loopsSemaphore = yield* Semaphore.make(1)
         const loopWatcherScope = yield* Scope.make()
 
@@ -2127,13 +2130,20 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             }),
           )
 
+        const closeLoopHandle = (handle: LoopHandle) =>
+          Effect.gen(function* () {
+            yield* interruptActiveStream(handle.activeStreamRef)
+            yield* Deferred.succeed(handle.closed, undefined).pipe(Effect.ignore)
+            yield* Scope.close(handle.scope, Exit.void)
+          }).pipe(Effect.ignore)
+
         const cleanupLoopIfCurrent = (
           sessionId: SessionId,
           branchId: BranchId,
           handle: LoopHandle,
         ) =>
           removeLoopIfCurrent(sessionId, branchId, handle).pipe(
-            Effect.andThen(Scope.close(handle.scope, Exit.void)),
+            Effect.andThen(closeLoopHandle(handle)),
             Effect.ignore,
           )
 
@@ -2233,6 +2243,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const idlePersistedRef = yield* SubscriptionRef.make(0)
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
+            const closed = yield* Deferred.make<void>()
             const runtimeStateRef = yield* SubscriptionRef.make(
               runtimeStateFromLoopState(initialLoopState, initialQueue),
             )
@@ -2786,6 +2797,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               persistQueueCurrentState,
               persistQueueState,
               resourceManager,
+              closed,
               scope: loopScope,
             }
           })
@@ -2804,6 +2816,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const created = yield* Effect.withSpan("AgentLoop.getLoop.semaphore")(
             loopsSemaphore.withPermits(1)(
               Effect.gen(function* () {
+                if ((yield* Ref.get(terminatedSessionsRef)).has(sessionId)) {
+                  return yield* new AgentLoopError({
+                    message: `Session runtime terminated: ${sessionId}`,
+                  })
+                }
                 const existing = (yield* Ref.get(loopsRef)).get(key)
                 if (existing !== undefined) return undefined
                 const handle = yield* makeLoop(sessionId, branchId, sideMutationSemaphore)
@@ -2819,6 +2836,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           if (created !== undefined) {
             yield* Effect.gen(function* () {
               yield* created.actor.start
+              if (yield* Deferred.isDone(created.closed)) {
+                return yield* new AgentLoopError({
+                  message: `Session runtime terminated: ${sessionId}`,
+                })
+              }
               yield* created.refreshRuntimeState
               yield* Effect.forkIn(
                 created.actor.awaitExit.pipe(
@@ -2863,6 +2885,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           sessionId: SessionId,
           branchId: BranchId,
         ) {
+          if ((yield* Ref.get(terminatedSessionsRef)).has(sessionId)) return undefined
           const existing = yield* findLoop(sessionId, branchId)
           if (existing !== undefined) return existing
 
@@ -2884,6 +2907,45 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         })
 
         const currentRuntimeState = (loop: LoopHandle) => SubscriptionRef.get(loop.runtimeStateRef)
+
+        const terminateSession = Effect.fn("AgentLoop.terminateSession")(function* (
+          sessionId: SessionId,
+        ) {
+          const prefix = `${sessionId}:`
+          const loopsToClose = yield* loopsSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              yield* Ref.update(terminatedSessionsRef, (terminated) => {
+                const next = new Set(terminated)
+                next.add(sessionId)
+                return next
+              })
+
+              const selected = Array.from((yield* Ref.get(loopsRef)).entries()).filter(([key]) =>
+                key.startsWith(prefix),
+              )
+              yield* Ref.update(loopsRef, (loops) => {
+                const next = new Map(loops)
+                for (const [key] of selected) {
+                  next.delete(key)
+                }
+                return next
+              })
+              yield* Ref.update(mutationSemaphoresRef, (semaphores) => {
+                const next = new Map(semaphores)
+                for (const key of next.keys()) {
+                  if (key.startsWith(prefix)) next.delete(key)
+                }
+                return next
+              })
+              return selected.map(([, loop]) => loop)
+            }),
+          )
+
+          yield* Effect.forEach(loopsToClose, closeLoopHandle, {
+            concurrency: "unbounded",
+            discard: true,
+          })
+        })
 
         const turnControlOwnerFor = (
           loop: LoopHandle,
@@ -3449,8 +3511,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           watchState: (input) =>
             Effect.gen(function* () {
               const loop = yield* getLoop(input.sessionId, input.branchId)
-              return SubscriptionRef.changes(loop.runtimeStateRef)
+              return SubscriptionRef.changes(loop.runtimeStateRef).pipe(
+                Stream.interruptWhen(Deferred.await(loop.closed)),
+              )
             }),
+
+          terminateSession,
         }
 
         const failTurnControlCommand = (
@@ -3506,11 +3572,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const loops = yield* Ref.get(loopsRef)
-            yield* Effect.forEach(
-              Array.from(loops.values()),
-              (loop) => Scope.close(loop.scope, Exit.void),
-              { concurrency: "unbounded" },
-            )
+            yield* Effect.forEach(Array.from(loops.values()), closeLoopHandle, {
+              concurrency: "unbounded",
+            })
             yield* Scope.close(loopWatcherScope, Exit.void)
           }),
         )
@@ -3530,6 +3594,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       respondInteraction: () => Effect.void,
       recordToolResult: () => Effect.void,
       invokeTool: () => Effect.void,
+      terminateSession: () => Effect.void,
       getState: () =>
         Effect.succeed(
           LoopRuntimeStateSchema.Idle.make({

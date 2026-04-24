@@ -194,6 +194,7 @@ export interface SessionRuntimeService {
   readonly watchState: (
     input: SessionRuntimeTarget,
   ) => Effect.Effect<Stream.Stream<SessionRuntimeState>, SessionRuntimeError>
+  readonly terminateSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
@@ -529,6 +530,8 @@ const makeLiveSessionRuntime: Effect.Effect<
       agentLoop
         .watchState(input)
         .pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
+
+    terminateSession: (sessionId) => agentLoop.terminateSession(sessionId),
   } satisfies SessionRuntimeService
 })
 
@@ -556,5 +559,6 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
       getMetrics: () =>
         Effect.succeed({ turns: 0, tokens: 0, toolCalls: 0, retries: 0, durationMs: 0 }),
       watchState: () => Effect.succeed(Stream.empty),
+      terminateSession: () => Effect.void,
     })
 }
