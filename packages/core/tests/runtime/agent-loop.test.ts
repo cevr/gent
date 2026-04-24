@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Cause, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as Response from "effect/unstable/ai/Response"
 import * as fs from "node:fs"
@@ -42,6 +42,7 @@ import {
   type AnyCapabilityContribution,
   type AnyResourceContribution,
 } from "@gent/core/extensions/api"
+import { defineResource } from "@gent/core/domain/contribution"
 import { Permission } from "@gent/core/domain/permission"
 import {
   EventEnvelope,
@@ -78,6 +79,7 @@ import {
 } from "../../src/runtime/agent/agent-loop.state"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
+import { reducerActor } from "../extensions/helpers/reducer-actor"
 
 // ============================================================================
 // Shared helpers
@@ -154,6 +156,50 @@ const makeLayer = (
     BunServices.layer,
     ResourceManagerLive,
   )
+  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  return Layer.provideMerge(
+    AgentLoop.Live({ baseSections: [] }),
+    Layer.merge(deps, eventPublisherLayer),
+  )
+}
+
+const makeLayerWithMachineExtensions = (
+  providerLayer: Layer.Layer<Provider>,
+  extensions: Parameters<typeof MachineEngine.fromExtensions>[0],
+  turnControlLayer: Layer.Layer<ExtensionTurnControl> = ExtensionTurnControl.Live,
+) => {
+  const resolved = resolveExtensions([
+    {
+      manifest: { id: "agents" },
+      scope: "builtin" as const,
+      sourcePath: "test",
+      contributions: {
+        agents: Object.values(Agents),
+      },
+    },
+    ...extensions,
+  ])
+  const registryLayer = Layer.merge(
+    ExtensionRegistry.fromResolved(resolved),
+    DriverRegistry.fromResolved({
+      modelDrivers: resolved.modelDrivers,
+      externalDrivers: resolved.externalDrivers,
+    }),
+  )
+  const baseDeps = Layer.mergeAll(
+    Storage.TestWithSql(),
+    providerLayer,
+    registryLayer,
+    turnControlLayer,
+    RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    ConfigService.Test(),
+    EventStore.Memory,
+    ToolRunner.Test(),
+    BunServices.layer,
+    ResourceManagerLive,
+  )
+  const machineLayer = Layer.provide(MachineEngine.fromExtensions(resolved.extensions), baseDeps)
+  const deps = Layer.merge(baseDeps, machineLayer)
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
     AgentLoop.Live({ baseSections: [] }),
@@ -2216,6 +2262,88 @@ describe("checkpoint persistence", () => {
 
           yield* Deferred.succeed(gate, undefined)
           yield* Fiber.join(fiber)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("turn-control follow-up emitted during loop inspection does not deadlock", async () => {
+    const gate = await Effect.runPromise(Deferred.make<void>())
+    const firstStarted = await Effect.runPromise(Deferred.make<void>())
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+              return finishPart({ finishReason: "stop" })
+            }),
+          ),
+        ),
+      generate: () => Effect.succeed("test response"),
+    })
+    const inspectorFollowUp = {
+      manifest: { id: "inspector-follow-up", version: "1.0.0" },
+      scope: "builtin" as const,
+      sourcePath: "test",
+      contributions: {
+        resources: [
+          defineResource({
+            scope: "process",
+            layer: Layer.empty as Layer.Layer<unknown>,
+            machine: reducerActor({
+              id: "inspector-follow-up",
+              initial: { queued: false },
+              reduce: (state, event) =>
+                event._tag === "MachineInspected" &&
+                event.actorId.startsWith("agent-loop:") &&
+                event.inspectionType === "@machine.transition" &&
+                !state.queued
+                  ? { state: { queued: true } }
+                  : { state },
+              afterTransition: (before, after) =>
+                !before.queued && after.queued
+                  ? [{ _tag: "QueueFollowUp", content: "inspection follow-up" }]
+                  : [],
+            }),
+          }),
+        ],
+      },
+    } satisfies Parameters<typeof MachineEngine.fromExtensions>[0][number]
+    const sharedTurnControl = await Effect.runPromise(
+      Effect.scoped(
+        Effect.map(Layer.build(ExtensionTurnControl.Live), (context) =>
+          Context.get(context, ExtensionTurnControl),
+        ),
+      ),
+    )
+    const layer = makeLayerWithMachineExtensions(
+      providerLayer,
+      [inspectorFollowUp],
+      Layer.succeed(ExtensionTurnControl, sharedTurnControl),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          const message = makeMessage("turn-control-inspection-session", "b1", "first")
+          yield* submitAgentLoop(agentLoop, message).pipe(Effect.timeout("1 second"))
+          yield* Deferred.await(firstStarted)
+
+          const snapshot = yield* agentLoop.getQueue({
+            sessionId: "turn-control-inspection-session",
+            branchId: "b1",
+          })
+          expect(snapshot.followUp.map((entry) => entry.content)).toContain("inspection follow-up")
+
+          yield* Deferred.succeed(gate, undefined)
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: message.sessionId, branchId: message.branchId },
+            "Idle",
+          )
         }).pipe(Effect.provide(layer)),
       ),
     )

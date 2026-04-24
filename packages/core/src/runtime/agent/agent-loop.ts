@@ -98,6 +98,7 @@ import {
 import {
   ExtensionTurnControl,
   TurnControlError,
+  type CurrentTurnControlOwnerService,
   type TurnControlEnvelope,
 } from "../extensions/turn-control.js"
 import { withWideEvent, WideEvent, providerStreamBoundary } from "../wide-event-boundary"
@@ -1658,6 +1659,8 @@ const applyAgentOverrides = (
 type LoopHandle = {
   actor: LoopActor
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
+  stateRef: Ref.Ref<LoopState>
+  startingStateRef: Ref.Ref<LoopState | undefined>
   queueRef: Ref.Ref<LoopQueueState>
   idlePersistedRef: SubscriptionRef.SubscriptionRef<number>
   turnFailureRef: SubscriptionRef.SubscriptionRef<TurnFailureState>
@@ -1678,6 +1681,11 @@ type LoopHandle = {
   updateQueue: (
     update: (queue: LoopQueueState) => LoopQueueState,
   ) => Effect.Effect<void, AgentLoopError>
+  persistQueueSnapshot: (
+    state: LoopState,
+    queue: LoopQueueState,
+  ) => Effect.Effect<void, AgentLoopError>
+  persistQueueCurrentState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   persistQueueState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   resourceManager: ResourceManagerService
   scope: Scope.Closeable
@@ -2150,13 +2158,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const turnMetricsRef = yield* Ref.make(emptyTurnMetrics())
             const interruptedRef = yield* Ref.make(false)
             const currentAgent = yield* resolveStoredAgent({ storage, sessionId, branchId })
+            const initialLoopState = buildIdleState({ currentAgent })
+            const stateRef = yield* Ref.make<LoopState>(initialLoopState)
+            const startingStateRef = yield* Ref.make<LoopState | undefined>(undefined)
             const queueRef = yield* Ref.make(initialQueue)
             const queueMutationSemaphore = yield* Semaphore.make(1)
             const idlePersistedRef = yield* SubscriptionRef.make(0)
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const runtimeStateRef = yield* SubscriptionRef.make(
-              runtimeStateFromLoopState(buildIdleState({ currentAgent }), initialQueue),
+              runtimeStateFromLoopState(initialLoopState, initialQueue),
             )
             let loopActor: LoopActor | undefined
             const inspector = makePublishingInspector({
@@ -2181,6 +2192,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     runtimeStateRef,
                     runtimeStateFromLoopState(state, queue),
                   )
+                  yield* Ref.set(stateRef, state)
+                  yield* Ref.set(startingStateRef, undefined)
                   return
                 }
                 yield* checkpointStorage.upsert(
@@ -2195,6 +2208,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   Effect.annotateLogs({ nextState: state._tag }),
                 )
                 yield* SubscriptionRef.set(runtimeStateRef, runtimeStateFromLoopState(state, queue))
+                yield* Ref.set(stateRef, state)
+                yield* Ref.set(startingStateRef, undefined)
               }).pipe(
                 Effect.mapError(
                   (error) =>
@@ -2240,6 +2255,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 yield* persistRuntimeSnapshot(yield* loopActor.snapshot, nextQueue)
                 yield* Ref.set(queueRef, nextQueue)
               })
+
+            const persistQueueSnapshot = (state: LoopState, nextQueue: LoopQueueState) =>
+              Effect.gen(function* () {
+                yield* persistRuntimeSnapshot(state, nextQueue)
+                yield* Ref.set(queueRef, nextQueue)
+              })
+
+            const persistQueueCurrentState = (nextQueue: LoopQueueState) =>
+              Ref.get(stateRef).pipe(
+                Effect.flatMap((state) => persistQueueSnapshot(state, nextQueue)),
+              )
 
             const takeNextQueuedTurnSerialized = queueMutationSemaphore.withPermits(1)(
               Effect.gen(function* () {
@@ -2510,7 +2536,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const loopMachine = Machine.make({
               state: AgentLoopState,
               event: AgentLoopEvent,
-              initial: buildIdleState({ currentAgent }),
+              initial: initialLoopState,
             })
               // Idle → Running
               .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
@@ -2644,6 +2670,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                           return Option.none<LoopState>()
                         }
                         yield* Ref.set(queueRef, recovered.value.queue)
+                        yield* Ref.set(stateRef, recovered.value.state)
                         yield* SubscriptionRef.set(
                           runtimeStateRef,
                           runtimeStateFromLoopState(recovered.value.state, recovered.value.queue),
@@ -2675,6 +2702,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             return {
               actor: spawnedLoopActor,
               activeStreamRef,
+              stateRef,
+              startingStateRef,
               queueRef,
               idlePersistedRef,
               turnFailureRef,
@@ -2686,6 +2715,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               persistState: persistRuntimeState,
               refreshRuntimeState,
               updateQueue,
+              persistQueueSnapshot,
+              persistQueueCurrentState,
               persistQueueState,
               resourceManager,
               scope: loopScope,
@@ -2787,28 +2818,145 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         const currentRuntimeState = (loop: LoopHandle) => SubscriptionRef.get(loop.runtimeStateRef)
 
+        const turnControlOwnerFor = (
+          loop: LoopHandle,
+          sessionId: SessionId,
+          branchId: BranchId,
+          stateForQueuePersistence?: LoopState,
+        ): CurrentTurnControlOwnerService => ({
+          matches: (command) => command.sessionId === sessionId && command.branchId === branchId,
+          apply: (command) =>
+            Effect.gen(function* () {
+              if (command.sessionId !== sessionId || command.branchId !== branchId) {
+                return false
+              }
+              switch (command._tag) {
+                case "QueueFollowUp": {
+                  const message = Message.cases.regular.make({
+                    id: MessageId.make(Bun.randomUUIDv7()),
+                    sessionId: command.sessionId,
+                    branchId: command.branchId,
+                    role: "user",
+                    parts: [new TextPart({ type: "text", text: command.content })],
+                    createdAt: yield* DateTime.nowAsDate,
+                    metadata: command.metadata,
+                  })
+                  const currentQueue = yield* Ref.get(loop.queueRef)
+                  if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
+                    return yield* new TurnControlError({
+                      command: command._tag,
+                      message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                    })
+                  }
+                  const nextQueue = appendFollowUpQueueState(currentQueue, { message })
+                  const persist =
+                    stateForQueuePersistence === undefined
+                      ? loop.persistQueueState(nextQueue)
+                      : loop.persistQueueSnapshot(stateForQueuePersistence, nextQueue)
+                  yield* persist.pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TurnControlError({
+                          command: command._tag,
+                          message: `Failed to apply ${command._tag} turn-control command`,
+                          cause,
+                        }),
+                    ),
+                  )
+                  return true
+                }
+                case "Interject": {
+                  const message = Message.cases.interjection.make({
+                    id: MessageId.make(Bun.randomUUIDv7()),
+                    sessionId: command.sessionId,
+                    branchId: command.branchId,
+                    role: "user",
+                    parts: [new TextPart({ type: "text", text: command.content })],
+                    createdAt: yield* DateTime.nowAsDate,
+                  })
+                  const nextQueue = appendSteeringItem(yield* Ref.get(loop.queueRef), { message })
+                  const persist =
+                    stateForQueuePersistence === undefined
+                      ? loop.persistQueueState(nextQueue)
+                      : loop.persistQueueSnapshot(stateForQueuePersistence, nextQueue)
+                  yield* persist.pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TurnControlError({
+                          command: command._tag,
+                          message: `Failed to apply ${command._tag} turn-control command`,
+                          cause,
+                        }),
+                    ),
+                  )
+                  const state = stateForQueuePersistence ?? (yield* currentRuntimeState(loop))
+                  if (state._tag === "Running" && stateForQueuePersistence === undefined) {
+                    yield* interruptActiveStream(loop.activeStreamRef)
+                  }
+                  return true
+                }
+              }
+            }),
+        })
+
+        const withQueueMutationOwner = <A, E, R>(
+          loop: LoopHandle,
+          sessionId: SessionId,
+          branchId: BranchId,
+          effect: Effect.Effect<A, E, R>,
+          stateForQueuePersistence?: LoopState,
+        ): Effect.Effect<A, E, R> =>
+          extensionTurnControl.withOwner(
+            turnControlOwnerFor(loop, sessionId, branchId, stateForQueuePersistence),
+            effect,
+          )
+
         const submitTurn = Effect.fn("AgentLoop.submitTurn")(function* (
           command: SubmitTurnCommand,
         ) {
           const loop = yield* getLoop(command.message.sessionId, command.message.branchId)
           const item = buildQueuedTurnItem(command)
-          yield* loop.queueMutationSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const loopState = yield* loop.actor.snapshot
-              if (loopState._tag !== "Idle") {
-                const nextQueue = appendFollowUpQueueState(yield* Ref.get(loop.queueRef), item)
-                yield* loop.persistQueueState(nextQueue)
-                return
-              }
+          const reservedStart = yield* withQueueMutationOwner(
+            loop,
+            command.message.sessionId,
+            command.message.branchId,
+            loop.queueMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const startingState = yield* Ref.get(loop.startingStateRef)
+                if (startingState !== undefined) {
+                  yield* loop.persistQueueSnapshot(
+                    startingState,
+                    appendFollowUpQueueState(yield* Ref.get(loop.queueRef), item),
+                  )
+                  return
+                }
+                const projectedState = yield* currentRuntimeState(loop)
+                if (projectedState._tag !== "Idle") {
+                  const nextQueue = appendFollowUpQueueState(yield* Ref.get(loop.queueRef), item)
+                  yield* loop.persistQueueCurrentState(nextQueue)
+                  return
+                }
+                const loopState = yield* Ref.get(loop.stateRef)
+                if (loopState._tag !== "Idle") {
+                  const nextQueue = appendFollowUpQueueState(yield* Ref.get(loop.queueRef), item)
+                  yield* loop.persistQueueCurrentState(nextQueue)
+                  return
+                }
 
-              yield* mapLoopActorCause(
-                command.message.sessionId,
-                command.message.branchId,
-                loop,
-                loop.actor.call(AgentLoopEvent.Start({ item })),
-              )
-            }),
+                const reservedRunningState = buildRunningState(loopState, item)
+                yield* Ref.set(loop.startingStateRef, reservedRunningState)
+                return reservedRunningState
+              }),
+            ),
           )
+          if (reservedStart !== undefined) {
+            yield* mapLoopActorCause(
+              command.message.sessionId,
+              command.message.branchId,
+              loop,
+              loop.actor.call(AgentLoopEvent.Start({ item })),
+            )
+          }
         })
 
         const runTurn = Effect.fn("AgentLoop.runTurn")(function* (command: RunTurnCommand) {
@@ -3035,31 +3183,54 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const existingLoop = yield* findLoop(message.sessionId, message.branchId)
           const loop = existingLoop ?? (yield* getLoop(message.sessionId, message.branchId))
           const item = { message }
-          yield* loop.queueMutationSemaphore.withPermits(1)(
-            Effect.gen(function* () {
-              const currentQueue = yield* Ref.get(loop.queueRef)
-              if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
-                return yield* new AgentLoopError({
-                  message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
-                })
-              }
-              if (existingLoop === undefined) {
-                yield* loop.persistQueueState(appendFollowUpQueueState(currentQueue, item))
-                return
-              }
-              const loopState = yield* loop.actor.snapshot
-              if (loopState._tag !== "Idle") {
-                yield* loop.persistQueueState(appendFollowUpQueueState(currentQueue, item))
-                return
-              }
-              yield* mapLoopActorCause(
-                message.sessionId,
-                message.branchId,
-                loop,
-                loop.actor.call(AgentLoopEvent.Start({ item })),
-              )
-            }),
+          const reservedStart = yield* withQueueMutationOwner(
+            loop,
+            message.sessionId,
+            message.branchId,
+            loop.queueMutationSemaphore.withPermits(1)(
+              Effect.gen(function* () {
+                const currentQueue = yield* Ref.get(loop.queueRef)
+                if (countQueuedFollowUps(currentQueue) >= DEFAULTS.followUpQueueMax) {
+                  return yield* new AgentLoopError({
+                    message: `Follow-up queue full (max ${DEFAULTS.followUpQueueMax})`,
+                  })
+                }
+                if (existingLoop === undefined) {
+                  yield* loop.persistQueueState(appendFollowUpQueueState(currentQueue, item))
+                  return
+                }
+                const projectedState = yield* currentRuntimeState(loop)
+                const startingState = yield* Ref.get(loop.startingStateRef)
+                if (startingState !== undefined) {
+                  yield* loop.persistQueueSnapshot(
+                    startingState,
+                    appendFollowUpQueueState(currentQueue, item),
+                  )
+                  return
+                }
+                if (projectedState._tag !== "Idle") {
+                  yield* loop.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+                  return
+                }
+                const loopState = yield* Ref.get(loop.stateRef)
+                if (loopState._tag !== "Idle") {
+                  yield* loop.persistQueueCurrentState(appendFollowUpQueueState(currentQueue, item))
+                  return
+                }
+                const reservedRunningState = buildRunningState(loopState, item)
+                yield* Ref.set(loop.startingStateRef, reservedRunningState)
+                return reservedRunningState
+              }),
+            ),
           )
+          if (reservedStart !== undefined) {
+            yield* mapLoopActorCause(
+              message.sessionId,
+              message.branchId,
+              loop,
+              loop.actor.call(AgentLoopEvent.Start({ item })),
+            )
+          }
         })
 
         const service: AgentLoopService = {
