@@ -1,7 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import { SessionId } from "@gent/core/domain/ids"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
@@ -168,6 +168,23 @@ describe("session queries", () => {
             name: "Orphan",
             cwd: process.cwd(),
             parentSessionId: SessionId.make("nonexistent"),
+          }),
+        )
+
+        expect(result._tag).toBe("Failure")
+      }),
+    ),
+  )
+
+  it.live("createSession rejects parent branch without parent session through the public API", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const result = yield* Effect.result(
+          client.session.create({
+            name: "Dangling branch parent",
+            cwd: process.cwd(),
+            parentBranchId: BranchId.make("dangling-parent-branch"),
           }),
         )
 
