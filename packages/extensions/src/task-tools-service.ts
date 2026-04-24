@@ -15,7 +15,7 @@ import {
   type SessionId,
   type BranchId,
 } from "@gent/core/extensions/api"
-import { EventPublisher } from "./builtin-internal.js"
+import { EventPublisher } from "../internal/builtin.js"
 import { TaskStorage, type TaskStorageService } from "./task-tools-storage.js"
 
 // Extension-owned task service. Present only when @gent/task-tools is loaded.

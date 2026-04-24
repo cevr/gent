@@ -35,6 +35,14 @@ const sourceLines = (file: string): ReadonlyArray<{ line: number; text: string }
     .split("\n")
     .map((text, index) => ({ line: index + 1, text }))
 
+const importProbe = (specifier: string) =>
+  Bun.spawnSync({
+    cmd: ["bun", "-e", `await import(${JSON.stringify(specifier)})`],
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+
 const isCommentLine = (text: string) => {
   const trimmed = text.trim()
   return (
@@ -307,8 +315,37 @@ describe("architecture policy", () => {
     expect(pkg).not.toMatch(/"\.\/extensions\/internal"/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal": null/)
     expect(extensionsPkg).toMatch(/"\.\/core-internal\.js": null/)
+    expect(extensionsPkg).toMatch(/"\.\/core-internal\.ts": null/)
     expect(extensionsPkg).toMatch(/"\.\/builtin-internal": null/)
     expect(extensionsPkg).toMatch(/"\.\/builtin-internal\.js": null/)
+    expect(extensionsPkg).toMatch(/"\.\/builtin-internal\.ts": null/)
+    expect(extensionsPkg).toMatch(/"\.\/internal\/\*": null/)
+  })
+
+  test("workspace paths do not bypass blocked extension internals", () => {
+    const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
+      readonly compilerOptions?: {
+        readonly paths?: Record<string, ReadonlyArray<string>>
+      }
+    }
+    const paths = tsconfig.compilerOptions?.paths ?? {}
+
+    expect(paths["@gent/extensions/builtin-internal"]).toEqual([
+      "./packages/extensions/.blocked-internal.ts",
+    ])
+    expect(paths["@gent/extensions/core-internal"]).toEqual([
+      "./packages/extensions/.blocked-internal.ts",
+    ])
+    expect(paths["@gent/extensions/internal/*"]).toEqual([
+      "./packages/extensions/.blocked-internal.ts",
+    ])
+    expect(paths["@gent/extensions/*"]).toEqual(["./packages/extensions/src/*"])
+    expect(importProbe("@gent/extensions/builtin-internal").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/builtin-internal.js").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/core-internal").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/core-internal.js").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/internal/builtin").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/internal/builtin.js").exitCode).not.toBe(0)
   })
 
   test("runtime modules do not import server prompt internals", () => {
@@ -345,16 +382,49 @@ describe("architecture policy", () => {
 
   test("builtin extensions have exactly one explicit internal membrane", () => {
     const bridgeImport = "../../core/src/extensions/internal.js"
+    const legacyBridgeName = "core-internal"
+    const membraneSource = readFileSync(
+      pathResolve(ROOT, "packages/extensions/internal/builtin.ts"),
+      "utf8",
+    )
     const violations = collectSourceFiles()
       .filter((file) => file.includes("/packages/extensions/src/"))
-      .filter((file) => !file.endsWith("/packages/extensions/src/builtin-internal.ts"))
       .flatMap((file) =>
         sourceLines(file)
           .filter(({ text }) => !isCommentLine(text))
           .filter(({ text }) => text.includes(bridgeImport))
           .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
       )
+    const membraneImports = collectSourceFiles()
+      .filter((file) => file.includes("/packages/extensions/src/"))
+      .flatMap((file) =>
+        sourceLines(file)
+          .filter(({ text }) => !isCommentLine(text))
+          .filter(({ text }) => text.includes("../internal/builtin.js"))
+          .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+      )
+    const legacyViolations = collectSourceFiles()
+      .filter((file) => file.includes("/packages/extensions/src/"))
+      .flatMap((file) =>
+        sourceLines(file)
+          .filter(({ text }) => !isCommentLine(text))
+          .filter(({ text }) => text.includes(legacyBridgeName))
+          .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+      )
 
     expect(violations).toEqual([])
+    expect(membraneSource).toMatchInlineSnapshot(`
+"export {
+  defineBuiltinResource,
+  EventPublisher,
+  InteractionPendingReader,
+  MachineExecute,
+  ToolRunner,
+  type BuiltinResourceMachine,
+} from "../../core/src/extensions/internal.js"
+"
+`)
+    expect(membraneImports.length).toBeGreaterThan(0)
+    expect(legacyViolations).toEqual([])
   })
 })

@@ -42,6 +42,11 @@
       "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
       "@gent/core/test-utils/*": ["./packages/core/src/test-utils/*"],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/builtin-internal": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/builtin-internal.js": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/core-internal": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/core-internal.js": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/internal/*": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/*": ["./packages/extensions/src/*"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"]
     }

@@ -20,7 +20,7 @@ import {
   ProjectionError,
   type PromptSection,
 } from "@gent/core/extensions/api"
-import { MachineExecute } from "../builtin-internal.js"
+import { MachineExecute } from "../../internal/builtin.js"
 import { ExecutorProtocol, type ExecutorSnapshotReply } from "./protocol.js"
 
 const PROJECTION_ID = "executor-state"

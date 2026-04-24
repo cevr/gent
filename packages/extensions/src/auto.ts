@@ -23,7 +23,7 @@ import {
   type AgentEvent,
   type ExtensionHostContext,
 } from "@gent/core/extensions/api"
-import { defineBuiltinResource, type BuiltinResourceMachine } from "./builtin-internal.js"
+import { defineBuiltinResource, type BuiltinResourceMachine } from "../internal/builtin.js"
 import { AUTO_EXTENSION_ID, AutoProtocol, AutoSnapshotReply } from "./auto-protocol.js"
 import { AutoCheckpointTool } from "./auto-checkpoint.js"
 import { AutoJournal } from "./auto-journal.js"

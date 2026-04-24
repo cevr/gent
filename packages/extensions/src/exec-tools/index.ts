@@ -1,7 +1,7 @@
 import { Layer, Schema } from "effect"
 import { Event as MEvent, Machine, State as MState } from "effect-machine"
 import { defineExtension, resource } from "@gent/core/extensions/api"
-import { defineBuiltinResource, type BuiltinResourceMachine } from "../builtin-internal.js"
+import { defineBuiltinResource, type BuiltinResourceMachine } from "../../internal/builtin.js"
 import { BashTool } from "./bash.js"
 import { EXEC_TOOLS_EXTENSION_ID, ExecToolsProtocol } from "./protocol.js"
 

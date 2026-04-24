@@ -309,11 +309,11 @@ const plugin: Plugin = {
         const inExtensionsPackage = filename.includes("packages/extensions/")
         if (!inCoreExtensions && !inExtensionsPackage) return {}
 
-        // Exempt: api.ts is the public bridge; core-internal.ts is the
-        // builtin-only bridge for Gent-owned extensions.
+        // Exempt: api.ts is the public bridge; internal/builtin.ts is the
+        // narrow builtin-only membrane for Gent-owned extensions.
         if (
           filename.endsWith("/extensions/api.ts") ||
-          filename.endsWith("/packages/extensions/src/core-internal.ts")
+          filename.endsWith("/packages/extensions/internal/builtin.ts")
         ) {
           return {}
         }

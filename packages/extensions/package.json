@@ -10,6 +10,7 @@
     "./builtin-internal": null,
     "./builtin-internal.js": null,
     "./builtin-internal.ts": null,
+    "./internal/*": null,
     "./internal-resource-machine": null,
     "./internal-resource-machine.js": null,
     "./internal-resource-machine.ts": null,
