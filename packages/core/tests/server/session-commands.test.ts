@@ -6,7 +6,6 @@ import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/id
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
 import { EventStore, EventStoreError } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
-import type { LoadedExtension } from "@gent/core/domain/extension"
 import type { ProjectionContribution } from "@gent/core/domain/projection"
 import { Provider } from "@gent/core/providers/provider"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
@@ -21,6 +20,7 @@ import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../extensions/helpers/test-preset"
+import type { LoadedExtension } from "../../src/domain/extension"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
