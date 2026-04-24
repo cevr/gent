@@ -189,9 +189,9 @@ export const makeRegistryScope = <Services>(defaultValue: Registry.Registry<Serv
     const registry =
       props.registry ??
       (props.services === undefined
-        ? Registry.make({ maxEntries: props.maxEntries })
+        ? defaultValue
         : Registry.make({ services: props.services, maxEntries: props.maxEntries }))
-    const shouldDispose = props.registry === undefined
+    const shouldDispose = props.registry === undefined && props.services !== undefined
 
     onCleanup(() => {
       if (shouldDispose) registry.dispose()

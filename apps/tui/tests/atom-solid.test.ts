@@ -28,7 +28,7 @@ const waitFor = (predicate: () => boolean): Promise<void> =>
   })
 
 describe("atom-solid registry", () => {
-  test("uses atom identity keys for cache ownership", () => {
+  test("keeps distinct atom instances isolated", () => {
     const registry = make()
     const first = state(1)
     const second = state(1)
@@ -38,12 +38,29 @@ describe("atom-solid registry", () => {
 
     registry.set(first, 2)
 
-    expect(first.key).not.toBe(second.key)
     expect(registry.get(first)).toBe(2)
     expect(registry.get(second)).toBe(1)
 
     firstUnmount()
     secondUnmount()
+    registry.dispose()
+  })
+
+  test("uses atom object identity instead of forgeable public keys", () => {
+    const registry = make()
+    const first = state(1)
+    const clone: typeof first = { ...first }
+
+    const firstUnmount = registry.mount(first)
+    const cloneUnmount = registry.mount(clone)
+
+    registry.set(first, 2)
+
+    expect(registry.get(first)).toBe(2)
+    expect(registry.get(clone)).toBe(1)
+
+    firstUnmount()
+    cloneUnmount()
     registry.dispose()
   })
 
@@ -121,6 +138,36 @@ describe("atom-solid registry", () => {
 
     expect(observedRegistry).toBe(registry)
     expect(observed).toBe("scoped")
+    dispose()
+    registry.dispose()
+  })
+
+  test("typed registry providers reuse scoped defaults when services are omitted", async () => {
+    const services = Context.add(Context.empty(), Greeting, { text: "default-scope" })
+    const registry = make({ services })
+    const scope = makeRegistryScope(registry)
+    const greeting = effect(
+      Effect.gen(function* () {
+        const service = yield* Greeting
+        return service.text
+      }),
+    )
+    let observed: string | undefined
+
+    const dispose = createRoot((disposeRoot) => {
+      createComponent(scope.RegistryProvider, {
+        get children() {
+          const result = scope.useAtomValue(greeting)
+          observed = Result.getOrUndefined(result())
+          return undefined
+        },
+      })
+      return disposeRoot
+    })
+
+    await waitFor(() => observed === "default-scope")
+
+    expect(observed).toBe("default-scope")
     dispose()
     registry.dispose()
   })

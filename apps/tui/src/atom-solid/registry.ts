@@ -48,8 +48,8 @@ const isWritableInstance = <R, W>(instance: AtomInstance<R>): instance is Writab
 
 class RegistryImpl<Services> implements Registry<Services> {
   private readonly services: Context.Context<Services>
-  private readonly instances = new Map<symbol, AtomInstance<unknown>>()
-  private readonly refCounts = new Map<symbol, number>()
+  private readonly instances = new Map<object, AtomInstance<unknown>>()
+  private readonly refCounts = new Map<object, number>()
   private readonly maxEntries: number | undefined
   private readonly shouldEvict: boolean
   private readonly owner: Owner
@@ -96,24 +96,24 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   refresh<A, R extends Services>(atom: Atom<A, R>): void {
-    const instance = this.instances.get(atom.key)
+    const instance = this.instances.get(atom)
     if (instance !== undefined) {
-      this.touch(atom.key, instance)
+      this.touch(atom, instance)
     }
     instance?.refresh?.()
   }
 
   mount<A, R extends Services>(atom: Atom<A, R>): () => void {
     this.ensure(atom)
-    this.touch(atom.key)
-    const current = this.refCounts.get(atom.key) ?? 0
-    this.refCounts.set(atom.key, current + 1)
+    this.touch(atom)
+    const current = this.refCounts.get(atom) ?? 0
+    this.refCounts.set(atom, current + 1)
     return () => {
-      const next = (this.refCounts.get(atom.key) ?? 1) - 1
+      const next = (this.refCounts.get(atom) ?? 1) - 1
       if (next <= 0) {
-        this.refCounts.delete(atom.key)
+        this.refCounts.delete(atom)
       } else {
-        this.refCounts.set(atom.key, next)
+        this.refCounts.set(atom, next)
       }
       this.evictIfNeeded()
     }
@@ -129,9 +129,9 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   private ensure<A, R extends Services>(atom: Atom<A, R>): AtomInstance<A> {
-    const existing = this.instances.get(atom.key)
+    const existing = this.instances.get(atom)
     if (existing !== undefined) {
-      this.touch(atom.key, existing)
+      this.touch(atom, existing)
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- cached atom identity owns the instance type relation
       return existing as AtomInstance<A>
     }
@@ -139,7 +139,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     if (created === undefined) {
       throw new Error("Atom build returned no instance")
     }
-    this.instances.set(atom.key, created)
+    this.instances.set(atom, created)
     this.evictIfNeeded()
     return created
   }
@@ -154,7 +154,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     return instance
   }
 
-  private touch(key: symbol, instance?: AtomInstance<unknown>): void {
+  private touch(key: object, instance?: AtomInstance<unknown>): void {
     if (!this.shouldEvict) return
     const value = instance ?? this.instances.get(key)
     if (value === undefined) return
@@ -175,7 +175,7 @@ class RegistryImpl<Services> implements Registry<Services> {
   }
 
   private findEvictable(): {
-    key: symbol
+    key: object
     instance: AtomInstance<unknown>
   } | null {
     for (const [key, instance] of this.instances) {
@@ -186,7 +186,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     return null
   }
 
-  private isMounted(key: symbol): boolean {
+  private isMounted(key: object): boolean {
     return (this.refCounts.get(key) ?? 0) > 0
   }
 }
