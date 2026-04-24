@@ -21,7 +21,7 @@ export const buildExtensionHealthSnapshot = (
           }
         : { status: "active" as const }
     const degraded =
-      status.status === "failed" || actor?.status === "failed" || schedulerFailures.length > 0
+      status.status === "failed" || actor?._tag === "failed" || schedulerFailures.length > 0
 
     return {
       manifest: status.manifest,
@@ -41,7 +41,7 @@ export const buildExtensionHealthSnapshot = (
     .filter((status) => status.activation.status === "failed")
     .map((status) => status.manifest.id)
   const failedActors = extensions
-    .filter((status) => status.actor?.status === "failed")
+    .filter((status) => status.actor?._tag === "failed")
     .map((status) => status.manifest.id)
   const failedScheduledJobs = extensions.flatMap((status) =>
     status.scheduler.failures.map((failure) => `${status.manifest.id}:${failure.jobId}`),

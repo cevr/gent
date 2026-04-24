@@ -5,11 +5,12 @@ import type { Machine, ProvideSlots, SlotCalls, SlotsDef } from "effect-machine"
 import type { AgentDefinition, AgentName, DriverSource } from "./agent"
 import type { AnyCapabilityContribution } from "./capability"
 import type { AgentEvent } from "./event"
-import type { BranchId, SessionId, ToolCallId } from "./ids"
+import { BranchId, SessionId, type ToolCallId } from "./ids"
 import type { Message, MessagePart } from "./message"
 import type { ExtensionContributions } from "./contribution.js"
 export type { ExtensionContributions } from "./contribution.js"
 import type { PromptSection } from "./prompt.js"
+import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 import type {
   AnyExtensionCommandMessage,
   AnyExtensionRequestMessage,
@@ -73,19 +74,32 @@ export type ExtensionStatusInfo =
       readonly scheduledJobFailures?: ReadonlyArray<ScheduledJobFailureInfo>
     } & FailedExtension)
 
-export type ExtensionActorLifecycleStatus = "starting" | "running" | "restarting" | "failed"
-
 export type ExtensionActorFailurePhase = "start" | "runtime"
 
-export interface ExtensionActorStatusInfo {
-  readonly extensionId: string
-  readonly sessionId: SessionId
-  readonly branchId?: BranchId
-  readonly status: ExtensionActorLifecycleStatus
-  readonly restartCount?: number
-  readonly error?: string
-  readonly failurePhase?: ExtensionActorFailurePhase
+const ExtensionActorStatusFields = {
+  extensionId: Schema.String,
+  sessionId: SessionId,
+  branchId: Schema.optional(BranchId),
 }
+
+export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
+  starting: ExtensionActorStatusFields,
+  running: {
+    ...ExtensionActorStatusFields,
+    restartCount: Schema.optional(Schema.Number),
+  },
+  restarting: {
+    ...ExtensionActorStatusFields,
+    restartCount: Schema.Number,
+  },
+  failed: {
+    ...ExtensionActorStatusFields,
+    error: Schema.String,
+    failurePhase: Schema.Literals(["start", "runtime"]),
+    restartCount: Schema.optional(Schema.Number),
+  },
+})
+export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 
 export type ExtensionScope = "builtin" | "user" | "project"
 

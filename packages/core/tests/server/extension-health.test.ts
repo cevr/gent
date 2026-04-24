@@ -23,11 +23,12 @@ describe("buildExtensionHealthSnapshot", () => {
       ],
       [
         {
+          _tag: "failed",
           extensionId: "@gent/plan",
           sessionId: "s1" as never,
           branchId: "b1" as never,
-          status: "failed",
           error: "actor boom",
+          failurePhase: "runtime",
         },
       ],
     )
@@ -64,11 +65,12 @@ describe("buildExtensionHealthSnapshot", () => {
           status: "active",
         },
         actor: {
+          _tag: "failed",
           extensionId: "@gent/plan",
           sessionId: "s1",
           branchId: "b1",
-          status: "failed",
           error: "actor boom",
+          failurePhase: "runtime",
         },
         scheduler: {
           status: "degraded",

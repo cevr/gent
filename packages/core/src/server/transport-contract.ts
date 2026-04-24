@@ -379,25 +379,31 @@ export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
 export const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
 export type ExtensionActivationPhase = typeof ExtensionActivationPhase.Type
 
-export const ExtensionActorLifecycleStatus = Schema.Literals([
-  "starting",
-  "running",
-  "restarting",
-  "failed",
-])
-export type ExtensionActorLifecycleStatus = typeof ExtensionActorLifecycleStatus.Type
-
 export const ExtensionActorFailurePhase = Schema.Literals(["start", "runtime"])
 export type ExtensionActorFailurePhase = typeof ExtensionActorFailurePhase.Type
 
-export const ExtensionActorStatusInfo = Schema.Struct({
+const ExtensionActorStatusFields = {
   extensionId: Schema.String,
   sessionId: SessionId,
   branchId: Schema.optional(BranchId),
-  status: ExtensionActorLifecycleStatus,
-  restartCount: Schema.optional(Schema.Number),
-  error: Schema.optional(Schema.String),
-  failurePhase: Schema.optional(ExtensionActorFailurePhase),
+}
+
+export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
+  starting: ExtensionActorStatusFields,
+  running: {
+    ...ExtensionActorStatusFields,
+    restartCount: Schema.optional(Schema.Number),
+  },
+  restarting: {
+    ...ExtensionActorStatusFields,
+    restartCount: Schema.Number,
+  },
+  failed: {
+    ...ExtensionActorStatusFields,
+    error: Schema.String,
+    failurePhase: ExtensionActorFailurePhase,
+    restartCount: Schema.optional(Schema.Number),
+  },
 })
 export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 

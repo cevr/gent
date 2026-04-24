@@ -85,7 +85,6 @@ export {
   ClearDriverOverrideInput,
   ListExtensionStatusInput,
   ExtensionActivationPhase,
-  ExtensionActorLifecycleStatus,
   ExtensionActorStatusInfo,
   ExtensionHealth,
   ExtensionHealthSnapshot,

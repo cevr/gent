@@ -1,6 +1,6 @@
 import { Cause, Deferred, Effect, Ref, Semaphore } from "effect"
 import type { Scope } from "effect"
-import type { ExtensionActorStatusInfo, ExtensionRef } from "../../../domain/extension.js"
+import { ExtensionActorStatusInfo, type ExtensionRef } from "../../../domain/extension.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type { ExtensionProtocolError } from "../../../domain/extension-protocol.js"
 import { spawnMachineExtensionRef } from "../spawn-machine-ref.js"
@@ -101,15 +101,16 @@ export const makeMachineLifecycle = (params: {
       failurePhase: "start" | "runtime",
       restartCount: number,
     ) =>
-      setActorStatus({
-        extensionId,
-        sessionId,
-        branchId,
-        status: "failed",
-        error,
-        failurePhase,
-        ...(restartCount > 0 ? { restartCount } : {}),
-      })
+      setActorStatus(
+        ExtensionActorStatusInfo.cases.failed.make({
+          extensionId,
+          sessionId,
+          branchId,
+          error,
+          failurePhase,
+          ...(restartCount > 0 ? { restartCount } : {}),
+        }),
+      )
 
     const spawnActorEntry = (
       spec: ActorSpawnSpec,
@@ -120,13 +121,20 @@ export const makeMachineLifecycle = (params: {
       restartCount: number,
     ): Effect.Effect<ActorEntry | undefined> =>
       Effect.gen(function* () {
-        yield* setActorStatus({
-          extensionId: spec.extensionId,
-          sessionId,
-          branchId,
-          status: lifecycleStatus,
-          ...(restartCount > 0 ? { restartCount } : {}),
-        })
+        yield* setActorStatus(
+          lifecycleStatus === "starting"
+            ? ExtensionActorStatusInfo.cases.starting.make({
+                extensionId: spec.extensionId,
+                sessionId,
+                branchId,
+              })
+            : ExtensionActorStatusInfo.cases.restarting.make({
+                extensionId: spec.extensionId,
+                sessionId,
+                branchId,
+                restartCount,
+              }),
+        )
 
         const spawnExit = yield* Effect.exit(
           // @effect-diagnostics-next-line anyUnknownInErrorContext:off
@@ -175,13 +183,14 @@ export const makeMachineLifecycle = (params: {
           return undefined
         }
 
-        yield* setActorStatus({
-          extensionId: spec.extensionId,
-          sessionId,
-          branchId,
-          status: "running",
-          ...(restartCount > 0 ? { restartCount } : {}),
-        })
+        yield* setActorStatus(
+          ExtensionActorStatusInfo.cases.running.make({
+            extensionId: spec.extensionId,
+            sessionId,
+            branchId,
+            ...(restartCount > 0 ? { restartCount } : {}),
+          }),
+        )
         yield* Effect.logDebug("extension.actor.spawned").pipe(
           Effect.annotateLogs({
             extensionId: spec.extensionId,
@@ -201,7 +210,10 @@ export const makeMachineLifecycle = (params: {
     ): Effect.Effect<ActorEntry | undefined> =>
       Effect.gen(function* () {
         const currentStatus = yield* getActorStatus(sessionId, entry.ref.id)
-        const currentRestartCount = currentStatus?.restartCount ?? 0
+        const currentRestartCount =
+          currentStatus !== undefined && "restartCount" in currentStatus
+            ? (currentStatus.restartCount ?? 0)
+            : 0
         const actorBranchId = branchId ?? currentStatus?.branchId
         yield* stopActor(entry)
 

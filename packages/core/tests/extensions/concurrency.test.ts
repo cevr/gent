@@ -166,10 +166,10 @@ describe("extension concurrency", () => {
           expect(delivered).toEqual(["SessionStarted", "TurnCompleted"])
           expect(statuses).toEqual([
             {
+              _tag: "running",
               extensionId: "ordered-restart",
               sessionId,
               branchId,
-              status: "running",
               restartCount: 1,
             },
           ])

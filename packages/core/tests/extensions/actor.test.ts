@@ -211,10 +211,10 @@ describe("MachineEngine", () => {
       expect(reply).toEqual({ count: 1 })
       expect(statuses).toEqual([
         {
+          _tag: "running",
           extensionId: "flaky-request",
           sessionId,
           branchId,
-          status: "running",
           restartCount: 1,
         },
       ])
