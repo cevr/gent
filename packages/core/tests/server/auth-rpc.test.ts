@@ -14,6 +14,7 @@ import { Effect, Layer } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
+import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
 import { ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
@@ -33,15 +34,14 @@ const failingAuthStoreLayer = Layer.succeed(
 )
 
 const failingReadAuthStoreLayer = Layer.succeed(
-  AuthStore,
-  AuthStore.of({
-    get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+  AuthStorage,
+  AuthStorage.of({
+    get: () => Effect.fail(new AuthStorageError({ message: "read failed" })),
     set: () => Effect.void,
-    remove: () => Effect.void,
+    delete: () => Effect.void,
     list: () => Effect.succeed([]),
-    listInfo: () => Effect.succeed({}),
   }),
-)
+).pipe((storageLayer) => Layer.provide(AuthStore.Live, storageLayer))
 
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()

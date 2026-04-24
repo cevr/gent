@@ -127,6 +127,42 @@ describe("AuthStore", () => {
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
   })
 
+  it.live("get surfaces storage read failures", () => {
+    const failingStorage = Layer.succeed(AuthStorage, {
+      get: () => Effect.fail(new AuthStorageError({ message: "read failed" })),
+      set: () => Effect.void,
+      delete: () => Effect.void,
+      list: () => Effect.succeed([]),
+    })
+
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const exit = yield* Effect.exit(auth.get("openai"))
+      expect(exit._tag).toBe("Failure")
+      expect(exit.cause.toString()).toContain("read failed")
+    }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
+  })
+
+  it.live("list and listInfo surface storage list failures", () => {
+    const failingStorage = Layer.succeed(AuthStorage, {
+      get: () => Effect.succeed(undefined),
+      set: () => Effect.void,
+      delete: () => Effect.void,
+      list: () => Effect.fail(new AuthStorageError({ message: "list failed" })),
+    })
+
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const listExit = yield* Effect.exit(auth.list())
+      expect(listExit._tag).toBe("Failure")
+      expect(listExit.cause.toString()).toContain("list failed")
+
+      const listInfoExit = yield* Effect.exit(auth.listInfo())
+      expect(listInfoExit._tag).toBe("Failure")
+      expect(listInfoExit.cause.toString()).toContain("list failed")
+    }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
+  })
+
   it.live("keychain-style delete failures reach AuthStore", () => {
     const keychainLikeStorage = Layer.succeed(AuthStorage, {
       get: () => Effect.succeed("sk-existing"),

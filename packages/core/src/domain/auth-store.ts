@@ -122,10 +122,16 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
           ),
         )
 
+      const authStorageError = (message: string) => (cause: unknown) =>
+        new AuthStoreError({
+          message,
+          cause,
+        })
+
       return AuthStore.of({
         get: (provider) =>
           storage.get(provider).pipe(
-            Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
+            Effect.mapError(authStorageError("Failed to read auth info")),
             Effect.flatMap((raw) =>
               raw !== undefined && raw.length > 0
                 ? decode(raw)
@@ -158,20 +164,22 @@ export class AuthStore extends Context.Service<AuthStore, AuthStoreService>()(
           ),
 
         list: () =>
-          storage.list().pipe(
-            Effect.catchEager(() => Effect.succeed([])),
-            Effect.withSpan("AuthStore.list"),
-          ),
+          storage
+            .list()
+            .pipe(
+              Effect.mapError(authStorageError("Failed to list auth providers")),
+              Effect.withSpan("AuthStore.list"),
+            ),
 
         listInfo: () =>
           storage.list().pipe(
-            Effect.catchEager(() => Effect.succeed([] as readonly string[])),
+            Effect.mapError(authStorageError("Failed to list auth providers")),
             Effect.flatMap((providers) =>
               Effect.forEach(
                 providers,
                 (provider) =>
                   storage.get(provider).pipe(
-                    Effect.catchEager(() => Effect.sync(() => undefined as string | undefined)),
+                    Effect.mapError(authStorageError("Failed to read auth info")),
                     Effect.flatMap((raw) =>
                       raw !== undefined && raw.length > 0
                         ? decode(raw).pipe(Effect.map((info) => [provider, info] as const))
