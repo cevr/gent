@@ -44,6 +44,8 @@ export const SendUserMessagePayload = Schema.Struct({
   agentOverride: Schema.optional(AgentName),
   interactive: Schema.optional(Schema.Boolean),
   runSpec: Schema.optional(RunSpecSchema),
+  /** Client-generated correlation id for end-to-end observability. */
+  requestId: Schema.optional(Schema.String),
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
@@ -120,6 +122,7 @@ export const SendUserMessageCommand = Schema.TaggedStruct("SendUserMessage", {
   ...RuntimeTurnFields,
   content: Schema.String,
   ...RuntimeTurnOptionFields,
+  requestId: Schema.optional(Schema.String),
 })
 export type SendUserMessageCommand = typeof SendUserMessageCommand.Type
 

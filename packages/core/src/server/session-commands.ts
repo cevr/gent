@@ -581,6 +581,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
       const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
 
+      // ── requestId dedup ──
+      //
+      // Clients generate a `requestId` per create/send so a WS-level retry
+      // after an ambiguous failure converges on a single session/message id
+      // instead of forking state. Cache is per-server, in-memory only: the
+      // window of ambiguity is the transport retry window (seconds), not
+      // cross-process. If the server crashes, the client learns on reconnect.
+      const createRequestCache = yield* Ref.make(new Map<string, CreateSessionResult>())
+      const sendRequestCache = yield* Ref.make(new Set<string>())
+
       const summarizeBranch = Effect.fn("SessionCommands.summarizeBranch")(function* (
         branchId: BranchId,
       ) {
@@ -653,6 +663,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const createSession = Effect.fn("SessionCommands.createSession")(function* (
         input: CreateSessionInput,
       ) {
+        if (input.requestId !== undefined) {
+          const cached = (yield* Ref.get(createRequestCache)).get(input.requestId)
+          if (cached !== undefined) return cached
+        }
         const sessionId = SessionId.make(Bun.randomUUIDv7())
         if (input.parentBranchId !== undefined && input.parentSessionId === undefined) {
           return yield* new NotFoundError({
@@ -736,11 +750,21 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               branchId,
               content: input.initialPrompt,
               ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
+              ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
             }),
           )
         }
 
-        return { sessionId, branchId, name }
+        const result: CreateSessionResult = { sessionId, branchId, name }
+        if (input.requestId !== undefined) {
+          const rid = input.requestId
+          yield* Ref.update(createRequestCache, (m) => {
+            const next = new Map(m)
+            next.set(rid, result)
+            return next
+          })
+        }
+        return result
       })
 
       const createBranch = Effect.fn("SessionCommands.createBranch")(function* (
@@ -1012,6 +1036,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       const sendMessage = Effect.fn("SessionCommands.sendMessage")(function* (
         input: SendMessageInput,
       ) {
+        if (input.requestId !== undefined) {
+          const seen = (yield* Ref.get(sendRequestCache)).has(input.requestId)
+          if (seen) return
+        }
         yield* sessionRuntime.dispatch(
           sendUserMessageCommand({
             sessionId: input.sessionId,
@@ -1019,8 +1047,17 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             content: input.content,
             ...(input.agentOverride !== undefined ? { agentOverride: input.agentOverride } : {}),
             ...(input.runSpec !== undefined ? { runSpec: input.runSpec } : {}),
+            ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
           }),
         )
+        if (input.requestId !== undefined) {
+          const rid = input.requestId
+          yield* Ref.update(sendRequestCache, (s) => {
+            const next = new Set(s)
+            next.add(rid)
+            return next
+          })
+        }
         yield* Effect.logInfo("session.messageSent").pipe(
           Effect.annotateLogs({
             sessionId: input.sessionId,

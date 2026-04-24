@@ -42,7 +42,6 @@ import { usePromptHistory } from "../hooks/use-prompt-history"
 import { useScopedKeyboard } from "../keyboard/context"
 import { useRouter } from "../router/index"
 import { formatConnectionIssue, formatError, type UiError } from "../utils/format-error"
-import { useWorkspace } from "../workspace/index"
 import { useExtensionUI } from "../extensions/context"
 import { useSpinnerClock } from "../hooks/use-spinner-clock"
 import { useChildSessions } from "../hooks/use-child-sessions"
@@ -166,7 +165,6 @@ export function createSessionController(props: {
   const { cast } = useRuntime()
   const { exit, handleEsc } = useExit()
   const quitChain = useKeyChain()
-  const workspace = useWorkspace()
   const history = usePromptHistory()
   const tick = useSpinnerClock()
 
@@ -470,23 +468,14 @@ export function createSessionController(props: {
   }
 
   // ── Session builtin commands ──
+  // Routes through the shared `createSession` helper (generates a `requestId`
+  // and updates the client-side session machine), so retry semantics and
+  // dedup match every other create path instead of bypassing them with a
+  // raw RPC call.
   const newSessionCmd = () => {
-    cast(
-      client.client.session.create({ cwd: workspace.cwd }).pipe(
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            client.switchSession(result.sessionId, result.branchId, result.name)
-            router.navigateToSession(result.sessionId, result.branchId)
-          }),
-        ),
-        Effect.asVoid,
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-          }),
-        ),
-      ),
-    )
+    client.createSession((sessionId, branchId) => {
+      router.navigateToSession(sessionId, branchId)
+    })
   }
 
   const sessionBuiltins: Command[] = [

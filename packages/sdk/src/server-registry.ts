@@ -243,6 +243,37 @@ export const registryIdentityOf = (entry: ServerRegistryEntry): ServerRegistryId
 export const canSignalRegistryEntry = (entry: ServerRegistryEntry): boolean =>
   entry.hostname === hostname() && isPidAlive(entry.pid)
 
+/**
+ * Signal a registry entry's PID with SIGTERM — only when the live process at
+ * that URL proves it owns the full registry identity (serverId, pid, hostname,
+ * dbPath, buildFingerprint). PID liveness alone is not sufficient: the kernel
+ * may have recycled the PID to an unrelated process.
+ *
+ * The caller supplies a probe — an Effect that returns `true` iff the URL
+ * reports an identity matching `registryIdentityOf(entry)`. Keeping the
+ * HttpClient dependency in the caller lets this helper stay runtime-free.
+ *
+ * Returns `"signaled"` when SIGTERM was sent, `"skipped"` otherwise. Never
+ * throws — signal failures map to `"skipped"`.
+ */
+export const signalIfIdentityOwned = <E, R>(
+  entry: ServerRegistryEntry,
+  probe: (entry: ServerRegistryEntry) => Effect.Effect<boolean, E, R>,
+): Effect.Effect<"signaled" | "skipped", never, R> =>
+  Effect.gen(function* () {
+    if (!canSignalRegistryEntry(entry)) return "skipped" as const
+    const owns = yield* probe(entry).pipe(Effect.catchEager(() => Effect.succeed(false)))
+    if (!owns) return "skipped" as const
+    const sent = yield* Effect.try({
+      try: () => process.kill(entry.pid, "SIGTERM"),
+      catch: () => undefined,
+    }).pipe(
+      Effect.as(true),
+      Effect.catchEager(() => Effect.succeed(false)),
+    )
+    return sent ? ("signaled" as const) : ("skipped" as const)
+  })
+
 /** Release a cross-process lock. Only releases if we own it (PID match). */
 export const releaseLock = (home: string, dbPath: string): void => {
   const lockDir = join(ensureRegistryDir(home), `${registryHash(dbPath)}.lock`)

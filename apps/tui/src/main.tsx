@@ -45,19 +45,20 @@ import {
   type InitialState,
 } from "./app-bootstrap"
 import { runHeadless } from "./headless-runner"
-import { Gent, GentConnectionError, type GentClientBundle } from "@gent/sdk"
+import {
+  Gent,
+  GentConnectionError,
+  probeRegistryEntryIdentity,
+  type GentClientBundle,
+} from "@gent/sdk"
 import {
   listRegistryEntries,
   validateRegistryEntry,
   removeRegistryEntry,
   isPidAlive,
   getLocalHostname,
+  signalIfIdentityOwned,
 } from "@gent/sdk/server-registry"
-
-class ServerSignalError extends Schema.TaggedErrorClass<ServerSignalError>()("ServerSignalError", {
-  pid: Schema.Number,
-  serverId: Schema.String,
-}) {}
 
 // Clear client log on startup
 clearClientLog()
@@ -440,18 +441,14 @@ const serverStop = Command.make(
         return
       }
 
-      // Signal all targets
+      // Signal all targets — identity-probe before SIGTERM so PID reuse after a
+      // crash never kills an unrelated process (same boundary as SDK attach).
       for (const entry of toStop) {
-        if (isPidAlive(entry.pid)) {
-          yield* Effect.try({
-            try: () => process.kill(entry.pid, "SIGTERM"),
-            catch: () => new ServerSignalError({ pid: entry.pid, serverId: entry.serverId }),
-          }).pipe(
-            Effect.andThen(Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)),
-            Effect.catchTag("ServerSignalError", (e) =>
-              Console.log(`Failed to signal PID ${e.pid} (${e.serverId})`),
-            ),
-          )
+        const outcome = yield* signalIfIdentityOwned(entry, probeRegistryEntryIdentity)
+        if (outcome === "signaled") {
+          yield* Console.log(`Sent SIGTERM to PID ${entry.pid} (${entry.serverId})`)
+        } else {
+          yield* Console.log(`Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`)
         }
       }
 

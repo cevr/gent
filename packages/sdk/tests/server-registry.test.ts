@@ -17,6 +17,7 @@ import {
   isPidAlive,
   registryIdentityOf,
   canSignalRegistryEntry,
+  signalIfIdentityOwned,
   acquireLock,
   releaseLock,
   withLock,
@@ -424,5 +425,79 @@ describe("Cross-Process Lock", () => {
 
     // Should succeed because the existing lock has a dead PID
     expect(acquireLock(home, "/tmp/stale.db")).toBe(true)
+  })
+})
+
+describe("signalIfIdentityOwned", () => {
+  test("skips when PID is not alive (PID-reuse guard)", async () => {
+    const entry = makeEntry({ pid: 99999999 })
+    let probeCalled = false
+    const result = await Effect.runPromise(
+      signalIfIdentityOwned(entry, () => {
+        probeCalled = true
+        return Effect.succeed(true)
+      }),
+    )
+    expect(result).toBe("skipped")
+    expect(probeCalled).toBe(false)
+  })
+
+  test("skips when probe says identity does not match", async () => {
+    // Spawn a subprocess that outlives the test window so PID stays alive
+    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
+    try {
+      const entry = makeEntry({ pid: proc.pid })
+      const result = await Effect.runPromise(
+        signalIfIdentityOwned(entry, () => Effect.succeed(false)),
+      )
+      expect(result).toBe("skipped")
+      // Subprocess should still be alive — we didn't signal it
+      expect(isPidAlive(proc.pid)).toBe(true)
+    } finally {
+      proc.kill()
+    }
+  })
+
+  test("skips on cross-host entry", async () => {
+    const entry = makeEntry({ hostname: "definitely-not-this-host" })
+    let probeCalled = false
+    const result = await Effect.runPromise(
+      signalIfIdentityOwned(entry, () => {
+        probeCalled = true
+        return Effect.succeed(true)
+      }),
+    )
+    expect(result).toBe("skipped")
+    expect(probeCalled).toBe(false)
+  })
+
+  test("signals when probe confirms identity", async () => {
+    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
+    try {
+      const entry = makeEntry({ pid: proc.pid })
+      const result = await Effect.runPromise(
+        signalIfIdentityOwned(entry, () => Effect.succeed(true)),
+      )
+      expect(result).toBe("signaled")
+      // Wait briefly for SIGTERM to propagate
+      await new Promise((r) => setTimeout(r, 200))
+      expect(isPidAlive(proc.pid)).toBe(false)
+    } finally {
+      if (isPidAlive(proc.pid)) proc.kill()
+    }
+  })
+
+  test("skips when probe fails (treated as no identity proof)", async () => {
+    const proc = Bun.spawn(["sleep", "10"], { stdout: "ignore", stderr: "ignore" })
+    try {
+      const entry = makeEntry({ pid: proc.pid })
+      const result = await Effect.runPromise(
+        signalIfIdentityOwned(entry, () => Effect.fail("probe boom")),
+      )
+      expect(result).toBe("skipped")
+      expect(isPidAlive(proc.pid)).toBe(true)
+    } finally {
+      proc.kill()
+    }
   })
 })

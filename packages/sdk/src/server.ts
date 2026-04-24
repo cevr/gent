@@ -37,7 +37,7 @@ import {
   withLock,
   computeLocalFingerprint,
   registryIdentityOf,
-  canSignalRegistryEntry,
+  signalIfIdentityOwned,
 } from "./server-registry.js"
 import { findOpenPort } from "./supervisor.js"
 // ── Types ──
@@ -298,6 +298,14 @@ const probeServer = (
     Effect.catchEager(() => Effect.succeed(false)),
   )
 
+/**
+ * Probe a registry entry's `/_gent/identity` endpoint and confirm every
+ * identity field matches. Shared with `server stop` paths (TUI/CLI) so
+ * PID-reuse after a crash never signals an unrelated process.
+ */
+export const probeRegistryEntryIdentity = (entry: ServerRegistryEntry): Effect.Effect<boolean> =>
+  probeServer(entry.rpcUrl, registryIdentityOf(entry))
+
 // ── Main server resolver ──
 
 export const resolveServer = (
@@ -336,14 +344,8 @@ export const resolveServer = (
         }
       }
       // Stale — only signal when the live process proves it owns this registry identity.
-      const ownsRegistryIdentity = validation.valid
-        ? yield* probeServer(existing.rpcUrl, registryIdentityOf(existing))
-        : false
-      if (ownsRegistryIdentity && canSignalRegistryEntry(existing)) {
-        yield* Effect.try({
-          try: () => process.kill(existing.pid, "SIGTERM"),
-          catch: () => undefined,
-        }).pipe(Effect.ignore)
+      if (validation.valid) {
+        yield* signalIfIdentityOwned(existing, probeRegistryEntryIdentity)
       }
       removeRegistryEntry(home, dbPath, existing.serverId)
     }
