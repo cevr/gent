@@ -1,6 +1,8 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Exit, Fiber } from "effect"
 import {
+  WorkerSupervisorError,
+  WorkerSupervisorInternal,
   waitForWorkerRunning,
   type WorkerLifecycleState,
   type WorkerSupervisor,
@@ -100,5 +102,120 @@ describe("waitForWorkerRunning", () => {
     // After interrupt, emitting should not throw (listener was removed)
     sup.emit(running)
     // If we get here without error, cleanup worked
+  })
+})
+
+describe("WorkerSupervisorInternal.isRetryableStartupError", () => {
+  test("retries pre-ready subprocess exits and stream failures", () => {
+    expect(
+      WorkerSupervisorInternal.isRetryableStartupError(
+        new WorkerSupervisorError({ message: "worker stdout closed before ready" }),
+      ),
+    ).toBe(true)
+    expect(
+      WorkerSupervisorInternal.isRetryableStartupError(
+        new WorkerSupervisorError({ message: "worker exited before ready (1)" }),
+      ),
+    ).toBe(true)
+    expect(
+      WorkerSupervisorInternal.isRetryableStartupError(
+        new WorkerSupervisorError({ message: "failed to read worker readiness: stream reset" }),
+      ),
+    ).toBe(true)
+  })
+
+  test("does not retry configuration or capacity failures", () => {
+    expect(
+      WorkerSupervisorInternal.isRetryableStartupError(
+        new WorkerSupervisorError({ message: "worker stdout unavailable during startup" }),
+      ),
+    ).toBe(false)
+    expect(
+      WorkerSupervisorInternal.isRetryableStartupError(
+        new WorkerSupervisorError({ message: "worker did not become ready within 10000ms" }),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe("WorkerSupervisorInternal.launchWorkerUntilReady", () => {
+  test("retries retryable pre-ready failures on the same assigned port", async () => {
+    const stopped: number[] = []
+    const slept: number[] = []
+    let current: { readonly pid: number } | undefined
+    let attempts = 0
+
+    const launched = await Effect.runPromise(
+      WorkerSupervisorInternal.launchWorkerUntilReady({
+        maxAttempts: 3,
+        retryDelayMs: 5,
+        spawn: Effect.sync(() => {
+          attempts += 1
+          return { port: 44123, url: "http://127.0.0.1:44123/rpc", proc: { pid: attempts } }
+        }),
+        waitForReady: ({ proc }) =>
+          proc.pid === 1
+            ? Effect.fail(
+                new WorkerSupervisorError({ message: "worker stdout closed before ready" }),
+              )
+            : Effect.void,
+        stop: (proc) =>
+          Effect.sync(() => {
+            stopped.push(proc.pid)
+          }),
+        sleep: (delayMs) =>
+          Effect.sync(() => {
+            slept.push(delayMs)
+          }),
+        setCurrent: (proc) => {
+          current = proc
+        },
+        isCurrent: (proc) => current?.pid === proc.pid,
+        isStopped: () => false,
+        logRetry: () => undefined,
+      }),
+    )
+
+    expect(launched?.port).toBe(44123)
+    expect(launched?.proc.pid).toBe(2)
+    expect(current?.pid).toBe(2)
+    expect(attempts).toBe(2)
+    expect(stopped).toEqual([1])
+    expect(slept).toEqual([5])
+  })
+
+  test("stops every failed retryable launch before failing the retry budget", async () => {
+    const stopped: number[] = []
+    let current: { readonly pid: number } | undefined
+    let attempts = 0
+
+    const exit = await Effect.runPromiseExit(
+      WorkerSupervisorInternal.launchWorkerUntilReady({
+        maxAttempts: 3,
+        retryDelayMs: 5,
+        spawn: Effect.sync(() => {
+          attempts += 1
+          return { port: 44123, url: "http://127.0.0.1:44123/rpc", proc: { pid: attempts } }
+        }),
+        waitForReady: () =>
+          Effect.fail(new WorkerSupervisorError({ message: "worker exited before ready (1)" })),
+        stop: (proc) =>
+          Effect.sync(() => {
+            stopped.push(proc.pid)
+          }),
+        sleep: () => Effect.void,
+        setCurrent: (proc) => {
+          current = proc
+        },
+        isCurrent: (proc) => current?.pid === proc.pid,
+        isStopped: () => false,
+        logRetry: () => undefined,
+      }),
+    )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(attempts).toBe(3)
+    expect(stopped).toEqual([1, 2, 3])
+    expect(current).toBeUndefined()
   })
 })

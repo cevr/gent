@@ -1,4 +1,4 @@
-import { Clock, Effect, Schema, type Scope } from "effect"
+import { Cause, Clock, Effect, Exit, Schema, type Scope } from "effect"
 import * as net from "node:net"
 import { pathToFileURL } from "node:url"
 import { runSupervisorBackoffRestart, runSupervisorCrashRestart } from "./supervisor-boundary.js"
@@ -65,6 +65,8 @@ const WORKER_HOST = "127.0.0.1"
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
 const WORKER_READY_PREFIX = "GENT_WORKER_READY "
+const STARTUP_MAX_ATTEMPTS = 3
+const STARTUP_RETRY_DELAY_MS = 250
 
 const resolveWorkerLaunch = async (options?: {
   readonly sourceEntryPath?: string
@@ -206,6 +208,97 @@ const waitForWorkerReady = (
       return new WorkerSupervisorError({ message })
     }),
   )
+
+const isRetryableStartupError = (error: WorkerSupervisorError): boolean =>
+  error.message === "worker stdout closed before ready" ||
+  error.message.startsWith("worker exited before ready") ||
+  error.message.startsWith("failed to read worker readiness:")
+
+const startupErrorFromCause = (
+  cause: Cause.Cause<WorkerSupervisorError>,
+): WorkerSupervisorError => {
+  const squashed = Cause.squash(cause)
+  return Schema.is(WorkerSupervisorError)(squashed)
+    ? squashed
+    : new WorkerSupervisorError({ message: String(squashed) })
+}
+
+interface StartedWorker<Proc extends { readonly pid: number }> {
+  readonly port: number
+  readonly url: string
+  readonly proc: Proc
+}
+
+interface LaunchWorkerUntilReadyOptions<Proc extends { readonly pid: number }> {
+  readonly maxAttempts?: number
+  readonly retryDelayMs?: number
+  readonly spawn: Effect.Effect<StartedWorker<Proc>, WorkerSupervisorError>
+  readonly waitForReady: (
+    launched: StartedWorker<Proc>,
+  ) => Effect.Effect<void, WorkerSupervisorError>
+  readonly stop: (proc: Proc) => Effect.Effect<void>
+  readonly sleep: (delayMs: number) => Effect.Effect<void>
+  readonly setCurrent: (proc: Proc | undefined) => void
+  readonly isCurrent: (proc: Proc) => boolean
+  readonly isStopped: () => boolean
+  readonly logRetry: (input: {
+    readonly attempt: number
+    readonly pid: number
+    readonly error: string
+  }) => void
+}
+
+const launchWorkerUntilReady = <Proc extends { readonly pid: number }>(
+  options: LaunchWorkerUntilReadyOptions<Proc>,
+): Effect.Effect<StartedWorker<Proc> | undefined, WorkerSupervisorError> =>
+  Effect.gen(function* () {
+    const maxAttempts = options.maxAttempts ?? STARTUP_MAX_ATTEMPTS
+    const retryDelayMs = options.retryDelayMs ?? STARTUP_RETRY_DELAY_MS
+    let launched: StartedWorker<Proc> | undefined
+    let startupError: WorkerSupervisorError | undefined
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      launched = yield* options.spawn
+      options.setCurrent(launched.proc)
+      const readyExit = yield* options.waitForReady(launched).pipe(Effect.exit)
+      if (Exit.isSuccess(readyExit)) {
+        startupError = undefined
+        break
+      }
+
+      startupError = startupErrorFromCause(readyExit.cause)
+      yield* options.stop(launched.proc)
+      if (options.isCurrent(launched.proc)) options.setCurrent(undefined)
+      if (
+        options.isStopped() ||
+        !isRetryableStartupError(startupError) ||
+        attempt === maxAttempts
+      ) {
+        break
+      }
+
+      options.logRetry({
+        attempt,
+        pid: launched.proc.pid,
+        error: startupError.message,
+      })
+      yield* options.sleep(retryDelayMs * attempt)
+    }
+
+    if (options.isStopped()) return undefined
+    if (launched === undefined) {
+      return yield* new WorkerSupervisorError({ message: "worker launch did not start" })
+    }
+    if (startupError !== undefined) {
+      return yield* new WorkerSupervisorError({
+        message: isRetryableStartupError(startupError)
+          ? `worker did not become ready after ${maxAttempts} attempts: ${startupError.message}`
+          : startupError.message,
+      })
+    }
+
+    return launched
+  })
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync } from "node:fs"
@@ -361,6 +454,9 @@ export const startWorkerSupervisor = (
       const handleProcessExit = () => {
         killSubprocessSync(current)
       }
+      const disarmProcessExit = () => {
+        if (!isShared) process.off("exit", handleProcessExit)
+      }
 
       // In shared mode, don't kill the server when the parent exits
       if (!isShared) {
@@ -373,23 +469,40 @@ export const startWorkerSupervisor = (
       }
 
       const launchCurrent = Effect.gen(function* () {
-        const launched = yield* spawnWorkerProcess(options, assignedPort)
-        current = launched.proc
-        yield* waitForWorkerReady(launched.proc, startupTimeoutMs)
+        const readyWorker = yield* launchWorkerUntilReady({
+          spawn: spawnWorkerProcess(options, assignedPort),
+          waitForReady: (launched) => waitForWorkerReady(launched.proc, startupTimeoutMs),
+          stop: stopSubprocess,
+          sleep: (delayMs) => Effect.sleep(`${delayMs} millis`),
+          setCurrent: (proc) => {
+            current = proc
+          },
+          isCurrent: (proc) => current?.pid === proc.pid,
+          isStopped: () => stopped,
+          logRetry: (input) => {
+            shutdownLog("launch.retry", {
+              attempt: input.attempt,
+              pid: input.pid,
+              error: input.error,
+            })
+          },
+        })
+        if (readyWorker === undefined) return
+
         restartPromise = undefined
         emit({
           _tag: "running",
-          port: launched.port,
-          pid: launched.proc.pid,
+          port: readyWorker.port,
+          pid: readyWorker.proc.pid,
           restartCount,
         })
 
-        void launched.proc.exited.then(() => {
+        void readyWorker.proc.exited.then(() => {
           if (stopped) return
-          if (current?.pid !== launched.proc.pid) return
+          if (current?.pid !== readyWorker.proc.pid) return
 
           // Shared mode: exit code 0 is intentional idle shutdown — don't restart
-          if (isShared && launched.proc.exitCode === 0) {
+          if (isShared && readyWorker.proc.exitCode === 0) {
             stopped = true
             emit({ _tag: "stopped", port: assignedPort, restartCount })
             return
@@ -398,8 +511,8 @@ export const startWorkerSupervisor = (
           runSupervisorCrashRestart(
             supervisorServices,
             restartInternal({
-              exitCode: launched.proc.exitCode,
-              previousPid: launched.proc.pid,
+              exitCode: readyWorker.proc.exitCode,
+              previousPid: readyWorker.proc.pid,
             }),
           )
         })
@@ -491,13 +604,23 @@ export const startWorkerSupervisor = (
         yield* Effect.promise(() => inFlight)
       })
 
-      yield* launchCurrent
+      yield* launchCurrent.pipe(
+        Effect.catchEager((error) =>
+          Effect.gen(function* () {
+            disarmProcessExit()
+            const proc = current
+            current = undefined
+            if (proc !== undefined) yield* stopSubprocess(proc)
+            return yield* error
+          }),
+        ),
+      )
 
       const stop = Effect.gen(function* () {
         shutdownLog("supervisor.stop.enter")
         if (stopped) return
         stopped = true
-        if (!isShared) process.off("exit", handleProcessExit)
+        disarmProcessExit()
         const proc = current
         current = undefined
         if (proc !== undefined) yield* stopSubprocess(proc)
@@ -525,5 +648,7 @@ export const startWorkerSupervisor = (
   )
 
 export const WorkerSupervisorInternal = {
+  isRetryableStartupError,
+  launchWorkerUntilReady,
   resolveWorkerLaunch,
 } as const
