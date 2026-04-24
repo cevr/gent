@@ -342,8 +342,8 @@ describe("AgentRunner", () => {
 
         const calls = yield* recorder.getCalls()
         assertSequence(calls, [
-          { service: "EventStore", method: "publish", match: { _tag: "AgentRunSpawned" } },
-          { service: "EventStore", method: "publish", match: { _tag: "AgentRunSucceeded" } },
+          { service: "EventStore", method: "append", match: { _tag: "AgentRunSpawned" } },
+          { service: "EventStore", method: "append", match: { _tag: "AgentRunSucceeded" } },
         ])
 
         // Verify enriched AgentRunSucceeded payload fields (args is the event object directly)
@@ -351,7 +351,7 @@ describe("AgentRunner", () => {
           const args = c.args as Record<string, unknown> | undefined
           return (
             c.service === "EventStore" &&
-            c.method === "publish" &&
+            c.method === "append" &&
             args?._tag === "AgentRunSucceeded"
           )
         })

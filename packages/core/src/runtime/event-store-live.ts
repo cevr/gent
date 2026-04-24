@@ -33,7 +33,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.unw
     const sessions = new Map<SessionId, PubSub.PubSub<EventEnvelope>>()
 
     const service: EventStoreService = {
-      publish: Effect.fn("EventStore.publish")(function* (event) {
+      append: Effect.fn("EventStore.append")(function* (event) {
         const currentSpan = yield* Effect.currentParentSpan.pipe(
           Effect.orElseSucceed(() => undefined),
         )
@@ -41,10 +41,22 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.unw
         const envelope = yield* storage
           .appendEvent(event, traceId !== undefined ? { traceId } : undefined)
           .pipe(Effect.mapError(toEventStoreError("Failed to append event")))
-        const eventSessionId = getEventSessionId(event)
+        return envelope
+      }),
+
+      broadcast: (envelope) => {
+        const eventSessionId = getEventSessionId(envelope.event)
         if (eventSessionId !== undefined) {
-          yield* PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope)
+          return PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope).pipe(
+            Effect.asVoid,
+          )
         }
+        return Effect.void
+      },
+
+      publish: Effect.fn("EventStore.publish")(function* (event) {
+        const envelope = yield* service.append(event)
+        yield* service.broadcast(envelope)
       }),
 
       subscribe: ({ sessionId, branchId, after }) =>

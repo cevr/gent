@@ -78,7 +78,7 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
 
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
-    .filter((call) => call.service === "EventStore" && call.method === "publish")
+    .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
 
 describe("agent override behavior", () => {

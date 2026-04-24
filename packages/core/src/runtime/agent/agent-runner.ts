@@ -499,6 +499,8 @@ const buildEphemeralLayer = (params: {
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
       return EventPublisher.of({
+        append: (event) => baseEventStore.append(event),
+        deliver: (envelope) => baseEventStore.broadcast(envelope),
         publish: (event) => baseEventStore.publish(event),
         terminateSession: () => Effect.void,
       })

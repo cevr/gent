@@ -5,7 +5,7 @@ import {
   type MakeExtensionHostContextDeps,
 } from "@gent/core/runtime/make-extension-host-context"
 import { SessionId, BranchId, MessageId } from "@gent/core/domain/ids"
-import { EventStoreError } from "@gent/core/domain/event"
+import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { Message, Session, Branch, TextPart } from "@gent/core/domain/message"
 import { SessionDeleter } from "@gent/core/domain/session-deleter"
 
@@ -135,10 +135,22 @@ const makeTestDeps = (testStorage: ReturnType<typeof createTestStorage>) => {
       run: die("AgentRunnerService"),
     } as MakeExtensionHostContextDeps["agentRunner"],
     eventPublisher: {
-      publish: (event: { _tag: string }) => {
-        published.push(event)
-        return Effect.void
-      },
+      append: (event: AgentEvent) =>
+        Effect.succeed(
+          EventEnvelope.make({
+            id: EventId.make(published.length + 1),
+            event,
+            createdAt: Date.now(),
+          }),
+        ),
+      deliver: (envelope: EventEnvelope) =>
+        Effect.sync(() => {
+          published.push(envelope.event)
+        }),
+      publish: (event: AgentEvent) =>
+        Effect.sync(() => {
+          published.push(event)
+        }),
       terminateSession: die("EventPublisher"),
     } as MakeExtensionHostContextDeps["eventPublisher"],
   }
@@ -248,6 +260,8 @@ describe("session mutation primitives", () => {
       {
         ...deps,
         eventPublisher: {
+          append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+          deliver: () => Effect.void,
           publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
           terminateSession: () => Effect.void,
         },
@@ -312,6 +326,8 @@ describe("session mutation primitives", () => {
       {
         ...deps,
         eventPublisher: {
+          append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+          deliver: () => Effect.void,
           publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
           terminateSession: () => Effect.void,
         },

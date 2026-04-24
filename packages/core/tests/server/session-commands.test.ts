@@ -44,6 +44,8 @@ const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 const failingPublisherLayer = Layer.succeed(EventPublisher, {
+  append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
+  deliver: () => Effect.void,
   publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
   terminateSession: () => Effect.void,
 })
@@ -56,6 +58,39 @@ const failingSessionCommandsLayer = () => {
     SessionRuntime.Test(),
     EventStore.Memory,
     failingPublisherLayer,
+    Provider.Debug(),
+    MachineEngine.Test(),
+    SessionCwdRegistry.Test(),
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
+const postCommitFailingSessionCommandsLayer = () => {
+  const storageLayer = Storage.MemoryWithSql()
+  const eventStoreLayer = EventStore.Memory
+  const postCommitFailingPublisherLayer = Layer.effect(
+    EventPublisher,
+    Effect.gen(function* () {
+      const eventStore = yield* EventStore
+      return EventPublisher.of({
+        append: (event) => eventStore.append(event),
+        deliver: () => Effect.fail(new EventStoreError({ message: "deliver failed" })),
+        publish: (event) =>
+          Effect.gen(function* () {
+            const envelope = yield* eventStore.append(event)
+            yield* Effect.fail(new EventStoreError({ message: "deliver failed" }))
+            return envelope
+          }),
+        terminateSession: () => Effect.void,
+      })
+    }),
+  ).pipe(Layer.provide(eventStoreLayer))
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    SessionRuntime.Test(),
+    eventStoreLayer,
+    postCommitFailingPublisherLayer,
     Provider.Debug(),
     MachineEngine.Test(),
     SessionCwdRegistry.Test(),
@@ -145,6 +180,18 @@ describe("session command persistence", () => {
       expect(yield* branches.listBranches(sessionId)).toHaveLength(1)
       expect(yield* messages.listMessages(branchId)).toHaveLength(1)
     }).pipe(Effect.provide(failingSessionCommandsLayer())),
+  )
+
+  it.live("does not roll back committed rows when post-commit delivery fails", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+
+      const exit = yield* Effect.exit(commands.createSession({ cwd: "/tmp/post-commit" }))
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* sessions.listSessions()).toHaveLength(1)
+    }).pipe(Effect.provide(postCommitFailingSessionCommandsLayer())),
   )
 })
 

@@ -105,17 +105,26 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
     let nextId = 0
 
     const service: EventStoreService = {
-      publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
+      append: Effect.fn("RecordingEventStore.append")(function* (event) {
         nextId += 1
         const createdAt = yield* Clock.currentTimeMillis
-        events.push(
-          EventEnvelope.make({
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            id: nextId as EventEnvelope["id"],
-            event,
-            createdAt,
-          }),
-        )
+        const envelope = EventEnvelope.make({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          id: nextId as EventEnvelope["id"],
+          event,
+          createdAt,
+        })
+        events.push(envelope)
+        yield* recorder.record({
+          service: "EventStore",
+          method: "append",
+          args: event,
+        })
+        return envelope
+      }),
+      broadcast: () => Effect.void,
+      publish: Effect.fn("RecordingEventStore.publish")(function* (event) {
+        yield* service.append(event)
         yield* recorder.record({
           service: "EventStore",
           method: "publish",

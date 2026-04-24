@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
-import { type AgentEvent, EventStore } from "@gent/core/domain/event"
+import { type AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { SubscriptionEngine } from "@gent/core/runtime/extensions/resource-host/subscription-engine"
 import { MachineEngine } from "@gent/core/runtime/extensions/resource-host/machine-engine"
@@ -23,19 +23,36 @@ const makeEvent = (tag: string, sessionId: string, branchId?: string) =>
     ...(branchId !== undefined ? { branchId: BranchId.make(branchId) } : {}),
   }) as unknown as AgentEvent
 
+const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
+  let nextId = 0
+  const append = (event: AgentEvent) =>
+    Effect.sync(() => {
+      onAppend?.(event)
+      nextId += 1
+      return {
+        id: EventId.make(nextId),
+        event,
+        createdAt: Date.now(),
+      } as EventEnvelope
+    })
+  return Layer.succeed(EventStore, {
+    append,
+    broadcast: () => Effect.void,
+    publish: (event: AgentEvent) =>
+      Effect.gen(function* () {
+        yield* append(event)
+      }),
+    subscribe: () => Effect.void as never,
+    removeSession: () => Effect.void,
+  })
+}
+
 describe("EventPublisher", () => {
   test("normal publish appends and delivers", async () => {
     const delivered: string[] = []
     const persisted: string[] = []
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          persisted.push(event._tag)
-        }),
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>
@@ -68,11 +85,7 @@ describe("EventPublisher", () => {
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer()
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>
@@ -116,14 +129,7 @@ describe("EventPublisher", () => {
     const nestedDelivered = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          persisted.push(event._tag)
-        }),
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>
@@ -164,11 +170,7 @@ describe("EventPublisher", () => {
   test("events without sessionId skip queued delivery", async () => {
     let delivered = 0
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer()
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: () =>
@@ -200,11 +202,7 @@ describe("EventPublisher", () => {
     const busNested = Effect.runSync(Deferred.make<void>())
     let publishFn: ((event: AgentEvent) => Effect.Effect<void>) | undefined
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer()
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>
@@ -261,16 +259,11 @@ describe("EventPublisher", () => {
       ]),
     )
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          persisted.push(event._tag)
-          if (event._tag === "ExtensionStateChanged" && persisted.includes("NestedEvent")) {
-            Effect.runSync(Deferred.succeed(nestedPulse, void 0).pipe(Effect.ignore))
-          }
-        }),
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
+    const baseLayer = makeEventStoreLayer((event) => {
+      persisted.push(event._tag)
+      if (event._tag === "ExtensionStateChanged" && persisted.includes("NestedEvent")) {
+        Effect.runSync(Deferred.succeed(nestedPulse, void 0).pipe(Effect.ignore))
+      }
     })
 
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
@@ -333,11 +326,7 @@ describe("EventPublisher per-cwd router", () => {
     const branchA = BranchId.make("branch-primary")
     const branchB = BranchId.make("branch-secondary")
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer()
 
     // Primary MachineEngine tracks events dispatched to it
     const primaryEngineLayer = Layer.succeed(MachineEngine, {
@@ -454,11 +443,7 @@ describe("EventPublisher per-cwd router", () => {
     const sessionA = SessionId.make("session-primary")
     const sessionB = SessionId.make("session-secondary")
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: () => Effect.void,
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer()
 
     const noopEngine = {
       publish: () => Effect.succeed([] as ReadonlyArray<string>),
@@ -557,14 +542,7 @@ describe("EventPublisher per-cwd router", () => {
     const primaryCwd = "/primary"
     const sessionB = SessionId.make("session-secondary")
 
-    const baseLayer = Layer.succeed(EventStore, {
-      publish: (event: AgentEvent) =>
-        Effect.sync(() => {
-          persisted.push(event._tag)
-        }),
-      subscribe: () => Effect.void as never,
-      removeSession: () => Effect.void,
-    })
+    const baseLayer = makeEventStoreLayer((event) => persisted.push(event._tag))
 
     const primaryEngineLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>

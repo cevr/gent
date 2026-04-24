@@ -30,6 +30,7 @@ import {
   BranchCreated,
   BranchSwitched,
   SessionStarted,
+  type AgentEvent,
 } from "../domain/event.js"
 import { AgentRunnerService } from "../domain/agent.js"
 
@@ -117,6 +118,8 @@ export const HostEventPublisherRef = Context.Reference<EventPublisherService>(
   "@gent/core/src/runtime/make-extension-host-context/HostEventPublisherRef",
   {
     defaultValue: () => ({
+      append: unavailable("EventPublisher"),
+      deliver: unavailable("EventPublisher"),
       publish: () => Effect.void,
       terminateSession: unavailable("EventPublisher"),
     }),
@@ -216,6 +219,23 @@ export const makeAmbientExtensionHostContextDeps = (
     }
   })
 
+const transactHostMutationWithEvent = <A, E, R>(
+  deps: MakeExtensionHostContextDeps,
+  mutation: Effect.Effect<A, E, R>,
+  event: AgentEvent,
+) =>
+  Effect.gen(function* () {
+    const committed = yield* deps.storage.withTransaction(
+      Effect.gen(function* () {
+        const result = yield* mutation
+        const envelope = yield* deps.eventPublisher.append(event)
+        return { result, envelope }
+      }),
+    )
+    yield* deps.eventPublisher.deliver(committed.envelope)
+    return committed.result
+  })
+
 export const makeExtensionHostContext = (
   runInfo: MakeExtensionHostContextRunInfo,
   deps: MakeExtensionHostContextDeps,
@@ -312,16 +332,13 @@ export const makeExtensionHostContext = (
           name: params.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* deps.storage.withTransaction(
-          Effect.gen(function* () {
-            yield* deps.storage.createBranch(branch)
-            yield* deps.eventPublisher.publish(
-              BranchCreated.make({
-                sessionId: runInfo.sessionId,
-                branchId: branch.id,
-                parentBranchId: runInfo.branchId,
-              }),
-            )
+        yield* transactHostMutationWithEvent(
+          deps,
+          deps.storage.createBranch(branch),
+          BranchCreated.make({
+            sessionId: runInfo.sessionId,
+            branchId: branch.id,
+            parentBranchId: runInfo.branchId,
           }),
         )
         return { branchId: branch.id }
@@ -341,7 +358,8 @@ export const makeExtensionHostContext = (
           name: params.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* deps.storage.withTransaction(
+        yield* transactHostMutationWithEvent(
+          deps,
           Effect.gen(function* () {
             yield* deps.storage.createBranch(branch)
 
@@ -353,14 +371,11 @@ export const makeExtensionHostContext = (
                 }),
               )
             }
-
-            yield* deps.eventPublisher.publish(
-              BranchCreated.make({
-                sessionId: runInfo.sessionId,
-                branchId: branch.id,
-                parentBranchId: runInfo.branchId,
-              }),
-            )
+          }),
+          BranchCreated.make({
+            sessionId: runInfo.sessionId,
+            branchId: branch.id,
+            parentBranchId: runInfo.branchId,
           }),
         )
         return { branchId: branch.id }
@@ -407,7 +422,8 @@ export const makeExtensionHostContext = (
           updatedAt: now,
           activeBranchId: branchId,
         })
-        yield* deps.storage.withTransaction(
+        yield* transactHostMutationWithEvent(
+          deps,
           Effect.gen(function* () {
             yield* deps.storage.createSession(session)
             const branch = new Branch({
@@ -416,8 +432,8 @@ export const makeExtensionHostContext = (
               createdAt: now,
             })
             yield* deps.storage.createBranch(branch)
-            yield* deps.eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
           }),
+          SessionStarted.make({ sessionId, branchId }),
         )
         return { sessionId, branchId }
       }),

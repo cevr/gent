@@ -5,7 +5,7 @@ import {
   ExtensionStateChanged,
   getEventBranchId,
   getEventSessionId,
-  type AgentEvent,
+  type EventEnvelope,
   type EventStoreService,
 } from "../domain/event.js"
 import type { MachineEngineService } from "../runtime/extensions/resource-host/machine-engine.js"
@@ -51,17 +51,19 @@ const buildPulseIndex = (registryService: ExtensionRegistryService) => {
 }
 
 /**
- * Inner publish logic. Dispatches an event through storage, machine engine,
+ * Inner delivery logic. Broadcasts an already-durable event through live
+ * subscriptions, machine engine,
  * pulse index, and subscription bus. Used by both `EventPublisherLive`
  * (single-profile, ephemeral children) and the router (per-cwd dispatch).
  */
-const publishInner = (
-  event: AgentEvent,
+const deliverInner = (
+  envelope: EventEnvelope,
   deps: InnerPublisherDeps,
   pulseByTag: Map<string, Set<string>>,
 ) =>
   Effect.gen(function* () {
-    yield* deps.baseEventStore.publish(event)
+    yield* deps.baseEventStore.broadcast(envelope)
+    const event = envelope.event
     const sessionId = getEventSessionId(event)
     if (sessionId === undefined) return
 
@@ -144,7 +146,13 @@ export const EventPublisherLive: Layer.Layer<
     const pulseByTag = buildPulseIndex(registry)
 
     return EventPublisher.of({
-      publish: (event) => publishInner(event, deps, pulseByTag),
+      append: (event) => baseEventStore.append(event),
+      deliver: (envelope) => deliverInner(envelope, deps, pulseByTag),
+      publish: (event) =>
+        Effect.gen(function* () {
+          const envelope = yield* baseEventStore.append(event)
+          yield* deliverInner(envelope, deps, pulseByTag)
+        }),
       terminateSession: (_sessionId) => Effect.void,
     })
   }),
@@ -206,85 +214,94 @@ export const makeEventPublisherRouter = (): {
       // Per-cwd pulse index cache — built lazily on first event for a cwd.
       const cwdPulseCache = new Map<string, Map<string, Set<string>>>()
 
+      const deliver = (envelope: EventEnvelope) =>
+        Effect.gen(function* () {
+          const event = envelope.event
+          const sessionId = getEventSessionId(event)
+          if (sessionId === undefined) {
+            yield* deliverInner(envelope, primaryDeps, primaryPulseByTag)
+            return
+          }
+
+          const sessionCwd = yield* cwdRegistry.lookup(sessionId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                // Storage lookup failed — broadcast event but don't guess
+                // which runtime to dispatch to (fail-closed).
+                yield* baseEventStore.broadcast(envelope)
+                yield* logDeliveryFailure("event-publisher.cwd-lookup.failed", {
+                  sessionId,
+                  error: String(cause),
+                })
+                return "__cwd_lookup_failed__" as const
+              }),
+            ),
+          )
+
+          if (sessionCwd === "__cwd_lookup_failed__") return
+
+          if (sessionCwd === undefined || sessionCwd === primaryCwd) {
+            yield* deliverInner(envelope, primaryDeps, primaryPulseByTag)
+            return
+          }
+
+          // Different cwd — resolve per-cwd profile. If profile cache
+          // is unavailable or resolution fails, persist the event but
+          // skip runtime dispatch (fail closed). Falling back to the
+          // primary cwd's MachineEngine would be silent wrong-runtime
+          // delivery.
+          if (handle.profileCache === undefined) {
+            yield* baseEventStore.broadcast(envelope)
+            yield* logDeliveryFailure("event-publisher.profile-cache.unavailable", {
+              sessionId,
+              sessionCwd,
+            })
+            return
+          }
+
+          const profile = yield* handle.profileCache.resolve(sessionCwd).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* logDeliveryFailure("event-publisher.profile-resolve.failed", {
+                  sessionId,
+                  sessionCwd,
+                  error: String(cause),
+                })
+                return undefined
+              }),
+            ),
+          )
+
+          if (profile === undefined) {
+            // Profile resolution failed — event is already durable, but
+            // runtime dispatch is unsafe. Still broadcast to live event
+            // subscribers.
+            yield* baseEventStore.broadcast(envelope)
+            return
+          }
+
+          const cwdDeps: InnerPublisherDeps = {
+            baseEventStore,
+            stateRuntime: profile.extensionStateRuntime,
+            bus: profile.subscriptionEngine,
+          }
+
+          let pulseByTag = cwdPulseCache.get(sessionCwd)
+          if (pulseByTag === undefined) {
+            pulseByTag = buildPulseIndex(profile.registryService)
+            cwdPulseCache.set(sessionCwd, pulseByTag)
+          }
+
+          yield* deliverInner(envelope, cwdDeps, pulseByTag)
+        })
+
       return EventPublisher.of({
+        append: (event) => baseEventStore.append(event),
+        deliver,
         publish: (event) =>
           Effect.gen(function* () {
-            const sessionId = getEventSessionId(event)
-            if (sessionId === undefined) {
-              yield* publishInner(event, primaryDeps, primaryPulseByTag)
-              return
-            }
-
-            const sessionCwd = yield* cwdRegistry.lookup(sessionId).pipe(
-              Effect.catchCause((cause) =>
-                Effect.gen(function* () {
-                  // Storage lookup failed — persist event but don't guess
-                  // which runtime to dispatch to (fail-closed).
-                  yield* baseEventStore.publish(event)
-                  yield* logDeliveryFailure("event-publisher.cwd-lookup.failed", {
-                    sessionId,
-                    error: String(cause),
-                  })
-                  return "__cwd_lookup_failed__" as const
-                }),
-              ),
-            )
-
-            if (sessionCwd === "__cwd_lookup_failed__") return
-
-            if (sessionCwd === undefined || sessionCwd === primaryCwd) {
-              yield* publishInner(event, primaryDeps, primaryPulseByTag)
-              return
-            }
-
-            // Different cwd — resolve per-cwd profile. If profile cache
-            // is unavailable or resolution fails, persist the event but
-            // skip runtime dispatch (fail closed). Falling back to the
-            // primary cwd's MachineEngine would be silent wrong-runtime
-            // delivery.
-            if (handle.profileCache === undefined) {
-              yield* baseEventStore.publish(event)
-              yield* logDeliveryFailure("event-publisher.profile-cache.unavailable", {
-                sessionId,
-                sessionCwd,
-              })
-              return
-            }
-
-            const profile = yield* handle.profileCache.resolve(sessionCwd).pipe(
-              Effect.catchCause((cause) =>
-                Effect.gen(function* () {
-                  yield* logDeliveryFailure("event-publisher.profile-resolve.failed", {
-                    sessionId,
-                    sessionCwd,
-                    error: String(cause),
-                  })
-                  return undefined
-                }),
-              ),
-            )
-
-            if (profile === undefined) {
-              // Profile resolution failed — event already persisted by
-              // the catchCause path above, but publishInner wasn't called.
-              // Persist here to ensure storage consistency.
-              yield* baseEventStore.publish(event)
-              return
-            }
-
-            const cwdDeps: InnerPublisherDeps = {
-              baseEventStore,
-              stateRuntime: profile.extensionStateRuntime,
-              bus: profile.subscriptionEngine,
-            }
-
-            let pulseByTag = cwdPulseCache.get(sessionCwd)
-            if (pulseByTag === undefined) {
-              pulseByTag = buildPulseIndex(profile.registryService)
-              cwdPulseCache.set(sessionCwd, pulseByTag)
-            }
-
-            yield* publishInner(event, cwdDeps, pulseByTag)
+            const envelope = yield* baseEventStore.append(event)
+            yield* deliver(envelope)
           }),
 
         terminateSession: (_sessionId) => Effect.void,

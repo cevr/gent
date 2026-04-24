@@ -423,6 +423,8 @@ export class EventStoreError extends Schema.TaggedErrorClass<EventStoreError>()(
 }) {}
 
 export interface EventStoreService {
+  readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
+  readonly broadcast: (envelope: EventEnvelope) => Effect.Effect<void>
   readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
   readonly subscribe: (params: {
     sessionId: SessionId
@@ -481,7 +483,7 @@ const makeMemoryEventStore = Effect.gen(function* () {
   const idRef = yield* Ref.make(0)
 
   const service: EventStoreService = {
-    publish: Effect.fn("EventStore.publish")(function* (event) {
+    append: Effect.fn("EventStore.append")(function* (event) {
       const id = yield* Ref.modify(idRef, (n) => [n + 1, n + 1])
       const currentSpan = yield* Effect.currentParentSpan.pipe(
         Effect.orElseSucceed(() => undefined),
@@ -493,10 +495,22 @@ const makeMemoryEventStore = Effect.gen(function* () {
         ...(currentSpan !== undefined ? { traceId: currentSpan.traceId } : {}),
       })
       yield* Ref.update(eventsRef, (events) => [...events, envelope])
-      const eventSessionId = getEventSessionId(event)
+      return envelope
+    }),
+
+    broadcast: (envelope) => {
+      const eventSessionId = getEventSessionId(envelope.event)
       if (eventSessionId !== undefined) {
-        yield* PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope)
+        return PubSub.publish(getOrCreateSessionPubSub(sessions, eventSessionId), envelope).pipe(
+          Effect.asVoid,
+        )
       }
+      return Effect.void
+    },
+
+    publish: Effect.fn("EventStore.publish")(function* (event) {
+      const envelope = yield* service.append(event)
+      yield* service.broadcast(envelope)
     }),
 
     subscribe: ({ sessionId, branchId, after }) =>

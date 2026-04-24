@@ -21,7 +21,7 @@ import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import { TurnError } from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
-import { EventStore } from "@gent/core/domain/event"
+import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
@@ -95,10 +95,16 @@ const makeDriverRegistry = (executor: TurnExecutor) =>
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.succeed(EventStore, {
+    append: (event: AgentEvent) =>
+      Effect.gen(function* () {
+        yield* Ref.update(eventsRef, (events) => [...events, event])
+        return EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() })
+      }),
+    broadcast: () => Effect.void,
     publish: (event: AgentEvent) =>
-      Ref.update(eventsRef, (events) => [...events, event]).pipe(
-        Effect.as({ id: 0, event, createdAt: Date.now() }),
-      ),
+      Effect.gen(function* () {
+        yield* Ref.update(eventsRef, (events) => [...events, event])
+      }),
     subscribe: () => Stream.empty,
     removeSession: () => Effect.void,
   })
@@ -433,6 +439,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
       generate: () => Effect.succeed("unused"),
     })
+    const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
 
     const deps = Layer.mergeAll(
       Storage.TestWithSql(),
@@ -444,13 +451,8 @@ describe("ExternalDriverContribution end-to-end", () => {
       }),
       MachineEngine.Test(),
       ExtensionTurnControl.Test(),
-      // Real EventStore would need more wiring; use the counting store.
       // Messages go through Storage directly — EventStore path is orthogonal.
-      Layer.succeed(EventStore, {
-        publish: () => Effect.succeed({ id: 0, event: {} as AgentEvent, createdAt: Date.now() }),
-        subscribe: () => Stream.empty,
-        removeSession: () => Effect.void,
-      }),
+      makeCountingEventStore(eventsRef),
       ToolRunner.Test(),
       RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
       ConfigService.Test(),

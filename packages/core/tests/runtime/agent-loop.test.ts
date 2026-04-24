@@ -43,7 +43,7 @@ import {
   type AnyResourceContribution,
 } from "@gent/core/extensions/api"
 import { Permission } from "@gent/core/domain/permission"
-import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event"
+import { EventEnvelope, EventId, EventStore, type AgentEvent } from "@gent/core/domain/event"
 import { InteractionPendingError } from "@gent/core/domain/interaction-request"
 import { ApprovalService } from "@gent/core/runtime/approval-service"
 import { EventPublisherLive } from "@gent/core/server/event-publisher"
@@ -265,10 +265,16 @@ const makeLiveToolLayer = (
 
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.succeed(EventStore, {
+    append: (event: AgentEvent) =>
+      Effect.gen(function* () {
+        yield* Ref.update(eventsRef, (events) => [...events, event])
+        return EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() })
+      }),
+    broadcast: () => Effect.void,
     publish: (event: AgentEvent) =>
-      Ref.update(eventsRef, (events) => [...events, event]).pipe(
-        Effect.as({ id: 0, event, createdAt: Date.now() } as EventEnvelope),
-      ),
+      Effect.gen(function* () {
+        yield* Ref.update(eventsRef, (events) => [...events, event])
+      }),
     subscribe: () => Stream.empty,
     removeSession: () => Effect.void,
   })
@@ -650,7 +656,7 @@ describe("streaming", () => {
 
           const calls = yield* recorder.getCalls()
           const publishedEvents = calls
-            .filter((call) => call.service === "EventStore" && call.method === "publish")
+            .filter((call) => call.service === "EventStore" && call.method === "append")
             .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
             .filter((tag): tag is string => tag !== undefined)
 
@@ -1013,7 +1019,7 @@ describe("streaming", () => {
 
         const calls = yield* recorder.getCalls()
         const tags = calls
-          .filter((call) => call.service === "EventStore" && call.method === "publish")
+          .filter((call) => call.service === "EventStore" && call.method === "append")
           .map((call) => (call.args as { _tag: string } | undefined)?._tag)
 
         expect(tags.includes("MachineInspected")).toBe(true)
@@ -1589,7 +1595,7 @@ describe("interaction", () => {
 
           const calls = yield* recorder.getCalls()
           const eventTags = calls
-            .filter((c) => c.service === "EventStore" && c.method === "publish")
+            .filter((c) => c.service === "EventStore" && c.method === "append")
             .map((c) => (c.args as { _tag: string })._tag)
           expect(eventTags).toContain("ToolCallStarted")
 

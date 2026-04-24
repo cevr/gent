@@ -149,7 +149,7 @@ const createSessionBranch = Effect.gen(function* () {
 
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
-    .filter((call) => call.service === "EventStore" && call.method === "publish")
+    .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => (call.args as { _tag?: string } | undefined)?._tag)
 
 const latestUserText = (request: { readonly prompt: unknown }) =>

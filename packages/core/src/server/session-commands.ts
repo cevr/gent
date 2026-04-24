@@ -13,6 +13,7 @@ import {
   BranchSummarized,
   SessionStarted,
   SessionSettingsUpdated,
+  type AgentEvent,
 } from "../domain/event.js"
 import { SessionStorage } from "../storage/session-storage.js"
 import { BranchStorage } from "../storage/branch-storage.js"
@@ -133,6 +134,22 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return parts.join("").trim()
       })
 
+      const transactWithEvent = <A, E, R>(
+        mutation: Effect.Effect<A, E, R>,
+        event: AgentEvent,
+      ): Effect.Effect<A, E | AppServiceError, R> =>
+        Effect.gen(function* () {
+          const committed = yield* storage.withTransaction(
+            Effect.gen(function* () {
+              const result = yield* mutation
+              const envelope = yield* eventPublisher.append(event)
+              return { result, envelope }
+            }),
+          )
+          yield* eventPublisher.deliver(committed.envelope)
+          return committed.result
+        })
+
       const createSession = Effect.fn("SessionCommands.createSession")(function* (
         input: CreateSessionInput,
       ) {
@@ -166,7 +183,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           createdAt: now,
         })
 
-        yield* storage
+        const committed = yield* storage
           .withTransaction(
             Effect.gen(function* () {
               yield* sessionStorage.createSession(session)
@@ -180,10 +197,14 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
               if (input.cwd !== undefined) {
                 yield* sessionCwdRegistry.record(sessionId, input.cwd)
               }
-              yield* eventPublisher.publish(SessionStarted.make({ sessionId, branchId }))
+              const envelope = yield* eventPublisher.append(
+                SessionStarted.make({ sessionId, branchId }),
+              )
+              return { envelope }
             }),
           )
           .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
+        yield* eventPublisher.deliver(committed.envelope)
         yield* Effect.logInfo("session.created").pipe(
           Effect.annotateLogs({
             sessionId,
@@ -216,21 +237,17 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* storage.withTransaction(
-          Effect.gen(function* () {
-            yield* branchStorage.createBranch(branch)
-            yield* eventPublisher.publish(
-              BranchCreated.make({
-                sessionId: branch.sessionId,
-                branchId: branch.id,
-                ...(branch.parentBranchId !== undefined
-                  ? { parentBranchId: branch.parentBranchId }
-                  : {}),
-                ...(branch.parentMessageId !== undefined
-                  ? { parentMessageId: branch.parentMessageId }
-                  : {}),
-              }),
-            )
+        yield* transactWithEvent(
+          branchStorage.createBranch(branch),
+          BranchCreated.make({
+            sessionId: branch.sessionId,
+            branchId: branch.id,
+            ...(branch.parentBranchId !== undefined
+              ? { parentBranchId: branch.parentBranchId }
+              : {}),
+            ...(branch.parentMessageId !== undefined
+              ? { parentMessageId: branch.parentMessageId }
+              : {}),
           }),
         )
         return { branchId: branch.id }
@@ -310,7 +327,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           name: input.name,
           createdAt: yield* DateTime.nowAsDate,
         })
-        yield* storage.withTransaction(
+        yield* transactWithEvent(
           Effect.gen(function* () {
             yield* branchStorage.createBranch(branch)
 
@@ -322,19 +339,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
                 }),
               )
             }
-
-            yield* eventPublisher.publish(
-              BranchCreated.make({
-                sessionId: branch.sessionId,
-                branchId: branch.id,
-                ...(branch.parentBranchId !== undefined
-                  ? { parentBranchId: branch.parentBranchId }
-                  : {}),
-                ...(branch.parentMessageId !== undefined
-                  ? { parentMessageId: branch.parentMessageId }
-                  : {}),
-              }),
-            )
+          }),
+          BranchCreated.make({
+            sessionId: branch.sessionId,
+            branchId: branch.id,
+            ...(branch.parentBranchId !== undefined
+              ? { parentBranchId: branch.parentBranchId }
+              : {}),
+            ...(branch.parentMessageId !== undefined
+              ? { parentMessageId: branch.parentMessageId }
+              : {}),
           }),
         )
         return { branchId: branch.id }
