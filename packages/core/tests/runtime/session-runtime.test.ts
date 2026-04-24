@@ -748,6 +748,113 @@ describe("SessionRuntime", () => {
     )
   })
 
+  test("dispatch SendUserMessage concurrent with turn completion runs the follow-up once", async () => {
+    const { layer: providerLayer, controls } = await Effect.runPromise(
+      createSequenceProvider([
+        {
+          ...textStep("first reply"),
+          gated: true,
+          assertRequest: (request) => {
+            expect(latestUserText(request)).toBe("first")
+          },
+        },
+        {
+          ...textStep("second reply"),
+          assertRequest: (request) => {
+            expect(latestUserText(request)).toBe("second")
+          },
+        },
+      ]),
+    )
+    const layer = makeRuntimeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+        )
+        yield* controls.waitForCall(0)
+
+        const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
+        const followUpFiber = yield* Effect.forkChild(
+          sessionRuntime.dispatch(
+            sendUserMessageCommand({ sessionId, branchId, content: "second" }),
+          ),
+        )
+        yield* Fiber.join(emitFiber)
+        yield* Fiber.join(followUpFiber)
+
+        const messages = yield* waitFor(
+          storage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 2,
+          5_000,
+          "concurrent follow-up completion",
+        )
+        expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
+        expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+        expect(yield* controls.callCount).toBe(2)
+        yield* controls.assertDone()
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("drainQueuedMessages atomically clears follow-ups during an active turn", async () => {
+    const { layer: providerLayer, controls } = await Effect.runPromise(
+      createSequenceProvider([
+        {
+          ...textStep("first reply"),
+          gated: true,
+          assertRequest: (request) => {
+            expect(latestUserText(request)).toBe("first")
+          },
+        },
+        textStep("should not run"),
+      ]),
+    )
+    const layer = makeRuntimeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({ sessionId, branchId, content: "first" }),
+        )
+        yield* controls.waitForCall(0)
+        yield* sessionRuntime.dispatch(
+          sendUserMessageCommand({ sessionId, branchId, content: "drain me" }),
+        )
+
+        const drained = yield* sessionRuntime.drainQueuedMessages({ sessionId, branchId })
+        expect(drained.followUp).toEqual([
+          expect.objectContaining({ _tag: "follow-up", content: "drain me" }),
+        ])
+        expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
+          steering: [],
+          followUp: [],
+        } satisfies QueueSnapshot)
+
+        yield* controls.emitAll(0)
+        yield* waitFor(
+          sessionRuntime.getState({ sessionId, branchId }),
+          (state) => state._tag === "Idle",
+          5_000,
+          "idle after drained follow-up",
+        )
+        expect(yield* controls.callCount).toBe(1)
+        expect(
+          (yield* storage.listMessages(branchId)).filter((message) => message.role === "user"),
+        ).toHaveLength(1)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   test("dispatch RespondInteraction resumes a waiting interaction through the live loop", async () => {
     const callCount = Ref.makeUnsafe(0)
     const resolution = Deferred.makeUnsafe<void>()
