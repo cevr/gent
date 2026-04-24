@@ -15,6 +15,22 @@ describe("composePromptWithTranscript", () => {
     expect(composePromptWithTranscript(messages, "hello")).toBe("hello")
   })
 
+  test("renders multi-part live user messages instead of dropping later parts", () => {
+    const live = {
+      role: "user",
+      parts: [
+        { type: "text", text: "first text" },
+        { type: "image", image: "data:image/png;base64,abc", mediaType: "image/png" },
+        { type: "text", text: "second text" },
+      ],
+    }
+    const result = composePromptWithTranscript([live], live)
+    expect(result).toContain("<user-message>")
+    expect(result).toContain("first text")
+    expect(result).toContain('<image mediaType="image/png" src="data:image/png;base64,abc" />')
+    expect(result).toContain("second text")
+  })
+
   test("renders prior text turns inside a labelled envelope", () => {
     const messages = [
       { role: "user", parts: [{ type: "text", text: "first turn" }] },
@@ -27,6 +43,27 @@ describe("composePromptWithTranscript", () => {
     expect(result).toContain("<user>\nfirst turn\n</user>")
     expect(result).toContain("<assistant>\nfirst reply\n</assistant>")
     expect(result.endsWith("\n\nsecond turn")).toBe(true)
+  })
+
+  test("appends structured live user parts after the historical envelope", () => {
+    const live = {
+      role: "user",
+      parts: [
+        { type: "text", text: "look here" },
+        { type: "image", image: "https://example.com/live.png", mediaType: "image/png" },
+        { type: "text", text: "then answer" },
+      ],
+    }
+    const messages = [
+      { role: "user", parts: [{ type: "text", text: "first turn" }] },
+      { role: "assistant", parts: [{ type: "text", text: "first reply" }] },
+      live,
+    ]
+    const result = composePromptWithTranscript(messages, live)
+    expect(result).toContain("</historical-transcript>\n\n<user-message>")
+    expect(result).toContain("look here")
+    expect(result).toContain('<image mediaType="image/png" src="https://example.com/live.png" />')
+    expect(result.endsWith("then answer\n</user-message>")).toBe(true)
   })
 
   test("renders tool-call parts as structured <tool> elements", () => {

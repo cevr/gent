@@ -28,7 +28,11 @@ import { AcpClosedError, AcpError } from "./protocol.js"
 import type { SessionNotification } from "./schema.js"
 import type { CodemodeConfig } from "./mcp-codemode.js"
 import { makeAcpRunTool } from "./executor-boundary.js"
-import { composePromptWithTranscript } from "./transcript.js"
+import {
+  composePromptWithTranscript,
+  findLastUserMessage,
+  renderLiveUserPrompt,
+} from "./transcript.js"
 
 // ── Session Manager Interface (Batch 3 provides implementation) ──
 
@@ -129,20 +133,6 @@ export const mapAcpUpdateToTurnEvent = (
   }
 }
 
-/** Extract text from the last user message in the conversation. */
-const extractLastUserMessage = (
-  messages: ReadonlyArray<{ role: string; parts: ReadonlyArray<{ type: string; text?: string }> }>,
-): string => {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg === undefined || msg.role !== "user") continue
-    for (const part of msg.parts) {
-      if (part.type === "text" && part.text !== undefined) return part.text
-    }
-  }
-  return ""
-}
-
 // ── Turn Executor Factory ──
 
 export const makeAcpTurnExecutor = (
@@ -202,10 +192,10 @@ export const makeAcpTurnExecutor = (
       // protocol exposes only `prompt` for user input; we cannot inject
       // assistant turns directly. Bare last-user would silently drop
       // history across cache misses / driver swaps.
-      const lastUser = extractLastUserMessage(ctx.messages)
+      const lastUser = findLastUserMessage(ctx.messages)
       const promptText = session.created
         ? composePromptWithTranscript(ctx.messages, lastUser)
-        : lastUser
+        : renderLiveUserPrompt(lastUser)
 
       // Fork the prompt call — runs concurrently with the update stream.
       // On failure, fail the deferred so the stream doesn't hang. An

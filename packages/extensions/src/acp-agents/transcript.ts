@@ -144,16 +144,11 @@ const renderMessage = (msg: MessageLike): string | undefined => {
  */
 export const composePromptWithTranscript = (
   messages: ReadonlyArray<MessageLike>,
-  liveUserText: string,
+  liveUser: MessageLike | string | undefined,
 ): string => {
-  let lastUserIdx = -1
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") {
-      lastUserIdx = i
-      break
-    }
-  }
+  const lastUserIdx = findLastUserMessageIndex(messages)
   const history = lastUserIdx <= 0 ? [] : messages.slice(0, lastUserIdx)
+  const liveUserText = typeof liveUser === "string" ? liveUser : renderLiveUserPrompt(liveUser)
   if (history.length === 0) return liveUserText
 
   const blocks: string[] = []
@@ -173,4 +168,27 @@ export const composePromptWithTranscript = (
     "",
     liveUserText,
   ].join("\n")
+}
+
+export const findLastUserMessage = (
+  messages: ReadonlyArray<MessageLike>,
+): MessageLike | undefined => {
+  const idx = findLastUserMessageIndex(messages)
+  return idx >= 0 ? messages[idx] : undefined
+}
+
+export const renderLiveUserPrompt = (message: MessageLike | undefined): string => {
+  if (message === undefined) return ""
+  const rendered = message.parts.map(renderPart).filter((s): s is string => s !== undefined)
+  if (rendered.length === 0) return ""
+  const [only] = message.parts
+  if (message.parts.length === 1 && only?.type === "text") return only.text ?? ""
+  return ["<user-message>", ...rendered, "</user-message>"].join("\n")
+}
+
+const findLastUserMessageIndex = (messages: ReadonlyArray<MessageLike>): number => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i
+  }
+  return -1
 }

@@ -16,7 +16,7 @@ import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { Provider } from "@gent/core/providers/provider"
 import { finishPart } from "@gent/core/debug/provider"
-import { Message, TextPart } from "@gent/core/domain/message"
+import { ImagePart, Message, TextPart } from "@gent/core/domain/message"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
 import {
@@ -50,6 +50,16 @@ const makeMessage = (text: string) =>
     branchId,
     role: "user",
     parts: [new TextPart({ type: "text", text })],
+    createdAt: new Date(),
+  })
+
+const makeMessageWithParts = (parts: Message["parts"]) =>
+  Message.Regular.make({
+    id: `${sessionId}-${branchId}-multipart-msg`,
+    sessionId,
+    branchId,
+    role: "user",
+    parts,
     createdAt: new Date(),
   })
 
@@ -384,6 +394,43 @@ describe("external turn execution", () => {
     expect(capturedCtx!.agent.name).toBe("test-external")
     expect(capturedCtx!.cwd).toBe("/tmp")
     expect(capturedCtx!.abortSignal).toBeDefined()
+  })
+
+  test("executor receives all live user message parts", async () => {
+    const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
+    let capturedCtx: TurnContext | undefined
+
+    const executor = makeCapturingExecutor([Finished.make({ stopReason: "stop" })], (ctx) => {
+      capturedCtx = ctx
+    })
+
+    const layer = makeLayerWithEvents(executor, eventsRef)
+    const message = makeMessageWithParts([
+      new TextPart({ type: "text", text: "first text" }),
+      new ImagePart({
+        type: "image",
+        image: "data:image/png;base64,abc",
+        mediaType: "image/png",
+      }),
+      new TextPart({ type: "text", text: "second text" }),
+    ])
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          yield* runAgentLoop(agentLoop, message, {
+            agentOverride: "test-external",
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const lastUser = capturedCtx!.messages.at(-1)
+    expect(lastUser?.parts.map((part) => part.type)).toEqual(["text", "image", "text"])
+    expect(lastUser?.parts[2]?.type === "text" ? lastUser.parts[2].text : undefined).toBe(
+      "second text",
+    )
   })
 
   test("reasoning-delta events are captured in assistant output", async () => {

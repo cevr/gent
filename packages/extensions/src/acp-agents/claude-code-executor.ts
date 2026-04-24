@@ -45,7 +45,11 @@ import { makeAcpRunTool } from "./executor-boundary.js"
 import { readClaudeCodeOAuthToken } from "./claude-code-auth.js"
 import { CLAUDE_CODE_AGENT_NAME } from "./config.js"
 import type { ExternalSessionKey } from "./executor.js"
-import { composePromptWithTranscript } from "./transcript.js"
+import {
+  composePromptWithTranscript,
+  findLastUserMessage,
+  renderLiveUserPrompt,
+} from "./transcript.js"
 
 // ── SDK message → TurnEvent mapping ──
 
@@ -402,10 +406,10 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
       // bare `prompt(lastUser)` would silently drop everything before
       // the cache miss. The preamble is suppressed when reusing a warm
       // session.
-      const lastUserText = extractLastUserMessage(ctx.messages)
+      const lastUser = findLastUserMessage(ctx.messages)
       const promptText = managed.created
-        ? composePromptWithTranscript(ctx.messages, lastUserText)
-        : lastUserText
+        ? composePromptWithTranscript(ctx.messages, lastUser)
+        : renderLiveUserPrompt(lastUser)
 
       // Per-prompt cancel — `session.prompt` calls `q.interrupt()` when
       // the signal aborts. The SDK session stays cached.
@@ -423,16 +427,3 @@ export const makeClaudeCodeTurnExecutor = (manager: ClaudeCodeSessionManager): T
 })
 
 // ── Helpers ──
-
-const extractLastUserMessage = (
-  messages: ReadonlyArray<{ role: string; parts: ReadonlyArray<{ type: string; text?: string }> }>,
-): string => {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (msg === undefined || msg.role !== "user") continue
-    for (const part of msg.parts) {
-      if (part.type === "text" && part.text !== undefined) return part.text
-    }
-  }
-  return ""
-}
