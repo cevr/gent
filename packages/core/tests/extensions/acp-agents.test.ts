@@ -7,6 +7,13 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Schema } from "effect"
 import type { AnyCapabilityContribution } from "@gent/core/domain/capability"
+import {
+  ReasoningDelta,
+  TextDelta,
+  ToolCompleted,
+  ToolFailed,
+  ToolStarted,
+} from "@gent/core/extensions/api"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
@@ -25,6 +32,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "text-delta", text: "hello world" })
+    expect(event).toBeInstanceOf(TextDelta)
   })
 
   test("maps agent_thought_chunk with text content to reasoning-delta", () => {
@@ -35,6 +43,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "reasoning-delta", text: "thinking..." })
+    expect(event).toBeInstanceOf(ReasoningDelta)
   })
 
   test("maps tool_call to tool-started", () => {
@@ -46,6 +55,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "tool-started", toolCallId: "tc-1", toolName: "read_file" })
+    expect(event).toBeInstanceOf(ToolStarted)
   })
 
   test("maps tool_call_update completed to tool-completed", () => {
@@ -57,6 +67,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "tool-completed", toolCallId: "tc-1" })
+    expect(event).toBeInstanceOf(ToolCompleted)
   })
 
   test("maps tool_call_update failed to tool-failed", () => {
@@ -69,6 +80,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "tool-failed", toolCallId: "tc-2", error: "not found" })
+    expect(event).toBeInstanceOf(ToolFailed)
   })
 
   test("returns undefined for non-text content in message chunk", () => {
@@ -114,6 +126,7 @@ describe("mapAcpUpdateToTurnEvent", () => {
       }),
     )
     expect(event).toEqual({ _tag: "tool-started", toolCallId: "tc-3", toolName: "unknown" })
+    expect(event).toBeInstanceOf(ToolStarted)
   })
 
   test("tool_call_update with in-progress status returns undefined", () => {

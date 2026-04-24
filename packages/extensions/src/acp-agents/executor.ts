@@ -11,7 +11,13 @@
  */
 import { Deferred, Effect, Stream } from "effect"
 import {
+  ReasoningDelta,
+  TextDelta,
+  ToolCompleted,
   TurnError,
+  ToolFailed,
+  ToolStarted,
+  TurnFinished,
   type TurnContext,
   type TurnEvent,
   type TurnExecutor,
@@ -79,13 +85,12 @@ const mapToolCallUpdate = (obj: Record<string, unknown>): TurnEvent | undefined 
   const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
   const status = typeof obj["status"] === "string" ? obj["status"] : undefined
   if (toolCallId === undefined) return undefined
-  if (status === "completed") return { _tag: "tool-completed", toolCallId }
+  if (status === "completed") return ToolCompleted.make({ toolCallId })
   if (status === "failed") {
-    return {
-      _tag: "tool-failed",
+    return ToolFailed.make({
       toolCallId,
       error: typeof obj["error"] === "string" ? obj["error"] : "tool failed",
-    }
+    })
   }
   return undefined
 }
@@ -103,20 +108,19 @@ export const mapAcpUpdateToTurnEvent = (
   switch (kind) {
     case "agent_message_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined ? { _tag: "text-delta", text } : undefined
+      return text !== undefined ? TextDelta.make({ text }) : undefined
     }
     case "agent_thought_chunk": {
       const text = extractTextFromContent(obj["content"])
-      return text !== undefined ? { _tag: "reasoning-delta", text } : undefined
+      return text !== undefined ? ReasoningDelta.make({ text }) : undefined
     }
     case "tool_call": {
       const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
       if (toolCallId === undefined) return undefined
-      return {
-        _tag: "tool-started",
+      return ToolStarted.make({
         toolCallId,
         toolName: typeof obj["title"] === "string" ? obj["title"] : "unknown",
-      }
+      })
     }
     case "tool_call_update":
       return mapToolCallUpdate(obj)
@@ -241,12 +245,7 @@ export const makeAcpTurnExecutor = (
       // After updates drain, emit the finished event
       const finishedStream: Stream.Stream<TurnEvent, TurnError> = Stream.fromEffect(
         Deferred.await(promptDone).pipe(
-          Effect.map(
-            (stopReason): TurnEvent => ({
-              _tag: "finished",
-              stopReason,
-            }),
-          ),
+          Effect.map((stopReason): TurnEvent => TurnFinished.make({ stopReason })),
         ),
       )
 

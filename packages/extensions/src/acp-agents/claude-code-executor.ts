@@ -27,7 +27,13 @@
  */
 import { Effect, Stream } from "effect"
 import {
+  ReasoningDelta,
+  TextDelta,
+  ToolCompleted,
   TurnError,
+  ToolFailed,
+  ToolStarted,
+  TurnFinished,
   type TurnContext,
   type TurnEvent,
   type TurnExecutor,
@@ -46,17 +52,17 @@ import { composePromptWithTranscript } from "./transcript.js"
 /**
  * Map a `result` message to the terminal `finished` event.
  */
-const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEvent => ({
-  _tag: "finished",
-  stopReason: msg.subtype === "success" ? (msg.stop_reason ?? "end_turn") : msg.subtype,
-  usage:
-    msg.usage !== undefined
-      ? {
-          inputTokens: msg.usage.input_tokens,
-          outputTokens: msg.usage.output_tokens,
-        }
-      : undefined,
-})
+const mapResultMessage = (msg: Extract<SDKMessage, { type: "result" }>): TurnEvent =>
+  TurnFinished.make({
+    stopReason: msg.subtype === "success" ? (msg.stop_reason ?? "end_turn") : msg.subtype,
+    usage:
+      msg.usage !== undefined
+        ? {
+            inputTokens: msg.usage.input_tokens,
+            outputTokens: msg.usage.output_tokens,
+          }
+        : undefined,
+  })
 
 /**
  * Map a full `assistant` message. Text/thinking are emitted via the
@@ -78,12 +84,13 @@ const mapAssistantMessage = (
     const id = typeof block["id"] === "string" ? block["id"] : undefined
     const name = typeof block["name"] === "string" ? block["name"] : "unknown"
     if (id !== undefined) {
-      events.push({
-        _tag: "tool-started",
-        toolCallId: id,
-        toolName: name,
-        input: block["input"],
-      })
+      events.push(
+        ToolStarted.make({
+          toolCallId: id,
+          toolName: name,
+          input: block["input"],
+        }),
+      )
     }
   }
   return events
@@ -101,9 +108,9 @@ const mapUserMessage = (msg: Extract<SDKMessage, { type: "user" }>): ReadonlyArr
     if (id === undefined) continue
     if (block["is_error"] === true) {
       const errText = stringifyContent(block["content"]) ?? "tool failed"
-      events.push({ _tag: "tool-failed", toolCallId: id, error: errText })
+      events.push(ToolFailed.make({ toolCallId: id, error: errText }))
     } else {
-      events.push({ _tag: "tool-completed", toolCallId: id, output: block["content"] })
+      events.push(ToolCompleted.make({ toolCallId: id, output: block["content"] }))
     }
   }
   return events
@@ -127,10 +134,10 @@ const mapStreamEvent = (
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const d = delta as Record<string, unknown>
   if (d["type"] === "text_delta" && typeof d["text"] === "string" && d["text"] !== "") {
-    return [{ _tag: "text-delta", text: d["text"] }]
+    return [TextDelta.make({ text: d["text"] })]
   }
   if (d["type"] === "thinking_delta" && typeof d["thinking"] === "string" && d["thinking"] !== "") {
-    return [{ _tag: "reasoning-delta", text: d["thinking"] }]
+    return [ReasoningDelta.make({ text: d["thinking"] })]
   }
   return []
 }

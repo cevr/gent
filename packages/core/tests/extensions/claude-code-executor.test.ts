@@ -6,6 +6,14 @@
  * agent loop) lives in Commit 5.
  */
 import { describe, test, expect } from "bun:test"
+import {
+  ReasoningDelta,
+  TextDelta,
+  ToolCompleted,
+  ToolFailed,
+  ToolStarted,
+  TurnFinished,
+} from "@gent/core/extensions/api"
 import { mapSdkMessage } from "@gent/extensions/acp-agents/claude-code-executor"
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- SDK types are noisy; tests only build the fields the mapper reads.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -24,7 +32,9 @@ describe("mapSdkMessage", () => {
         delta: { type: "text_delta", text: "hello" },
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([{ _tag: "text-delta", text: "hello" }])
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([{ _tag: "text-delta", text: "hello" }])
+    expect(events[0]).toBeInstanceOf(TextDelta)
   })
 
   test("stream_event content_block_delta thinking_delta → reasoning-delta", () => {
@@ -38,7 +48,9 @@ describe("mapSdkMessage", () => {
         delta: { type: "thinking_delta", thinking: "ponder" },
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([{ _tag: "reasoning-delta", text: "ponder" }])
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([{ _tag: "reasoning-delta", text: "ponder" }])
+    expect(events[0]).toBeInstanceOf(ReasoningDelta)
   })
 
   test("assistant text block does NOT emit (stream_event is the source)", () => {
@@ -64,9 +76,11 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_use", id: "t-1", name: "read", input: { path: "/x" } }],
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([
       { _tag: "tool-started", toolCallId: "t-1", toolName: "read", input: { path: "/x" } },
     ])
+    expect(events[0]).toBeInstanceOf(ToolStarted)
   })
 
   test("user tool_result success → tool-completed", () => {
@@ -79,9 +93,9 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_result", tool_use_id: "t-1", content: "ok" }],
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([
-      { _tag: "tool-completed", toolCallId: "t-1", output: "ok" },
-    ])
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([{ _tag: "tool-completed", toolCallId: "t-1", output: "ok" }])
+    expect(events[0]).toBeInstanceOf(ToolCompleted)
   })
 
   test("user tool_result with is_error → tool-failed", () => {
@@ -94,7 +108,9 @@ describe("mapSdkMessage", () => {
         content: [{ type: "tool_result", tool_use_id: "t-2", is_error: true, content: "boom" }],
       },
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([{ _tag: "tool-failed", toolCallId: "t-2", error: "boom" }])
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([{ _tag: "tool-failed", toolCallId: "t-2", error: "boom" }])
+    expect(events[0]).toBeInstanceOf(ToolFailed)
   })
 
   test("result success → finished with stop_reason", () => {
@@ -114,13 +130,15 @@ describe("mapSdkMessage", () => {
       modelUsage: {},
       permission_denials: [],
     } as unknown as SDKMessage
-    expect(mapSdkMessage(msg)).toEqual([
+    const events = mapSdkMessage(msg)
+    expect(events).toEqual([
       {
         _tag: "finished",
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 5 },
       },
     ])
+    expect(events[0]).toBeInstanceOf(TurnFinished)
   })
 
   test("system / status messages map to nothing", () => {

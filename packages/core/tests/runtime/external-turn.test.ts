@@ -19,7 +19,15 @@ import { finishPart } from "@gent/core/debug/provider"
 import { Message, TextPart } from "@gent/core/domain/message"
 import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
 import type { TurnExecutor, TurnEvent, TurnContext } from "@gent/core/domain/driver"
-import { TurnError } from "@gent/core/domain/driver"
+import {
+  Finished,
+  ReasoningDelta,
+  TextDelta,
+  ToolCompleted,
+  ToolFailed,
+  ToolStarted,
+  TurnError,
+} from "@gent/core/domain/driver"
 import type { AgentEvent } from "@gent/core/domain/event"
 import { EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
 import { EventPublisherLive } from "../../src/server/event-publisher"
@@ -158,9 +166,9 @@ describe("external turn execution", () => {
   test("publishes StreamStarted, StreamChunk, and TurnCompleted for external turn", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      { _tag: "text-delta", text: "Hello from " },
-      { _tag: "text-delta", text: "external agent" },
-      { _tag: "finished", stopReason: "stop" },
+      TextDelta.make({ text: "Hello from " }),
+      TextDelta.make({ text: "external agent" }),
+      Finished.make({ stopReason: "stop" }),
     ])
 
     const layer = makeLayerWithEvents(executor, eventsRef)
@@ -187,10 +195,10 @@ describe("external turn execution", () => {
   test("publishes tool observability events for external tool calls", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      { _tag: "tool-started", toolCallId: "tc-1", toolName: "read_file" },
-      { _tag: "tool-completed", toolCallId: "tc-1" },
-      { _tag: "text-delta", text: "File contents here" },
-      { _tag: "finished", stopReason: "stop" },
+      ToolStarted.make({ toolCallId: "tc-1", toolName: "read_file" }),
+      ToolCompleted.make({ toolCallId: "tc-1" }),
+      TextDelta.make({ text: "File contents here" }),
+      Finished.make({ stopReason: "stop" }),
     ])
 
     const layer = makeLayerWithEvents(executor, eventsRef)
@@ -216,9 +224,9 @@ describe("external turn execution", () => {
   test("publishes ToolCallFailed for failed external tool calls", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      { _tag: "tool-started", toolCallId: "tc-fail", toolName: "bash" },
-      { _tag: "tool-failed", toolCallId: "tc-fail", error: "permission denied" },
-      { _tag: "finished", stopReason: "stop" },
+      ToolStarted.make({ toolCallId: "tc-fail", toolName: "bash" }),
+      ToolFailed.make({ toolCallId: "tc-fail", error: "permission denied" }),
+      Finished.make({ stopReason: "stop" }),
     ])
 
     const layer = makeLayerWithEvents(executor, eventsRef)
@@ -265,10 +273,10 @@ describe("external turn execution", () => {
   test("external turn does not re-execute tools (toolCalls empty in draft)", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      { _tag: "tool-started", toolCallId: "tc-1", toolName: "bash" },
-      { _tag: "tool-completed", toolCallId: "tc-1" },
-      { _tag: "text-delta", text: "done" },
-      { _tag: "finished", stopReason: "stop" },
+      ToolStarted.make({ toolCallId: "tc-1", toolName: "bash" }),
+      ToolCompleted.make({ toolCallId: "tc-1" }),
+      TextDelta.make({ text: "done" }),
+      Finished.make({ stopReason: "stop" }),
     ])
 
     const layer = makeLayerWithEvents(executor, eventsRef)
@@ -355,7 +363,7 @@ describe("external turn execution", () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     let capturedCtx: TurnContext | undefined
 
-    const executor = makeCapturingExecutor([{ _tag: "finished", stopReason: "stop" }], (ctx) => {
+    const executor = makeCapturingExecutor([Finished.make({ stopReason: "stop" })], (ctx) => {
       capturedCtx = ctx
     })
 
@@ -381,9 +389,9 @@ describe("external turn execution", () => {
   test("reasoning-delta events are captured in assistant output", async () => {
     const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
     const executor = makeMockExecutor([
-      { _tag: "reasoning-delta", text: "thinking..." },
-      { _tag: "text-delta", text: "answer" },
-      { _tag: "finished", stopReason: "stop" },
+      ReasoningDelta.make({ text: "thinking..." }),
+      TextDelta.make({ text: "answer" }),
+      Finished.make({ stopReason: "stop" }),
     ])
 
     const layer = makeLayerWithEvents(executor, eventsRef)
@@ -424,8 +432,8 @@ describe("ExternalDriverContribution end-to-end", () => {
     const e2eExecutor: TurnExecutor = {
       executeTurn: () =>
         Stream.fromIterable<TurnEvent, TurnError>([
-          { _tag: "text-delta", text: expectedText },
-          { _tag: "finished", stopReason: "stop" },
+          TextDelta.make({ text: expectedText }),
+          Finished.make({ stopReason: "stop" }),
         ]),
     }
 
