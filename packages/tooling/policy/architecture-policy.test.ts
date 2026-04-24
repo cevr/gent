@@ -333,7 +333,13 @@ describe("architecture policy", () => {
     expect(paths["@gent/extensions/builtin-internal"]).toEqual([
       "./packages/extensions/.blocked-internal.ts",
     ])
+    expect(paths["@gent/extensions/builtin-internal.ts"]).toEqual([
+      "./packages/extensions/.blocked-internal.ts",
+    ])
     expect(paths["@gent/extensions/core-internal"]).toEqual([
+      "./packages/extensions/.blocked-internal.ts",
+    ])
+    expect(paths["@gent/extensions/core-internal.ts"]).toEqual([
       "./packages/extensions/.blocked-internal.ts",
     ])
     expect(paths["@gent/extensions/internal/*"]).toEqual([
@@ -342,8 +348,10 @@ describe("architecture policy", () => {
     expect(paths["@gent/extensions/*"]).toEqual(["./packages/extensions/src/*"])
     expect(importProbe("@gent/extensions/builtin-internal").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/builtin-internal.js").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/builtin-internal.ts").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/core-internal").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/core-internal.js").exitCode).not.toBe(0)
+    expect(importProbe("@gent/extensions/core-internal.ts").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/internal/builtin").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/internal/builtin.js").exitCode).not.toBe(0)
   })
