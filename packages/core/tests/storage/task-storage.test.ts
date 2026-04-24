@@ -15,6 +15,12 @@ const testLayer = Layer.merge(baseLayer, taskStorageLayer)
 
 const test = it.live.layer(testLayer)
 
+// Separate layer for migration regression tests — only Storage + SqlClient,
+// NO TaskStorage.Live yet. The test seeds a legacy-shaped tasks table via
+// raw SQL, then provides TaskStorage.Live on top to trigger the migration.
+const migrationBaseLayer = Storage.TestWithSql()
+const migrationTest = it.live.layer(migrationBaseLayer)
+
 const setup = Effect.gen(function* () {
   const storage = yield* Storage
   const taskStorage = yield* TaskStorage
@@ -221,6 +227,110 @@ describe("Composite branch FK", () => {
       const present = yield* taskStorage.getTask(TaskId.make("t1"))
       expect(present).toBeUndefined()
     }))
+})
+
+describe("Legacy-shape migration", () => {
+  // Legacy schema: only the session_id FK. This mirrors what was in
+  // production before the composite-branch FK was added. The migration
+  // detects this via PRAGMA foreign_key_list and rebuilds the table.
+  const legacyTasksSql = `
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      owner TEXT,
+      agent_type TEXT,
+      prompt TEXT,
+      cwd TEXT,
+      metadata TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `
+
+  const seedLegacyTasks = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const storage = yield* Storage
+    const now = new Date()
+    yield* storage.createSession(
+      new Session({
+        id: SessionId.make("s1"),
+        name: "Test",
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+    yield* storage.createBranch(
+      new Branch({
+        id: BranchId.make("b-keep"),
+        sessionId: SessionId.make("s1"),
+        createdAt: now,
+      }),
+    )
+    yield* sql.unsafe(legacyTasksSql)
+    // Two rows — one whose branch still exists, one whose branch does not.
+    // INNER JOIN in the migration should keep the first, drop the second.
+    yield* sql.unsafe(
+      `INSERT INTO tasks (id, session_id, branch_id, subject, status, created_at, updated_at) VALUES ('keep', 's1', 'b-keep', 'Keep me', 'pending', ${now.getTime()}, ${now.getTime()})`,
+    )
+    yield* sql.unsafe(
+      `INSERT INTO tasks (id, session_id, branch_id, subject, status, created_at, updated_at) VALUES ('orphan', 's1', 'b-gone', 'Drop me', 'pending', ${now.getTime()}, ${now.getTime()})`,
+    )
+  })
+
+  migrationTest("detects legacy shape, filters orphans, preserves live rows", () =>
+    Effect.gen(function* () {
+      yield* seedLegacyTasks
+
+      // Now stand up TaskStorage.Live — this triggers the migration on
+      // the seeded legacy table.
+      yield* Effect.gen(function* () {
+        const taskStorage = yield* TaskStorage
+        const kept = yield* taskStorage.getTask(TaskId.make("keep"))
+        expect(kept).toBeDefined()
+        expect(kept!.subject).toBe("Keep me")
+
+        const dropped = yield* taskStorage.getTask(TaskId.make("orphan"))
+        expect(dropped).toBeUndefined()
+      }).pipe(Effect.provide(TaskStorage.Live))
+    }),
+  )
+
+  migrationTest("post-migration cascade works end-to-end", () =>
+    Effect.gen(function* () {
+      yield* seedLegacyTasks
+      yield* Effect.gen(function* () {
+        const taskStorage = yield* TaskStorage
+        const host = yield* Storage
+
+        yield* host.deleteBranch(BranchId.make("b-keep"))
+
+        const remaining = yield* taskStorage.listTasks(SessionId.make("s1"))
+        expect(remaining.length).toBe(0)
+      }).pipe(Effect.provide(TaskStorage.Live))
+    }),
+  )
+
+  migrationTest("post-migration indexes are recreated on the new tasks table", () =>
+    Effect.gen(function* () {
+      yield* seedLegacyTasks
+      yield* Effect.gen(function* () {
+        // Force TaskStorage.Live to construct so the migration runs.
+        yield* TaskStorage
+        const sql = yield* SqlClient.SqlClient
+        const idx = yield* sql<{
+          name: string
+        }>`SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'tasks'`
+        const names = idx.map((r) => r.name)
+        expect(names).toContain("idx_tasks_session")
+        expect(names).toContain("idx_tasks_session_branch")
+      }).pipe(Effect.provide(TaskStorage.Live))
+    }),
+  )
 })
 
 describe("TaskStorageReadOnly", () => {

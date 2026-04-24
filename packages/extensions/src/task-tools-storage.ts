@@ -184,18 +184,14 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
         `,
       )
       .pipe(Effect.orDie)
-    yield* sql
-      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
-      .pipe(Effect.orDie)
-    yield* sql
-      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`)
-      .pipe(Effect.orDie)
 
     // One-shot migration: earlier schemas lacked the composite (branch_id,
     // session_id) FK, so a branch delete cascaded messages but left orphan
     // tasks. Detect the legacy shape via PRAGMA foreign_key_list and rebuild
     // the table with the correct FKs, preserving rows whose branch still
-    // exists. Drops orphans whose branch is already gone.
+    // exists. Drops orphans whose branch is already gone. Runs BEFORE index
+    // creation so the CREATE INDEX below lands on the post-migration table
+    // rather than the legacy table (which gets dropped).
     interface ForeignKeyRow {
       readonly table: string
       readonly from: string
@@ -222,11 +218,44 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
               INNER JOIN branches ON branches.id = legacy.branch_id AND branches.session_id = legacy.session_id
             `)
             yield* sql.unsafe(`DROP TABLE tasks__legacy_fk_migration`)
+            // Fail the rebuild if any surviving row still violates an FK.
+            // SQLite silently accepts bad rows when foreign_keys is OFF;
+            // foreign_key_check surfaces them so we don't commit a
+            // corrupt table.
+            interface ForeignKeyViolation {
+              readonly table: string
+              readonly rowid: number | null
+              readonly parent: string
+              readonly fkid: number
+            }
+            const violations = yield* sql.unsafe<ForeignKeyViolation>(
+              `PRAGMA foreign_key_check(tasks)`,
+            )
+            if (violations.length > 0) {
+              const details = violations
+                .slice(0, 10)
+                .map((v) => `rowid=${v.rowid ?? "?"} parent=${v.parent}#${v.fkid}`)
+                .join(", ")
+              return yield* Effect.die(
+                new TaskStorageError({
+                  message: `TaskStorage migration left FK violations: ${details}`,
+                }),
+              )
+            }
           }),
         )
         .pipe(Effect.orDie)
       yield* sql.unsafe(`PRAGMA foreign_keys = ON`).pipe(Effect.orDie)
     }
+
+    // Indexes come AFTER the migration so they always land on the current
+    // tasks table rather than the legacy one that gets dropped.
+    yield* sql
+      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
+      .pipe(Effect.orDie)
+    yield* sql
+      .unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_session_branch ON tasks(session_id, branch_id)`)
+      .pipe(Effect.orDie)
 
     return {
       createTask: Effect.fn("TaskStorage.createTask")(
