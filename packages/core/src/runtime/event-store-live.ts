@@ -68,6 +68,14 @@ export const EventStoreLive: Layer.Layer<EventStore, never, Storage> = Layer.unw
           Stream.unwrap(
             Effect.gen(function* () {
               const afterId = after ?? 0
+              const session = yield* storage
+                .getSession(sessionId)
+                .pipe(Effect.mapError(toEventStoreError("Failed to validate session")))
+              if (session === undefined) {
+                return yield* new EventStoreError({
+                  message: `Session not found: ${sessionId}`,
+                })
+              }
               const ps = getOrCreateSessionPubSub(sessions, sessionId)
               const subscription = yield* PubSub.subscribe(ps)
               const initial = yield* storage

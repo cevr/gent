@@ -310,24 +310,35 @@ const makeLiveSessionRuntime: Effect.Effect<
     storage,
   })
 
+  // Every public session-scoped boundary (dispatch + reads + subscriptions) MUST
+  // validate durable existence before proceeding. In-memory tombstones do not
+  // survive restart — a read for a deleted session would otherwise fall through
+  // to "return idle" in the agent-loop and hide the ghost.
+  const requireSessionExists = (target: SessionRuntimeTarget) =>
+    storage.getSession(target.sessionId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SessionRuntimeError({
+            message: `Session lookup failed: ${target.sessionId}`,
+            cause,
+          }),
+      ),
+      Effect.flatMap((session) =>
+        session === undefined
+          ? Effect.fail(
+              new SessionRuntimeError({
+                message: `Session not found: ${target.sessionId}`,
+              }),
+            )
+          : Effect.succeed(session),
+      ),
+    )
+
   const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
     command: RuntimeCommand,
   ) {
-    const requireDispatchSessionExists = (target: SessionRuntimeTarget) =>
-      storage.getSession(target.sessionId).pipe(
-        Effect.flatMap((session) =>
-          session === undefined
-            ? Effect.fail(
-                new SessionRuntimeError({
-                  message: `Session not found: ${target.sessionId}`,
-                }),
-              )
-            : Effect.succeed(session),
-        ),
-      )
-
     const target = runtimeCommandTarget(command)
-    yield* requireDispatchSessionExists(target)
+    yield* requireSessionExists(target)
 
     switch (command._tag) {
       case "SendUserMessage": {
@@ -461,76 +472,68 @@ const makeLiveSessionRuntime: Effect.Effect<
       ),
 
     drainQueuedMessages: (input) =>
-      agentLoop
-        .drainQueue(input)
-        .pipe(
-          Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
-        ),
+      requireSessionExists(input).pipe(
+        Effect.flatMap(() => agentLoop.drainQueue(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("drainQueuedMessages failed", cause))),
+      ),
 
     getQueuedMessages: (input) =>
-      agentLoop
-        .getQueue(input)
-        .pipe(
-          Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
-        ),
+      requireSessionExists(input).pipe(
+        Effect.flatMap(() => agentLoop.getQueue(input)),
+        Effect.catchCause((cause) => Effect.fail(wrapError("getQueuedMessages failed", cause))),
+      ),
 
     getState: (input) =>
       Effect.gen(function* () {
+        yield* requireSessionExists(input)
         const loopState = yield* agentLoop.getState(input)
         return loopState satisfies SessionRuntimeState
       }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getState failed", cause)))),
 
     getMetrics: (input) =>
-      storage.listEvents({ sessionId: input.sessionId, branchId: input.branchId }).pipe(
-        Effect.map((envelopes) => {
-          let turns = 0
-          let tokens = 0
-          let toolCalls = 0
-          let retries = 0
-          let durationMs = 0
-          for (const { event } of envelopes) {
-            switch (event._tag) {
-              case "TurnCompleted":
-                turns++
-                durationMs += event.durationMs
-                break
-              case "StreamEnded":
-                if (event.usage !== undefined) {
-                  tokens += event.usage.inputTokens + event.usage.outputTokens
-                }
-                break
-              case "ToolCallStarted":
-                toolCalls++
-                break
-              case "ProviderRetrying":
-                retries++
-                break
-            }
+      Effect.gen(function* () {
+        yield* requireSessionExists(input)
+        const envelopes = yield* storage
+          .listEvents({ sessionId: input.sessionId, branchId: input.branchId })
+          .pipe(Effect.catchEager(() => Effect.succeed([])))
+        let turns = 0
+        let tokens = 0
+        let toolCalls = 0
+        let retries = 0
+        let durationMs = 0
+        for (const { event } of envelopes) {
+          switch (event._tag) {
+            case "TurnCompleted":
+              turns++
+              durationMs += event.durationMs
+              break
+            case "StreamEnded":
+              if (event.usage !== undefined) {
+                tokens += event.usage.inputTokens + event.usage.outputTokens
+              }
+              break
+            case "ToolCallStarted":
+              toolCalls++
+              break
+            case "ProviderRetrying":
+              retries++
+              break
           }
-          return {
-            turns,
-            tokens,
-            toolCalls,
-            retries,
-            durationMs,
-          } satisfies SessionRuntimeMetrics
-        }),
-        Effect.catchEager(() =>
-          Effect.succeed({
-            turns: 0,
-            tokens: 0,
-            toolCalls: 0,
-            retries: 0,
-            durationMs: 0,
-          } satisfies SessionRuntimeMetrics),
-        ),
-        Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause))),
-      ),
+        }
+        return {
+          turns,
+          tokens,
+          toolCalls,
+          retries,
+          durationMs,
+        } satisfies SessionRuntimeMetrics
+      }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("getMetrics failed", cause)))),
 
     watchState: (input) =>
-      agentLoop
-        .watchState(input)
-        .pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
+      Effect.gen(function* () {
+        yield* requireSessionExists(input)
+        return yield* agentLoop.watchState(input)
+      }).pipe(Effect.catchCause((cause) => Effect.fail(wrapError("watchState failed", cause)))),
 
     terminateSession: (sessionId) => agentLoop.terminateSession(sessionId),
 

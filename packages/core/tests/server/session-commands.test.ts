@@ -1349,6 +1349,59 @@ describe("session.delete", () => {
       ),
     )
   })
+
+  it.live(
+    "rejects public read boundaries for deleted sessions (events, watchRuntime, getState, getMetrics, queue.get)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* makeClient()
+          const created = yield* client.session.create({ cwd: process.cwd() })
+          yield* client.session.delete({ sessionId: created.sessionId })
+
+          const eventsExit = yield* Effect.exit(
+            client.session
+              .events({ sessionId: created.sessionId })
+              .pipe(Stream.runDrain, Effect.timeout("5 seconds")),
+          )
+          expect(eventsExit._tag).toBe("Failure")
+
+          const watchExit = yield* Effect.exit(
+            client.session
+              .watchRuntime({
+                sessionId: created.sessionId,
+                branchId: created.branchId,
+              })
+              .pipe(Stream.runDrain, Effect.timeout("5 seconds")),
+          )
+          expect(watchExit._tag).toBe("Failure")
+
+          const stateExit = yield* Effect.exit(
+            client.actor.getState({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          )
+          expect(stateExit._tag).toBe("Failure")
+
+          const metricsExit = yield* Effect.exit(
+            client.actor.getMetrics({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          )
+          expect(metricsExit._tag).toBe("Failure")
+
+          const queueExit = yield* Effect.exit(
+            client.queue.get({
+              sessionId: created.sessionId,
+              branchId: created.branchId,
+            }),
+          )
+          expect(queueExit._tag).toBe("Failure")
+        }),
+      ),
+  )
 })
 
 describe("message.send", () => {
