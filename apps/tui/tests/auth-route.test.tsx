@@ -236,7 +236,9 @@ describe("Auth route", () => {
           instructions?: string
         }) => void)
       | undefined
-    const callbackCalls: Array<{ provider: string; authorizationId: string }> = []
+    const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
+    const callbackCalls: Array<{ provider: string; authorizationId: string; sessionId: string }> =
+      []
 
     const client = createMockClient({
       auth: {
@@ -267,7 +269,9 @@ describe("Auth route", () => {
             anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
             openai: [{ label: "API key", type: "api" as const }],
           }),
-        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+        authorize: (input: { provider: string; method: number; sessionId: string }) => {
+          authorizeCalls.push(input)
+          const { provider } = input
           if (provider !== "anthropic") return Effect.succeed(null)
           return Effect.promise(
             () =>
@@ -281,9 +285,9 @@ describe("Auth route", () => {
               }),
           )
         },
-        callback: ({ provider, authorizationId }: { provider: string; authorizationId: string }) =>
+        callback: (input: { provider: string; authorizationId: string; sessionId: string }) =>
           Effect.sync(() => {
-            callbackCalls.push({ provider, authorizationId })
+            callbackCalls.push(input)
           }),
       },
     })
@@ -321,6 +325,9 @@ describe("Auth route", () => {
     await setup.renderOnce()
     await setup.renderOnce()
 
+    expect(authorizeCalls).toEqual([
+      { provider: "anthropic", method: 0, sessionId: activeSessionId },
+    ])
     expect(callbackCalls).toEqual([])
     setup.renderer.destroy()
   })
@@ -329,6 +336,7 @@ describe("Auth route", () => {
     let ctx: ClientContextValue | undefined
     let rejectOpen: ((error: LinkOpenerError) => void) | undefined
     const calls: Array<{ agentName?: string }> = []
+    const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
 
     const client = createMockClient({
       auth: {
@@ -360,7 +368,9 @@ describe("Auth route", () => {
             anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
             openai: [{ label: "API key", type: "api" as const }],
           }),
-        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+        authorize: (input: { provider: string; method: number; sessionId: string }) => {
+          authorizeCalls.push(input)
+          const { provider } = input
           if (provider !== "anthropic") return Effect.succeed(null)
           return Effect.succeed({
             authorizationId: "auth-old",
@@ -414,11 +424,15 @@ describe("Auth route", () => {
 
     expect(frame).toContain("openai")
     expect(frame).not.toContain("open failed")
+    expect(authorizeCalls).toEqual([
+      { provider: "anthropic", method: 0, sessionId: activeSessionId },
+    ])
     setup.renderer.destroy()
   })
 
   test("ignores stale oauth opener failures after cancelling the same auth flow", async () => {
     let rejectOpen: ((error: LinkOpenerError) => void) | undefined
+    const authorizeCalls: Array<{ provider: string; method: number; sessionId: string }> = []
 
     const client = createMockClient({
       auth: {
@@ -436,7 +450,9 @@ describe("Auth route", () => {
           Effect.succeed({
             anthropic: [{ label: "Browser OAuth", type: "oauth" as const }],
           }),
-        authorize: ({ provider }: { provider: string; method: number; sessionId: string }) => {
+        authorize: (input: { provider: string; method: number; sessionId: string }) => {
+          authorizeCalls.push(input)
+          const { provider } = input
           if (provider !== "anthropic") return Effect.succeed(null)
           return Effect.succeed({
             authorizationId: "auth-cancelled",
@@ -484,6 +500,9 @@ describe("Auth route", () => {
 
     expect(frame).toContain("anthropic")
     expect(frame).not.toContain("open failed")
+    expect(authorizeCalls).toEqual([
+      { provider: "anthropic", method: 0, sessionId: activeSessionId },
+    ])
     setup.renderer.destroy()
   })
 })
