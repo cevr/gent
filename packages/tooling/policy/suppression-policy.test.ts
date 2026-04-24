@@ -478,7 +478,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/core/src/domain/schema-tagged-enum-class.ts:159 eslint:import/namespace",
   "packages/core/src/domain/schema-tagged-enum-class.ts:194 eslint:import/namespace",
   "packages/core/src/domain/schema-tagged-enum-class.ts:296 eslint:@typescript-eslint/no-unsafe-type-assertion",
-  "packages/core/src/domain/schema-tagged-enum-class.ts:391 eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "packages/core/src/domain/schema-tagged-enum-class.ts:393 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/domain/sdk-boundary.ts:71 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/domain/tool-schema.ts:25 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/domain/tool-schema.ts:30 eslint:@typescript-eslint/no-unsafe-type-assertion",

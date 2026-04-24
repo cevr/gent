@@ -197,6 +197,14 @@ describe("TaggedEnumClass — explicit wire tags", () => {
     expect(out).toBe("tool:read")
   })
 
+  test("`isAnyOf` accepts direct member names and wire tags", () => {
+    const e = TurnEvent.TextDelta.make({ text: "hello" })
+    expect(TurnEvent.isAnyOf(["TextDelta"])(e)).toBe(true)
+    expect(TurnEvent.isAnyOf(["text-delta"])(e)).toBe(true)
+    expect(TurnEvent.isAnyOf(["ToolCall"])(e)).toBe(false)
+    expect(TurnEvent.isAnyOf(["tool-call"])(e)).toBe(false)
+  })
+
   test("rejects lowercase or kebab members even when they would be valid wire tags", () => {
     expect(() =>
       TaggedEnumClass("BadTurnEvent", {

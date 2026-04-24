@@ -336,11 +336,13 @@ const makeTaggedEnumClass = <const V extends VariantsMap>(
     Object.entries(variantClasses).map(([memberName, variant]) => [memberName, Schema.is(variant)]),
   )
   const isAnyOf = (members: ReadonlyArray<string>) => {
-    const allowed = new Set(members)
+    const allowedMembers = new Set(members)
+    const allowedWireTags = new Set(members.map((member) => memberToWireTag.get(member) ?? member))
     return (u: unknown): boolean => {
       if (typeof u !== "object" || u === null || !("_tag" in u)) return false
       const tag = (u as { readonly _tag?: unknown })._tag
-      return typeof tag === "string" && allowed.has(wireTagToMember.get(tag) ?? "")
+      if (typeof tag !== "string") return false
+      return allowedWireTags.has(tag) || allowedMembers.has(wireTagToMember.get(tag) ?? "")
     }
   }
   const getHandler = (
