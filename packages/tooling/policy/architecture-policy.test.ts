@@ -156,16 +156,23 @@ describe("architecture policy", () => {
   })
 
   test("package exports expose only approved runtime subpaths", () => {
-    const file = pathResolve(ROOT, "packages/core/package.json")
-    const source = readFileSync(file, "utf8")
+    const packageFile = pathResolve(ROOT, "packages/core/package.json")
+    const tsconfigFile = pathResolve(ROOT, "tsconfig.json")
+    const source = readFileSync(packageFile, "utf8")
+    const tsconfigSource = readFileSync(tsconfigFile, "utf8")
     const packageJson = JSON.parse(source) as { exports?: Record<string, unknown> }
+    const tsconfig = JSON.parse(tsconfigSource) as {
+      compilerOptions?: { paths?: Record<string, unknown> }
+    }
     const exports = packageJson.exports ?? {}
+    const paths = tsconfig.compilerOptions?.paths ?? {}
     const runtimeExports = Object.fromEntries(
       Object.entries(exports).filter(([key]) => key.startsWith("./runtime/")),
     )
-
-    expect(exports["./runtime/*"]).toBeUndefined()
-    expect(runtimeExports).toEqual({
+    const runtimePaths = Object.fromEntries(
+      Object.entries(paths).filter(([key]) => key.startsWith("@gent/core/runtime/")),
+    )
+    const approvedRuntimePackageExports = {
       "./runtime/extensions/disabled": "./src/runtime/extensions/disabled.ts",
       "./runtime/extensions/disabled.js": "./src/runtime/extensions/disabled.ts",
       "./runtime/extensions/registry": "./src/runtime/extensions/registry.ts",
@@ -187,7 +194,35 @@ describe("architecture policy", () => {
       "./runtime/runtime-platform.js": "./src/runtime/runtime-platform.ts",
       "./runtime/tracer": "./src/runtime/tracer.ts",
       "./runtime/tracer.js": "./src/runtime/tracer.ts",
-    })
+    }
+    const approvedRuntimeTsconfigPaths = {
+      "@gent/core/runtime/extensions/disabled": [
+        "./packages/core/src/runtime/extensions/disabled.ts",
+      ],
+      "@gent/core/runtime/extensions/disabled.js": [
+        "./packages/core/src/runtime/extensions/disabled.ts",
+      ],
+      "@gent/core/runtime/extensions/registry": [
+        "./packages/core/src/runtime/extensions/registry.ts",
+      ],
+      "@gent/core/runtime/extensions/registry.js": [
+        "./packages/core/src/runtime/extensions/registry.ts",
+      ],
+      "@gent/core/runtime/log-paths": ["./packages/core/src/runtime/log-paths.ts"],
+      "@gent/core/runtime/log-paths.js": ["./packages/core/src/runtime/log-paths.ts"],
+      "@gent/core/runtime/logger": ["./packages/core/src/runtime/logger.ts"],
+      "@gent/core/runtime/logger.js": ["./packages/core/src/runtime/logger.ts"],
+      "@gent/core/runtime/runtime-platform": ["./packages/core/src/runtime/runtime-platform.ts"],
+      "@gent/core/runtime/runtime-platform.js": ["./packages/core/src/runtime/runtime-platform.ts"],
+      "@gent/core/runtime/tracer": ["./packages/core/src/runtime/tracer.ts"],
+      "@gent/core/runtime/tracer.js": ["./packages/core/src/runtime/tracer.ts"],
+    }
+
+    expect(exports["./runtime/*"]).toBeUndefined()
+    expect(paths["@gent/core/*"]).toBeUndefined()
+    expect(paths["@gent/core/runtime/*"]).toBeUndefined()
+    expect(runtimeExports).toEqual(approvedRuntimePackageExports)
+    expect(runtimePaths).toEqual(approvedRuntimeTsconfigPaths)
   })
 
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {

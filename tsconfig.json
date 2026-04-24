@@ -13,7 +13,34 @@
     "types": ["bun"],
     "noEmit": true,
     "paths": {
-      "@gent/core/*": ["./packages/core/src/*"],
+      "@gent/core/debug/*": ["./packages/core/src/debug/*"],
+      "@gent/core/domain/*": ["./packages/core/src/domain/*"],
+      "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
+      "@gent/core/providers/*": ["./packages/core/src/providers/*"],
+      "@gent/core/runtime/extensions/disabled": [
+        "./packages/core/src/runtime/extensions/disabled.ts"
+      ],
+      "@gent/core/runtime/extensions/disabled.js": [
+        "./packages/core/src/runtime/extensions/disabled.ts"
+      ],
+      "@gent/core/runtime/extensions/registry": [
+        "./packages/core/src/runtime/extensions/registry.ts"
+      ],
+      "@gent/core/runtime/extensions/registry.js": [
+        "./packages/core/src/runtime/extensions/registry.ts"
+      ],
+      "@gent/core/runtime/log-paths": ["./packages/core/src/runtime/log-paths.ts"],
+      "@gent/core/runtime/log-paths.js": ["./packages/core/src/runtime/log-paths.ts"],
+      "@gent/core/runtime/logger": ["./packages/core/src/runtime/logger.ts"],
+      "@gent/core/runtime/logger.js": ["./packages/core/src/runtime/logger.ts"],
+      "@gent/core/runtime/runtime-platform": ["./packages/core/src/runtime/runtime-platform.ts"],
+      "@gent/core/runtime/runtime-platform.js": ["./packages/core/src/runtime/runtime-platform.ts"],
+      "@gent/core/runtime/tracer": ["./packages/core/src/runtime/tracer.ts"],
+      "@gent/core/runtime/tracer.js": ["./packages/core/src/runtime/tracer.ts"],
+      "@gent/core/server/*": ["./packages/core/src/server/*"],
+      "@gent/core/storage/*": ["./packages/core/src/storage/*"],
+      "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
+      "@gent/core/test-utils/*": ["./packages/core/src/test-utils/*"],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
       "@gent/extensions/*": ["./packages/extensions/src/*"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"]
