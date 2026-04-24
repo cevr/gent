@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
-import type * as PublicExtensionApi from "@gent/core/extensions/api"
+import * as PublicExtensionApi from "@gent/core/extensions/api"
 import {
   action,
   defineExtension,
@@ -254,8 +254,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadBuiltinRuntimeEffect = PublicExtensionApi.BuiltinRuntimeEffect
     // @ts-expect-error — builtin machine shape is not part of the public author API
     type _BadBuiltinResourceMachine = PublicExtensionApi.BuiltinResourceMachine
-    // @ts-expect-error — builtin resource constructor is not part of the public author API
-    type _BadDefineBuiltinResource = PublicExtensionApi.defineBuiltinResource
 
     type PublicMachine = PublicExtensionApi.ResourceMachine<
       { readonly _tag: "Idle" },
@@ -267,6 +265,14 @@ describe("Effect-purity locks (compile-time)", () => {
     const badEffect: PublicAfterTransitionEffect = { _tag: "QueueFollowUp", content: "x" }
 
     void badEffect
+    expect(true).toBe(true)
+  })
+
+  test("public extension api does not expose builtin runtime constructors as values", () => {
+    // @ts-expect-error — builtin resource constructor is not part of the public author API
+    const badDefineBuiltinResource = PublicExtensionApi.defineBuiltinResource
+
+    void badDefineBuiltinResource
     expect(true).toBe(true)
   })
 
