@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { ExtensionProtocolError } from "../domain/extension-protocol.js"
 import { EventStoreError } from "../domain/event.js"
-import { ProviderAuthError } from "../domain/driver.js"
+import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ProviderError } from "../providers/provider.js"
 import { SessionRuntimeErrorSchema, type SessionRuntimeError } from "../runtime/session-runtime.js"
 import { StorageError } from "../storage/sqlite-storage.js"
@@ -25,6 +25,7 @@ export type GentRpcError =
   | SessionRuntimeError
   | ProviderError
   | ProviderAuthError
+  | DriverError
   | ExtensionProtocolError
   | PlatformErrorSchema
   | EventStoreError
@@ -37,6 +38,7 @@ export const GentRpcError = Schema.Union([
   SessionRuntimeErrorSchema,
   ProviderError,
   ProviderAuthError,
+  DriverError,
   ExtensionProtocolError,
   PlatformErrorSchema,
   EventStoreError,

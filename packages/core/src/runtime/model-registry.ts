@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
 import { HttpClient, type HttpClient as HttpClientService } from "effect/unstable/http"
 import { AuthStore } from "../domain/auth-store.js"
+import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model, ModelId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
@@ -124,8 +125,10 @@ const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(
 )
 
 export interface ModelRegistryService {
-  readonly list: () => Effect.Effect<readonly Model[]>
-  readonly get: (modelId: ModelId) => Effect.Effect<Model | undefined>
+  readonly list: () => Effect.Effect<readonly Model[], DriverError | ProviderAuthError>
+  readonly get: (
+    modelId: ModelId,
+  ) => Effect.Effect<Model | undefined, DriverError | ProviderAuthError>
   readonly refresh: () => Effect.Effect<void>
 }
 
@@ -204,7 +207,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         return yield* applyFilters(raw)
       }).pipe(Effect.withSpan("ModelRegistry.load"))
 
-      const resolveAuth = (providerId: string): Effect.Effect<ProviderAuthInfo | undefined> =>
+      const resolveAuth = (
+        providerId: string,
+      ): Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError> =>
         authStore.get(providerId).pipe(
           Effect.map((info): ProviderAuthInfo | undefined => {
             if (info === undefined) return undefined
@@ -220,13 +225,17 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
             }
             return undefined
           }),
-          Effect.catchEager(() => Effect.void.pipe(Effect.as(undefined))),
+          Effect.mapError(
+            (e) =>
+              new ProviderAuthError({
+                message: `Failed to read auth for provider "${providerId}"`,
+                cause: e,
+              }),
+          ),
         )
 
       const applyFilters = (models: readonly Model[]) =>
-        driverRegistry
-          .filterModelCatalog(models, resolveAuth)
-          .pipe(Effect.catchEager(() => Effect.succeed(models)))
+        driverRegistry.filterModelCatalog(models, resolveAuth)
 
       const refresh = Effect.gen(function* () {
         const remote = yield* fetchRemote

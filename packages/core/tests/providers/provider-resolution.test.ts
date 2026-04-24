@@ -5,7 +5,12 @@ import type { LoadedExtension } from "../../src/domain/extension.js"
 import type { ModelDriverContribution } from "@gent/core/domain/driver"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
-import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
+import {
+  AuthStore,
+  AuthStoreError,
+  type AuthInfo,
+  type AuthStoreService,
+} from "@gent/core/domain/auth-store"
 import {
   Provider,
   type ProviderError,
@@ -89,14 +94,17 @@ const makeExt = (extId: string, modelDrivers: ModelDriverContribution[]): Loaded
   contributions: { modelDrivers },
 })
 
-const buildProviderLayer = (extensions: LoadedExtension[]) => {
+const buildProviderLayer = (
+  extensions: LoadedExtension[],
+  authStore: AuthStoreService = testAuthStorage,
+) => {
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
   const driverRegistryLayer = DriverRegistry.fromResolved({
     modelDrivers: resolved.modelDrivers,
     externalDrivers: resolved.externalDrivers,
   })
-  const authLayer = Layer.succeed(AuthStore, testAuthStorage)
+  const authLayer = Layer.succeed(AuthStore, authStore)
   return Layer.provide(Provider.Live, Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer))
 }
 
@@ -156,6 +164,37 @@ describe("Provider model resolution", () => {
       }).pipe(Effect.provide(layer)),
     )
     expect(result._tag).toBe("Failure")
+  })
+
+  test("auth store read failures fail closed before resolving the model", async () => {
+    let resolved = false
+    const provider: ModelDriverContribution = {
+      id: "auth-fails",
+      name: "AuthFails",
+      resolveModel: () => {
+        resolved = true
+        return fakeResolution()
+      },
+    }
+    const authStore = {
+      ...testAuthStorage,
+      get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+    }
+    const layer = buildProviderLayer([makeExt("auth-fails-ext", [provider])], authStore)
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        yield* provider.stream({
+          model: "auth-fails/model",
+          prompt: [],
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("Failure")
+    expect(resolved).toBe(false)
+    expect(result.toString()).toContain('Failed to read auth for provider "auth-fails"')
   })
 
   // ── Per-turn driver registry override (per-cwd profile shadowing) ──

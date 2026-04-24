@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { Context, Deferred, Effect, FileSystem, Layer, Path, Schema, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { AuthStore } from "../../src/domain/auth-store.js"
+import { AuthStore, AuthStoreError } from "../../src/domain/auth-store.js"
 import type { ModelDriverContribution, ProviderResolution } from "../../src/domain/driver.js"
 import { Model, ModelId } from "../../src/domain/model.js"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry.js"
@@ -101,6 +101,14 @@ const authLayer = Layer.succeed(AuthStore, {
   listInfo: () => Effect.succeed({}),
 })
 
+const failingReadAuthLayer = Layer.succeed(AuthStore, {
+  get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+  set: () => Effect.void,
+  remove: () => Effect.void,
+  list: () => Effect.succeed([]),
+  listInfo: () => Effect.succeed({}),
+})
+
 const makeHttpLayer = (responseText: string) =>
   Layer.succeed(
     HttpClient.HttpClient,
@@ -144,6 +152,7 @@ const makeRegistryLayerWithDrivers = (
   home: string,
   responseText: string,
   modelDrivers: ReadonlyArray<ModelDriverContribution>,
+  authStoreLayer: Layer.Layer<AuthStore> = authLayer,
 ) =>
   ModelRegistry.Live.pipe(
     Layer.provide(
@@ -155,7 +164,7 @@ const makeRegistryLayerWithDrivers = (
           modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
           externalDrivers: new Map(),
         }),
-        authLayer,
+        authStoreLayer,
         makeHttpLayer(responseText),
       ),
     ),
@@ -321,40 +330,78 @@ describe("ModelRegistry", () => {
     ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
-  it.live(
-    "falls back to the base catalog when a model-driver filter returns malformed output",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
-          const malformed = Model.make({
-            id: ModelId.make("openai/broken"),
-            name: "Broken",
-            provider: "openai",
-          })
-          Reflect.set(malformed, "name", 42)
-          const registry = yield* Effect.gen(function* () {
-            const context = yield* Layer.build(
-              makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
+  it.live("fails closed when a model-driver filter returns malformed output", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        const malformed = Model.make({
+          id: ModelId.make("openai/broken"),
+          name: "Broken",
+          provider: "openai",
+        })
+        Reflect.set(malformed, "name", 42)
+        const registry = yield* Effect.gen(function* () {
+          const context = yield* Layer.build(
+            makeRegistryLayerWithDrivers(tmpDir, JSON.stringify(remoteCatalog), [
+              {
+                id: "malformed-filter",
+                name: "Malformed filter",
+                resolveModel: unusedResolution,
+                listModels: () => [malformed],
+              },
+            ]),
+          )
+          return Context.get(context, ModelRegistry)
+        })
+
+        yield* registry.refresh()
+        const error = yield* Effect.flip(registry.list())
+
+        expect(error._tag).toBe("DriverError")
+        if (error._tag === "DriverError") {
+          expect(error.reason).toContain("returned an invalid model catalog")
+        }
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+  )
+
+  it.live("fails closed when auth lookup fails during model-driver catalog filtering", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tmpDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        let filterCalled = false
+        const registry = yield* Effect.gen(function* () {
+          const context = yield* Layer.build(
+            makeRegistryLayerWithDrivers(
+              tmpDir,
+              JSON.stringify(remoteCatalog),
+              [
                 {
-                  id: "malformed-filter",
-                  name: "Malformed filter",
+                  id: "auth-filter",
+                  name: "Auth filter",
                   resolveModel: unusedResolution,
-                  listModels: () => [malformed],
+                  listModels: (models) => {
+                    filterCalled = true
+                    return models
+                  },
                 },
-              ]),
-            )
-            return Context.get(context, ModelRegistry)
-          })
+              ],
+              failingReadAuthLayer,
+            ),
+          )
+          return Context.get(context, ModelRegistry)
+        })
 
-          yield* registry.refresh()
-          const models = yield* registry.list()
+        yield* registry.refresh()
+        const error = yield* Effect.flip(registry.list())
 
-          expect(models).toHaveLength(1)
-          expect(models[0]?.id).toBe("openai/gpt-5.4")
-          expect(models[0]?.name).toBe("GPT-5.4")
-        }),
-      ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
+        expect(error._tag).toBe("ProviderAuthError")
+        expect(filterCalled).toBe(false)
+        if (error._tag === "ProviderAuthError") {
+          expect(error.message).toContain('Failed to read auth for provider "auth-filter"')
+        }
+      }),
+    ).pipe(Effect.provide(Layer.merge(BunFileSystem.layer, Path.layer))),
   )
 
   it.live("ignores malformed cache payloads instead of leaking raw shapes", () =>

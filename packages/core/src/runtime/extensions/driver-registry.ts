@@ -21,6 +21,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type {
   ExternalDriverContribution,
   ModelDriverContribution,
+  ProviderAuthError,
   ProviderAuthInfo,
   TurnExecutor,
 } from "../../domain/driver.js"
@@ -52,8 +53,10 @@ export interface DriverRegistryService {
   /** Run a base catalog through every model driver's `listModels` filter. */
   readonly filterModelCatalog: (
     baseCatalog: ReadonlyArray<Model>,
-    resolveAuth?: (driverId: string) => Effect.Effect<ProviderAuthInfo | undefined>,
-  ) => Effect.Effect<ReadonlyArray<Model>, DriverError>
+    resolveAuth?: (
+      driverId: string,
+    ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
+  ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
   /** Require a model driver — fail with `DriverError` when missing. */
   readonly requireModel: (id: string) => Effect.Effect<ModelDriverContribution, DriverError>
   /** Require an external driver — fail with `DriverError` when missing. */

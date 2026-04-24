@@ -1,7 +1,7 @@
 import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message } from "../domain/message.js"
-import { AuthOauth, AuthStore, type AuthInfo, type AuthStoreService } from "../domain/auth-store.js"
+import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import {
   DriverRegistry,
@@ -33,14 +33,9 @@ const parseModelId = (modelId: string): [string, string] | undefined => {
   return [modelId.slice(0, slash), modelId.slice(slash + 1)]
 }
 
-const missingAuthInfo: AuthInfo | undefined = undefined
-
 // ── Model Resolver ──
 
 const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverRegistryService) => {
-  const resolveAuthFromStore = (providerName: string) =>
-    authStore.get(providerName).pipe(Effect.catchEager(() => Effect.succeed(missingAuthInfo)))
-
   return Effect.fn("Provider.resolveModel")(function* (
     modelId: string,
     hints?: ProviderHints,
@@ -78,7 +73,16 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
       })
     }
 
-    const authInfo = yield* resolveAuthFromStore(providerName)
+    const authInfo = yield* authStore.get(providerName).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderError({
+            message: `Failed to read auth for provider "${providerName}"`,
+            model: modelId,
+            cause: e,
+          }),
+      ),
+    )
     let authParam: ProviderAuthInfo | undefined
     if (authInfo?.type === "api") {
       authParam = { type: "api", key: authInfo.key }
