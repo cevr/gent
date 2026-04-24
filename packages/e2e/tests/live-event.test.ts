@@ -2,9 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Ref, Stream } from "effect"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
-// See event-stream-direct.test.ts for why streaming tests are direct-only.
-const directStreamingCases = transportCases.filter((c) => c.name === "direct")
-
 const collectLiveEvents = <A, E>(
   stream: Stream.Stream<A, E>,
 ): Effect.Effect<Ref.Ref<A[]>, E, never> =>
@@ -27,9 +24,9 @@ const collectLiveEvents = <A, E>(
     return values
   })
 
-describe("direct live event contracts", () => {
-  for (const transport of directStreamingCases) {
-    const timeoutMs = 15_000
+describe("live event contracts", () => {
+  for (const transport of transportCases) {
+    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
       `${transport.name} streamEvents with latest cursor behaves as future-only live stream`,
@@ -90,7 +87,8 @@ describe("direct live event contracts", () => {
 
   // The replay-to-live handoff test needs StreamChunk events to be observed.
   // Signal provider gates each chunk so we can release them on demand without
-  // paying real wall-clock per chunk.
+  // paying real wall-clock per chunk. Direct-only: the worker subprocess
+  // cannot share the in-memory controls handle with the test process.
   const timeoutMs = 15_000
   test(
     `${directSignalCase.name} streamEvents keeps streamed chunks across replay-to-live handoff`,

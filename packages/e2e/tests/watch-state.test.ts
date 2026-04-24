@@ -3,9 +3,6 @@ import { Deferred, Effect, Ref, Stream } from "effect"
 import { extractText } from "@gent/sdk"
 import { directSignalCase, transportCases, waitFor } from "./transport-harness"
 
-// See event-stream-direct.test.ts for why streaming tests are direct-only.
-const directStreamingCases = transportCases.filter((c) => c.name === "direct")
-
 const collectSnapshots = <A, E>(
   stream: Stream.Stream<A, E>,
 ): Effect.Effect<Ref.Ref<A[]>, E, never> =>
@@ -28,9 +25,9 @@ const collectSnapshots = <A, E>(
     return values
   })
 
-describe("direct runtime watch contracts", () => {
-  for (const transport of directStreamingCases) {
-    const timeoutMs = 15_000
+describe("runtime watch contracts", () => {
+  for (const transport of transportCases) {
+    const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
       `${transport.name} watchRuntime emits current runtime and later updates`,
@@ -106,6 +103,8 @@ describe("direct runtime watch contracts", () => {
   // The queued-follow-up snapshot test needs the first turn to still be in
   // flight when the second message arrives. Signal provider keeps the stream
   // paused on the chunk gate without paying real wall-clock per chunk.
+  // Direct-only: the worker subprocess cannot share the in-memory controls
+  // handle with the test process.
   const timeoutMs = 20_000
   test(
     `${directSignalCase.name} watchRuntime emits queued follow-up snapshots`,

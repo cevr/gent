@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/core-boundary.test.ts tests/event-stream-direct.test.ts tests/live-event-direct.test.ts tests/queue-contract.test.ts tests/watch-state-direct.test.ts",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/core-boundary.test.ts tests/event-stream.test.ts tests/live-event.test.ts tests/queue-contract.test.ts tests/watch-state.test.ts",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test tests/e2e.test.ts tests/supervisor.test.ts tests/transport-contract.test.ts tests/server-lifecycle.test.ts"
   },
   "dependencies": {

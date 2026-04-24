@@ -3,13 +3,6 @@ import { Deferred, Effect, Ref, Stream } from "effect"
 import type { EventEnvelope } from "@gent/core/domain/event"
 import { transportCases, waitFor } from "./transport-harness"
 
-// Server-side streaming fibers are not interrupted when clients disconnect
-// (neither HTTP nor WebSocket transports propagate scope teardown to the
-// server's stream fiber). This causes CPU spin on the shared worker after
-// streaming tests complete. Until Effect fixes upstream scope propagation,
-// streaming tests only run on the direct transport.
-const directStreamingCases = transportCases.filter((c) => c.name === "direct")
-
 const startCollecting = (
   client: {
     session: {
@@ -67,8 +60,8 @@ const waitForTaggedEvent = (
     ),
   )
 
-describe("direct event stream contracts", () => {
-  for (const transport of directStreamingCases) {
+describe("event stream contracts", () => {
+  for (const transport of transportCases) {
     const timeoutMs = transport.name === "worker-http" ? 30_000 : 15_000
 
     test(
