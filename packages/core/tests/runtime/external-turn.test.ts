@@ -35,6 +35,7 @@ import { EventPublisherLive } from "../../src/server/event-publisher"
 import { Storage } from "@gent/core/storage/sqlite-storage"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { ModelRegistry } from "../../src/runtime/model-registry"
 import { ConfigService } from "../../src/runtime/config-service"
 import { Agents } from "@gent/extensions/all-agents"
 import { ensureStorageParents } from "@gent/core/test-utils"
@@ -162,6 +163,7 @@ const makeLayerWithEvents = (executor: TurnExecutor, eventsRef: Ref.Ref<AgentEve
     RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
     ConfigService.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
@@ -347,6 +349,7 @@ describe("external turn execution", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -529,6 +532,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -628,6 +632,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -730,6 +735,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -832,6 +838,7 @@ describe("ExternalDriverContribution end-to-end", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(

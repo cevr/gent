@@ -84,11 +84,13 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     sessionId: SessionId,
     branchId: BranchId,
     usage: Schema.optional(UsageSchema),
-    // `model` identifies which model produced the stream that just ended. The
-    // server pairs it with `usage` to compute cost; SessionRuntimeMetrics
-    // sums this per session so the TUI no longer re-joins usage against a
-    // client-side model registry to get cost.
+    // `model` identifies which model produced the stream that just ended.
     model: Schema.optional(ModelId),
+    // `costUsd` is computed at emit-time from `usage` × pricing snapshot for
+    // `model`. Freezing cost into the event makes the transcript authoritative:
+    // replaying the same event log always sums to the same cost, even if the
+    // upstream pricing registry later refreshes.
+    costUsd: Schema.optional(Schema.Number),
     interrupted: Schema.optional(Schema.Boolean),
   },
   TurnCompleted: {

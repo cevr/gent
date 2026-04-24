@@ -69,6 +69,8 @@ import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
 import { ConfigService } from "../config-service.js"
+import { ModelRegistry } from "../model-registry.js"
+import { calculateCost, type ModelId } from "../../domain/model.js"
 import type { InteractionPendingError } from "../../domain/interaction-request.js"
 import type { PromptSection } from "../../domain/prompt.js"
 import { DEFAULTS } from "../../domain/defaults.js"
@@ -1310,6 +1312,31 @@ const resolveTurnEventStream = (params: {
     } satisfies ModelTurnSource
   })
 
+// Pricing snapshot lookup: given a modelId, yield current pricing (or
+// undefined if not known). Resolved once per session at AgentLoop start so
+// the per-turn emission path is context-free (the machine task R must stay
+// narrow to what Machine.spawn provides).
+export type PricingLookup = (
+  modelId: ModelId,
+) => Effect.Effect<{ readonly input: number; readonly output: number } | undefined>
+
+// Freeze pricing into the StreamEnded event at emit time. Returns undefined
+// when usage is absent or pricing is missing; the reducer treats that as a
+// zero contribution. Storing the computed cost on the event makes the
+// transcript authoritative: replaying the same events always sums to the
+// same cost, even if ModelRegistry pricing later refreshes.
+const computeStreamEndedCost = (params: {
+  modelId: ModelId
+  usage: { inputTokens: number; outputTokens: number } | undefined
+  getPricing: PricingLookup
+}): Effect.Effect<number | undefined> =>
+  Effect.gen(function* () {
+    if (params.usage === undefined) return undefined
+    const pricing = yield* params.getPricing(params.modelId)
+    if (pricing === undefined) return undefined
+    return calculateCost(params.usage, pricing)
+  })
+
 const runTurnStreamPhase = (params: {
   messageId: MessageId
   step: number
@@ -1325,6 +1352,7 @@ const runTurnStreamPhase = (params: {
   storage: StorageService
   hostCtx: ExtensionHostContext
   turnMetrics?: Ref.Ref<TurnMetrics>
+  getPricing: PricingLookup
 }) =>
   Effect.gen(function* () {
     const persistAssistantPartsLocal = (
@@ -1443,6 +1471,11 @@ const runTurnStreamPhase = (params: {
       return collected
     }
 
+    const streamEndedCost = yield* computeStreamEndedCost({
+      modelId: params.resolved.modelId,
+      usage: collected.messageProjection.usage,
+      getPricing: params.getPricing,
+    })
     yield* params
       .publishEvent(
         StreamEnded.make({
@@ -1452,6 +1485,7 @@ const runTurnStreamPhase = (params: {
             ? { usage: collected.messageProjection.usage }
             : {}),
           model: params.resolved.modelId,
+          ...(streamEndedCost !== undefined ? { costUsd: streamEndedCost } : {}),
         }),
       )
       .pipe(Effect.orDie)
@@ -2154,6 +2188,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
     | ToolRunner
     | ResourceManager
     | ConfigService
+    | ModelRegistry
   > =>
     Layer.effect(
       AgentLoop,
@@ -2172,6 +2207,16 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         // available to inner closures without leaking the requirement
         // into Stream/Machine task signatures.
         const configServiceForRun = yield* ConfigService
+        // Capture ModelRegistry at setup so per-turn cost freezing (see
+        // `computeStreamEndedCost`) is context-free on the hot path. The
+        // pricing lookup stays an Effect so it can catch registry errors
+        // without crossing into ProviderError.
+        const modelRegistryForRun = yield* ModelRegistry
+        const getPricing: PricingLookup = (modelId) =>
+          modelRegistryForRun.get(modelId).pipe(
+            Effect.map((m) => m?.pricing),
+            Effect.catchEager(() => Effect.succeed(undefined)),
+          )
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
         const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
         const terminatedSessionsRef = yield* Ref.make<Set<SessionId>>(new Set())
@@ -2631,6 +2676,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   branchId,
                   activeStream,
                   turnMetrics: turnMetricsRef,
+                  getPricing,
                 }).pipe(Effect.ensuring(Ref.set(activeStreamRef, undefined)))
 
                 if (collected.interrupted) {

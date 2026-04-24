@@ -8,6 +8,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { AgentLoop } from "../../src/runtime/agent/agent-loop"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
+import { ModelRegistry } from "../../src/runtime/model-registry"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
@@ -155,6 +156,7 @@ const makeLayer = (
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -197,6 +199,7 @@ const makeLayerWithMachineExtensions = (
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const machineLayer = Layer.provide(MachineEngine.fromExtensions(resolved.extensions), baseDeps)
   const deps = Layer.merge(baseDeps, machineLayer)
@@ -221,6 +224,7 @@ const makeRecordingLayer = (providerLayer: Layer.Layer<Provider>) => {
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
     recorderLayer,
     eventStoreLayer,
   )
@@ -283,6 +287,7 @@ const makeCheckpointFailureLayer = (options: { failUpsertOn?: number; failRemove
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -332,6 +337,7 @@ const makeLiveToolLayer = (
     Permission.Live([], "allow"),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
@@ -374,6 +380,7 @@ const makeLayerWithEvents = (
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -398,6 +405,7 @@ const makeLayerWithEventPublisher = (
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
   return Layer.provideMerge(
@@ -506,6 +514,7 @@ const makeExternalLayerWithEvents = (
     ToolRunner.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    ModelRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
   return Layer.provideMerge(
@@ -656,6 +665,7 @@ describe("streaming", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const layer = Layer.provideMerge(
@@ -1414,6 +1424,7 @@ describe("streaming", () => {
       ConfigService.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
       recorderLayer,
       eventStoreLayer,
       toolDeps,
@@ -1998,6 +2009,7 @@ describe("interaction", () => {
       Permission.Live([], "allow"),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
       recorderLayer,
       eventStoreLayer,
     )
@@ -2115,6 +2127,7 @@ describe("interaction", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
     const loopLayer = Layer.provideMerge(
@@ -2282,6 +2295,7 @@ describe("checkpoint persistence", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const layer = Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
@@ -2335,6 +2349,7 @@ describe("checkpoint persistence", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const layer = Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
@@ -2398,6 +2413,7 @@ describe("checkpoint persistence", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const layer = Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
@@ -2553,6 +2569,7 @@ describe("checkpoint persistence", () => {
       ToolRunner.Test(),
       BunServices.layer,
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const layer = Layer.provideMerge(
       AgentLoop.Live({ baseSections: [] }),
@@ -2702,6 +2719,7 @@ describe("recovery", () => {
       toolRunnerLayer,
       ApprovalService.Test(),
       ResourceManagerLive,
+      ModelRegistry.Test(),
     )
     const eventPublisherLayer = Layer.provide(EventPublisherLive, base)
 
