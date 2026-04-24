@@ -61,7 +61,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "eslint:@typescript-eslint/no-unsafe-type-assertion": 46,
       "eslint:no-await-in-loop": 2,
       "eslint:no-control-regex": 6,
-      "ts:@ts-expect-error": 30,
+      "ts:@ts-expect-error": 33,
     },
   },
   {
@@ -82,6 +82,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
         "packages/core/src/runtime/extensions/extension-storage.ts",
         "packages/core/src/domain/extension-load-boundary.ts",
         "packages/core/src/extensions/api.ts",
+        "packages/core/src/extensions/internal.ts",
         "apps/tui/src/components/autocomplete-popup-boundary.ts",
         "apps/tui/src/extensions/loader-boundary.ts",
       ].includes(file),
@@ -92,7 +93,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
       "effect:preferSchemaOverJson:off": 1,
       "eslint:@typescript-eslint/no-explicit-any": 8,
       "eslint:@typescript-eslint/no-non-null-assertion": 2,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 27,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 28,
     },
   },
   {
@@ -219,7 +220,7 @@ const SUPPRESSION_CATEGORIES: ReadonlyArray<SuppressionCategory> = [
     counts: {
       "eslint:@typescript-eslint/no-implied-eval": 1,
       "eslint:@typescript-eslint/no-require-imports": 1,
-      "eslint:@typescript-eslint/no-unsafe-type-assertion": 40,
+      "eslint:@typescript-eslint/no-unsafe-type-assertion": 39,
       "eslint:no-process-env": 3,
       "eslint:typescript-eslint/consistent-type-imports": 1,
       "effect:nodeBuiltinImport:off": 1,
