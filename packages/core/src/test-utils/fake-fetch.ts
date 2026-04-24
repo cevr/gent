@@ -121,7 +121,7 @@ export const fakeFetchLayer = (
     body: string
   },
 ): Layer.Layer<never, never, never> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   Layer.succeed(FetchHttpClient.Fetch, makeFakeFetch(state, responder) as never)
 
 /**

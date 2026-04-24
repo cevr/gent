@@ -136,11 +136,11 @@ const loadExtensionFile = (filePath: string): Effect.Effect<GentExtension, Exten
 /** Type guard for GentExtension shape */
 const isGentExtension = (value: unknown): value is GentExtension => {
   if (typeof value !== "object" || value === null) return false
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const obj = value as Record<string, unknown>
   if (!("manifest" in obj) || typeof obj["manifest"] !== "object" || obj["manifest"] === null)
     return false
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const manifest = obj["manifest"] as Record<string, unknown>
   if (!("id" in manifest) || typeof manifest["id"] !== "string") return false
   if (!("setup" in obj) || typeof obj["setup"] !== "function") return false

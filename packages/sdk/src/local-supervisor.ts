@@ -58,7 +58,7 @@ const makeSwappableClient = (
   stateRef: Ref.Ref<ConnectionState>,
 ): GentNamespacedClient => {
   const route = <K extends keyof GentRpcClient>(key: K): GentRpcClient[K] => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
     return ((...args: ReadonlyArray<unknown>) => {
       const client = Ref.getUnsafe(clientRef)
       if (client === undefined) {
@@ -72,7 +72,7 @@ const makeSwappableClient = (
           ? disconnectedStreamResult(args, error)
           : Effect.fail(error)
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       const method = client[key] as (...methodArgs: ReadonlyArray<unknown>) => unknown
       return method(...args)
     }) as GentRpcClient[K]

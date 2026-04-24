@@ -47,7 +47,7 @@ const retryableMessageSnippets = [
 
 const hasRetryableStatus = (cause: unknown) => {
   if (cause === null || typeof cause !== "object" || !("status" in cause)) return false
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   const status = (cause as { status: number }).status
   return status === 429 || status === 529 || (status >= 500 && status < 600)
 }

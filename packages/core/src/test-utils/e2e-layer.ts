@@ -131,7 +131,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
             // at this boundary the same way the legacy `layerContribution`
             // did. Production paths flow through `collectProcessLayers`.
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             const overrideLayer = override() as unknown as Layer.Layer<unknown, unknown, never>
             const layerOverride = defineResource({
               scope: "process",
@@ -166,9 +166,9 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           .filter((r) => r.scope === "process")
           .map((r) => {
             // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource layers carry their own R/E; consumers responsible for satisfying.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             const provided = Layer.provide(r.layer as Layer.Layer<any>, storageLayer)
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
             return provided as unknown as Layer.Layer<never>
           }),
       )

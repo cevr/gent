@@ -26,7 +26,7 @@ export interface RegistryOptions<Services = unknown> {
 export const make = <Services = unknown>(options?: RegistryOptions<Services>): Registry<Services> =>
   new RegistryImpl(
     options?.services ??
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
       (Context.empty() as Context.Context<Services>),
     options?.maxEntries,
   )
@@ -120,7 +120,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     const existing = this.instances.get(key)
     if (existing !== undefined) {
       this.touch(key, existing)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
       return existing as AtomInstance<A>
     }
     const created = runWithOwner(this.owner, () => atom.build(this))
@@ -139,7 +139,7 @@ class RegistryImpl<Services> implements Registry<Services> {
     if (!("set" in instance)) {
       throw new Error("Atom is not writable")
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
     return instance as WritableInstance<R, W>
   }
 

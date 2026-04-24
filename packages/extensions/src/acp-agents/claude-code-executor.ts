@@ -71,7 +71,7 @@ const mapAssistantMessage = (
   const events: TurnEvent[] = []
   const rawBlocks: unknown = msg.message.content ?? []
   if (!Array.isArray(rawBlocks)) return events
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const blocks = rawBlocks as ReadonlyArray<Record<string, unknown>>
   for (const block of blocks) {
     if (block["type"] !== "tool_use") continue
@@ -93,7 +93,7 @@ const mapUserMessage = (msg: Extract<SDKMessage, { type: "user" }>): ReadonlyArr
   const events: TurnEvent[] = []
   const rawBlocks: unknown = msg.message.content ?? []
   if (!Array.isArray(rawBlocks)) return events
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const blocks = rawBlocks as ReadonlyArray<Record<string, unknown>>
   for (const block of blocks) {
     if (block["type"] !== "tool_result") continue
@@ -119,12 +119,12 @@ const mapStreamEvent = (
 ): ReadonlyArray<TurnEvent> => {
   const rawEvent: unknown = msg.event
   if (typeof rawEvent !== "object" || rawEvent === null) return []
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const e = rawEvent as Record<string, unknown>
   if (e["type"] !== "content_block_delta") return []
   const delta = e["delta"]
   if (typeof delta !== "object" || delta === null) return []
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const d = delta as Record<string, unknown>
   if (d["type"] === "text_delta" && typeof d["text"] === "string" && d["text"] !== "") {
     return [{ _tag: "text-delta", text: d["text"] }]
@@ -139,7 +139,7 @@ const stringifyContent = (content: unknown): string | undefined => {
   if (typeof content === "string") return content
   if (Array.isArray(content)) {
     const parts = content
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       .map((c: Record<string, unknown>) => (typeof c["text"] === "string" ? c["text"] : ""))
       .filter((s: string) => s !== "")
     return parts.length > 0 ? parts.join("") : undefined

@@ -97,7 +97,7 @@ export const action = <Input, Output, R>(input: ActionInput<Input, Output, R>): 
     input: input.input,
     output: input.output,
     ...(input.promptSnippet !== undefined ? { promptSnippet: input.promptSnippet } : {}),
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as AnyCapabilityContribution["effect"],
   } as unknown as CapabilityToken
 }

@@ -244,7 +244,7 @@ const buildSystemArray = (
   // shape than the wire-level Record we receive from the SDK. The
   // signature only reads `role` + `content` defensively.
   const billing = buildBillingHeaderValue(
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
     finalMessages as ReadonlyArray<{ role?: string; content?: string }>,
     version,
     entrypoint,
@@ -480,7 +480,7 @@ export const transformStreamEvent = (
   const rawBlock = e["content_block"]
   const block = isRecord(rawBlock) ? rawBlock : undefined
   if (block?.["type"] === "tool_use" && typeof block["name"] === "string") {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
     return {
       ...event,
       content_block: { ...block, name: stripPrefix(block["name"]) },
@@ -512,7 +512,7 @@ export const keychainClient: Layer.Layer<
         inner
           .createMessage({
             ...options,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
             payload: transformPayload(
               options.payload as Record<string, unknown>,
             ) as typeof options.payload,
@@ -526,7 +526,7 @@ export const keychainClient: Layer.Layer<
                   ...b,
                   content: transformResponseContent(content),
                 }
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
                 return [transformed as typeof body, response] as [typeof body, typeof response]
               }
               return [body, response] as [typeof body, typeof response]
@@ -537,7 +537,7 @@ export const keychainClient: Layer.Layer<
         inner
           .createMessageStream({
             ...options,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
             payload: transformPayload(
               options.payload as Record<string, unknown>,
             ) as typeof options.payload,

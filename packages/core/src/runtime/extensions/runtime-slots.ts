@@ -98,7 +98,7 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
 const runProjectionQuery = (
   extensionId: string,
   projectionId: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
   query: (ctx: ProjectionTurnContext) => Effect.Effect<any, any, any>,
   ctx: ProjectionTurnContext,
 ) =>

@@ -72,7 +72,7 @@ export function AgentTree(props: AgentTreeProps) {
     children().flatMap((child) =>
       child.toolCalls.map((tc) => ({
         toolName: tc.toolName,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
         args: (tc.input ?? {}) as Record<string, unknown>,
         isError: tc.status === "error",
         status: tc.status,

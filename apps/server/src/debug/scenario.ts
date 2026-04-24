@@ -586,7 +586,7 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
         intent: ref.intent,
       })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
     }
 

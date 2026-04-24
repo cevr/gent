@@ -58,7 +58,7 @@ export const generateToolDescription = (
     const rawProps = schema["properties"]
     let props: Record<string, unknown> = {}
     if (typeof rawProps === "object" && rawProps !== null && !Array.isArray(rawProps)) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       props = rawProps as Record<string, unknown>
     }
     const rawRequired = schema["required"]

@@ -69,7 +69,7 @@ export interface AcpSessionManager {
 /** Extract text from an ACP content block. Returns undefined for non-text content. */
 const extractTextFromContent = (content: unknown): string | undefined => {
   if (typeof content !== "object" || content === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const c = content as Record<string, unknown>
   return c["type"] === "text" && typeof c["text"] === "string" ? c["text"] : undefined
 }
@@ -96,7 +96,7 @@ export const mapAcpUpdateToTurnEvent = (
 ): TurnEvent | undefined => {
   const update = notification.update
   if (typeof update !== "object" || update === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const obj = update as Record<string, unknown>
   const kind = obj["sessionUpdate"]
 

@@ -313,7 +313,7 @@ export interface ExtensionActorDefinition<
   SlotsR = never,
   SD extends SlotsDef = Record<string, never>,
 > {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   readonly machine: Machine.Machine<State, Event, never, any, any, SD>
   readonly slots?: (ctx: {
     readonly sessionId: SessionId
@@ -339,7 +339,7 @@ export interface ExtensionActorDefinition<
   }) => Effect.Effect<void>
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyExtensionActorDefinition = ExtensionActorDefinition<any, any, any, any>
 
 // `CommandContribution` (server slash commands) was deleted in C8 — no

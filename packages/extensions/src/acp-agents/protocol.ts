@@ -123,7 +123,7 @@ export const makeAcpConnection = (
     // both, never neither.
     const handleResponse = (parsed: Record<string, unknown>) =>
       Effect.gen(function* () {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
         const id = parsed["id"] as RequestId
         const claimed = yield* Ref.modify(
           stateRef,
@@ -197,7 +197,7 @@ export const makeAcpConnection = (
 
         let parsed: Record<string, unknown>
         try {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
           parsed = JSON.parse(line) as Record<string, unknown>
         } catch {
           yield* Effect.logWarning("acp: unparseable line").pipe(

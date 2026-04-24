@@ -32,7 +32,7 @@ import { compileCapabilities } from "../../src/runtime/extensions/capability-hos
 
 // CapabilityContext extends ExtensionHostContext (large RPC surface). Tests
 // for the skeleton don't exercise extension RPC; cast a minimal shape.
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
 const ctx = {
   sessionId: "s",
   branchId: "b",
@@ -49,7 +49,7 @@ const extWith = (
   scope,
   sourcePath: `/test/${id}`,
   contributions: {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     capabilities: caps as ReadonlyArray<CapabilityContribution<never, never, never>>,
   },
 })
@@ -166,7 +166,7 @@ describe("capability-host", () => {
         .run("@test/c", "echo", "model", { value: 42 }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
       expect((result as CapabilityError).reason).toMatch(/input decode failed/)
     }),
   )
@@ -179,7 +179,7 @@ describe("capability-host", () => {
         intent: "read",
         input: Schema.Struct({ value: Schema.String }),
         output: Schema.Struct({ value: Schema.String }),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
         effect: () => Effect.succeed({ value: 42 } as unknown as { value: string }),
       }
       const compiled = compileCapabilities([extWith("@test/c", "builtin", [badOutputCap])])
@@ -187,7 +187,7 @@ describe("capability-host", () => {
         .run("@test/c", "bad", "model", { value: "x" }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
       expect((result as CapabilityError).reason).toMatch(/output validation failed/)
     }),
   )
@@ -207,7 +207,7 @@ describe("capability-host", () => {
         .run("@test/c", "boom", "model", { value: "x" }, ctx)
         .pipe(Effect.flip)
       expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
       expect((result as CapabilityError).reason).toMatch(/handler defect/)
     }),
   )
@@ -266,7 +266,7 @@ describe("capability-host", () => {
         intent: "read",
         input: Schema.Unknown,
         output: Schema.Unknown,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
         effect: (_, c) => Effect.succeed((c as { extension: { send: unknown } }).extension.send),
       }
       const compiled = compileCapabilities([extWith("@test/c", "builtin", [widePeekCap])])
@@ -282,7 +282,7 @@ describe("capability-host", () => {
         .pipe(Effect.flip)
       // The defect propagates as a CapabilityError via `catchDefect`.
       expect(result).toBeInstanceOf(CapabilityError)
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
       expect((result as CapabilityError).reason).toMatch(/wide-context key "extension"/)
     }),
   )

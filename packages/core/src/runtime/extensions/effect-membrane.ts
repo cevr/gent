@@ -22,7 +22,7 @@ export const sealErasedEffect = <A, E>(
   // already provided the required services.
 ): Effect.Effect<A, E> =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit erased-effect membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   Effect.suspend(effect).pipe(
     Effect.catchEager(handlers.onFailure),
     Effect.catchDefect(handlers.onDefect),
@@ -36,10 +36,10 @@ export const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit erased-effect membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   Effect.exit(Effect.suspend(effect)) as Effect.Effect<Exit.Exit<A, unknown>>
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
 export type ErasedResourceLayer = Layer.Layer<any>
 
 /**
@@ -51,13 +51,13 @@ export type ErasedResourceLayer = Layer.Layer<any>
  * an unknown extension set.
  */
 export const eraseResourceLayer = (
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
   layer: Layer.Layer<any, any, any>,
 ): ErasedResourceLayer =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — explicit resource-layer membrane
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   layer as ErasedResourceLayer
 
 export const emptyErasedResourceLayer: ErasedResourceLayer =
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   Layer.empty as ErasedResourceLayer

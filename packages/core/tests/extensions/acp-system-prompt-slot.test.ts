@@ -16,7 +16,7 @@ import { compileRuntimeSlots } from "../../src/runtime/extensions/runtime-slots"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
 
 const baseAgent = AgentDefinition.make({
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   name: "cowork" as never,
 })
 

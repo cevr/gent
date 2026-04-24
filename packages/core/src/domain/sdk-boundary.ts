@@ -68,7 +68,7 @@ export const sdkBoundary = <A, E extends TaggedErrorLike>(
   _label: string,
   effect: Effect.Effect<A, E, never>,
 ): SdkBoundary<A, E> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   effect as SdkBoundary<A, E>
 
 /**

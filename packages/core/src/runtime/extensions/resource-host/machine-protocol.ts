@@ -127,7 +127,7 @@ export class MachineProtocol {
     value: unknown,
   ): Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError> {
     return this.decodeReply(message.extensionId, message._tag, schema, value).pipe(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       Effect.map((reply) => reply as ExtractExtensionReply<M>),
     )
   }
@@ -136,7 +136,7 @@ export class MachineProtocol {
     result: unknown | ExtensionProtocolError,
   ): Effect.Effect<ExtractExtensionReply<M>, ExtensionProtocolError> {
     if (Schema.is(ExtensionProtocolError)(result)) return Effect.fail(result)
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
     return Effect.succeed(result as ExtractExtensionReply<M>)
   }
 
@@ -165,7 +165,7 @@ export class MachineProtocol {
         )
       }
       return yield* Schema.decodeUnknownEffect(definition.schema)(message).pipe(
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
         Effect.map((value) => value as M),
         Effect.mapError((error) =>
           protocolError(message.extensionId, message._tag, expectedKind, error.message),

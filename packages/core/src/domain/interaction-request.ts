@@ -69,7 +69,7 @@ const ApprovalRequestSchema = Schema.Struct({
   metadata: Schema.optional(Schema.Unknown),
 })
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
 const interactionJsonCodec = Schema.fromJsonString(ApprovalRequestSchema as unknown as Schema.Any)
 
 export const encodeInteractionParams = (

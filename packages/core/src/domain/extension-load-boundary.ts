@@ -21,7 +21,7 @@ export const sealRuntimeLoadedEffect = <A>(opts: {
   readonly defectMessage: (cause: unknown) => string
 }): Effect.Effect<A, ExtensionLoadError> =>
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off — runtime-loaded JS membrane; E/R are intentionally erased here and re-sealed to ExtensionLoadError
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   Effect.suspend(opts.effect).pipe(
     Effect.catchEager((cause) =>
       Effect.fail(

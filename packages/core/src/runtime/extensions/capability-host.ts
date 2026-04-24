@@ -68,7 +68,7 @@ const narrowCtxGuard = (
   extensionId: string,
   capabilityId: string,
 ): CapabilityContext =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   new Proxy(ctx as object, {
     get(target, prop, receiver) {
       if (typeof prop === "string" && WIDE_ONLY_CTX_KEYS.has(prop)) {
@@ -235,7 +235,7 @@ export const compileCapabilities = (
         ? narrowCtxGuard(ctx, extensionId, capabilityId)
         : (ctx as CapabilityContext)
       // Decode input — caller-supplied, validated at the boundary.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       const decodedInput = yield* Schema.decodeUnknownEffect(entry.capability.input as Schema.Any)(
         input,
       ).pipe(
@@ -283,7 +283,7 @@ export const compileCapabilities = (
       // Validate output shape — handler returns typed (decoded) form; encode
       // confirms it matches the schema contract. Misshape is a host bug.
       // Return the original typed value (callers expect decoded form).
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       yield* Schema.encodeUnknownEffect(entry.capability.output as Schema.Any)(output).pipe(
         Effect.catchEager((e) =>
           Effect.fail(

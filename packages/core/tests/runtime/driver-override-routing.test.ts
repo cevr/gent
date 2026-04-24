@@ -20,7 +20,7 @@ import { ConfigService, UserConfig } from "../../src/runtime/config-service"
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- AgentName is branded; tests build raw definitions.
 const cowork = AgentDefinition.make({ name: "cowork" as never })
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
 const hardcoded = AgentDefinition.make({
   name: "hardcoded" as never,
   driver: ExternalDriverRef.make({ id: "acp-claude-code" }),

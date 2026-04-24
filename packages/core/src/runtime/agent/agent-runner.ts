@@ -102,7 +102,7 @@ const applyChildMetadataEnvelope = (state: ChildMetadataAccumulator, env: EventE
     case "ToolCallStarted":
       state.started.set(env.event.toolCallId, {
         toolName: env.event.toolName,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
         args: (env.event.input ?? {}) as Record<string, unknown>,
       })
       return
@@ -466,7 +466,7 @@ const buildEphemeralLayer = (params: {
   const resolved = params.extensionRegistry.getResolved()
   const extensionLayers = buildExtensionLayers(resolved)
   const parentService = <S>(tag: Context.Key<unknown, S>): S =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
     Context.get(params.parentServices as Context.Context<unknown>, tag)
 
   const storageLayer = Storage.MemoryWithSql()

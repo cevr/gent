@@ -185,7 +185,7 @@ export interface ResourceMachine<
   SlotsR = never,
   SD extends SlotsDef = Record<string, never>,
 > {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   readonly machine: Machine.Machine<State, Event, never, any, any, SD>
   readonly slots?: (ctx: {
     readonly sessionId: SessionId
@@ -200,7 +200,7 @@ export interface ResourceMachine<
   readonly onInit?: (ctx: ResourceMachineInitContext<State, Event, SD>) => Effect.Effect<void>
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceMachine = ResourceMachine<any, any, any, any>
 
 // ── The Resource contribution ──
@@ -262,7 +262,7 @@ export interface ResourceContribution<A, S extends ResourceScope, R = never, E =
  * spans multiple service tags + R/E channels. Hosts iterate this shape and
  * route each Resource to the appropriate engine.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
 // ── Smart constructor ──

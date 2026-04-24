@@ -46,7 +46,7 @@ const runOxlint = async (fixtureFile: string): Promise<OxlintRun> => {
     new Response(proc.stderr).text(),
   ])
   const exitCode = await proc.exited
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const report = JSON.parse(stdout) as OxlintReport
   return { report, exitCode, stderr }
 }

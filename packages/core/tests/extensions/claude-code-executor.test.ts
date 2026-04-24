@@ -14,7 +14,7 @@ const stubBase = { uuid: "u-1", session_id: "s-1", parent_tool_use_id: null }
 
 describe("mapSdkMessage", () => {
   test("stream_event content_block_delta text_delta → text-delta", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "stream_event",
       ...stubBase,
@@ -28,7 +28,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("stream_event content_block_delta thinking_delta → reasoning-delta", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "stream_event",
       ...stubBase,
@@ -42,7 +42,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("assistant text block does NOT emit (stream_event is the source)", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "assistant",
       ...stubBase,
@@ -55,7 +55,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("assistant tool_use block → tool-started", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "assistant",
       ...stubBase,
@@ -70,7 +70,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("user tool_result success → tool-completed", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "user",
       ...stubBase,
@@ -85,7 +85,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("user tool_result with is_error → tool-failed", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "user",
       ...stubBase,
@@ -98,7 +98,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("result success → finished with stop_reason", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "result",
       subtype: "success",
@@ -124,7 +124,7 @@ describe("mapSdkMessage", () => {
   })
 
   test("system / status messages map to nothing", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const msg = {
       type: "system",
       subtype: "init",

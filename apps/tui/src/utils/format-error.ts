@@ -54,7 +54,7 @@ const extractUnknownMessage = (error: unknown): string => {
 export const formatConnectionIssue = (error: unknown): string => {
   const message =
     error !== null && typeof error === "object" && "_tag" in error
-      ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
         formatError(error as UiError)
       : extractUnknownMessage(error)
 

@@ -231,7 +231,7 @@ describe("defineResource", () => {
     // extractMachine; the actual supervision is tested by machine-engine
     // tests that drive a real machine end-to-end.
     const stubMachine = {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
       machine: { _stub: true } as any,
     }
     const r = defineResource({
@@ -253,7 +253,7 @@ describe("defineResource", () => {
 describe("defineExtension validation: Resource.machine constraints", () => {
   // Both fixtures use a stub machine — defineExtension validates structure
   // (counts, scopes), not Machine.Machine internals.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const stubMachine = { machine: { _stub: true } as any }
 
   test("rejects extension with 2+ Resources declaring `machine` (codex BLOCK 1)", async () => {

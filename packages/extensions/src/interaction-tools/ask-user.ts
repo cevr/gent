@@ -10,7 +10,7 @@ const parseAnswers = (notes: string): string[][] => {
   try {
     const parsed = JSON.parse(notes) as unknown
     if (Array.isArray(parsed) && parsed.every(Array.isArray)) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       return parsed as string[][]
     }
     return [[notes]]

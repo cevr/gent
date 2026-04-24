@@ -189,7 +189,7 @@ export interface CapabilityContribution<
   readonly effect: (input: Input, ctx: CapabilityContext) => Effect.Effect<Output, E, R>
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyCapabilityContribution = CapabilityContribution<any, any, any, any>
 
 /**

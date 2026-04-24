@@ -20,7 +20,7 @@ export const runWithReconnect = <E, R>(
   let attempt = 0
   const label = options.label ?? "unknown"
   const log = options.log
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
   return Effect.gen(function* () {
     attempt++
     log.info("reconnect.attempt", { label, attempt })

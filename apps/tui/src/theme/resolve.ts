@@ -15,7 +15,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
       if (defs[c] != null) {
         return resolveColor(defs[c])
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
       const themeColor = theme.theme[c as keyof ThemeColors]
       if (themeColor !== undefined) {
         return resolveColor(themeColor)
@@ -35,7 +35,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
         ([key]) =>
           key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity",
       )
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
       .map(([key, value]) => [key, resolveColor(value as ColorValue)]),
   ) as Partial<ThemeColors>
 
@@ -58,7 +58,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
   // Handle thinkingOpacity - optional with default of 0.6
   const thinkingOpacity = theme.theme.thinkingOpacity ?? 0.6
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
   return {
     ...resolved,
     _hasSelectedListItemText: hasSelectedListItemText,

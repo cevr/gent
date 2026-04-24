@@ -9,7 +9,7 @@ import type { PromptSection } from "./prompt"
 // Params must have no context requirement (never) for sync decoding
 export interface ToolDefinition<
   Name extends string = string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
   Result = unknown,
   Error = never,

@@ -221,7 +221,7 @@ export const executorActor: ExtensionActorDefinition<
     if (message.extensionId !== EXECUTOR_EXTENSION_ID) return undefined
     switch (message._tag) {
       case "Connect":
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
         return MachineEvent.Connect({ cwd: (message["cwd"] as string | undefined) ?? "/" })
       case "Disconnect":
         return MachineEvent.Disconnect
@@ -244,7 +244,7 @@ export const executorActor: ExtensionActorDefinition<
 
       // Check autoStart setting
       const settingsRaw = yield* ctx.slots.resolveSettings({ cwd: ctx.sessionCwd ?? "/" })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       const settings = settingsRaw as ResolvedExecutorSettings
       if (!settings.autoStart) return
 

@@ -262,7 +262,7 @@ export const makeExtensionHostContext = (
       const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
         intent: ref.intent,
       })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
       return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
     },
   },

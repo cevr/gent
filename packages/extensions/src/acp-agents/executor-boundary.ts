@@ -31,7 +31,7 @@ export const makeAcpRunTool = (params: {
   // The TurnExecutor interface erases the executor's context channel, but
   // the agent runtime ambiently provides ToolRunner at invocation time. Re-
   // type the captured ServiceMap to expose the typed ToolRunner key.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const ambient = params.services as unknown as Context.Context<ToolRunner>
   const toolRunner = Context.get(ambient, ToolRunner)
   const runOnRuntime = Effect.runPromiseWith(params.services)

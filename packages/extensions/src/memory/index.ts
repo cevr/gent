@@ -114,7 +114,7 @@ const memoryMachine = Machine.make({
 })
   .on(MemoryMachineState.Active, MemoryMachineEvent.Published, ({ state, event }) => {
     const nextMemory = reduce(state.memory as MemoryState, event.event, {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       sessionId: "" as never,
       branchId: undefined,
     }).state

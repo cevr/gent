@@ -57,7 +57,7 @@ const setupSkillsExtension = Effect.provide(
           r.tag === Skills
             ? defineResource({
                 ...r,
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
                 layer: Skills.Test(testSkills) as Layer.Layer<Skills>,
               })
             : r,

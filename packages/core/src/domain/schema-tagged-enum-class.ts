@@ -132,7 +132,7 @@ const buildVariantClass = <Tag extends string, F extends VariantFields>(
     tag,
     fields,
   )
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   return variant as unknown as TaggedEnumClassVariant<Tag, F>
 }
 
@@ -278,7 +278,7 @@ export const TaggedEnumClass = <V extends VariantsMap>(
   // instead of creating an own property, silently dropping the variant
   // from `Object.values(...)`. The runtime guard above rejects `__proto__`
   // explicitly; this is belt + suspenders.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   const variantClasses = Object.create(null) as Record<
     string,
     Schema.Top & { readonly Type: { readonly _tag: string } }
@@ -292,6 +292,6 @@ export const TaggedEnumClass = <V extends VariantsMap>(
   const members = Object.values(variantClasses)
   const union = Schema.Union(members).pipe(Schema.toTaggedUnion("_tag"))
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   return union as unknown as TaggedEnumClass<V>
 }

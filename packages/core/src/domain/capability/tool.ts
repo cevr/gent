@@ -47,7 +47,7 @@ export interface ToolCapabilityContext extends ModelCapabilityContext {
  *  decode JSON synchronously without resolving services, so the decoder
  *  may not have a context requirement. */
 export interface ToolInput<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Decoder<any, never> = Schema.Decoder<any, never>,
   Result = unknown,
   Error = never,
@@ -105,7 +105,7 @@ export interface ToolInput<
  * The legacy `defineTool` carrier was deleted in B11.5d.
  */
 export const tool = <
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
   Params extends Schema.Decoder<any, never>,
   Result,
   Error,
@@ -119,7 +119,7 @@ export const tool = <
     description: input.description,
     audiences: ["model"],
     intent: "write",
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     input: input.params as Schema.Schema<unknown>,
     // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.
     // Tools needing typed-output validation should author through `request(...)`.
@@ -134,6 +134,6 @@ export const tool = <
     // ToolCapabilityContext extends ModelCapabilityContext and narrows
     // `toolCallId` to required — `tool` execute signatures satisfy the
     // capability `effect` signature contravariantly.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     effect: input.execute as AnyCapabilityContribution["effect"],
   }) as unknown as CapabilityToken

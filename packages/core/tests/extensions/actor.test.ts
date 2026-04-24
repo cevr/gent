@@ -408,7 +408,7 @@ describe("Resource.machine end-to-end", () => {
             // `AnyResourceContribution` variance traps.
             defineResource<unknown, "process">({
               scope: "process",
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
               layer: Layer.empty as Layer.Layer<unknown>,
               machine: counterMachine,
             }),
@@ -446,7 +446,7 @@ describe("Resource.machine end-to-end", () => {
             resources: [
               defineResource<unknown, "process">({
                 scope: "process",
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
                 layer: Layer.empty as Layer.Layer<unknown>,
                 machine: sessionCounter,
               }),

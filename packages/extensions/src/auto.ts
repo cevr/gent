@@ -45,7 +45,7 @@ const parseCheckpointParams = (
     status,
     summary: typeof input["summary"] === "string" ? input["summary"] : "Checkpoint",
     learnings: typeof input["learnings"] === "string" ? input["learnings"] : undefined,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
     metrics: isRecord(input["metrics"]) ? (input["metrics"] as Record<string, number>) : undefined,
     nextIdea: typeof input["nextIdea"] === "string" ? input["nextIdea"] : undefined,
   }

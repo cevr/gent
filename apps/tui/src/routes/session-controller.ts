@@ -278,7 +278,7 @@ export function createSessionController(props: {
             Effect.sync(() => {
               client.setError(
                 typeof error === "object" && error !== null
-                  ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                  ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
                     formatError(error as UiError)
                   : String(error),
               )
@@ -560,7 +560,7 @@ export function createSessionController(props: {
         }
         cast(
           client
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
             .updateSessionReasoningLevel(level === "off" ? undefined : (level as ReasoningEffort))
             .pipe(
               Effect.catchEager((error) =>

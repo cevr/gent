@@ -358,7 +358,7 @@ describe("EventPublisher per-cwd router", () => {
     // used by the router's inner publish path need real values: the
     // engine, registry's getResolved, and subscriptionEngine.
     const secondaryResolved = resolveExtensions([])
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const secondaryProfile = {
       cwd: secondaryCwd,
       extensions: [],
@@ -472,7 +472,7 @@ describe("EventPublisher per-cwd router", () => {
     }
 
     const secondaryResolved = resolveExtensions([])
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     const secondaryProfile = {
       cwd: secondaryCwd,
       extensions: [],

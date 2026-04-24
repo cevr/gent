@@ -93,7 +93,7 @@ export interface EphemeralComposerInputs {
 // The build() output recovers the user-visible `Provides` union via the
 // builder's type parameter; only the internal store uses `unknown` here.
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
 type OpaqueLayer = Layer.Layer<any, any, any>
 
 /**
@@ -102,9 +102,9 @@ type OpaqueLayer = Layer.Layer<any, any, any>
  * `Layer<Provides, never, never>`.
  */
 /** Extract the `Provides` (Identifier) channel from each `OwnedService` in a tuple. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
 type ProvidesOf<Services extends ReadonlyArray<OwnedService<any, any, any, any>>> = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
   [K in keyof Services]: Services[K] extends OwnedService<infer I, any, any, any> ? I : never
 }[number]
 
@@ -169,7 +169,7 @@ const OVERRIDE_TAG_SETS: Record<
   keyof EphemeralOverrides,
   ReadonlyArray<Context.Key<unknown, unknown>>
 > = {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   storage: [
     Storage,
     SessionStorage,
@@ -182,19 +182,19 @@ const OVERRIDE_TAG_SETS: Record<
     InteractionStorage,
     SearchStorage,
   ] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   eventStore: [EventStore] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   eventPublisher: [EventPublisher] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   approval: [ApprovalService] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   promptPresenter: [PromptPresenter] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   resourceManager: [ResourceManager] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   toolRunner: [ToolRunner] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   sessionRuntime: [SessionRuntime] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
 }
 
@@ -213,7 +213,7 @@ export interface EphemeralComposerBuilder<Provides> {
    * "single source of truth" purpose).
    */
   readonly own: <
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
     Services extends ReadonlyArray<OwnedService<any, any, any, any>>,
   >(
     ...services: Services
@@ -278,7 +278,7 @@ const omitContext = (
   if (keys.length === 0) return ctx
   // `Context.omit` is variadic over keys; we trampoline the spread to keep
   // the runtime call simple and the type assertion narrow.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   return Context.omit(...(keys as Array<any>))(ctx) as Context.Context<never>
 }
 
@@ -287,14 +287,14 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
     own: (...services) => {
       const newKeys: ReadonlyArray<Context.Key<unknown, unknown>> = [
         ...state.ownedKeys,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
         ...services.map((s) => s.tag as Context.Key<unknown, unknown>),
       ]
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
       const newLayers: ReadonlyArray<OpaqueLayer> = [
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
         ...state.ownedLayers,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
         ...services.map((s) => s.layer as OpaqueLayer),
       ]
       return makeBuilder({
@@ -307,7 +307,7 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       makeBuilder({
         ...state,
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
         mergedLayers: [...state.mergedLayers, layer as OpaqueLayer],
       }),
     withOverrides: (overrides) => {
@@ -344,7 +344,7 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       // results from being replayed (the parent's `EventPublisherLive`
       // layer object is `===` to the child's, so its build is in the parent
       // memo). `Layer.fresh` below is defense-in-depth for the same memo.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       const memoKey = Layer.CurrentMemoMap as unknown as Context.Key<unknown, unknown>
       const omittedParentLayer = Layer.succeedContext(
         omitContext(parentServices, [...ownedKeys, memoKey]),
@@ -357,7 +357,7 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       // parameter and applied at the final return.
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
       const allLayers: ReadonlyArray<OpaqueLayer> = [
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
         omittedParentLayer as unknown as OpaqueLayer,
         // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer R/E erased
         ...mergedLayers,
@@ -379,7 +379,7 @@ const makeBuilder = <Provides>(state: EphemeralComposerState): EphemeralComposer
       // builder's accumulated `Provides` channel — the composer guarantees
       // every owned/merged service identifier is in the layer.
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — composer recovers Provides at this boundary
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       const layer = Layer.fresh(merged) as Layer.Layer<Provides, never, never>
 
       // The profile is a data carrier; the live `Scope.Scope` for the

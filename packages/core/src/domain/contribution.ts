@@ -91,5 +91,5 @@ export { defineResource } from "./resource.js"
 export const resource = <A, S extends ResourceScope, R, E>(
   r: ResourceContribution<A, S, R, E>,
 ): AnyResourceContribution =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   r as unknown as AnyResourceContribution

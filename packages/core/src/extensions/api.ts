@@ -298,7 +298,7 @@ const resolveField = <A>(
     if (spec === undefined) return []
     if (Array.isArray(spec)) return spec
     const result = yield* Effect.try({
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       try: () => (spec as (args: { ctx: ExtensionSetupContext }) => unknown)({ ctx }),
       catch: (cause) =>
         new ExtensionLoadError({
@@ -325,7 +325,7 @@ const resolveField = <A>(
           message: `${field} factory must resolve to an array, got ${typeof value}`,
         })
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
       return value as ReadonlyArray<A>
     }
     // Sync factory: validate shape — a JS extension returning a single item
@@ -337,7 +337,7 @@ const resolveField = <A>(
         message: `${field} factory must return an array, got ${typeof result}`,
       })
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
     return result as ReadonlyArray<A>
   })
 

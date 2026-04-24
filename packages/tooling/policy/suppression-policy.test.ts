@@ -316,9 +316,11 @@ const hasInlineReason = (suppression: SuppressionInstance): boolean =>
 
 const ESLINT_RULES_REQUIRING_INLINE_REASON = new Set<SuppressionRule>([
   "eslint:@typescript-eslint/no-empty-object-type",
+  "eslint:@typescript-eslint/no-explicit-any",
   "eslint:@typescript-eslint/no-implied-eval",
   "eslint:@typescript-eslint/no-non-null-assertion",
   "eslint:@typescript-eslint/no-require-imports",
+  "eslint:@typescript-eslint/no-unsafe-type-assertion",
   "eslint:import/namespace",
   "eslint:no-await-in-loop",
   "eslint:no-constant-condition",

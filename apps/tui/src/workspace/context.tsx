@@ -116,7 +116,7 @@ export function WorkspaceProvider(props: WorkspaceProviderProps) {
     if (currentFiber !== null) {
       Effect.runFork(Fiber.interrupt(currentFiber))
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
     const gitServices = services as Context.Context<ChildProcessSpawner.ChildProcessSpawner>
     currentFiber = Effect.runForkWith(gitServices)(
       getGitInfo(props.cwd).pipe(

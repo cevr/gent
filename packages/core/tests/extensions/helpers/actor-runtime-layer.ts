@@ -25,7 +25,7 @@ export const makeActorRuntimeLayer = (config: {
       (ext.contributions.resources ?? [])
         .filter((r) => r.scope === "process")
         .map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
           (r) => r.layer as Layer.Layer<never>,
         ),
     )

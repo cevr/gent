@@ -93,7 +93,7 @@ const spawnSecurity = (
       return raw.trim()
     },
     catch: (e) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       const error = e as { exitCode?: number; killed?: boolean; code?: string }
       if (error.killed || error.code === "ETIMEDOUT") {
         return new ProviderAuthError({
@@ -348,12 +348,12 @@ export const updateCredentialBlob = (
 ): string | undefined => {
   let parsed: Record<string, unknown>
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
     parsed = JSON.parse(existingJson) as Record<string, unknown>
   } catch {
     return undefined
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const wrapper = parsed["claudeAiOauth"] as Record<string, unknown> | undefined
   const target = wrapper ?? parsed
   target["accessToken"] = newCreds.accessToken
@@ -463,7 +463,7 @@ export const parseOAuthResponse = (
     return undefined
   }
   if (typeof parsed !== "object" || parsed === null) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
   const data = parsed as OAuthTokenResponse
   if (typeof data.access_token !== "string") return undefined
   const expiresIn = typeof data.expires_in === "number" ? data.expires_in : 36_000
@@ -538,9 +538,9 @@ const spawnClaudeCli = (): Effect.Effect<void, ProviderAuthError> =>
       // eslint-disable-next-line no-process-env -- auth probe inherits local CLI credentials from the shell
       const env = { ...process.env, TERM: "dumb" }
       const proc = Bun.spawn(["claude", "-p", ".", "--model", "haiku"], {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
         stdout: "ignore" as unknown as "pipe",
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
         stderr: "ignore" as unknown as "pipe",
         env,
         timeout: 60_000,

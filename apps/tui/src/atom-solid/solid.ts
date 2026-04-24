@@ -23,7 +23,7 @@ const defaultRegistry = (() => {
 export const RegistryContext = createContext<Registry.Registry<unknown>>(defaultRegistry)
 
 export const useRegistry = <Services = never>(): Registry.Registry<Services> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
   useContext(RegistryContext) as Registry.Registry<Services>
 
 type AtomInput<A, Services = never> = Atom<A, Services> | Accessor<Atom<A, Services>>

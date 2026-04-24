@@ -199,7 +199,7 @@ export class ExecutorSidecar extends Context.Service<ExecutorSidecar, ExecutorSi
           if (!isRecord(raw)) return emptyRegistry
           const sidecars = raw["sidecars"]
           if (!isRecord(sidecars)) return emptyRegistry
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
           return { version: 1, sidecars: sidecars as Record<string, RegisteredSidecar> }
         }
 

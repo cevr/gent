@@ -227,7 +227,7 @@ export const spawnMachineExtensionRef = <
                 Effect.catchEager(() => Effect.succeed(false)),
               ),
             sessionCwd,
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
             parentSessionId: parentSessionId as typeof ctx.sessionId | undefined,
             getSessionAncestors: () =>
               storage._tag === "Some"
@@ -295,7 +295,7 @@ export const spawnMachineExtensionRef = <
                 `extension "${extensionId}" did not reply to request "${message._tag}"`,
               )
             }
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
             return result.reply as never
           }),
         snapshot: Effect.gen(function* () {

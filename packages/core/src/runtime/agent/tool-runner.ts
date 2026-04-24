@@ -82,7 +82,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       const basePermissionOpt = yield* Effect.serviceOption(Permission)
 
       const run =
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
         Effect.fn("ToolRunner.run")(function* (toolCall, ctx, profileOverride) {
           return yield* Effect.gen(function* () {
             yield* WideEvent.set({ sessionId: ctx.sessionId, branchId: ctx.branchId })
@@ -171,16 +171,16 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
                   const wrapped = Effect.gen(function* () {
                     const output = yield* tool.effect(
                       decodedInput.success,
-                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
                       ctx as Parameters<typeof tool.effect>[1],
                     )
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
                     yield* Schema.encodeUnknownEffect(tool.output as Schema.Any)(output).pipe(
                       Effect.orDie,
                     )
                     return output
                   })
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
                   return wrapped as Effect.Effect<unknown>
                 },
                 ctx,

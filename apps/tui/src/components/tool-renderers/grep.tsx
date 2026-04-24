@@ -38,7 +38,7 @@ const GrepOutputSchema = Schema.Struct({
 function parseGrepOutput(output: string | undefined): GrepOutput | undefined {
   const d = decodeToolOutput(GrepOutputSchema, output)
   if (d === undefined) return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
   return { matches: d["matches"] as GrepMatch[], truncated: d["truncated"] ?? false }
 }
 

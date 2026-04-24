@@ -70,5 +70,5 @@ export type ReadOnly<S> = S & ReadOnlyTag
  * ```
  */
 export const withReadOnly = <S>(value: S): ReadOnly<S> =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
   value as ReadOnly<S>

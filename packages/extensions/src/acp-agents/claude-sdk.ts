@@ -139,7 +139,7 @@ class Pushable<T> implements AsyncIterable<T> {
     this.done = true
     while (this.resolvers.length > 0) {
       const resolve = this.resolvers.shift()
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       resolve?.({ value: undefined as never, done: true })
     }
   }
@@ -152,7 +152,7 @@ class Pushable<T> implements AsyncIterable<T> {
           return Promise.resolve({ value: queued, done: false })
         }
         if (this.done) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
           return Promise.resolve({ value: undefined as never, done: true })
         }
         return new Promise<IteratorResult<T>>((resolve) => {

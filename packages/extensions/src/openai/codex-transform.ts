@@ -249,7 +249,7 @@ class Unauthorized401Error extends Schema.TaggedErrorClass<Unauthorized401Error>
   response: Schema.Any,
 }) {
   getResponse(): HttpClientResponse.HttpClientResponse {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
     return this.response as HttpClientResponse.HttpClientResponse
   }
 }

@@ -129,5 +129,5 @@ export interface ProjectionContribution<A = unknown, R extends ReadOnlyTag = nev
  * fence. Keeping `any` for the value `A` is intentional — `A` is a
  * pure data shape that downstream consumers narrow per call.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
 export type AnyProjectionContribution = ProjectionContribution<any, ReadOnlyTag>

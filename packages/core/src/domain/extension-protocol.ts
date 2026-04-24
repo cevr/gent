@@ -188,7 +188,7 @@ const readHiddenMetadata = (
   if ((typeof value !== "object" && typeof value !== "function") || value === null) {
     return undefined
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   return (value as Record<PropertyKey, unknown>)[symbol] as ExtensionProtocolMetadata | undefined
 }
 
@@ -199,7 +199,7 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
 ): ExtensionCommandDefinition<Id, Tag, F> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   const schema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
@@ -214,10 +214,10 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
     schema,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   const make = ((payload?: PayloadType<F>) =>
     attachMessageMetadata(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       {
         extensionId,
         _tag: tag,
@@ -250,7 +250,7 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
 ): ExtensionRequestDefinition<Id, Tag, F, R> => {
   assertFields(fields)
   const payloadSchema = Schema.Struct(fields)
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   const schema = Schema.Struct({
     extensionId: Schema.Literal(extensionId),
     _tag: Schema.Literal(tag),
@@ -269,10 +269,10 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
     replyDecoder,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   const make = ((payload?: PayloadType<F>) =>
     attachMessageMetadata(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       {
         extensionId,
         _tag: tag,
@@ -321,7 +321,7 @@ export const getExtensionReplySchema = <M>(
 ): Schema.Schema<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
   if (metadata?._tag !== "request") return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   return metadata.replySchema as Schema.Schema<ExtractExtensionReply<M>>
 }
 
@@ -330,7 +330,7 @@ export const getExtensionReplyDecoder = <M>(
 ): Schema.Decoder<ExtractExtensionReply<M>> | undefined => {
   const metadata = getExtensionMessageMetadata(message)
   if (metadata?._tag !== "request") return undefined
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
   return metadata.replyDecoder as Schema.Decoder<ExtractExtensionReply<M>>
 }
 
@@ -373,7 +373,7 @@ export const listExtensionProtocolDefinitions = (
         message: `request protocol entry "${key}" is missing a reply schema`,
       })
     }
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
     return value as AnyExtensionMessageDefinition
   })
 

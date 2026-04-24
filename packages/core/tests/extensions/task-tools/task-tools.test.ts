@@ -47,7 +47,7 @@ const makeCtx = Effect.gen(function* () {
       .capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctxBase, {
         intent: ref.intent,
       })
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
   }
   return testToolContext({

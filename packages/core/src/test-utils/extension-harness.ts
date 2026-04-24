@@ -145,7 +145,7 @@ export function createActorHarness<State>(
 export function createActorHarness<State, Message = void>(
   config: ActorHarnessConfig<State, Message>,
   options?: ActorHarnessOptions,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
 ): ActorHarnessResult<State, any> {
   const ctx: ExtensionReduceContext = {
     sessionId: SessionId.make(options?.sessionId ?? "test-session"),
@@ -155,7 +155,7 @@ export function createActorHarness<State, Message = void>(
   const deriveCtx: ExtensionTurnContext = {
     sessionId: ctx.sessionId,
     branchId: BranchId.make(ctx.branchId ?? "test-branch"),
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
     agent: options?.agent ?? AgentDefinition.make({ name: "test" as never }),
     allTools: options?.allTools ?? [],
     interactive: true,
@@ -176,11 +176,11 @@ export function createActorHarness<State, Message = void>(
   const receiveHandler = config.receive
   const receive =
     receiveHandler !== undefined
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
         (state: State, message: any): ReduceResult<State> => receiveHandler(state, message)
       : undefined
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   return {
     reduce,
     derive,
@@ -189,7 +189,7 @@ export function createActorHarness<State, Message = void>(
     deriveCtx,
     events,
     initial: config.initial,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test fixture owns intentionally partial typed values
   } as any
 }
 
@@ -291,9 +291,9 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
             .map((r) => {
               // Resource layers carry their own R/E; harness boundary.
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
               const merged = Layer.provideMerge(r.layer as Layer.Layer<any>, baseLayerAny)
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
               return merged as Layer.Layer<never, never, object>
             }),
       )

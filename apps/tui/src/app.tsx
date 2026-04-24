@@ -22,7 +22,7 @@ function AppContent(props: AppProps) {
     <box flexDirection="column" width="100%" height="100%">
       <Switch>
         <Match
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
           when={isRoute.session(router.route()) ? (router.route() as SessionRoute) : false}
           keyed
         >
@@ -38,7 +38,7 @@ function AppContent(props: AppProps) {
         </Match>
         <Match
           when={
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
             isRoute.branchPicker(router.route()) ? (router.route() as BranchPickerRoute) : false
           }
         >

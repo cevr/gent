@@ -281,7 +281,7 @@ const probeServer = (
     const baseUrl = rpcUrl.replace("/rpc", "")
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
     const identity = (yield* response.json) as {
       serverId?: string
       dbPath?: string

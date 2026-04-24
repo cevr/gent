@@ -22,17 +22,17 @@ export function flattenAllOf(schema: Record<string, unknown>): Record<string, un
     if (key === "allOf" && Array.isArray(value)) {
       for (const entry of value) {
         if (typeof entry === "object" && entry !== null) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
           Object.assign(result, flattenAllOf(entry as Record<string, unknown>))
         }
       }
     } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
       result[key] = flattenAllOf(value as Record<string, unknown>)
     } else if (Array.isArray(value)) {
       result[key] = value.map((item) =>
         typeof item === "object" && item !== null && !Array.isArray(item)
-          ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          ? // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
             flattenAllOf(item as Record<string, unknown>)
           : item,
       )

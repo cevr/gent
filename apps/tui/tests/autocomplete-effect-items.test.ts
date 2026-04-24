@@ -48,11 +48,11 @@ const makeFakeTransport = (
   } = {},
 ): ClientTransportShape => {
   const ask = () => Effect.succeed(opts.askReply ?? [])
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const fakeClient = {
     extension: { ask },
   } as unknown as GentNamespacedClient
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
   const fakeRuntime = {} as GentRuntime
   return {
     client: fakeClient,
@@ -60,9 +60,9 @@ const makeFakeTransport = (
     currentSession:
       opts.currentSession ??
       (() => ({
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
         sessionId: "sess-1" as SessionId,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture owns intentionally partial typed values
         branchId: "branch-1" as BranchId,
       })),
   }

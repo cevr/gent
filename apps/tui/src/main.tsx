@@ -196,7 +196,7 @@ const main = Command.make(
       const cwd = process.cwd()
       const home = Option.getOrElse(yield* Config.option(Config.string("HOME")), () => "/tmp")
       const scope = yield* Effect.scope
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
       const uiServices = (yield* Layer.buildWithScope(
         makeUiLayer(),
         scope,
@@ -212,7 +212,7 @@ const main = Command.make(
 
       // Create Effect-backed logger from captured services
       const logServices = yield* Effect.context<never>()
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
       const log = createClientLog(logServices as Context.Context<unknown>)
       let mainFiber: Fiber.Fiber<unknown, unknown> | undefined
       yield* Effect.withFiber((fiber) =>
@@ -533,5 +533,5 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- platform boundary validates foreign runtime shape before use
 runCliMain(Effect.scoped(mainEffect) as Effect.Effect<void>, { teardown: gracefulCliTeardown })

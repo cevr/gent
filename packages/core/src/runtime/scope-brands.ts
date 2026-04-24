@@ -77,7 +77,7 @@ export const brandServerScope = (profile: {
   cwd: string
   resolved: ResolvedExtensions
 }): ServerProfile =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   ({ ...profile, __brand: undefined as unknown as ServerScope }) as ServerProfile
 
 /**
@@ -86,7 +86,7 @@ export const brandServerScope = (profile: {
  * **Restricted**: only `session-profile.ts` (the per-cwd profile cache) may call this.
  */
 export const brandCwdScope = (profile: { cwd: string; resolved: ResolvedExtensions }): CwdProfile =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   ({ ...profile, __brand: undefined as unknown as CwdScope }) as CwdProfile
 
 /**
@@ -99,7 +99,7 @@ export const brandEphemeralScope = (profile: {
   cwd: string
   resolved: ResolvedExtensions
 }): EphemeralProfile =>
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
   ({ ...profile, __brand: undefined as unknown as EphemeralScope }) as EphemeralProfile
 
 /**

@@ -38,7 +38,7 @@ export const state = <A>(initialValue: A): Writable<A> =>
     const [value, setValue] = createSignal(initialValue)
     const set = (next: A | ((value: A) => A)) => {
       if (typeof next === "function") {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape
         setValue(next as (value: A) => A)
         return
       }
