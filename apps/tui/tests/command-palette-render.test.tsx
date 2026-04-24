@@ -140,4 +140,65 @@ describe("CommandPalette renderer", () => {
       reasoningLevel: undefined,
     })
   })
+
+  test("creates palette sessions with workspace cwd", async () => {
+    let router: RouterContextValue | undefined
+    const createdSessionId = SessionId.make("session-created")
+    const createdBranchId = BranchId.make("branch-created")
+    const createInputs: Array<{ cwd?: string; requestId?: string }> = []
+    const workspaceCwd = process.cwd()
+    const client = createMockClient({
+      session: {
+        create: (input: { cwd?: string; requestId?: string }) =>
+          Effect.sync(() => {
+            createInputs.push(input)
+            return {
+              sessionId: createdSessionId,
+              branchId: createdBranchId,
+              name: "Created",
+            }
+          }),
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => (
+        <>
+          <OpenPaletteOnMount />
+          <RouterProbe onReady={(value) => (router = value)} />
+        </>
+      ),
+      {
+        client,
+        cwd: workspaceCwd,
+        width: 90,
+        height: 28,
+      },
+    )
+    if (router === undefined) throw new Error("router context not ready")
+
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Commands") && frame.includes("Sessions"),
+      "commands root",
+    )
+    setup.mockInput.pressEnter()
+    await waitForRenderedFrame(
+      setup,
+      (frame) => frame.includes("Sessions") && frame.includes("+ New Session"),
+      "sessions level",
+    )
+    setup.mockInput.pressEnter()
+
+    await waitForRenderedFrame(
+      setup,
+      (frame) => !frame.includes("Sessions"),
+      "palette closed after create",
+    )
+
+    expect(createInputs).toHaveLength(1)
+    expect(createInputs[0]?.cwd).toBe(workspaceCwd)
+    expect(typeof createInputs[0]?.requestId).toBe("string")
+    expect(router.route()).toEqual(Route.session(createdSessionId, createdBranchId))
+  })
 })

@@ -211,21 +211,21 @@ export const renderWithProviders = async (
                     Route.session(SessionId.make("test-session"), BranchId.make("test-branch"))
                   }
                 >
-                  <ClientProvider
-                    client={client}
-                    runtime={runtime}
-                    log={noopLog}
-                    initialSession={toInitialSession(options?.initialSession)}
-                    initialAgent={options?.initialAgent}
+                  <WorkspaceProvider
+                    cwd={options?.cwd ?? defaultWorkspaceCwd}
+                    home="/tmp"
+                    services={services}
                   >
-                    <WorkspaceProvider
-                      cwd={options?.cwd ?? defaultWorkspaceCwd}
-                      home="/tmp"
-                      services={services}
+                    <ClientProvider
+                      client={client}
+                      runtime={runtime}
+                      log={noopLog}
+                      initialSession={toInitialSession(options?.initialSession)}
+                      initialAgent={options?.initialAgent}
                     >
                       <ExtensionUIProvider>{node()}</ExtensionUIProvider>
-                    </WorkspaceProvider>
-                  </ClientProvider>
+                    </ClientProvider>
+                  </WorkspaceProvider>
                 </RouterProvider>
               </CommandProvider>
             </EnvProvider>

@@ -30,6 +30,7 @@ import type { MessageId } from "@gent/core/domain/ids.js"
 import type { ClientLog } from "../utils/client-logger"
 import { formatConnectionIssue, formatError } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
+import { useWorkspace } from "../workspace"
 import { reduceAgentLifecycle } from "./agent-lifecycle"
 import { runSessionSubscriptionAttempt } from "./session-subscription"
 
@@ -273,6 +274,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const client = props.client
   const runtime = props.runtime
   const log = props.log
+  const workspace = useWorkspace()
   // Helper to run effects fire-and-forget
   const cast = <A, E>(effect: Effect.Effect<A, E, never>): void => {
     runtime.cast(effect)
@@ -647,7 +649,7 @@ export function ClientProvider(props: ClientProviderProps) {
       log.info("createSession", { requestId })
       dispatchSession({ _tag: "CreateRequested" })
       cast(
-        client.session.create({ requestId }).pipe(
+        client.session.create({ requestId, cwd: workspace.cwd }).pipe(
           Effect.tap((result) =>
             Effect.sync(() => {
               dispatchSession({
@@ -793,9 +795,7 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
   }
-
   const agentValue: ClientAgentValue = {
-    // Agent state
     agent: () => agentStore.agent,
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
