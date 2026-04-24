@@ -155,6 +155,15 @@ const assertFields = (fields: ExtensionFields) => {
   }
 }
 
+const assertPayload = (payload: unknown) => {
+  if ((typeof payload !== "object" && typeof payload !== "function") || payload === null) {
+    return
+  }
+  if ("extensionId" in payload || "_tag" in payload) {
+    throw new Error("extension protocol payload cannot redefine reserved keys: extensionId, _tag")
+  }
+}
+
 const attachMessageMetadata = <M extends object>(
   message: M,
   metadata: ExtensionMessageMetadata,
@@ -215,8 +224,9 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-  const make = ((payload?: PayloadType<F>) =>
-    attachMessageMetadata(
+  const make = ((payload?: PayloadType<F>) => {
+    assertPayload(payload)
+    return attachMessageMetadata(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       {
         extensionId,
@@ -224,7 +234,8 @@ const createCommand = <Id extends string, Tag extends string, F extends Extensio
         ...(payload ?? {}),
       } as ExtensionCommandMessage<Id, Tag, F>,
       metadata,
-    )) as MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
+    )
+  }) as MessageFactory<F, ExtensionCommandMessage<Id, Tag, F>>
 
   const is = (message: AnyExtensionMessage): message is ExtensionCommandMessage<Id, Tag, F> =>
     message.extensionId === extensionId && message._tag === tag
@@ -270,8 +281,9 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
-  const make = ((payload?: PayloadType<F>) =>
-    attachMessageMetadata(
+  const make = ((payload?: PayloadType<F>) => {
+    assertPayload(payload)
+    return attachMessageMetadata(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- protocol adapter narrows schema-checked wire shape
       {
         extensionId,
@@ -279,7 +291,8 @@ const createRequest = <Id extends string, Tag extends string, F extends Extensio
         ...(payload ?? {}),
       } as ExtensionRequestMessage<Id, Tag, F, R>,
       metadata,
-    )) as MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>>
+    )
+  }) as MessageFactory<F, ExtensionRequestMessage<Id, Tag, F, R>>
 
   const is = (message: AnyExtensionMessage): message is ExtensionRequestMessage<Id, Tag, F, R> =>
     message.extensionId === extensionId && message._tag === tag

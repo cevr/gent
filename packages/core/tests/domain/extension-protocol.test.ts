@@ -63,6 +63,29 @@ describe("extension protocol branding", () => {
     ).toThrow("reserved keys")
   })
 
+  test("command payloads cannot spoof envelope fields", () => {
+    const Ping = ExtensionMessage.command("plan", "Ping", { text: Schema.String })
+    const extensionIdPayload = { text: "hello", extensionId: "other-extension" }
+    const tagPayload = { text: "hello", _tag: "OtherMessage" }
+
+    expect(() => Ping.make(extensionIdPayload)).toThrow("reserved keys")
+    expect(() => Ping.make(tagPayload)).toThrow("reserved keys")
+  })
+
+  test("request payloads cannot spoof envelope fields", () => {
+    const GetTask = ExtensionMessage.reply(
+      "@gent/task-tools",
+      "GetTask",
+      { taskId: Schema.String },
+      Schema.Struct({ status: Schema.String }),
+    )
+    const extensionIdPayload = { taskId: "task-1", extensionId: "other-extension" }
+    const tagPayload = { taskId: "task-1", _tag: "OtherMessage" }
+
+    expect(() => GetTask.make(extensionIdPayload)).toThrow("reserved keys")
+    expect(() => GetTask.make(tagPayload)).toThrow("reserved keys")
+  })
+
   test("protocol registration rejects message instances", () => {
     const Ping = ExtensionMessage.command("plan", "Ping", {})
 
