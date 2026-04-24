@@ -13,7 +13,6 @@ bun install
 ```bash
 bun run typecheck  # Must pass clean (no errors, no suggestions)
 bun run test       # Run product behavior tests
-bun run policy     # Run source-scan architecture/policy tests
 ```
 
 ## Code Style

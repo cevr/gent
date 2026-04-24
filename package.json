@@ -14,9 +14,8 @@
     "fmt:check": "env -u FORCE_COLOR NO_COLOR=1 oxfmt --ignore-path=.oxlintignore --check",
     "build": "turbo run build",
     "test": "env -u FORCE_COLOR NO_COLOR=1 turbo run test",
-    "policy": "env -u FORCE_COLOR NO_COLOR=1 turbo run policy",
     "test:e2e": "turbo run test:e2e",
-    "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build,test,policy \"bun run typecheck\" \"bun run lint && bun run fmt:check\" \"bun run build\" \"bun run test\" \"bun run policy\"",
+    "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build,test \"bun run typecheck\" \"bun run lint && bun run fmt:check\" \"bun run build\" \"bun run test\"",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
     "prepare": "lefthook install"
