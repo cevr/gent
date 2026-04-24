@@ -197,10 +197,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
     yield* messageStorage.createMessage(user)
     yield* eventStore.publish(
       MessageReceived.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: user.id,
-        role: "user",
+        message: user,
       }),
     )
   })
@@ -349,19 +346,13 @@ const persistDebugTurn = (
     yield* messageStorage.createMessage(assistant)
     yield* eventStore.publish(
       MessageReceived.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: assistant.id,
-        role: "assistant",
+        message: assistant,
       }),
     )
     yield* messageStorage.createMessage(tool)
     yield* eventStore.publish(
       MessageReceived.make({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: tool.id,
-        role: "tool",
+        message: tool,
       }),
     )
   })

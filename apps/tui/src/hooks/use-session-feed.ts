@@ -11,6 +11,7 @@ import { createStore, produce, type SetStoreFunction } from "solid-js/store"
 import { Effect, Fiber, Stream } from "effect"
 import type { ActiveInteraction, AgentEvent } from "@gent/core/domain/event.js"
 import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import type { Message as DomainMessage } from "@gent/core/domain/message.js"
 import {
   extractText,
   extractReasoning,
@@ -24,7 +25,6 @@ import type { SessionEvent } from "../components/session-event-label"
 import { formatToolInput } from "../components/message-list-utils"
 import { formatConnectionIssue } from "../utils/format-error"
 import { runWithReconnect } from "../utils/run-with-reconnect"
-import { backfillBranchMessages } from "./use-session-feed-boundary"
 import type { ClientSessionValue, ClientTransportValue } from "../client/context"
 
 // ── Types ──
@@ -126,6 +126,40 @@ const buildMessages = (msgs: readonly MessageInfoReadonly[]): Message[] => {
       ? { ...message, _tag: "interjection-message", role: "user" }
       : { ...message, _tag: "regular-message" }
   })
+}
+
+const domainMessageToInfo = (message: DomainMessage): MessageInfoReadonly => {
+  const fields = {
+    id: message.id,
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    role: message.role,
+    parts: message.parts,
+    createdAt: message.createdAt.getTime(),
+    turnDurationMs: message.turnDurationMs,
+    metadata: message.metadata,
+  }
+  return message._tag === "interjection"
+    ? { ...fields, _tag: "interjection", role: "user" }
+    : { ...fields, _tag: "regular" }
+}
+
+const upsertReceivedMessage = (
+  setStore: SetStoreFunction<SessionFeedStore>,
+  message: DomainMessage,
+) => {
+  const next = buildMessages([domainMessageToInfo(message)])[0]
+  if (next === undefined) return
+  setStore(
+    produce((draft) => {
+      const index = draft.messages.findIndex((candidate) => candidate.id === next.id)
+      if (index === -1) {
+        draft.messages.push(next)
+        return
+      }
+      draft.messages[index] = next
+    }),
+  )
 }
 
 const createAssistantMessage = (content: string): Message => ({
@@ -459,14 +493,8 @@ export function useSessionFeed(
 
     switch (event._tag) {
       case "MessageReceived":
-        // User messages from other sources (interjections, multi-client) need fetching
-        if (event.role === "user") {
-          backfillBranchMessages({
-            client: client.client,
-            branchId: event.branchId,
-            isCurrent: () => currentKey === key,
-            apply: (msgs) => setStore("messages", buildMessages(msgs)),
-          })
+        if (event.message.role === "user") {
+          upsertReceivedMessage(setStore, event.message)
         }
         break
 

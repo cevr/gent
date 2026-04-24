@@ -2,7 +2,13 @@ import type { PlatformError } from "effect"
 import { createHash } from "node:crypto"
 import { Clock, Context, Effect, Layer, Option, Schema, FileSystem, Path } from "effect"
 import { Message, Session, Branch, MessagePart, MessageMetadata } from "../domain/message.js"
-import { AgentEvent, EventEnvelope, EventId, getEventSessionId } from "../domain/event.js"
+import {
+  AgentEvent,
+  EventEnvelope,
+  EventId,
+  getEventBranchId,
+  getEventSessionId,
+} from "../domain/event.js"
 import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { ReasoningEffort } from "../domain/agent.js"
 import { isRecord } from "../domain/guards.js"
@@ -27,7 +33,10 @@ const MessagePartJson = Schema.fromJsonString(MessagePart)
 const decodeMessagePart = Schema.decodeUnknownEffect(MessagePartJson)
 const encodeMessagePart = Schema.encodeEffect(MessagePartJson)
 const EventJson = Schema.fromJsonString(Schema.Unknown)
-const encodeEvent = Schema.encodeEffect(EventJson)
+const decodeEventJson = Schema.decodeUnknownEffect(EventJson)
+const encodeEventJson = Schema.encodeEffect(EventJson)
+const encodeEvent = (event: AgentEvent) =>
+  Schema.encodeEffect(AgentEvent)(event).pipe(Effect.flatMap(encodeEventJson))
 const MessageMetadataJson = Schema.fromJsonString(MessageMetadata)
 const decodeMessageMetadata = Schema.decodeUnknownOption(MessageMetadataJson)
 const encodeMessageMetadata = Schema.encodeSync(MessageMetadataJson)
@@ -54,7 +63,7 @@ const normalizeLegacyAgentEvent = (value: unknown): unknown => {
 }
 
 const decodeEvent = (json: string) =>
-  Schema.decodeUnknownEffect(EventJson)(json).pipe(
+  decodeEventJson(json).pipe(
     Effect.map(normalizeLegacyAgentEvent),
     Effect.flatMap(Schema.decodeUnknownEffect(AgentEvent)),
   )
@@ -402,6 +411,55 @@ const backfillMessageContentChunks = Effect.fn("Storage.backfillMessageContentCh
   },
 )
 
+const backfillMessageReceivedEvents = Effect.fn("Storage.backfillMessageReceivedEvents")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{
+      id: number
+      event_json: string
+    }>`SELECT id, event_json FROM events WHERE event_tag = ${"MessageReceived"}`
+
+    yield* Effect.forEach(
+      rows,
+      (row) =>
+        Effect.gen(function* () {
+          const decoded = yield* decodeEventJson(row.event_json).pipe(Effect.option)
+          if (decoded._tag === "None") return
+          const event = normalizeLegacyAgentEvent(decoded.value)
+          if (!isRecord(event)) return
+          if (event["_tag"] !== "MessageReceived") return
+          if ("message" in event) return
+          const messageId = event["messageId"]
+          if (typeof messageId !== "string") return
+
+          const messageRows = yield* sql<MessageChunkRow>`SELECT
+              m.id,
+              m.session_id,
+              m.branch_id,
+              m.kind,
+              m.role,
+              m.parts,
+              m.created_at,
+              m.turn_duration_ms,
+              m.metadata,
+              mc.ordinal as chunk_ordinal,
+              c.part_json as chunk_part_json
+            FROM messages m
+            LEFT JOIN message_chunks mc ON mc.message_id = m.id
+            LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+            WHERE m.id = ${messageId}
+            ORDER BY mc.ordinal ASC`
+          const entry = groupMessageChunkRows(messageRows)[0]
+          if (entry === undefined) return
+          const message = yield* decodeStoredMessage(entry.row, entry.partJsons)
+          const eventJson = yield* encodeEvent(AgentEvent.cases.MessageReceived.make({ message }))
+          yield* sql`UPDATE events SET event_json = ${eventJson}, branch_id = ${message.branchId} WHERE id = ${row.id}`
+        }),
+      { discard: true },
+    )
+  },
+)
+
 const backfillMessageSearchIndex = Effect.fn("Storage.backfillMessageSearchIndex")(function* () {
   const sql = yield* SqlClient.SqlClient
   const rows = yield* sql<MessageChunkRow>`SELECT
@@ -523,6 +581,7 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`ALTER TABLE events ADD COLUMN trace_id TEXT`).pipe(Effect.ignoreCause)
+  yield* backfillMessageReceivedEvents()
 
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS actor_inbox (
@@ -942,7 +1001,7 @@ const makeStorage = Effect.gen(function* () {
         if (sessionId === undefined) {
           return yield* new StorageError({ message: "Event missing sessionId" })
         }
-        const branchId = "branchId" in event ? (event.branchId as string | undefined) : undefined
+        const branchId = getEventBranchId(event)
         const createdAt = yield* Clock.currentTimeMillis
         const traceId = options?.traceId
         const eventJson = yield* encodeEvent(event)

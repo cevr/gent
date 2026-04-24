@@ -356,7 +356,7 @@ const makePublisherFailingFirstMatchingDelivery = (
         Effect.gen(function* () {
           const event = envelope.event
           delivered.push(
-            event._tag === "MessageReceived" ? `${event._tag}:${event.role}` : event._tag,
+            event._tag === "MessageReceived" ? `${event._tag}:${event.message.role}` : event._tag,
           )
           if (!failed && matches(event)) {
             failed = true
@@ -745,7 +745,7 @@ describe("streaming", () => {
     ])
     const failingPublisherLayer = Layer.succeed(EventPublisher, {
       append: (event: AgentEvent) =>
-        event._tag === "MessageReceived" && event.role === "assistant"
+        event._tag === "MessageReceived" && event.message.role === "assistant"
           ? Effect.fail(new EventStoreError({ message: "append failed" }))
           : Effect.succeed(
               EventEnvelope.make({ id: EventId.make(0), event, createdAt: Date.now() }),
@@ -807,7 +807,7 @@ describe("streaming", () => {
     ])
     const delivered: string[] = []
     const failingPublisherLayer = makePublisherFailingFirstMatchingDelivery(
-      (event) => event._tag === "MessageReceived" && event.role === "user",
+      (event) => event._tag === "MessageReceived" && event.message.role === "user",
       delivered,
     )
 
@@ -831,7 +831,7 @@ describe("streaming", () => {
         })
         const userReceived = events.filter(
           (envelope) =>
-            envelope.event._tag === "MessageReceived" && envelope.event.messageId === message.id,
+            envelope.event._tag === "MessageReceived" && envelope.event.message.id === message.id,
         )
 
         expect(firstExit._tag).toBe("Failure")

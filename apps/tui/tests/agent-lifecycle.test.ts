@@ -7,7 +7,18 @@ import {
   StreamStarted,
   TurnCompleted,
 } from "@gent/core/domain/event"
+import { Message } from "@gent/core/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
+
+const makeMessage = (role: "user" | "assistant") =>
+  Message.cases.regular.make({
+    id: "m1",
+    sessionId: "s1",
+    branchId: "b1",
+    role,
+    parts: [],
+    createdAt: new Date(0),
+  })
 
 describe("reduceAgentLifecycle", () => {
   test("marks a turn as streaming when the stream starts", () => {
@@ -21,10 +32,7 @@ describe("reduceAgentLifecycle", () => {
   test("keeps streaming until TurnCompleted", () => {
     const streamEnded = StreamEnded.make({ sessionId: "s1", branchId: "b1" })
     const assistantMessage = MessageReceived.make({
-      sessionId: "s1",
-      branchId: "b1",
-      messageId: "m1",
-      role: "assistant",
+      message: makeMessage("assistant"),
     })
     const turnCompleted = TurnCompleted.make({
       sessionId: "s1",
@@ -41,10 +49,7 @@ describe("reduceAgentLifecycle", () => {
 
   test("uses user messages to enter streaming immediately", () => {
     const userMessage = MessageReceived.make({
-      sessionId: "s1",
-      branchId: "b1",
-      messageId: "m1",
-      role: "user",
+      message: makeMessage("user"),
     })
 
     expect(reduceAgentLifecycle(userMessage)).toEqual({

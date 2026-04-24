@@ -591,6 +591,123 @@ describe("Storage", () => {
       }
     })
 
+    test("backfills legacy MessageReceived events from stored message variants on startup", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "gent-message-received-events-"))
+      const dbPath = join(dir, "gent.db")
+      try {
+        const db = new Database(dbPath)
+        db.run(`
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            cwd TEXT,
+            bypass INTEGER,
+            reasoning_level TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE branches (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            parent_branch_id TEXT,
+            parent_message_id TEXT,
+            name TEXT,
+            created_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`
+          CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT NOT NULL,
+            kind TEXT,
+            role TEXT NOT NULL,
+            parts TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            turn_duration_ms INTEGER
+          )
+        `)
+        db.run(`
+          CREATE TABLE events (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            branch_id TEXT,
+            event_tag TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        `)
+        db.run(`INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`, [
+          "legacy-event-s",
+          "legacy-event",
+          0,
+          0,
+        ])
+        db.run(`INSERT INTO branches (id, session_id, name, created_at) VALUES (?, ?, ?, ?)`, [
+          "legacy-event-b",
+          "legacy-event-s",
+          "main",
+          0,
+        ])
+        db.run(
+          `INSERT INTO messages (id, session_id, branch_id, kind, role, parts, created_at, turn_duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "legacy-event-m",
+            "legacy-event-s",
+            "legacy-event-b",
+            "interjection",
+            "user",
+            JSON.stringify([{ type: "text", text: "interrupt" }]),
+            1000,
+            null,
+          ],
+        )
+        db.run(
+          `INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+          [
+            "legacy-event-s",
+            null,
+            "MessageReceived",
+            JSON.stringify({
+              _tag: "MessageReceived",
+              sessionId: "legacy-event-s",
+              branchId: "legacy-event-b",
+              messageId: "legacy-event-m",
+              role: "user",
+            }),
+            1001,
+          ],
+        )
+        db.close()
+
+        const layer = Storage.LiveWithSql(dbPath).pipe(
+          Layer.provide(BunFileSystem.layer),
+          Layer.provide(BunServices.layer),
+        )
+
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const storage = yield* Storage
+            const events = yield* storage.listEvents({
+              sessionId: SessionId.make("legacy-event-s"),
+              branchId: BranchId.make("legacy-event-b"),
+            })
+
+            expect(events).toHaveLength(1)
+            const event = events[0]?.event
+            expect(event?._tag).toBe("MessageReceived")
+            if (event?._tag !== "MessageReceived") return
+            expect(event.message._tag).toBe("interjection")
+            expect(event.message.id).toBe("legacy-event-m")
+          }).pipe(Effect.provide(layer)),
+        )
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
     it.live("counts messages in a branch", () =>
       Effect.gen(function* () {
         const storage = yield* Storage

@@ -26,7 +26,7 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
       return { preferredAgent: event.toAgent }
 
     case "MessageReceived":
-      if (event.role === "user") return { status: { _tag: "streaming" } }
+      if (event.message.role === "user") return { status: { _tag: "streaming" } }
       return {}
 
     default:

@@ -204,7 +204,6 @@ const persistMessageReceived = (params: {
   storage: StorageService
   eventPublisher: Pick<EventPublisherService, "append" | "deliver">
   message: Message
-  role: Message["role"]
 }) =>
   commitWithEvent({
     storage: params.storage,
@@ -218,7 +217,7 @@ const persistMessageReceived = (params: {
           branchId: params.message.branchId,
           match: (candidate) =>
             candidate.event._tag === "MessageReceived" &&
-            candidate.event.messageId === params.message.id,
+            candidate.event.message.id === params.message.id,
         })
         return {
           _tag: "unchanged" as const,
@@ -230,10 +229,7 @@ const persistMessageReceived = (params: {
       yield* params.storage.createMessageIfAbsent(params.message)
       const envelope = yield* params.eventPublisher.append(
         MessageReceived.make({
-          sessionId: params.message.sessionId,
-          branchId: params.message.branchId,
-          messageId: params.message.id,
-          role: params.role,
+          message: params.message,
         }),
       )
       return { _tag: "changed" as const, result: params.message, envelope }
@@ -399,7 +395,6 @@ const persistMessageParts = (params: {
       storage: params.storage,
       eventPublisher: params.eventPublisher,
       message,
-      role: params.role,
     })
   })
 
@@ -1012,7 +1007,6 @@ const resolveTurnPhase = (params: {
       storage: params.storage,
       eventPublisher: params.eventPublisher,
       message: params.message,
-      role: "user",
     })
 
     const resolved = yield* resolveTurnContext(params)
@@ -3042,7 +3036,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               storage,
               eventPublisher,
               message: userMessage,
-              role: "user",
             }).pipe(
               Effect.mapError(
                 (cause) =>

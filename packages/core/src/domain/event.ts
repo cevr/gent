@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect"
 
+import { Message } from "./message"
 import { branded, BranchId, MessageId, SessionId, TaskId, ToolCallId } from "./ids"
 import { ReasoningEffort } from "./agent"
 import { TaggedEnumClass } from "./schema-tagged-enum-class"
@@ -67,10 +68,7 @@ export const AgentEvent = TaggedEnumClass("AgentEvent", {
     branchId: BranchId,
   },
   MessageReceived: {
-    sessionId: SessionId,
-    branchId: BranchId,
-    messageId: MessageId,
-    role: Schema.Literals(["user", "assistant", "system", "tool"]),
+    message: Message,
   },
   StreamStarted: {
     sessionId: SessionId,
@@ -437,12 +435,14 @@ export interface EventStoreService {
 }
 
 export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
+  if (event._tag === "MessageReceived") return event.message.sessionId
   if ("sessionId" in event) return SessionId.make(event.sessionId)
   if ("parentSessionId" in event) return SessionId.make(event.parentSessionId)
   return undefined
 }
 
 export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
+  if (event._tag === "MessageReceived") return event.message.branchId
   if ("branchId" in event) return event.branchId as BranchId | undefined
   return undefined
 }
@@ -460,8 +460,7 @@ export const matchesEventFilter = (
 /** Branch-only filter — use when session is already known to match. */
 const matchesBranchFilter = (env: EventEnvelope, branchId?: BranchId): boolean => {
   if (branchId === undefined) return true
-  const eventBranchId =
-    "branchId" in env.event ? (env.event.branchId as BranchId | undefined) : undefined
+  const eventBranchId = getEventBranchId(env.event)
   return eventBranchId === branchId || eventBranchId === undefined
 }
 
