@@ -1,5 +1,8 @@
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   ExtensionLoadError,
   type GentExtension,
@@ -28,6 +31,7 @@ import { defineResource } from "@gent/core/domain/resource"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
 import { reducerActor } from "../extensions/helpers/reducer-actor"
+import { ConfigService } from "../../src/runtime/config-service"
 
 class ProfileToken extends Context.Service<
   ProfileToken,
@@ -486,6 +490,78 @@ describe("extension command RPCs", () => {
         }),
       ),
     )
+  })
+
+  test("RPC request resolves resources from SessionProfileCache.Live", async () => {
+    const home = mkdtempSync(join(tmpdir(), "gent-live-profile-home-"))
+    const profileCwd = mkdtempSync(join(tmpdir(), "gent-live-profile-cwd-"))
+    const ext: GentExtension = {
+      manifest: { id: "@test/live-profile-service-request" },
+      setup: (ctx) =>
+        Effect.succeed({
+          resources: [
+            defineResource({
+              tag: ProfileToken,
+              scope: "process",
+              layer: Layer.succeed(ProfileToken, {
+                read: () => Effect.succeed(`live:${ctx.cwd}`),
+              }),
+            }),
+          ],
+          capabilities: [
+            {
+              id: "read-live-profile-token",
+              audiences: ["transport-public"],
+              intent: "read",
+              input: Schema.String,
+              output: Schema.String,
+              effect: () =>
+                Effect.gen(function* () {
+                  const token = yield* ProfileToken
+                  return yield* token.read()
+                }),
+            },
+          ],
+        }),
+    }
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sessionProfileCacheLayer = SessionProfileCache.Live({
+              home,
+              platform: "test",
+              extensions: [ext],
+            }).pipe(Layer.provide(Layer.merge(BunServices.layer, ConfigService.Test())))
+            const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+            const { client } = yield* Gent.test(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer,
+                extensions: [],
+                sessionProfileCacheLayer,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+
+            const result = yield* client.extension.request({
+              sessionId,
+              extensionId: "@test/live-profile-service-request",
+              capabilityId: "read-live-profile-token",
+              intent: "read",
+              input: "token",
+              branchId,
+            })
+
+            expect(result).toBe(`live:${profileCwd}`)
+          }),
+        ),
+      )
+    } finally {
+      rmSync(profileCwd, { recursive: true, force: true })
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   test("RPC listStatus returns structurally tagged extension health", async () => {

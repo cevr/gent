@@ -990,6 +990,45 @@ describe("session.delete", () => {
     ),
   )
 
+  it.live("closes descendant event streams and removes descendants on public delete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* makeClient()
+        const parent = yield* client.session.create({ cwd: process.cwd() })
+        const child = yield* client.session.create({
+          cwd: process.cwd(),
+          parentSessionId: parent.sessionId,
+          parentBranchId: parent.branchId,
+        })
+        const grandchild = yield* client.session.create({
+          cwd: process.cwd(),
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+        })
+
+        const parentClosed = yield* collectSessionEvents(
+          client.session.events({ sessionId: parent.sessionId }),
+        )
+        const childClosed = yield* collectSessionEvents(
+          client.session.events({ sessionId: child.sessionId }),
+        )
+        const grandchildClosed = yield* collectSessionEvents(
+          client.session.events({ sessionId: grandchild.sessionId }),
+        )
+
+        yield* client.session.delete({ sessionId: parent.sessionId })
+
+        yield* Deferred.await(parentClosed).pipe(Effect.timeout("5 seconds"))
+        yield* Deferred.await(childClosed).pipe(Effect.timeout("5 seconds"))
+        yield* Deferred.await(grandchildClosed).pipe(Effect.timeout("5 seconds"))
+
+        expect(yield* client.session.get({ sessionId: parent.sessionId })).toBeNull()
+        expect(yield* client.session.get({ sessionId: child.sessionId })).toBeNull()
+        expect(yield* client.session.get({ sessionId: grandchild.sessionId })).toBeNull()
+      }),
+    ),
+  )
+
   it.live("closes runtime streams and interrupts active loops on public delete", () =>
     Effect.scoped(
       Effect.gen(function* () {
