@@ -1,6 +1,17 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Scope, Semaphore } from "effect"
-import { RpcClient } from "effect/unstable/rpc"
-import { GentRpcs, type GentRpcClient } from "@gent/core/server/rpcs.js"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Queue,
+  Ref,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect"
+import type { GentRpcClient } from "@gent/core/server/rpcs.js"
 import {
   GentConnectionError,
   type ConnectionState,
@@ -10,6 +21,25 @@ import { makeNamespacedClient, type GentNamespacedClient } from "./namespaced-cl
 import { runSupervisorRestart } from "./supervisor-boundary.js"
 
 type BuildLocalRpcClient<E, R> = (scope: Scope.Closeable) => Effect.Effect<GentRpcClient, E, R>
+type StreamOptions = {
+  readonly asQueue?: boolean | undefined
+  readonly streamBufferSize?: number | undefined
+}
+type StreamSuccess<T> = T extends Stream.Stream<infer A, infer _E, infer _R> ? A : never
+type StreamFailure<T> = T extends Stream.Stream<infer _A, infer E, infer _R> ? E : never
+type StreamRequirements<T> = T extends Stream.Stream<infer _A, infer _E, infer R> ? R : never
+type SessionEventsInput = Parameters<GentRpcClient["session.events"]>[0]
+type SessionEventsOptions = Parameters<GentRpcClient["session.events"]>[1]
+type SessionEventsStream = ReturnType<GentRpcClient["session.events"]>
+type SessionEventsSuccess = StreamSuccess<SessionEventsStream>
+type SessionEventsFailure = StreamFailure<SessionEventsStream>
+type SessionEventsRequirements = StreamRequirements<SessionEventsStream>
+type WatchRuntimeInput = Parameters<GentRpcClient["session.watchRuntime"]>[0]
+type WatchRuntimeOptions = Parameters<GentRpcClient["session.watchRuntime"]>[1]
+type WatchRuntimeStream = ReturnType<GentRpcClient["session.watchRuntime"]>
+type WatchRuntimeSuccess = StreamSuccess<WatchRuntimeStream>
+type WatchRuntimeFailure = StreamFailure<WatchRuntimeStream>
+type WatchRuntimeRequirements = StreamRequirements<WatchRuntimeStream>
 
 interface LocalSupervisor {
   readonly client: GentNamespacedClient
@@ -30,70 +60,161 @@ const unavailableError = (stateRef: Ref.Ref<ConnectionState>): GentConnectionErr
   return new GentConnectionError({ message: reason })
 }
 
-const makeUnavailableClient = (
-  stateRef: Ref.Ref<ConnectionState>,
-): Effect.Effect<GentRpcClient, never, Scope.Scope> =>
-  RpcClient.makeNoSerialization(GentRpcs, {
-    supportsAck: true,
-    disableTracing: true,
-    onFromClient: () => Effect.fail(unavailableError(stateRef)),
-  }).pipe(Effect.map(({ client }) => client))
+const disconnectedStreamResult = <A, E, R>(
+  options: StreamOptions | undefined,
+  error: GentConnectionError,
+):
+  | Stream.Stream<A, E | GentConnectionError, R>
+  | Effect.Effect<Queue.Dequeue<A, E | GentConnectionError | Cause.Done>, never, Scope.Scope> => {
+  if (options?.asQueue === true) {
+    return Effect.gen(function* () {
+      const queue = yield* Queue.make<A, E | GentConnectionError | Cause.Done>()
+      yield* Queue.fail(queue, error)
+      return Queue.asDequeue(queue)
+    })
+  }
+  return Stream.fail(error)
+}
 
 const makeSwappableClient = (
   clientRef: Ref.Ref<GentRpcClient | undefined>,
-  unavailableClient: GentRpcClient,
+  stateRef: Ref.Ref<ConnectionState>,
 ): GentNamespacedClient => {
-  const current = () => Ref.getUnsafe(clientRef) ?? unavailableClient
+  const current = () => Ref.getUnsafe(clientRef)
+  const disconnected = () => Effect.fail(unavailableError(stateRef))
+
+  function sessionEvents(
+    input: SessionEventsInput,
+    options: SessionEventsOptions & { readonly asQueue: true },
+  ): Effect.Effect<
+    Queue.Dequeue<SessionEventsSuccess, SessionEventsFailure | GentConnectionError | Cause.Done>,
+    never,
+    Scope.Scope
+  >
+  function sessionEvents(
+    input: SessionEventsInput,
+    options?: SessionEventsOptions,
+  ): Stream.Stream<
+    SessionEventsSuccess,
+    SessionEventsFailure | GentConnectionError,
+    SessionEventsRequirements
+  >
+  function sessionEvents(input: SessionEventsInput, options?: SessionEventsOptions) {
+    const client = current()
+    if (client !== undefined) return client["session.events"](input, options)
+    return disconnectedStreamResult<
+      SessionEventsSuccess,
+      SessionEventsFailure,
+      SessionEventsRequirements
+    >(options, unavailableError(stateRef))
+  }
+
+  function watchRuntime(
+    input: WatchRuntimeInput,
+    options: WatchRuntimeOptions & { readonly asQueue: true },
+  ): Effect.Effect<
+    Queue.Dequeue<WatchRuntimeSuccess, WatchRuntimeFailure | GentConnectionError | Cause.Done>,
+    never,
+    Scope.Scope
+  >
+  function watchRuntime(
+    input: WatchRuntimeInput,
+    options?: WatchRuntimeOptions,
+  ): Stream.Stream<
+    WatchRuntimeSuccess,
+    WatchRuntimeFailure | GentConnectionError,
+    WatchRuntimeRequirements
+  >
+  function watchRuntime(input: WatchRuntimeInput, options?: WatchRuntimeOptions) {
+    const client = current()
+    if (client !== undefined) return client["session.watchRuntime"](input, options)
+    return disconnectedStreamResult<
+      WatchRuntimeSuccess,
+      WatchRuntimeFailure,
+      WatchRuntimeRequirements
+    >(options, unavailableError(stateRef))
+  }
 
   const flatClient: GentRpcClient = {
-    "actor.sendUserMessage": (input, options) => current()["actor.sendUserMessage"](input, options),
-    "actor.sendToolResult": (input, options) => current()["actor.sendToolResult"](input, options),
-    "actor.invokeTool": (input, options) => current()["actor.invokeTool"](input, options),
-    "actor.interrupt": (input, options) => current()["actor.interrupt"](input, options),
-    "actor.getState": (input, options) => current()["actor.getState"](input, options),
-    "actor.getMetrics": (input, options) => current()["actor.getMetrics"](input, options),
-    "auth.listProviders": (input, options) => current()["auth.listProviders"](input, options),
-    "auth.setKey": (input, options) => current()["auth.setKey"](input, options),
-    "auth.deleteKey": (input, options) => current()["auth.deleteKey"](input, options),
-    "auth.listMethods": (input, options) => current()["auth.listMethods"](input, options),
-    "auth.authorize": (input, options) => current()["auth.authorize"](input, options),
-    "auth.callback": (input, options) => current()["auth.callback"](input, options),
-    "branch.list": (input, options) => current()["branch.list"](input, options),
-    "branch.create": (input, options) => current()["branch.create"](input, options),
-    "branch.getTree": (input, options) => current()["branch.getTree"](input, options),
-    "branch.switch": (input, options) => current()["branch.switch"](input, options),
-    "branch.fork": (input, options) => current()["branch.fork"](input, options),
-    "driver.list": (input, options) => current()["driver.list"](input, options),
-    "driver.set": (input, options) => current()["driver.set"](input, options),
-    "driver.clear": (input, options) => current()["driver.clear"](input, options),
-    "extension.send": (input, options) => current()["extension.send"](input, options),
-    "extension.ask": (input, options) => current()["extension.ask"](input, options),
-    "extension.request": (input, options) => current()["extension.request"](input, options),
-    "extension.listStatus": (input, options) => current()["extension.listStatus"](input, options),
+    "actor.sendUserMessage": (input, options) =>
+      current()?.["actor.sendUserMessage"](input, options) ?? disconnected(),
+    "actor.sendToolResult": (input, options) =>
+      current()?.["actor.sendToolResult"](input, options) ?? disconnected(),
+    "actor.invokeTool": (input, options) =>
+      current()?.["actor.invokeTool"](input, options) ?? disconnected(),
+    "actor.interrupt": (input, options) =>
+      current()?.["actor.interrupt"](input, options) ?? disconnected(),
+    "actor.getState": (input, options) =>
+      current()?.["actor.getState"](input, options) ?? disconnected(),
+    "actor.getMetrics": (input, options) =>
+      current()?.["actor.getMetrics"](input, options) ?? disconnected(),
+    "auth.listProviders": (input, options) =>
+      current()?.["auth.listProviders"](input, options) ?? disconnected(),
+    "auth.setKey": (input, options) => current()?.["auth.setKey"](input, options) ?? disconnected(),
+    "auth.deleteKey": (input, options) =>
+      current()?.["auth.deleteKey"](input, options) ?? disconnected(),
+    "auth.listMethods": (input, options) =>
+      current()?.["auth.listMethods"](input, options) ?? disconnected(),
+    "auth.authorize": (input, options) =>
+      current()?.["auth.authorize"](input, options) ?? disconnected(),
+    "auth.callback": (input, options) =>
+      current()?.["auth.callback"](input, options) ?? disconnected(),
+    "branch.list": (input, options) => current()?.["branch.list"](input, options) ?? disconnected(),
+    "branch.create": (input, options) =>
+      current()?.["branch.create"](input, options) ?? disconnected(),
+    "branch.getTree": (input, options) =>
+      current()?.["branch.getTree"](input, options) ?? disconnected(),
+    "branch.switch": (input, options) =>
+      current()?.["branch.switch"](input, options) ?? disconnected(),
+    "branch.fork": (input, options) => current()?.["branch.fork"](input, options) ?? disconnected(),
+    "driver.list": (input, options) => current()?.["driver.list"](input, options) ?? disconnected(),
+    "driver.set": (input, options) => current()?.["driver.set"](input, options) ?? disconnected(),
+    "driver.clear": (input, options) =>
+      current()?.["driver.clear"](input, options) ?? disconnected(),
+    "extension.send": (input, options) =>
+      current()?.["extension.send"](input, options) ?? disconnected(),
+    "extension.ask": (input, options) =>
+      current()?.["extension.ask"](input, options) ?? disconnected(),
+    "extension.request": (input, options) =>
+      current()?.["extension.request"](input, options) ?? disconnected(),
+    "extension.listStatus": (input, options) =>
+      current()?.["extension.listStatus"](input, options) ?? disconnected(),
     "extension.listCommands": (input, options) =>
-      current()["extension.listCommands"](input, options),
+      current()?.["extension.listCommands"](input, options) ?? disconnected(),
     "interaction.respondInteraction": (input, options) =>
-      current()["interaction.respondInteraction"](input, options),
-    "message.send": (input, options) => current()["message.send"](input, options),
-    "message.list": (input, options) => current()["message.list"](input, options),
-    "model.list": (input, options) => current()["model.list"](input, options),
-    "permission.listRules": (input, options) => current()["permission.listRules"](input, options),
-    "permission.deleteRule": (input, options) => current()["permission.deleteRule"](input, options),
-    "queue.drain": (input, options) => current()["queue.drain"](input, options),
-    "queue.get": (input, options) => current()["queue.get"](input, options),
-    "server.status": (input, options) => current()["server.status"](input, options),
-    "session.create": (input, options) => current()["session.create"](input, options),
-    "session.list": (input, options) => current()["session.list"](input, options),
-    "session.get": (input, options) => current()["session.get"](input, options),
-    "session.delete": (input, options) => current()["session.delete"](input, options),
-    "session.getChildren": (input, options) => current()["session.getChildren"](input, options),
-    "session.getTree": (input, options) => current()["session.getTree"](input, options),
-    "session.getSnapshot": (input, options) => current()["session.getSnapshot"](input, options),
+      current()?.["interaction.respondInteraction"](input, options) ?? disconnected(),
+    "message.send": (input, options) =>
+      current()?.["message.send"](input, options) ?? disconnected(),
+    "message.list": (input, options) =>
+      current()?.["message.list"](input, options) ?? disconnected(),
+    "model.list": (input, options) => current()?.["model.list"](input, options) ?? disconnected(),
+    "permission.listRules": (input, options) =>
+      current()?.["permission.listRules"](input, options) ?? disconnected(),
+    "permission.deleteRule": (input, options) =>
+      current()?.["permission.deleteRule"](input, options) ?? disconnected(),
+    "queue.drain": (input, options) => current()?.["queue.drain"](input, options) ?? disconnected(),
+    "queue.get": (input, options) => current()?.["queue.get"](input, options) ?? disconnected(),
+    "server.status": (input, options) =>
+      current()?.["server.status"](input, options) ?? disconnected(),
+    "session.create": (input, options) =>
+      current()?.["session.create"](input, options) ?? disconnected(),
+    "session.list": (input, options) =>
+      current()?.["session.list"](input, options) ?? disconnected(),
+    "session.get": (input, options) => current()?.["session.get"](input, options) ?? disconnected(),
+    "session.delete": (input, options) =>
+      current()?.["session.delete"](input, options) ?? disconnected(),
+    "session.getChildren": (input, options) =>
+      current()?.["session.getChildren"](input, options) ?? disconnected(),
+    "session.getTree": (input, options) =>
+      current()?.["session.getTree"](input, options) ?? disconnected(),
+    "session.getSnapshot": (input, options) =>
+      current()?.["session.getSnapshot"](input, options) ?? disconnected(),
     "session.updateReasoningLevel": (input, options) =>
-      current()["session.updateReasoningLevel"](input, options),
-    "session.events": (input, options) => current()["session.events"](input, options),
-    "session.watchRuntime": (input, options) => current()["session.watchRuntime"](input, options),
-    "steer.command": (input, options) => current()["steer.command"](input, options),
+      current()?.["session.updateReasoningLevel"](input, options) ?? disconnected(),
+    "session.events": sessionEvents,
+    "session.watchRuntime": watchRuntime,
+    "steer.command": (input, options) =>
+      current()?.["steer.command"](input, options) ?? disconnected(),
   }
 
   return makeNamespacedClient(flatClient)
@@ -262,10 +383,8 @@ export const startLocalSupervisor = <E, R>(
         )
         .pipe(Effect.catchEager(() => Effect.void))
 
-      const unavailableClient = yield* makeUnavailableClient(stateRef)
-
       return {
-        client: makeSwappableClient(clientRef, unavailableClient),
+        client: makeSwappableClient(clientRef, stateRef),
         lifecycle,
         stop,
       } satisfies LocalSupervisorResource
