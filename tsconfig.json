@@ -13,7 +13,10 @@
     "types": ["bun"],
     "noEmit": true,
     "paths": {
-      "@gent/core/debug/*": ["./packages/core/src/debug/*"],
+      "@gent/core/debug/provider": ["./packages/core/src/debug/provider.ts"],
+      "@gent/core/debug/provider.js": ["./packages/core/src/debug/provider.ts"],
+      "@gent/core/debug/session": ["./packages/core/src/debug/session.ts"],
+      "@gent/core/debug/session.js": ["./packages/core/src/debug/session.ts"],
       "@gent/core/domain/agent": ["./packages/core/src/domain/agent.ts"],
       "@gent/core/domain/agent.js": ["./packages/core/src/domain/agent.ts"],
       "@gent/core/domain/auth-guard": ["./packages/core/src/domain/auth-guard.ts"],
@@ -174,8 +177,33 @@
       "@gent/core/storage/sqlite-storage": ["./packages/core/src/storage/sqlite-storage.ts"],
       "@gent/core/storage/sqlite-storage.js": ["./packages/core/src/storage/sqlite-storage.ts"],
       "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
-      "@gent/core/test-utils/*": ["./packages/core/src/test-utils/*"],
+      "@gent/core/test-utils.js": ["./packages/core/src/test-utils/index.ts"],
+      "@gent/core/test-utils/e2e-layer": ["./packages/core/src/test-utils/e2e-layer.ts"],
+      "@gent/core/test-utils/e2e-layer.js": ["./packages/core/src/test-utils/e2e-layer.ts"],
+      "@gent/core/test-utils/extension-harness": [
+        "./packages/core/src/test-utils/extension-harness.ts"
+      ],
+      "@gent/core/test-utils/extension-harness.js": [
+        "./packages/core/src/test-utils/extension-harness.ts"
+      ],
+      "@gent/core/test-utils/fake-fetch": ["./packages/core/src/test-utils/fake-fetch.ts"],
+      "@gent/core/test-utils/fake-fetch.js": ["./packages/core/src/test-utils/fake-fetch.ts"],
+      "@gent/core/test-utils/fixtures": ["./packages/core/src/test-utils/fixtures.ts"],
+      "@gent/core/test-utils/fixtures.js": ["./packages/core/src/test-utils/fixtures.ts"],
+      "@gent/core/test-utils/in-process-layer": [
+        "./packages/core/src/test-utils/in-process-layer.ts"
+      ],
+      "@gent/core/test-utils/in-process-layer.js": [
+        "./packages/core/src/test-utils/in-process-layer.ts"
+      ],
+      "@gent/core/test-utils/reconciled-extensions": [
+        "./packages/core/src/test-utils/reconciled-extensions.ts"
+      ],
+      "@gent/core/test-utils/reconciled-extensions.js": [
+        "./packages/core/src/test-utils/reconciled-extensions.ts"
+      ],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
       "@gent/extensions/builtin-internal": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/builtin-internal.js": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/builtin-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
@@ -183,7 +211,273 @@
       "@gent/extensions/core-internal.js": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/core-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
       "@gent/extensions/internal/*": ["./packages/extensions/.blocked-internal.ts"],
-      "@gent/extensions/*": ["./packages/extensions/src/*"],
+      "@gent/extensions/acp-agents": ["./packages/extensions/src/acp-agents/index.ts"],
+      "@gent/extensions/acp-agents.js": ["./packages/extensions/src/acp-agents/index.ts"],
+      "@gent/extensions/acp-agents/claude-code-executor": [
+        "./packages/extensions/src/acp-agents/claude-code-executor.ts"
+      ],
+      "@gent/extensions/acp-agents/claude-code-executor.js": [
+        "./packages/extensions/src/acp-agents/claude-code-executor.ts"
+      ],
+      "@gent/extensions/acp-agents/claude-sdk": [
+        "./packages/extensions/src/acp-agents/claude-sdk.ts"
+      ],
+      "@gent/extensions/acp-agents/claude-sdk.js": [
+        "./packages/extensions/src/acp-agents/claude-sdk.ts"
+      ],
+      "@gent/extensions/acp-agents/executor": ["./packages/extensions/src/acp-agents/executor.ts"],
+      "@gent/extensions/acp-agents/executor.js": [
+        "./packages/extensions/src/acp-agents/executor.ts"
+      ],
+      "@gent/extensions/acp-agents/mcp-codemode": [
+        "./packages/extensions/src/acp-agents/mcp-codemode.ts"
+      ],
+      "@gent/extensions/acp-agents/mcp-codemode.js": [
+        "./packages/extensions/src/acp-agents/mcp-codemode.ts"
+      ],
+      "@gent/extensions/acp-agents/protocol": ["./packages/extensions/src/acp-agents/protocol.ts"],
+      "@gent/extensions/acp-agents/protocol.js": [
+        "./packages/extensions/src/acp-agents/protocol.ts"
+      ],
+      "@gent/extensions/acp-agents/schema": ["./packages/extensions/src/acp-agents/schema.ts"],
+      "@gent/extensions/acp-agents/schema.js": ["./packages/extensions/src/acp-agents/schema.ts"],
+      "@gent/extensions/acp-agents/transcript": [
+        "./packages/extensions/src/acp-agents/transcript.ts"
+      ],
+      "@gent/extensions/acp-agents/transcript.js": [
+        "./packages/extensions/src/acp-agents/transcript.ts"
+      ],
+      "@gent/extensions/all-agents": ["./packages/extensions/src/all-agents.ts"],
+      "@gent/extensions/all-agents.js": ["./packages/extensions/src/all-agents.ts"],
+      "@gent/extensions/anthropic": ["./packages/extensions/src/anthropic/index.ts"],
+      "@gent/extensions/anthropic.js": ["./packages/extensions/src/anthropic/index.ts"],
+      "@gent/extensions/anthropic/beta-cache": [
+        "./packages/extensions/src/anthropic/beta-cache.ts"
+      ],
+      "@gent/extensions/anthropic/beta-cache.js": [
+        "./packages/extensions/src/anthropic/beta-cache.ts"
+      ],
+      "@gent/extensions/anthropic/credential-service": [
+        "./packages/extensions/src/anthropic/credential-service.ts"
+      ],
+      "@gent/extensions/anthropic/credential-service.js": [
+        "./packages/extensions/src/anthropic/credential-service.ts"
+      ],
+      "@gent/extensions/anthropic/keychain-client": [
+        "./packages/extensions/src/anthropic/keychain-client.ts"
+      ],
+      "@gent/extensions/anthropic/keychain-client.js": [
+        "./packages/extensions/src/anthropic/keychain-client.ts"
+      ],
+      "@gent/extensions/anthropic/keychain-transform": [
+        "./packages/extensions/src/anthropic/keychain-transform.ts"
+      ],
+      "@gent/extensions/anthropic/keychain-transform.js": [
+        "./packages/extensions/src/anthropic/keychain-transform.ts"
+      ],
+      "@gent/extensions/anthropic/model-config": [
+        "./packages/extensions/src/anthropic/model-config.ts"
+      ],
+      "@gent/extensions/anthropic/model-config.js": [
+        "./packages/extensions/src/anthropic/model-config.ts"
+      ],
+      "@gent/extensions/anthropic/oauth": ["./packages/extensions/src/anthropic/oauth.ts"],
+      "@gent/extensions/anthropic/oauth.js": ["./packages/extensions/src/anthropic/oauth.ts"],
+      "@gent/extensions/anthropic/signing": ["./packages/extensions/src/anthropic/signing.ts"],
+      "@gent/extensions/anthropic/signing.js": ["./packages/extensions/src/anthropic/signing.ts"],
+      "@gent/extensions/artifacts-protocol": ["./packages/extensions/src/artifacts-protocol.ts"],
+      "@gent/extensions/artifacts-protocol.js": ["./packages/extensions/src/artifacts-protocol.ts"],
+      "@gent/extensions/audit/audit-tool": ["./packages/extensions/src/audit/audit-tool.ts"],
+      "@gent/extensions/audit/audit-tool.js": ["./packages/extensions/src/audit/audit-tool.ts"],
+      "@gent/extensions/auto": ["./packages/extensions/src/auto.ts"],
+      "@gent/extensions/auto.js": ["./packages/extensions/src/auto.ts"],
+      "@gent/extensions/auto-journal": ["./packages/extensions/src/auto-journal.ts"],
+      "@gent/extensions/auto-journal.js": ["./packages/extensions/src/auto-journal.ts"],
+      "@gent/extensions/auto-projection": ["./packages/extensions/src/auto-projection.ts"],
+      "@gent/extensions/auto-projection.js": ["./packages/extensions/src/auto-projection.ts"],
+      "@gent/extensions/auto-protocol": ["./packages/extensions/src/auto-protocol.ts"],
+      "@gent/extensions/auto-protocol.js": ["./packages/extensions/src/auto-protocol.ts"],
+      "@gent/extensions/counsel/counsel-tool": [
+        "./packages/extensions/src/counsel/counsel-tool.ts"
+      ],
+      "@gent/extensions/counsel/counsel-tool.js": [
+        "./packages/extensions/src/counsel/counsel-tool.ts"
+      ],
+      "@gent/extensions/delegate/delegate-tool": [
+        "./packages/extensions/src/delegate/delegate-tool.ts"
+      ],
+      "@gent/extensions/delegate/delegate-tool.js": [
+        "./packages/extensions/src/delegate/delegate-tool.ts"
+      ],
+      "@gent/extensions/exec-tools/bash": ["./packages/extensions/src/exec-tools/bash.ts"],
+      "@gent/extensions/exec-tools/bash.js": ["./packages/extensions/src/exec-tools/bash.ts"],
+      "@gent/extensions/exec-tools/protocol": ["./packages/extensions/src/exec-tools/protocol.ts"],
+      "@gent/extensions/exec-tools/protocol.js": [
+        "./packages/extensions/src/exec-tools/protocol.ts"
+      ],
+      "@gent/extensions/executor/actor": ["./packages/extensions/src/executor/actor.ts"],
+      "@gent/extensions/executor/actor.js": ["./packages/extensions/src/executor/actor.ts"],
+      "@gent/extensions/executor/domain": ["./packages/extensions/src/executor/domain.ts"],
+      "@gent/extensions/executor/domain.js": ["./packages/extensions/src/executor/domain.ts"],
+      "@gent/extensions/executor/mcp-bridge": ["./packages/extensions/src/executor/mcp-bridge.ts"],
+      "@gent/extensions/executor/mcp-bridge.js": [
+        "./packages/extensions/src/executor/mcp-bridge.ts"
+      ],
+      "@gent/extensions/executor/projection": ["./packages/extensions/src/executor/projection.ts"],
+      "@gent/extensions/executor/projection.js": [
+        "./packages/extensions/src/executor/projection.ts"
+      ],
+      "@gent/extensions/executor/protocol": ["./packages/extensions/src/executor/protocol.ts"],
+      "@gent/extensions/executor/protocol.js": ["./packages/extensions/src/executor/protocol.ts"],
+      "@gent/extensions/executor/sidecar": ["./packages/extensions/src/executor/sidecar.ts"],
+      "@gent/extensions/executor/sidecar.js": ["./packages/extensions/src/executor/sidecar.ts"],
+      "@gent/extensions/executor/tools": ["./packages/extensions/src/executor/tools.ts"],
+      "@gent/extensions/executor/tools.js": ["./packages/extensions/src/executor/tools.ts"],
+      "@gent/extensions/fs-tools/edit": ["./packages/extensions/src/fs-tools/edit.ts"],
+      "@gent/extensions/fs-tools/edit.js": ["./packages/extensions/src/fs-tools/edit.ts"],
+      "@gent/extensions/fs-tools/glob": ["./packages/extensions/src/fs-tools/glob.ts"],
+      "@gent/extensions/fs-tools/glob.js": ["./packages/extensions/src/fs-tools/glob.ts"],
+      "@gent/extensions/fs-tools/grep": ["./packages/extensions/src/fs-tools/grep.ts"],
+      "@gent/extensions/fs-tools/grep.js": ["./packages/extensions/src/fs-tools/grep.ts"],
+      "@gent/extensions/fs-tools/read": ["./packages/extensions/src/fs-tools/read.ts"],
+      "@gent/extensions/fs-tools/read.js": ["./packages/extensions/src/fs-tools/read.ts"],
+      "@gent/extensions/handoff": ["./packages/extensions/src/handoff.ts"],
+      "@gent/extensions/handoff.js": ["./packages/extensions/src/handoff.ts"],
+      "@gent/extensions/handoff-protocol": ["./packages/extensions/src/handoff-protocol.ts"],
+      "@gent/extensions/handoff-protocol.js": ["./packages/extensions/src/handoff-protocol.ts"],
+      "@gent/extensions/handoff-tool": ["./packages/extensions/src/handoff-tool.ts"],
+      "@gent/extensions/handoff-tool.js": ["./packages/extensions/src/handoff-tool.ts"],
+      "@gent/extensions/index": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/interaction-tools/ask-user": [
+        "./packages/extensions/src/interaction-tools/ask-user.ts"
+      ],
+      "@gent/extensions/interaction-tools/ask-user.js": [
+        "./packages/extensions/src/interaction-tools/ask-user.ts"
+      ],
+      "@gent/extensions/interaction-tools/projection": [
+        "./packages/extensions/src/interaction-tools/projection.ts"
+      ],
+      "@gent/extensions/interaction-tools/projection.js": [
+        "./packages/extensions/src/interaction-tools/projection.ts"
+      ],
+      "@gent/extensions/interaction-tools/prompt": [
+        "./packages/extensions/src/interaction-tools/prompt.ts"
+      ],
+      "@gent/extensions/interaction-tools/prompt.js": [
+        "./packages/extensions/src/interaction-tools/prompt.ts"
+      ],
+      "@gent/extensions/librarian/git-reader": [
+        "./packages/extensions/src/librarian/git-reader.ts"
+      ],
+      "@gent/extensions/librarian/git-reader.js": [
+        "./packages/extensions/src/librarian/git-reader.ts"
+      ],
+      "@gent/extensions/memory": ["./packages/extensions/src/memory/index.ts"],
+      "@gent/extensions/memory.js": ["./packages/extensions/src/memory/index.ts"],
+      "@gent/extensions/memory/projection": ["./packages/extensions/src/memory/projection.ts"],
+      "@gent/extensions/memory/projection.js": ["./packages/extensions/src/memory/projection.ts"],
+      "@gent/extensions/memory/state": ["./packages/extensions/src/memory/state.ts"],
+      "@gent/extensions/memory/state.js": ["./packages/extensions/src/memory/state.ts"],
+      "@gent/extensions/memory/tools": ["./packages/extensions/src/memory/tools.ts"],
+      "@gent/extensions/memory/tools.js": ["./packages/extensions/src/memory/tools.ts"],
+      "@gent/extensions/memory/vault": ["./packages/extensions/src/memory/vault.ts"],
+      "@gent/extensions/memory/vault.js": ["./packages/extensions/src/memory/vault.ts"],
+      "@gent/extensions/openai": ["./packages/extensions/src/openai/index.ts"],
+      "@gent/extensions/openai.js": ["./packages/extensions/src/openai/index.ts"],
+      "@gent/extensions/openai/codex-transform": [
+        "./packages/extensions/src/openai/codex-transform.ts"
+      ],
+      "@gent/extensions/openai/codex-transform.js": [
+        "./packages/extensions/src/openai/codex-transform.ts"
+      ],
+      "@gent/extensions/openai/credential-service": [
+        "./packages/extensions/src/openai/credential-service.ts"
+      ],
+      "@gent/extensions/openai/credential-service.js": [
+        "./packages/extensions/src/openai/credential-service.ts"
+      ],
+      "@gent/extensions/plan": ["./packages/extensions/src/plan.ts"],
+      "@gent/extensions/plan.js": ["./packages/extensions/src/plan.ts"],
+      "@gent/extensions/plan-tool": ["./packages/extensions/src/plan-tool.ts"],
+      "@gent/extensions/plan-tool.js": ["./packages/extensions/src/plan-tool.ts"],
+      "@gent/extensions/research/research-tool": [
+        "./packages/extensions/src/research/research-tool.ts"
+      ],
+      "@gent/extensions/research/research-tool.js": [
+        "./packages/extensions/src/research/research-tool.ts"
+      ],
+      "@gent/extensions/review/review-tool": ["./packages/extensions/src/review/review-tool.ts"],
+      "@gent/extensions/review/review-tool.js": ["./packages/extensions/src/review/review-tool.ts"],
+      "@gent/extensions/session-tools": ["./packages/extensions/src/session-tools/index.ts"],
+      "@gent/extensions/session-tools.js": ["./packages/extensions/src/session-tools/index.ts"],
+      "@gent/extensions/session-tools/read-session": [
+        "./packages/extensions/src/session-tools/read-session.ts"
+      ],
+      "@gent/extensions/session-tools/read-session.js": [
+        "./packages/extensions/src/session-tools/read-session.ts"
+      ],
+      "@gent/extensions/session-tools/search-sessions": [
+        "./packages/extensions/src/session-tools/search-sessions.ts"
+      ],
+      "@gent/extensions/session-tools/search-sessions.js": [
+        "./packages/extensions/src/session-tools/search-sessions.ts"
+      ],
+      "@gent/extensions/skills": ["./packages/extensions/src/skills/index.ts"],
+      "@gent/extensions/skills.js": ["./packages/extensions/src/skills/index.ts"],
+      "@gent/extensions/skills/protocol": ["./packages/extensions/src/skills/protocol.ts"],
+      "@gent/extensions/skills/protocol.js": ["./packages/extensions/src/skills/protocol.ts"],
+      "@gent/extensions/skills/search-skills": [
+        "./packages/extensions/src/skills/search-skills.ts"
+      ],
+      "@gent/extensions/skills/search-skills.js": [
+        "./packages/extensions/src/skills/search-skills.ts"
+      ],
+      "@gent/extensions/skills/skills": ["./packages/extensions/src/skills/skills.ts"],
+      "@gent/extensions/skills/skills.js": ["./packages/extensions/src/skills/skills.ts"],
+      "@gent/extensions/skills/skills-tool": ["./packages/extensions/src/skills/skills-tool.ts"],
+      "@gent/extensions/skills/skills-tool.js": ["./packages/extensions/src/skills/skills-tool.ts"],
+      "@gent/extensions/task-tools": ["./packages/extensions/src/task-tools/index.ts"],
+      "@gent/extensions/task-tools.js": ["./packages/extensions/src/task-tools/index.ts"],
+      "@gent/extensions/task-tools-service": ["./packages/extensions/src/task-tools-service.ts"],
+      "@gent/extensions/task-tools-service.js": ["./packages/extensions/src/task-tools-service.ts"],
+      "@gent/extensions/task-tools-storage": ["./packages/extensions/src/task-tools-storage.ts"],
+      "@gent/extensions/task-tools-storage.js": ["./packages/extensions/src/task-tools-storage.ts"],
+      "@gent/extensions/task-tools/identity": ["./packages/extensions/src/task-tools/identity.ts"],
+      "@gent/extensions/task-tools/identity.js": [
+        "./packages/extensions/src/task-tools/identity.ts"
+      ],
+      "@gent/extensions/task-tools/projection": [
+        "./packages/extensions/src/task-tools/projection.ts"
+      ],
+      "@gent/extensions/task-tools/projection.js": [
+        "./packages/extensions/src/task-tools/projection.ts"
+      ],
+      "@gent/extensions/task-tools/requests": ["./packages/extensions/src/task-tools/requests.ts"],
+      "@gent/extensions/task-tools/requests.js": [
+        "./packages/extensions/src/task-tools/requests.ts"
+      ],
+      "@gent/extensions/task-tools/task-create": [
+        "./packages/extensions/src/task-tools/task-create.ts"
+      ],
+      "@gent/extensions/task-tools/task-create.js": [
+        "./packages/extensions/src/task-tools/task-create.ts"
+      ],
+      "@gent/extensions/task-tools/task-get": ["./packages/extensions/src/task-tools/task-get.ts"],
+      "@gent/extensions/task-tools/task-get.js": [
+        "./packages/extensions/src/task-tools/task-get.ts"
+      ],
+      "@gent/extensions/task-tools/task-list": [
+        "./packages/extensions/src/task-tools/task-list.ts"
+      ],
+      "@gent/extensions/task-tools/task-list.js": [
+        "./packages/extensions/src/task-tools/task-list.ts"
+      ],
+      "@gent/extensions/task-tools/task-update": [
+        "./packages/extensions/src/task-tools/task-update.ts"
+      ],
+      "@gent/extensions/task-tools/task-update.js": [
+        "./packages/extensions/src/task-tools/task-update.ts"
+      ],
       "@gent/sdk": ["./packages/sdk/src/index.ts"]
     }
   },

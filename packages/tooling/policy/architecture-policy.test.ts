@@ -67,6 +67,54 @@ const pathEntries = (
     ]),
   )
 
+const extensionSourceTarget = (name: string): string => {
+  const fileTarget = `./src/${name}.ts`
+  const indexTarget = `./src/${name}/index.ts`
+
+  if (existsSync(pathResolve(ROOT, "packages/extensions", fileTarget))) return fileTarget
+  if (existsSync(pathResolve(ROOT, "packages/extensions", indexTarget))) return indexTarget
+  throw new Error(`approved extension subpath has no source target: ${name}`)
+}
+
+const extensionExportEntries = (names: ReadonlyArray<string>): Record<string, string | null> =>
+  Object.fromEntries(
+    names.flatMap((name) => [
+      [`./${name}`, extensionSourceTarget(name)],
+      [`./${name}.js`, extensionSourceTarget(name)],
+    ]),
+  )
+
+const extensionPathEntries = (
+  names: ReadonlyArray<string>,
+): Record<string, ReadonlyArray<string>> =>
+  Object.fromEntries(
+    names.flatMap((name) => {
+      const target = extensionSourceTarget(name).replace("./src/", "./packages/extensions/src/")
+      return [
+        [`@gent/extensions/${name}`, [target]],
+        [`@gent/extensions/${name}.js`, [target]],
+      ]
+    }),
+  )
+
+const activeSourceWildcards = (
+  entries: Record<string, unknown>,
+): ReadonlyArray<readonly [string, unknown]> =>
+  Object.entries(entries)
+    .filter(([key]) => key.includes("*"))
+    .filter(([key, value]) => {
+      if (key === "./internal/*" && value === null) return false
+      if (
+        key === "@gent/extensions/internal/*" &&
+        Array.isArray(value) &&
+        value.length === 1 &&
+        value[0] === "./packages/extensions/.blocked-internal.ts"
+      ) {
+        return false
+      }
+      return true
+    })
+
 const approvedPublicCoreSubpaths = {
   domain: [
     "agent",
@@ -101,6 +149,7 @@ const approvedPublicCoreSubpaths = {
     "windowing",
   ],
   providers: ["ai-transcript", "provider", "provider-auth"],
+  debug: ["provider", "session"],
   server: [
     "build-fingerprint",
     "connection-tracker",
@@ -124,7 +173,94 @@ const approvedPublicCoreSubpaths = {
     "session-storage",
     "sqlite-storage",
   ],
+  testUtils: [
+    "e2e-layer",
+    "extension-harness",
+    "fake-fetch",
+    "fixtures",
+    "in-process-layer",
+    "reconciled-extensions",
+  ],
 } as const
+
+const approvedPublicExtensionSubpaths = [
+  "acp-agents",
+  "acp-agents/claude-code-executor",
+  "acp-agents/claude-sdk",
+  "acp-agents/executor",
+  "acp-agents/mcp-codemode",
+  "acp-agents/protocol",
+  "acp-agents/schema",
+  "acp-agents/transcript",
+  "all-agents",
+  "anthropic",
+  "anthropic/beta-cache",
+  "anthropic/credential-service",
+  "anthropic/keychain-client",
+  "anthropic/keychain-transform",
+  "anthropic/model-config",
+  "anthropic/oauth",
+  "anthropic/signing",
+  "artifacts-protocol",
+  "audit/audit-tool",
+  "auto",
+  "auto-journal",
+  "auto-projection",
+  "auto-protocol",
+  "counsel/counsel-tool",
+  "delegate/delegate-tool",
+  "exec-tools/bash",
+  "exec-tools/protocol",
+  "executor/actor",
+  "executor/domain",
+  "executor/mcp-bridge",
+  "executor/projection",
+  "executor/protocol",
+  "executor/sidecar",
+  "executor/tools",
+  "fs-tools/edit",
+  "fs-tools/glob",
+  "fs-tools/grep",
+  "fs-tools/read",
+  "handoff",
+  "handoff-protocol",
+  "handoff-tool",
+  "index",
+  "interaction-tools/ask-user",
+  "interaction-tools/projection",
+  "interaction-tools/prompt",
+  "librarian/git-reader",
+  "memory",
+  "memory/projection",
+  "memory/state",
+  "memory/tools",
+  "memory/vault",
+  "openai",
+  "openai/codex-transform",
+  "openai/credential-service",
+  "plan",
+  "plan-tool",
+  "research/research-tool",
+  "review/review-tool",
+  "session-tools",
+  "session-tools/read-session",
+  "session-tools/search-sessions",
+  "skills",
+  "skills/protocol",
+  "skills/search-skills",
+  "skills/skills",
+  "skills/skills-tool",
+  "task-tools",
+  "task-tools-service",
+  "task-tools-storage",
+  "task-tools/identity",
+  "task-tools/projection",
+  "task-tools/requests",
+  "task-tools/task-create",
+  "task-tools/task-get",
+  "task-tools/task-list",
+  "task-tools/task-update",
+] as const
 
 const isCommentLine = (text: string) => {
   const trimmed = text.trim()
@@ -372,6 +508,68 @@ describe("architecture policy", () => {
     )
   })
 
+  test("package exports expose only approved debug and test utility subpaths", () => {
+    const packageJson = JSON.parse(
+      readFileSync(pathResolve(ROOT, "packages/core/package.json"), "utf8"),
+    ) as {
+      exports?: Record<string, unknown>
+    }
+    const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
+      compilerOptions?: { paths?: Record<string, unknown> }
+    }
+    const exports = packageJson.exports ?? {}
+    const paths = tsconfig.compilerOptions?.paths ?? {}
+    const debugExports = Object.fromEntries(
+      Object.entries(exports).filter(([key]) => key.startsWith("./debug/")),
+    )
+    const debugPaths = Object.fromEntries(
+      Object.entries(paths).filter(([key]) => key.startsWith("@gent/core/debug/")),
+    )
+    const testUtilsExports = Object.fromEntries(
+      Object.entries(exports).filter(([key]) => key.startsWith("./test-utils")),
+    )
+    const testUtilsPaths = Object.fromEntries(
+      Object.entries(paths).filter(([key]) => key.startsWith("@gent/core/test-utils")),
+    )
+
+    expect(exports["./debug/*"]).toBeUndefined()
+    expect(exports["./test-utils/*"]).toBeUndefined()
+    expect(paths["@gent/core/debug/*"]).toBeUndefined()
+    expect(paths["@gent/core/test-utils/*"]).toBeUndefined()
+    expect(debugExports).toEqual(exportEntries("debug", "debug", approvedPublicCoreSubpaths.debug))
+    expect(debugPaths).toEqual(pathEntries("debug", "debug", approvedPublicCoreSubpaths.debug))
+    expect(testUtilsExports).toEqual({
+      "./test-utils": "./src/test-utils/index.ts",
+      "./test-utils.js": "./src/test-utils/index.ts",
+      ...exportEntries("test-utils", "test-utils", approvedPublicCoreSubpaths.testUtils),
+    })
+    expect(testUtilsPaths).toEqual({
+      "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
+      "@gent/core/test-utils.js": ["./packages/core/src/test-utils/index.ts"],
+      ...pathEntries("test-utils", "test-utils", approvedPublicCoreSubpaths.testUtils),
+    })
+  })
+
+  test("package exports and workspace paths do not expose active wildcards", () => {
+    const corePackageJson = JSON.parse(
+      readFileSync(pathResolve(ROOT, "packages/core/package.json"), "utf8"),
+    ) as {
+      exports?: Record<string, unknown>
+    }
+    const extensionsPackageJson = JSON.parse(
+      readFileSync(pathResolve(ROOT, "packages/extensions/package.json"), "utf8"),
+    ) as {
+      exports?: Record<string, unknown>
+    }
+    const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
+      compilerOptions?: { paths?: Record<string, unknown> }
+    }
+
+    expect(activeSourceWildcards(corePackageJson.exports ?? {})).toEqual([])
+    expect(activeSourceWildcards(extensionsPackageJson.exports ?? {})).toEqual([])
+    expect(activeSourceWildcards(tsconfig.compilerOptions?.paths ?? {})).toEqual([])
+  })
+
   test("SessionProfileCache public surface does not expose speculative cache reads", () => {
     const file = pathResolve(ROOT, "packages/core/src/runtime/session-profile.ts")
     const source = readFileSync(file, "utf8")
@@ -477,6 +675,50 @@ describe("architecture policy", () => {
     expect(violations).toEqual([])
   })
 
+  test("extensions package exposes only approved explicit public subpaths", () => {
+    const packageJson = JSON.parse(
+      readFileSync(pathResolve(ROOT, "packages/extensions/package.json"), "utf8"),
+    ) as {
+      exports?: Record<string, unknown>
+    }
+    const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
+      compilerOptions?: { paths?: Record<string, unknown> }
+    }
+    const exports = packageJson.exports ?? {}
+    const paths = tsconfig.compilerOptions?.paths ?? {}
+    const extensionPaths = Object.fromEntries(
+      Object.entries(paths).filter(([key]) => key.startsWith("@gent/extensions")),
+    )
+
+    expect(exports).toEqual({
+      ".": "./src/index.ts",
+      "./index.js": "./src/index.ts",
+      "./core-internal": null,
+      "./core-internal.js": null,
+      "./core-internal.ts": null,
+      "./builtin-internal": null,
+      "./builtin-internal.js": null,
+      "./builtin-internal.ts": null,
+      "./internal/*": null,
+      "./internal-resource-machine": null,
+      "./internal-resource-machine.js": null,
+      "./internal-resource-machine.ts": null,
+      ...extensionExportEntries(approvedPublicExtensionSubpaths),
+    })
+    expect(extensionPaths).toEqual({
+      "@gent/extensions": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
+      "@gent/extensions/builtin-internal": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/builtin-internal.js": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/builtin-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/core-internal": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/core-internal.js": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/core-internal.ts": ["./packages/extensions/.blocked-internal.ts"],
+      "@gent/extensions/internal/*": ["./packages/extensions/.blocked-internal.ts"],
+      ...extensionPathEntries(approvedPublicExtensionSubpaths),
+    })
+  })
+
   test("workspace paths do not bypass blocked extension internals", () => {
     const tsconfig = JSON.parse(readFileSync(pathResolve(ROOT, "tsconfig.json"), "utf8")) as {
       readonly compilerOptions?: {
@@ -500,7 +742,7 @@ describe("architecture policy", () => {
     expect(paths["@gent/extensions/internal/*"]).toEqual([
       "./packages/extensions/.blocked-internal.ts",
     ])
-    expect(paths["@gent/extensions/*"]).toEqual(["./packages/extensions/src/*"])
+    expect(paths["@gent/extensions/*"]).toBeUndefined()
     expect(importProbe("@gent/extensions/builtin-internal").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/builtin-internal.js").exitCode).not.toBe(0)
     expect(importProbe("@gent/extensions/builtin-internal.ts").exitCode).not.toBe(0)
