@@ -62,9 +62,9 @@ import {
   ToolCallPart,
   type ImagePart,
   type ReasoningPart,
-  type ToolResultPart,
+  ToolResultPart,
 } from "../../domain/message.js"
-import { BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
+import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../../domain/ids.js"
 import { makeToolContext } from "../../domain/tool.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import { makeAmbientExtensionHostContextDeps } from "../make-extension-host-context.js"
@@ -238,6 +238,83 @@ const persistMessageReceived = (params: {
       )
       return { _tag: "changed" as const, result: params.message, envelope }
     }),
+  })
+
+const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
+const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
+const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:assistant`)
+const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
+  MessageId.make(`${commandId}:tool-result`)
+
+const recordToolResultPhase = (params: {
+  storage: StorageService
+  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
+  commandId: ActorCommandId
+  sessionId: SessionId
+  branchId: BranchId
+  toolCallId: ToolCallId
+  toolName: string
+  output: unknown
+  isError?: boolean
+}) =>
+  Effect.gen(function* () {
+    const outputType = params.isError === true ? "error-json" : "json"
+    const part = new ToolResultPart({
+      type: "tool-result",
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      output: { type: outputType, value: params.output },
+    })
+
+    const message = Message.cases.regular.make({
+      id: toolResultMessageIdForCommand(params.commandId),
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      role: "tool",
+      parts: [part],
+      createdAt: yield* DateTime.nowAsDate,
+    })
+
+    const isError = params.isError ?? false
+    const toolCallFields = {
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      summary: summarizeToolOutput(part),
+      output: stringifyOutput(part.output.value),
+    }
+
+    yield* commitWithEvent({
+      storage: params.storage,
+      eventPublisher: params.eventPublisher,
+      mutation: Effect.gen(function* () {
+        const existing = yield* params.storage.getMessage(message.id)
+        if (existing !== undefined) {
+          const envelope = yield* findPersistedEvent({
+            storage: params.storage,
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            match: (candidate) =>
+              (candidate.event._tag === "ToolCallSucceeded" ||
+                candidate.event._tag === "ToolCallFailed") &&
+              candidate.event.toolCallId === params.toolCallId,
+          })
+          return {
+            _tag: "unchanged" as const,
+            result: existing,
+            ...(envelope !== undefined ? { envelope } : {}),
+          }
+        }
+
+        const result = yield* params.storage.createMessageIfAbsent(message)
+        const envelope = yield* params.eventPublisher.append(
+          isError ? ToolCallFailed.make(toolCallFields) : ToolCallSucceeded.make(toolCallFields),
+        )
+        return { _tag: "changed" as const, result, envelope }
+      }),
+    })
   })
 
 export type ActiveStreamHandle = {
@@ -1473,11 +1550,31 @@ const RespondInteractionCommand = Schema.TaggedStruct("RespondInteraction", {
 })
 type RespondInteractionCommand = typeof RespondInteractionCommand.Type
 
+const RecordToolResultCommand = Schema.TaggedStruct("RecordToolResult", {
+  ...LoopTargetFields,
+  commandId: Schema.optional(ActorCommandId),
+  toolCallId: ToolCallId,
+  toolName: Schema.String,
+  output: Schema.Unknown,
+  isError: Schema.optional(Schema.Boolean),
+})
+type RecordToolResultCommand = typeof RecordToolResultCommand.Type
+
+const InvokeToolCommand = Schema.TaggedStruct("InvokeTool", {
+  ...LoopTargetFields,
+  commandId: Schema.optional(ActorCommandId),
+  toolName: Schema.String,
+  input: Schema.Unknown,
+})
+type InvokeToolCommand = typeof InvokeToolCommand.Type
+
 const LoopCommand = Schema.Union([
   SubmitTurnCommand,
   RunTurnCommand,
   ApplySteerCommand,
   RespondInteractionCommand,
+  RecordToolResultCommand,
+  InvokeToolCommand,
 ])
 type LoopCommand = typeof LoopCommand.Type
 
@@ -1549,8 +1646,17 @@ type LoopHandle = {
   queueRef: Ref.Ref<LoopQueueState>
   idlePersistedRef: SubscriptionRef.SubscriptionRef<number>
   turnFailureRef: SubscriptionRef.SubscriptionRef<TurnFailureState>
+  sideMutationSemaphore: Semaphore.Semaphore
   persistenceFailure: Effect.Effect<void, AgentLoopError>
   runtimeStateRef: SubscriptionRef.SubscriptionRef<LoopRuntimeState>
+  resolveTurnProfile: Effect.Effect<{
+    turnExtensionRegistry: ExtensionRegistryService
+    turnDriverRegistry: DriverRegistryService
+    turnExtensionStateRuntime: MachineEngineService
+    turnPermission: PermissionService
+    turnBaseSections: ReadonlyArray<PromptSection>
+    turnHostCtx: ExtensionHostContext
+  }>
   persistState: (state: LoopState) => Effect.Effect<void, AgentLoopError>
   refreshRuntimeState: Effect.Effect<void, AgentLoopError>
   updateQueue: (
@@ -1819,6 +1925,22 @@ export interface AgentLoopService {
     branchId: BranchId
     requestId: string
   }) => Effect.Effect<void, AgentLoopError>
+  readonly recordToolResult: (input: {
+    commandId?: ActorCommandId
+    sessionId: SessionId
+    branchId: BranchId
+    toolCallId: ToolCallId
+    toolName: string
+    output: unknown
+    isError?: boolean
+  }) => Effect.Effect<void, AgentLoopError>
+  readonly invokeTool: (input: {
+    commandId?: ActorCommandId
+    sessionId: SessionId
+    branchId: BranchId
+    toolName: string
+    input: unknown
+  }) => Effect.Effect<void, AgentLoopError>
   readonly getState: (input: {
     sessionId: SessionId
     branchId: BranchId
@@ -1992,6 +2114,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const queueRef = yield* Ref.make(initialQueue)
             const idlePersistedRef = yield* SubscriptionRef.make(0)
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
+            const sideMutationSemaphore = yield* Semaphore.make(1)
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const runtimeStateRef = yield* SubscriptionRef.make(
               runtimeStateFromLoopState(buildIdleState({ currentAgent }), initialQueue),
@@ -2499,8 +2622,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               queueRef,
               idlePersistedRef,
               turnFailureRef,
+              sideMutationSemaphore,
               persistenceFailure: Deferred.await(persistenceFailure),
               runtimeStateRef,
+              resolveTurnProfile,
               persistState: persistRuntimeState,
               refreshRuntimeState,
               updateQueue,
@@ -2657,6 +2782,150 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           yield* failIfTurnFailedSince(loop, turnFailureBaseline)
         })
 
+        const applySteer = Effect.fn("AgentLoop.applySteer")(function* (
+          command: ApplySteerCommand,
+        ) {
+          const loop = yield* getLoop(command.command.sessionId, command.command.branchId)
+          const projectedState = yield* currentRuntimeState(loop)
+
+          switch (command.command._tag) {
+            case "SwitchAgent":
+              yield* mapLoopActorCause(
+                command.command.sessionId,
+                command.command.branchId,
+                loop,
+                loop.actor.call(AgentLoopEvent.SwitchAgent({ agent: command.command.agent })),
+              )
+              return
+
+            case "Cancel":
+            case "Interrupt":
+              if (
+                projectedState._tag === "Running" ||
+                projectedState._tag === "WaitingForInteraction"
+              ) {
+                yield* mapLoopActorCause(
+                  command.command.sessionId,
+                  command.command.branchId,
+                  loop,
+                  loop.actor.call(AgentLoopEvent.Interrupt),
+                )
+                return
+              }
+              const loopState = yield* loop.actor.snapshot
+              if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
+                yield* mapLoopActorCause(
+                  command.command.sessionId,
+                  command.command.branchId,
+                  loop,
+                  loop.actor.call(AgentLoopEvent.Interrupt),
+                )
+              }
+              return
+
+            case "Interject": {
+              const interjectMessage = Message.cases.interjection.make({
+                id: MessageId.make(Bun.randomUUIDv7()),
+                sessionId: command.command.sessionId,
+                branchId: command.command.branchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text: command.command.message })],
+                createdAt: yield* DateTime.nowAsDate,
+              })
+              const item: QueuedTurnItem = {
+                message: interjectMessage,
+                ...(command.command.agent !== undefined
+                  ? { agentOverride: command.command.agent }
+                  : {}),
+              }
+              yield* loop.updateQueue((queue) => appendSteeringItem(queue, item))
+              if (projectedState._tag === "Running") {
+                yield* interruptActiveStream(loop.activeStreamRef)
+                return
+              }
+              const loopState = yield* loop.actor.snapshot
+              if (loopState._tag === "Running") {
+                yield* interruptActiveStream(loop.activeStreamRef)
+              }
+              return
+            }
+          }
+        })
+
+        const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(function* (
+          command: RespondInteractionCommand,
+        ) {
+          const loop = yield* findOrRestoreLoop(command.sessionId, command.branchId)
+          if (loop === undefined) return
+          const projectedState = yield* currentRuntimeState(loop)
+          if (projectedState._tag !== "WaitingForInteraction") {
+            const state = yield* loop.actor.snapshot
+            if (state._tag !== "WaitingForInteraction") return
+          }
+          yield* mapLoopActorCause(
+            command.sessionId,
+            command.branchId,
+            loop,
+            loop.actor.call(AgentLoopEvent.InteractionResponded({ requestId: command.requestId })),
+          )
+        })
+
+        const recordToolResult = Effect.fn("AgentLoop.recordToolResultPhase")(function* (
+          command: RecordToolResultCommand,
+        ) {
+          const loop = yield* getLoop(command.sessionId, command.branchId)
+          yield* loop.sideMutationSemaphore
+            .withPermits(1)(
+              recordToolResultPhase({
+                storage,
+                eventPublisher,
+                commandId: command.commandId ?? makeCommandId(),
+                sessionId: command.sessionId,
+                branchId: command.branchId,
+                toolCallId: command.toolCallId,
+                toolName: command.toolName,
+                output: command.output,
+                ...(command.isError !== undefined ? { isError: command.isError } : {}),
+              }),
+            )
+            .pipe(Effect.catchCause((cause) => Effect.fail(actorCauseFailure(cause))))
+        })
+
+        const invokeTool = Effect.fn("AgentLoop.invokeToolPhase")(function* (
+          command: InvokeToolCommand,
+        ) {
+          const loop = yield* getLoop(command.sessionId, command.branchId)
+          yield* loop.sideMutationSemaphore
+            .withPermits(1)(
+              Effect.gen(function* () {
+                const commandId = command.commandId ?? makeCommandId()
+                const currentTurnAgent = (yield* currentRuntimeState(loop)).agent
+                const environment = yield* loop.resolveTurnProfile
+
+                yield* invokeToolPhase({
+                  assistantMessageId: assistantMessageIdForCommand(commandId),
+                  toolResultMessageId: toolResultMessageIdForCommand(commandId),
+                  toolCallId: toolCallIdForCommand(commandId),
+                  toolName: command.toolName,
+                  input: command.input,
+                  publishEvent: (event) =>
+                    eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
+                  eventPublisher,
+                  sessionId: command.sessionId,
+                  branchId: command.branchId,
+                  currentTurnAgent,
+                  toolRunner,
+                  extensionRegistry: environment.turnExtensionRegistry,
+                  permission: environment.turnPermission,
+                  hostCtx: environment.turnHostCtx,
+                  resourceManager,
+                  storage,
+                })
+              }),
+            )
+            .pipe(Effect.catchCause((cause) => Effect.fail(actorCauseFailure(cause))))
+        })
+
         const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
           command: LoopCommand,
         ) {
@@ -2667,90 +2936,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             case "RunTurn":
               return yield* runTurn(command)
 
-            case "ApplySteer": {
-              const loop = yield* getLoop(command.command.sessionId, command.command.branchId)
-              const projectedState = yield* currentRuntimeState(loop)
+            case "ApplySteer":
+              return yield* applySteer(command)
 
-              switch (command.command._tag) {
-                case "SwitchAgent":
-                  yield* mapLoopActorCause(
-                    command.command.sessionId,
-                    command.command.branchId,
-                    loop,
-                    loop.actor.call(AgentLoopEvent.SwitchAgent({ agent: command.command.agent })),
-                  )
-                  return
-                case "Cancel":
-                case "Interrupt":
-                  if (
-                    projectedState._tag === "Running" ||
-                    projectedState._tag === "WaitingForInteraction"
-                  ) {
-                    yield* mapLoopActorCause(
-                      command.command.sessionId,
-                      command.command.branchId,
-                      loop,
-                      loop.actor.call(AgentLoopEvent.Interrupt),
-                    )
-                    return
-                  }
-                  const loopState = yield* loop.actor.snapshot
-                  if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-                    yield* mapLoopActorCause(
-                      command.command.sessionId,
-                      command.command.branchId,
-                      loop,
-                      loop.actor.call(AgentLoopEvent.Interrupt),
-                    )
-                  }
-                  return
-                case "Interject": {
-                  const interjectMessage = Message.cases.interjection.make({
-                    id: MessageId.make(Bun.randomUUIDv7()),
-                    sessionId: command.command.sessionId,
-                    branchId: command.command.branchId,
-                    role: "user",
-                    parts: [new TextPart({ type: "text", text: command.command.message })],
-                    createdAt: yield* DateTime.nowAsDate,
-                  })
-                  const item: QueuedTurnItem = {
-                    message: interjectMessage,
-                    ...(command.command.agent !== undefined
-                      ? { agentOverride: command.command.agent }
-                      : {}),
-                  }
-                  yield* loop.updateQueue((queue) => appendSteeringItem(queue, item))
-                  if (projectedState._tag === "Running") {
-                    yield* interruptActiveStream(loop.activeStreamRef)
-                    return
-                  }
-                  const loopState = yield* loop.actor.snapshot
-                  if (loopState._tag === "Running") {
-                    yield* interruptActiveStream(loop.activeStreamRef)
-                  }
-                  return
-                }
-              }
-            }
+            case "RespondInteraction":
+              return yield* respondInteraction(command)
 
-            case "RespondInteraction": {
-              const loop = yield* findOrRestoreLoop(command.sessionId, command.branchId)
-              if (loop === undefined) return
-              const projectedState = yield* currentRuntimeState(loop)
-              if (projectedState._tag !== "WaitingForInteraction") {
-                const state = yield* loop.actor.snapshot
-                if (state._tag !== "WaitingForInteraction") return
-              }
-              yield* mapLoopActorCause(
-                command.sessionId,
-                command.branchId,
-                loop,
-                loop.actor.call(
-                  AgentLoopEvent.InteractionResponded({ requestId: command.requestId }),
-                ),
-              )
-              return
-            }
+            case "RecordToolResult":
+              return yield* recordToolResult(command)
+
+            case "InvokeTool":
+              return yield* invokeTool(command)
           }
         })
 
@@ -2892,6 +3088,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           respondInteraction: (input) =>
             dispatchLoopCommand({ _tag: "RespondInteraction", ...input }),
 
+          recordToolResult: (input) => dispatchLoopCommand({ _tag: "RecordToolResult", ...input }),
+
+          invokeTool: (input) => dispatchLoopCommand({ _tag: "InvokeTool", ...input }),
+
           getState: (input) =>
             Effect.gen(function* () {
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
@@ -2977,6 +3177,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       drainQueue: () => Effect.succeed(emptyQueueSnapshot()),
       getQueue: () => Effect.succeed(emptyQueueSnapshot()),
       respondInteraction: () => Effect.void,
+      recordToolResult: () => Effect.void,
+      invokeTool: () => Effect.void,
       getState: () =>
         Effect.succeed(
           LoopRuntimeStateSchema.cases.Idle.make({

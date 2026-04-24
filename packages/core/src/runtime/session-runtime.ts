@@ -2,27 +2,18 @@ import { Cause, Context, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { AgentRunError, RunSpecSchema, type RunSpec, AgentName } from "../domain/agent.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../domain/queue.js"
 import { Permission } from "../domain/permission.js"
-import {
-  AgentRestarted,
-  ErrorOccurred,
-  ToolCallFailed,
-  ToolCallSucceeded,
-  type EventEnvelope,
-} from "../domain/event.js"
-import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
+import { AgentRestarted, ErrorOccurred } from "../domain/event.js"
+import { EventPublisher } from "../domain/event-publisher.js"
 import { ActorCommandId, BranchId, MessageId, SessionId, ToolCallId } from "../domain/ids.js"
-import { Message, TextPart, ToolResultPart } from "../domain/message.js"
-import { summarizeToolOutput, stringifyOutput } from "../domain/tool-output.js"
+import { Message, TextPart } from "../domain/message.js"
 import type { PromptSection } from "../domain/prompt.js"
-import { Storage, type StorageService } from "../storage/sqlite-storage.js"
-import { AgentLoop, invokeToolPhase } from "./agent/agent-loop.js"
-import { ToolRunner } from "./agent/tool-runner.js"
+import { Storage } from "../storage/sqlite-storage.js"
+import { AgentLoop } from "./agent/agent-loop.js"
 import { ExtensionRegistry } from "./extensions/registry.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-context.js"
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
-import { ResourceManager } from "./resource-manager.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
 import { AllowAllPermission, resolveSessionEnvironment } from "./session-runtime-context.js"
 import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
@@ -208,40 +199,8 @@ export interface SessionRuntimeService {
 const wrapError = (message: string, cause: Cause.Cause<unknown>) =>
   new SessionRuntimeError({ message, cause })
 
-type RuntimeCommittedEvent<A> =
-  | { readonly _tag: "changed"; readonly result: A; readonly envelope: EventEnvelope }
-  | { readonly _tag: "unchanged"; readonly result: A; readonly envelope?: EventEnvelope }
-
-const findPersistedRuntimeEvent = (params: {
-  storage: StorageService
-  sessionId: SessionId
-  branchId: BranchId
-  match: (envelope: EventEnvelope) => boolean
-}) =>
-  params.storage
-    .listEvents({ sessionId: params.sessionId, branchId: params.branchId })
-    .pipe(Effect.map((events) => [...events].reverse().find(params.match)))
-
-const commitRuntimeMutationWithEvent = <A, E, R>(params: {
-  storage: StorageService
-  eventPublisher: Pick<EventPublisherService, "append" | "deliver">
-  mutation: Effect.Effect<RuntimeCommittedEvent<A>, E, R>
-}) =>
-  Effect.gen(function* () {
-    const committed = yield* params.storage.withTransaction(params.mutation)
-    if (committed.envelope !== undefined) {
-      yield* params.eventPublisher.deliver(committed.envelope)
-    }
-    return committed.result
-  })
-
 const makeCommandId = () => ActorCommandId.make(Bun.randomUUIDv7())
 const userMessageIdForCommand = (commandId: ActorCommandId) => MessageId.make(commandId)
-const toolCallIdForCommand = (commandId: ActorCommandId) => ToolCallId.make(commandId)
-const assistantMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.make(`${commandId}:assistant`)
-const toolResultMessageIdForCommand = (commandId: ActorCommandId) =>
-  MessageId.make(`${commandId}:tool-result`)
 
 export const sendUserMessageCommand = (input: SendUserMessagePayload): SendUserMessageCommand => ({
   _tag: "SendUserMessage",
@@ -309,10 +268,8 @@ const makeLiveSessionRuntime: Effect.Effect<
   | AgentLoop
   | Storage
   | EventPublisher
-  | ToolRunner
   | ExtensionRegistry
   | DriverRegistry
-  | ResourceManager
   | MachineEngine
   | Permission
   | SessionProfileCache
@@ -320,10 +277,8 @@ const makeLiveSessionRuntime: Effect.Effect<
   const agentLoop = yield* AgentLoop
   const storage = yield* Storage
   const eventPublisher = yield* EventPublisher
-  const toolRunner = yield* ToolRunner
   const extensionRegistry = yield* ExtensionRegistry
   const driverRegistry = yield* DriverRegistry
-  const resourceManager = yield* ResourceManager
   const permissionOpt = yield* Effect.serviceOption(Permission)
   const profileCacheOpt = yield* Effect.serviceOption(SessionProfileCache)
   const profileCache = profileCacheOpt._tag === "Some" ? profileCacheOpt.value : undefined
@@ -418,102 +373,11 @@ const makeLiveSessionRuntime: Effect.Effect<
         return
       }
       case "RecordToolResult": {
-        const commandId = command.commandId ?? makeCommandId()
-        const outputType = command.isError === true ? "error-json" : "json"
-        const part = new ToolResultPart({
-          type: "tool-result",
-          toolCallId: command.toolCallId,
-          toolName: command.toolName,
-          output: { type: outputType, value: command.output },
-        })
-
-        const message = Message.cases.regular.make({
-          id: toolResultMessageIdForCommand(commandId),
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          role: "tool",
-          parts: [part],
-          createdAt: yield* DateTime.nowAsDate,
-        })
-
-        const isError = command.isError ?? false
-        const toolCallFields = {
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          toolCallId: command.toolCallId,
-          toolName: command.toolName,
-          summary: summarizeToolOutput(part),
-          output: stringifyOutput(part.output.value),
-        }
-        yield* commitRuntimeMutationWithEvent({
-          storage,
-          eventPublisher,
-          mutation: Effect.gen(function* () {
-            const existing = yield* storage.getMessage(message.id)
-            if (existing !== undefined) {
-              const envelope = yield* findPersistedRuntimeEvent({
-                storage,
-                sessionId: command.sessionId,
-                branchId: command.branchId,
-                match: (candidate) =>
-                  (candidate.event._tag === "ToolCallSucceeded" ||
-                    candidate.event._tag === "ToolCallFailed") &&
-                  candidate.event.toolCallId === command.toolCallId,
-              })
-              return {
-                _tag: "unchanged" as const,
-                result: existing,
-                ...(envelope !== undefined ? { envelope } : {}),
-              }
-            }
-
-            const result = yield* storage.createMessageIfAbsent(message)
-            const envelope = yield* eventPublisher.append(
-              isError
-                ? ToolCallFailed.make(toolCallFields)
-                : ToolCallSucceeded.make(toolCallFields),
-            )
-            return { _tag: "changed" as const, result, envelope }
-          }),
-        })
+        yield* agentLoop.recordToolResult(command)
         return
       }
       case "InvokeTool": {
-        const commandId = command.commandId ?? makeCommandId()
-        const toolCallId = toolCallIdForCommand(commandId)
-        const currentTurnAgent = (yield* agentLoop.getState(command)).agent
-        const { environment } = yield* resolveSessionEnvironment({
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          storage,
-          hostDeps,
-          profileCache,
-          defaults: {
-            driverRegistry,
-            permission: defaultPermission,
-            baseSections: [],
-          },
-        })
-
-        yield* invokeToolPhase({
-          assistantMessageId: assistantMessageIdForCommand(commandId),
-          toolResultMessageId: toolResultMessageIdForCommand(commandId),
-          toolCallId,
-          toolName: command.toolName,
-          input: command.input,
-          publishEvent: (event) =>
-            eventPublisher.publish(event).pipe(Effect.catchEager(() => Effect.void)),
-          eventPublisher,
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          currentTurnAgent,
-          toolRunner,
-          extensionRegistry: environment.extensionRegistry,
-          permission: environment.permission,
-          hostCtx: environment.hostCtx,
-          resourceManager,
-          storage,
-        })
+        yield* agentLoop.invokeTool(command)
         return
       }
       case "ApplySteer":

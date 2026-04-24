@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, test } from "bun:test"
-import { Deferred, Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { Branch, Session } from "@gent/core/domain/message"
@@ -506,6 +506,92 @@ describe("SessionRuntime", () => {
         expect(messages.filter((message) => message.role === "tool")).toHaveLength(1)
         expect(toolSucceeded).toHaveLength(1)
         expect(delivered.filter((tag) => tag === "ToolCallSucceeded")).toHaveLength(2)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  test("recordToolResult commands are serialized per session", async () => {
+    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    let releaseFirstDelivery: () => void = () => {}
+    let markFirstDeliveryStarted: () => void = () => {}
+    const firstDeliveryStarted = new Promise<void>((resolve) => {
+      markFirstDeliveryStarted = resolve
+    })
+    const releaseDelivery = new Promise<void>((resolve) => {
+      releaseFirstDelivery = resolve
+    })
+    let deliveredToolResults = 0
+
+    const eventPublisherLayer = Layer.effect(
+      EventPublisher,
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const append = (event: AgentEvent) =>
+          storage
+            .appendEvent(event)
+            .pipe(
+              Effect.mapError(
+                (error) => new EventStoreError({ message: error.message, cause: error }),
+              ),
+            )
+        const deliver = (envelope: EventEnvelope) =>
+          Effect.promise(async () => {
+            if (envelope.event._tag !== "ToolCallSucceeded") return
+            deliveredToolResults++
+            if (deliveredToolResults === 1) {
+              markFirstDeliveryStarted()
+              await releaseDelivery
+            }
+          })
+        return EventPublisher.of({
+          append,
+          deliver,
+          publish: (event) =>
+            Effect.gen(function* () {
+              const envelope = yield* append(event)
+              yield* deliver(envelope)
+            }),
+          terminateSession: () => Effect.void,
+        })
+      }),
+    )
+    const layer = makeRuntimeLayerWithEventPublisher(providerLayer, eventPublisherLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        const first = recordToolResultCommand({
+          commandId: ActorCommandId.make("record-tool-serialize-a"),
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("tool-call-serialize-a"),
+          toolName: "read",
+          output: { value: "a" },
+        })
+        const second = recordToolResultCommand({
+          commandId: ActorCommandId.make("record-tool-serialize-b"),
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make("tool-call-serialize-b"),
+          toolName: "read",
+          output: { value: "b" },
+        })
+
+        const firstFiber = yield* Effect.forkChild(sessionRuntime.dispatch(first))
+        yield* Effect.promise(() => firstDeliveryStarted).pipe(Effect.timeout("5 seconds"))
+
+        const secondFiber = yield* Effect.forkChild(sessionRuntime.dispatch(second))
+        const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("200 millis"))
+
+        expect(earlySecond._tag).toBe("None")
+        expect(deliveredToolResults).toBe(1)
+
+        releaseFirstDelivery()
+        yield* Fiber.join(firstFiber)
+        yield* Fiber.join(secondFiber)
+
+        expect(deliveredToolResults).toBe(2)
       }).pipe(Effect.provide(layer)),
     )
   })
