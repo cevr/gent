@@ -81,7 +81,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
             const decoded = decodeModelCatalog(nextCatalog)
             if (decoded._tag === "None") {
               return yield* new DriverError({
-                driver: DriverFailureRef.cases.model.make({ id: driver.id }),
+                driver: DriverFailureRef.Model.make({ id: driver.id }),
                 reason: `Model driver "${driver.id}" returned an invalid model catalog`,
               })
             }
@@ -94,7 +94,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           const found = resolved.modelDrivers.get(id)
           if (found === undefined) {
             return yield* new DriverError({
-              driver: DriverFailureRef.cases.model.make({ id }),
+              driver: DriverFailureRef.Model.make({ id }),
               reason: `No model driver registered for id "${id}"`,
             })
           }
@@ -105,7 +105,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           const found = resolved.externalDrivers.get(id)
           if (found === undefined) {
             return yield* new DriverError({
-              driver: DriverFailureRef.cases.external.make({ id }),
+              driver: DriverFailureRef.External.make({ id }),
               reason: `No external driver registered for id "${id}"`,
             })
           }

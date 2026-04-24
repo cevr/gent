@@ -4,7 +4,7 @@ import { Message, TextPart, copyMessageToBranch } from "@gent/core/domain/messag
 
 describe("copyMessageToBranch", () => {
   test("preserves interjection variant when copying to a new branch", () => {
-    const message = Message.cases.interjection.make({
+    const message = Message.Interjection.make({
       id: MessageId.make("source-message"),
       sessionId: SessionId.make("source-session"),
       branchId: BranchId.make("source-branch"),

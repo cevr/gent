@@ -83,21 +83,21 @@ const ExtensionActorStatusFields = {
 }
 
 export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
-  starting: ExtensionActorStatusFields,
-  running: {
+  Starting: TaggedEnumClass.variant("starting", ExtensionActorStatusFields),
+  Running: TaggedEnumClass.variant("running", {
     ...ExtensionActorStatusFields,
     restartCount: Schema.optional(Schema.Number),
-  },
-  restarting: {
+  }),
+  Restarting: TaggedEnumClass.variant("restarting", {
     ...ExtensionActorStatusFields,
     restartCount: Schema.Number,
-  },
-  failed: {
+  }),
+  Failed: TaggedEnumClass.variant("failed", {
     ...ExtensionActorStatusFields,
     error: Schema.String,
     failurePhase: Schema.Literals(["start", "runtime"]),
     restartCount: Schema.optional(Schema.Number),
-  },
+  }),
 })
 export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 

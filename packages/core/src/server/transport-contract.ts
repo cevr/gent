@@ -204,11 +204,11 @@ const MessageInfoFields = {
 }
 
 export const MessageInfo = TaggedEnumClass("MessageInfo", {
-  regular: MessageInfoFields,
-  interjection: {
+  Regular: TaggedEnumClass.variant("regular", MessageInfoFields),
+  Interjection: TaggedEnumClass.variant("interjection", {
     ...MessageInfoFields,
     role: Schema.Literal("user"),
-  },
+  }),
 })
 export type MessageInfo = typeof MessageInfo.Type
 export type MessageInfoReadonly = MessageInfo
@@ -389,21 +389,21 @@ const ExtensionActorStatusFields = {
 }
 
 export const ExtensionActorStatusInfo = TaggedEnumClass("ExtensionActorStatusInfo", {
-  starting: ExtensionActorStatusFields,
-  running: {
+  Starting: TaggedEnumClass.variant("starting", ExtensionActorStatusFields),
+  Running: TaggedEnumClass.variant("running", {
     ...ExtensionActorStatusFields,
     restartCount: Schema.optional(Schema.Number),
-  },
-  restarting: {
+  }),
+  Restarting: TaggedEnumClass.variant("restarting", {
     ...ExtensionActorStatusFields,
     restartCount: Schema.Number,
-  },
-  failed: {
+  }),
+  Failed: TaggedEnumClass.variant("failed", {
     ...ExtensionActorStatusFields,
     error: Schema.String,
     failurePhase: ExtensionActorFailurePhase,
     restartCount: Schema.optional(Schema.Number),
-  },
+  }),
 })
 export type ExtensionActorStatusInfo = typeof ExtensionActorStatusInfo.Type
 
@@ -420,19 +420,19 @@ export const ScheduledJobFailureInfo = Schema.Struct({
 export type ScheduledJobFailureInfo = typeof ScheduledJobFailureInfo.Type
 
 export const ExtensionActivationHealth = TaggedEnumClass("ExtensionActivationHealth", {
-  active: {},
-  failed: {
+  Active: TaggedEnumClass.variant("active", {}),
+  Failed: TaggedEnumClass.variant("failed", {
     phase: ExtensionActivationPhase,
     error: Schema.String,
-  },
+  }),
 })
 export type ExtensionActivationHealth = typeof ExtensionActivationHealth.Type
 
 export const ExtensionSchedulerHealth = TaggedEnumClass("ExtensionSchedulerHealth", {
-  healthy: {},
-  degraded: {
+  Healthy: TaggedEnumClass.variant("healthy", {}),
+  Degraded: TaggedEnumClass.variant("degraded", {
     failures: Schema.NonEmptyArray(ScheduledJobFailureInfo),
-  },
+  }),
 })
 export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
 
@@ -443,9 +443,9 @@ const ExtensionHealthIdentityFields = {
 }
 
 const HealthyExtensionActorStatusInfo = Schema.Union([
-  ExtensionActorStatusInfo.cases.starting,
-  ExtensionActorStatusInfo.cases.running,
-  ExtensionActorStatusInfo.cases.restarting,
+  ExtensionActorStatusInfo.Starting,
+  ExtensionActorStatusInfo.Running,
+  ExtensionActorStatusInfo.Restarting,
 ])
 
 const ExtensionHealthFields = {
@@ -457,14 +457,14 @@ const ExtensionHealthFields = {
 
 const HealthyExtensionHealthFields = {
   ...ExtensionHealthIdentityFields,
-  activation: ExtensionActivationHealth.cases.active,
+  activation: ExtensionActivationHealth.Active,
   actor: Schema.optional(HealthyExtensionActorStatusInfo),
-  scheduler: ExtensionSchedulerHealth.cases.healthy,
+  scheduler: ExtensionSchedulerHealth.Healthy,
 }
 
 const ExtensionHealthState = TaggedEnumClass("ExtensionHealth", {
-  healthy: HealthyExtensionHealthFields,
-  degraded: ExtensionHealthFields,
+  Healthy: TaggedEnumClass.variant("healthy", HealthyExtensionHealthFields),
+  Degraded: TaggedEnumClass.variant("degraded", ExtensionHealthFields),
 })
 
 const isDegradedExtensionHealth = (health: typeof ExtensionHealthState.Type): boolean =>
@@ -487,7 +487,8 @@ export const ExtensionHealth = Object.assign(
     ),
   ),
   {
-    cases: ExtensionHealthState.cases,
+    Healthy: ExtensionHealthState.Healthy,
+    Degraded: ExtensionHealthState.Degraded,
     guards: ExtensionHealthState.guards,
     isAnyOf: ExtensionHealthState.isAnyOf,
     match: ExtensionHealthState.match,
@@ -496,13 +497,13 @@ export const ExtensionHealth = Object.assign(
 export type ExtensionHealth = typeof ExtensionHealth.Type
 
 export const ExtensionHealthSummary = TaggedEnumClass("ExtensionHealthSummary", {
-  healthy: {},
-  degraded: {
+  Healthy: TaggedEnumClass.variant("healthy", {}),
+  Degraded: TaggedEnumClass.variant("degraded", {
     subtitle: Schema.optional(Schema.String),
     failedExtensions: Schema.Array(Schema.String),
     failedActors: Schema.Array(Schema.String),
     failedScheduledJobs: Schema.Array(Schema.String),
-  },
+  }),
 })
 export type ExtensionHealthSummary = typeof ExtensionHealthSummary.Type
 
@@ -518,14 +519,14 @@ export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 
 /** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
 export const DriverInfo = TaggedEnumClass("DriverInfo", {
-  model: {
+  Model: TaggedEnumClass.variant("model", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
-  },
-  external: {
+  }),
+  External: TaggedEnumClass.variant("external", {
     id: Schema.String,
     description: Schema.optional(Schema.String),
-  },
+  }),
 })
 export type DriverInfo = typeof DriverInfo.Type
 

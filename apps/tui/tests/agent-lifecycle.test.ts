@@ -11,7 +11,7 @@ import { Message } from "@gent/core/domain/message"
 import { reduceAgentLifecycle } from "../src/client/agent-lifecycle"
 
 const makeMessage = (role: "user" | "assistant") =>
-  Message.cases.regular.make({
+  Message.Regular.make({
     id: "m1",
     sessionId: "s1",
     branchId: "b1",

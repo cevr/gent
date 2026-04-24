@@ -52,7 +52,7 @@ const addMessage = (
   Effect.gen(function* () {
     const storage = yield* Storage
     return yield* storage.createMessage(
-      Message.cases.regular.make({
+      Message.Regular.make({
         id: MessageId.make(nextId()),
         sessionId,
         branchId,

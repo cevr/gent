@@ -64,7 +64,7 @@ const mergeQueuedFollowUp = (
 
   return {
     ...existing,
-    message: Message.cases.regular.make({
+    message: Message.Regular.make({
       id: existing.message.id,
       sessionId: existing.message.sessionId,
       branchId: existing.message.branchId,
@@ -153,8 +153,8 @@ const restampQueuedMessage = (message: Message): Message => {
     metadata: message.metadata,
   }
   return message._tag === "interjection"
-    ? Message.cases.interjection.make({ ...fields, role: "user" })
-    : Message.cases.regular.make(fields)
+    ? Message.Interjection.make({ ...fields, role: "user" })
+    : Message.Regular.make(fields)
 }
 
 const restampQueuedTurnItem = (item: QueuedTurnItem): QueuedTurnItem => ({
@@ -344,11 +344,11 @@ export const runtimeStateFromLoopState = (
 
   switch (state._tag) {
     case "Idle":
-      return LoopRuntimeStateSchema.cases.Idle.make({ agent, queue: queueSnapshot })
+      return LoopRuntimeStateSchema.Idle.make({ agent, queue: queueSnapshot })
     case "Running":
-      return LoopRuntimeStateSchema.cases.Running.make({ agent, queue: queueSnapshot })
+      return LoopRuntimeStateSchema.Running.make({ agent, queue: queueSnapshot })
     case "WaitingForInteraction":
-      return LoopRuntimeStateSchema.cases.WaitingForInteraction.make({
+      return LoopRuntimeStateSchema.WaitingForInteraction.make({
         agent,
         queue: queueSnapshot,
       })

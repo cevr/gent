@@ -26,7 +26,7 @@ const sessionId = SessionId.make("auto-e2e-session")
 const branchId = BranchId.make("auto-e2e-branch")
 
 const makeMessage = (text: string) =>
-  Message.cases.regular.make({
+  Message.Regular.make({
     id: MessageId.make(`msg-${Date.now()}`),
     sessionId,
     branchId,

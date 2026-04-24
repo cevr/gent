@@ -294,7 +294,7 @@ const seedSession = (testStorage: ReturnType<typeof createTestStorage>) => {
 const seedMessages = (testStorage: ReturnType<typeof createTestStorage>, count: number) => {
   const msgs: Message[] = []
   for (let i = 0; i < count; i++) {
-    const msg = Message.cases.regular.make({
+    const msg = Message.Regular.make({
       id: MessageId.make(`msg-${i}`),
       sessionId: SESSION_ID,
       branchId: BRANCH_ID,
@@ -336,7 +336,7 @@ describe("session mutation primitives", () => {
     const testStorage = createTestStorage()
     seedSession(testStorage)
     const msgs = seedMessages(testStorage, 4)
-    msgs[1] = Message.cases.interjection.make({
+    msgs[1] = Message.Interjection.make({
       id: msgs[1]!.id,
       sessionId: SESSION_ID,
       branchId: BRANCH_ID,

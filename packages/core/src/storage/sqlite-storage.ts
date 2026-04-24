@@ -289,8 +289,8 @@ const decodeStoredMessage = (row: MessageRow, partJsons: ReadonlyArray<string>) 
             : Option.getOrUndefined(decodeMessageMetadata(row.metadata)),
       }
       return row.kind === "interjection"
-        ? Message.cases.interjection.make({ ...fields, role: "user" })
-        : Message.cases.regular.make(fields)
+        ? Message.Interjection.make({ ...fields, role: "user" })
+        : Message.Regular.make(fields)
     },
   )
 
@@ -456,7 +456,7 @@ const backfillMessageReceivedEvents = Effect.fn("Storage.backfillMessageReceived
           const entry = groupMessageChunkRows(messageRows)[0]
           if (entry === undefined) return
           const message = yield* decodeStoredMessage(entry.row, entry.partJsons)
-          const eventJson = yield* encodeEvent(AgentEvent.cases.MessageReceived.make({ message }))
+          const eventJson = yield* encodeEvent(AgentEvent.MessageReceived.make({ message }))
           yield* sql`UPDATE events SET event_json = ${eventJson}, branch_id = ${message.branchId} WHERE id = ${row.id}`
         }),
       { discard: true },

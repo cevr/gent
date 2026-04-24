@@ -31,24 +31,24 @@ export type AgentPersistence = typeof AgentPersistence.Type
 // (e.g. ACP agents) instead of a model provider.
 
 export const DriverRef = TaggedEnumClass("DriverRef", {
-  model: {
+  Model: TaggedEnumClass.variant("model", {
     /** Optional model-driver id override. When omitted, the loop derives it
      *  from the agent's model id segment. */
     id: Schema.optional(Schema.String),
-  },
-  external: {
+  }),
+  External: TaggedEnumClass.variant("external", {
     /** External driver id — must match a registered
      *  `ExternalDriverContribution.id`. */
     id: Schema.String,
-  },
+  }),
 })
 export type DriverRef = Schema.Schema.Type<typeof DriverRef>
 
 // Per-variant aliases — same class identity, convenience names.
-export const ModelDriverRef = DriverRef.cases.model
-export type ModelDriverRef = typeof DriverRef.cases.model.Type
-export const ExternalDriverRef = DriverRef.cases.external
-export type ExternalDriverRef = typeof DriverRef.cases.external.Type
+export const ModelDriverRef = DriverRef.Model
+export type ModelDriverRef = typeof DriverRef.Model.Type
+export const ExternalDriverRef = DriverRef.External
+export type ExternalDriverRef = typeof DriverRef.External.Type
 
 /** Default agent name — used when no agent is explicitly specified. */
 export const DEFAULT_AGENT_NAME = "cowork" as AgentName

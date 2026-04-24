@@ -115,7 +115,7 @@ export const makeMachineLifecycle = (params: {
       restartCount: number,
     ) =>
       setActorStatus(
-        ExtensionActorStatusInfo.cases.failed.make({
+        ExtensionActorStatusInfo.Failed.make({
           extensionId,
           sessionId,
           branchId,
@@ -136,12 +136,12 @@ export const makeMachineLifecycle = (params: {
       Effect.gen(function* () {
         yield* setActorStatus(
           lifecycleStatus === "starting"
-            ? ExtensionActorStatusInfo.cases.starting.make({
+            ? ExtensionActorStatusInfo.Starting.make({
                 extensionId: spec.extensionId,
                 sessionId,
                 branchId,
               })
-            : ExtensionActorStatusInfo.cases.restarting.make({
+            : ExtensionActorStatusInfo.Restarting.make({
                 extensionId: spec.extensionId,
                 sessionId,
                 branchId,
@@ -197,7 +197,7 @@ export const makeMachineLifecycle = (params: {
         }
 
         yield* setActorStatus(
-          ExtensionActorStatusInfo.cases.running.make({
+          ExtensionActorStatusInfo.Running.make({
             extensionId: spec.extensionId,
             sessionId,
             branchId,

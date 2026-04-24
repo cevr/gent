@@ -31,13 +31,13 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
       const externals = yield* deps.driverRegistry.listExternal()
       const drivers = [
         ...models.map((driver) =>
-          DriverInfo.cases.model.make({
+          DriverInfo.Model.make({
             id: driver.id,
             ...(driver.name !== undefined ? { description: driver.name } : {}),
           }),
         ),
         ...externals.map((driver) =>
-          DriverInfo.cases.external.make({
+          DriverInfo.External.make({
             id: driver.id,
           }),
         ),

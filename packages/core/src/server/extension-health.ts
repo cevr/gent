@@ -15,13 +15,13 @@ import {
 const toTransportActorStatus = (status: DomainExtensionActorStatusInfo) => {
   switch (status._tag) {
     case "starting":
-      return ExtensionActorStatusInfo.cases.starting.make(status)
+      return ExtensionActorStatusInfo.Starting.make(status)
     case "running":
-      return ExtensionActorStatusInfo.cases.running.make(status)
+      return ExtensionActorStatusInfo.Running.make(status)
     case "restarting":
-      return ExtensionActorStatusInfo.cases.restarting.make(status)
+      return ExtensionActorStatusInfo.Restarting.make(status)
     case "failed":
-      return ExtensionActorStatusInfo.cases.failed.make(status)
+      return ExtensionActorStatusInfo.Failed.make(status)
   }
 }
 
@@ -39,11 +39,11 @@ export const buildExtensionHealthSnapshot = (
     const schedulerFailures = status.scheduledJobFailures ?? []
     const activation =
       status.status === "failed"
-        ? ExtensionActivationHealth.cases.failed.make({
+        ? ExtensionActivationHealth.Failed.make({
             phase: status.phase,
             error: status.error,
           })
-        : ExtensionActivationHealth.cases.active.make({})
+        : ExtensionActivationHealth.Active.make({})
     const degraded =
       status.status === "failed" || actor?._tag === "failed" || schedulerFailures.length > 0
     const [
@@ -52,10 +52,10 @@ export const buildExtensionHealthSnapshot = (
     ]: ReadonlyArray<ScheduledJobFailureInfo> = schedulerFailures
     const scheduler =
       firstSchedulerFailure !== undefined
-        ? ExtensionSchedulerHealth.cases.degraded.make({
+        ? ExtensionSchedulerHealth.Degraded.make({
             failures: [firstSchedulerFailure, ...remainingSchedulerFailures],
           })
-        : ExtensionSchedulerHealth.cases.healthy.make({})
+        : ExtensionSchedulerHealth.Healthy.make({})
 
     const payload = {
       manifest: status.manifest,
@@ -66,9 +66,7 @@ export const buildExtensionHealthSnapshot = (
       scheduler,
     }
 
-    return degraded
-      ? ExtensionHealth.cases.degraded.make(payload)
-      : ExtensionHealth.cases.healthy.make(payload)
+    return degraded ? ExtensionHealth.Degraded.make(payload) : ExtensionHealth.Healthy.make(payload)
   })
 
   const failedExtensions = extensions
@@ -94,13 +92,13 @@ export const buildExtensionHealthSnapshot = (
 
   const summary =
     failedExtensions.length > 0 || failedActors.length > 0 || failedScheduledJobs.length > 0
-      ? ExtensionHealthSummary.cases.degraded.make({
+      ? ExtensionHealthSummary.Degraded.make({
           ...(subtitle !== undefined ? { subtitle } : {}),
           failedExtensions,
           failedActors,
           failedScheduledJobs,
         })
-      : ExtensionHealthSummary.cases.healthy.make({})
+      : ExtensionHealthSummary.Healthy.make({})
 
   return {
     extensions,

@@ -11,15 +11,15 @@ const QueueEntryFields = {
 } as const
 
 export const QueueEntryInfo = TaggedEnumClass("QueueEntryInfo", {
-  steering: QueueEntryFields,
-  "follow-up": QueueEntryFields,
+  Steering: TaggedEnumClass.variant("steering", QueueEntryFields),
+  FollowUp: TaggedEnumClass.variant("follow-up", QueueEntryFields),
 })
 export type QueueEntryInfo = typeof QueueEntryInfo.Type
 
-export const SteeringQueueEntryInfo = QueueEntryInfo.cases.steering
-export type SteeringQueueEntryInfo = typeof QueueEntryInfo.cases.steering.Type
-export const FollowUpQueueEntryInfo = QueueEntryInfo.cases["follow-up"]
-export type FollowUpQueueEntryInfo = (typeof QueueEntryInfo.cases)["follow-up"]["Type"]
+export const SteeringQueueEntryInfo = QueueEntryInfo.Steering
+export type SteeringQueueEntryInfo = typeof QueueEntryInfo.Steering.Type
+export const FollowUpQueueEntryInfo = QueueEntryInfo.FollowUp
+export type FollowUpQueueEntryInfo = typeof QueueEntryInfo.FollowUp.Type
 
 export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")({
   steering: Schema.Array(QueueEntryInfo),

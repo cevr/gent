@@ -133,7 +133,7 @@ const sendFailingSessionCommandsLayer = () => {
     getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
     getState: () =>
       Effect.succeed(
-        SessionRuntimeStateSchema.cases.Idle.make({
+        SessionRuntimeStateSchema.Idle.make({
           agent: "cowork" as const,
           queue: emptyQueueSnapshot(),
         }),
@@ -262,7 +262,7 @@ describe("session command persistence", () => {
         name: "rollback",
       })
       yield* messages.createMessage(
-        Message.cases.regular.make({
+        Message.Regular.make({
           id: messageId,
           sessionId,
           branchId,
@@ -552,7 +552,7 @@ describe("session command persistence", () => {
         name: "delete messages",
       })
       yield* messages.createMessage(
-        Message.cases.regular.make({
+        Message.Regular.make({
           id: firstMessageId,
           sessionId,
           branchId,
@@ -562,7 +562,7 @@ describe("session command persistence", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.cases.regular.make({
+        Message.Regular.make({
           id: secondMessageId,
           sessionId,
           branchId,
@@ -610,7 +610,7 @@ describe("session command persistence", () => {
         name: "other",
       })
       yield* messages.createMessage(
-        Message.cases.regular.make({
+        Message.Regular.make({
           id: foreignMessageId,
           sessionId: otherSessionId,
           branchId: otherBranchId,
@@ -620,7 +620,7 @@ describe("session command persistence", () => {
         }),
       )
       yield* messages.createMessage(
-        Message.cases.regular.make({
+        Message.Regular.make({
           id: ownerMessageId,
           sessionId,
           branchId,

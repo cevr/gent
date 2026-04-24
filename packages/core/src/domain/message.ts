@@ -91,11 +91,11 @@ const MessageFields = {
 }
 
 export const Message = TaggedEnumClass("Message", {
-  regular: MessageFields,
-  interjection: {
+  Regular: TaggedEnumClass.variant("regular", MessageFields),
+  Interjection: TaggedEnumClass.variant("interjection", {
     ...MessageFields,
     role: Schema.Literal("user"),
-  },
+  }),
 })
 export type Message = typeof Message.Type
 export type RegularMessage = Extract<Message, { _tag: "regular" }>
@@ -120,8 +120,8 @@ export const copyMessageToBranch = (
     ...(message.metadata !== undefined ? { metadata: message.metadata } : {}),
   }
   return message._tag === "interjection"
-    ? Message.cases.interjection.make({ ...fields, role: "user" })
-    : Message.cases.regular.make(fields)
+    ? Message.Interjection.make({ ...fields, role: "user" })
+    : Message.Regular.make(fields)
 }
 
 // Session

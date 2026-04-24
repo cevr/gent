@@ -54,12 +54,12 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 
 /** Failure raised when a driver lookup or dispatch fails. */
 export const DriverFailureRef = TaggedEnumClass("DriverFailureRef", {
-  model: {
+  Model: TaggedEnumClass.variant("model", {
     id: Schema.String,
-  },
-  external: {
+  }),
+  External: TaggedEnumClass.variant("external", {
     id: Schema.String,
-  },
+  }),
 })
 export type DriverFailureRef = typeof DriverFailureRef.Type
 
@@ -199,60 +199,57 @@ export type TurnEventUsage = typeof TurnEventUsage.Type
 /**
  * `TurnEvent` — what an external driver streams back per turn.
  *
- * Authored via `TaggedEnumClass` (S0 substrate). Validates the factory's
- * handling of non-identifier tag names (kebab-case): variants are accessed
- * as `TurnEvent.cases["text-delta"]` rather than `TurnEvent.cases.textDelta`. Pattern
- * matching via `_tag === "text-delta"` or `Match.tag` works unchanged.
+ * Authored via `TaggedEnumClass`. Kebab-case wire tags are pinned with
+ * `TaggedEnumClass.variant(...)`, while constructors stay on PascalCase
+ * members such as `TurnEvent.TextDelta`.
  */
 export const TurnEvent = TaggedEnumClass("TurnEvent", {
-  "text-delta": {
+  TextDelta: TaggedEnumClass.variant("text-delta", {
     text: Schema.String,
-  },
-  "reasoning-delta": {
+  }),
+  ReasoningDelta: TaggedEnumClass.variant("reasoning-delta", {
     text: Schema.String,
-  },
-  "tool-call": {
+  }),
+  ToolCall: TaggedEnumClass.variant("tool-call", {
     toolCallId: Schema.String,
     toolName: Schema.String,
     input: Schema.Unknown,
-  },
-  "tool-started": {
+  }),
+  ToolStarted: TaggedEnumClass.variant("tool-started", {
     toolCallId: Schema.String,
     toolName: Schema.String,
     input: Schema.optional(Schema.Unknown),
-  },
-  "tool-completed": {
+  }),
+  ToolCompleted: TaggedEnumClass.variant("tool-completed", {
     toolCallId: Schema.String,
     output: Schema.optional(Schema.Unknown),
-  },
-  "tool-failed": {
+  }),
+  ToolFailed: TaggedEnumClass.variant("tool-failed", {
     toolCallId: Schema.String,
     error: Schema.String,
-  },
-  finished: {
+  }),
+  Finished: TaggedEnumClass.variant("finished", {
     stopReason: Schema.String,
     usage: Schema.optional(TurnEventUsage),
-  },
+  }),
 })
 export type TurnEvent = Schema.Schema.Type<typeof TurnEvent>
 
-// Per-variant re-exports — same class identity as `TurnEvent.cases["text-delta"]`,
-// exposed at module scope for ergonomic imports. The kebab-case wire tags
-// stay; the JS-friendly names below are the natural identifier form.
-export const TextDelta = TurnEvent.cases["text-delta"]
-export type TextDelta = (typeof TurnEvent.cases)["text-delta"]["Type"]
-export const ReasoningDelta = TurnEvent.cases["reasoning-delta"]
-export type ReasoningDelta = (typeof TurnEvent.cases)["reasoning-delta"]["Type"]
-export const ToolCall = TurnEvent.cases["tool-call"]
-export type ToolCall = (typeof TurnEvent.cases)["tool-call"]["Type"]
-export const ToolStarted = TurnEvent.cases["tool-started"]
-export type ToolStarted = (typeof TurnEvent.cases)["tool-started"]["Type"]
-export const ToolCompleted = TurnEvent.cases["tool-completed"]
-export type ToolCompleted = (typeof TurnEvent.cases)["tool-completed"]["Type"]
-export const ToolFailed = TurnEvent.cases["tool-failed"]
-export type ToolFailed = (typeof TurnEvent.cases)["tool-failed"]["Type"]
-export const Finished = TurnEvent.cases.finished
-export type Finished = typeof TurnEvent.cases.finished.Type
+// Per-variant re-exports — same class identity as the direct enum members.
+export const TextDelta = TurnEvent.TextDelta
+export type TextDelta = typeof TurnEvent.TextDelta.Type
+export const ReasoningDelta = TurnEvent.ReasoningDelta
+export type ReasoningDelta = typeof TurnEvent.ReasoningDelta.Type
+export const ToolCall = TurnEvent.ToolCall
+export type ToolCall = typeof TurnEvent.ToolCall.Type
+export const ToolStarted = TurnEvent.ToolStarted
+export type ToolStarted = typeof TurnEvent.ToolStarted.Type
+export const ToolCompleted = TurnEvent.ToolCompleted
+export type ToolCompleted = typeof TurnEvent.ToolCompleted.Type
+export const ToolFailed = TurnEvent.ToolFailed
+export type ToolFailed = typeof TurnEvent.ToolFailed.Type
+export const Finished = TurnEvent.Finished
+export type Finished = typeof TurnEvent.Finished.Type
 
 /** Failure raised by an external driver while streaming a turn. */
 export class TurnError extends Schema.TaggedErrorClass<TurnError>()("TurnError", {

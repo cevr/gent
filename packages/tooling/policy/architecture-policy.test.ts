@@ -136,6 +136,138 @@ const isCommentLine = (text: string) => {
   )
 }
 
+const skipWhitespaceAndComments = (source: string, start: number): number => {
+  let index = start
+  while (index < source.length) {
+    const char = source[index]
+    const next = source[index + 1]
+    if (/\s/.test(char ?? "")) {
+      index += 1
+      continue
+    }
+    if (char === "/" && next === "/") {
+      const newline = source.indexOf("\n", index + 2)
+      index = newline === -1 ? source.length : newline + 1
+      continue
+    }
+    if (char === "/" && next === "*") {
+      const end = source.indexOf("*/", index + 2)
+      index = end === -1 ? source.length : end + 2
+      continue
+    }
+    return index
+  }
+  return index
+}
+
+const skipStringLiteral = (source: string, start: number): number => {
+  const quote = source[start]
+  let index = start + 1
+  while (index < source.length) {
+    const char = source[index]
+    if (char === "\\") {
+      index += 2
+      continue
+    }
+    if (char === quote) return index + 1
+    index += 1
+  }
+  return source.length
+}
+
+const findMatchingBrace = (source: string, openBrace: number): number => {
+  let depth = 0
+  let index = openBrace
+  while (index < source.length) {
+    const char = source[index]
+    const next = source[index + 1]
+    if (char === "'" || char === '"' || char === "`") {
+      index = skipStringLiteral(source, index)
+      continue
+    }
+    if (char === "/" && next === "/") {
+      const newline = source.indexOf("\n", index + 2)
+      index = newline === -1 ? source.length : newline + 1
+      continue
+    }
+    if (char === "/" && next === "*") {
+      const end = source.indexOf("*/", index + 2)
+      index = end === -1 ? source.length : end + 2
+      continue
+    }
+    if (char === "{") depth += 1
+    if (char === "}") {
+      depth -= 1
+      if (depth === 0) return index
+    }
+    index += 1
+  }
+  return -1
+}
+
+const topLevelObjectKeys = (source: string): ReadonlyArray<string> => {
+  const keys: string[] = []
+  let depth = 1
+  let index = 1
+  while (index < source.length - 1) {
+    index = skipWhitespaceAndComments(source, index)
+    const char = source[index]
+    if (char === undefined) break
+
+    if (char === "'" || char === '"') {
+      const end = skipStringLiteral(source, index)
+      const key = source.slice(index + 1, end - 1)
+      const after = skipWhitespaceAndComments(source, end)
+      if (depth === 1 && source[after] === ":") keys.push(key)
+      index = after + 1
+      continue
+    }
+
+    if (char === "`") {
+      index = skipStringLiteral(source, index)
+      continue
+    }
+
+    if (/[A-Za-z_$]/.test(char) && depth === 1) {
+      const match = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(source.slice(index))
+      if (match !== null) {
+        const key = match[0]
+        const after = skipWhitespaceAndComments(source, index + key.length)
+        if (source[after] === ":") keys.push(key)
+        index = after + 1
+        continue
+      }
+    }
+
+    if (char === "{" || char === "[" || char === "(") depth += 1
+    if (char === "}" || char === "]" || char === ")") depth -= 1
+    index += 1
+  }
+  return keys
+}
+
+const taggedEnumVariantMemberViolations = (file: string): ReadonlyArray<string> => {
+  const source = readFileSync(file, "utf8")
+  const violations: string[] = []
+  let searchFrom = 0
+  while (true) {
+    const call = source.indexOf("TaggedEnumClass(", searchFrom)
+    if (call === -1) return violations
+    const openBrace = source.indexOf("{", call)
+    if (openBrace === -1) return violations
+    const closeBrace = findMatchingBrace(source, openBrace)
+    if (closeBrace === -1) return violations
+    const body = source.slice(openBrace, closeBrace + 1)
+    for (const key of topLevelObjectKeys(body)) {
+      if (!/^[A-Z][A-Za-z0-9]*$/.test(key)) {
+        const line = source.slice(0, openBrace + body.indexOf(key)).split("\n").length
+        violations.push(`${file.slice(ROOT.length + 1)}:${line} ${key}`)
+      }
+    }
+    searchFrom = closeBrace + 1
+  }
+}
+
 describe("architecture policy", () => {
   test("owned source shapes do not reintroduce `_kind` discriminators", () => {
     const violations = collectSourceFiles().flatMap((file) =>
@@ -144,6 +276,25 @@ describe("architecture policy", () => {
         .filter(
           ({ text }) => /(?:readonly\s+)?_kind\s*:/.test(text) || /["']_kind["']\s*:/.test(text),
         )
+        .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
+    )
+
+    expect(violations).toEqual([])
+  })
+
+  test("TaggedEnumClass definitions use direct PascalCase members", () => {
+    const violations = collectSourceFiles().flatMap((file) =>
+      taggedEnumVariantMemberViolations(file),
+    )
+
+    expect(violations).toEqual([])
+  })
+
+  test("production source does not use legacy TaggedEnumClass nested constructors", () => {
+    const violations = collectSourceFiles().flatMap((file) =>
+      sourceLines(file)
+        .filter(({ text }) => !isCommentLine(text))
+        .filter(({ text }) => /\.cases\b/.test(text))
         .map(({ line, text }) => `${file.slice(ROOT.length + 1)}:${line} ${text.trim()}`),
     )
 

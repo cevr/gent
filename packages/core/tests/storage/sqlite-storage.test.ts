@@ -278,7 +278,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: MessageId.make("cascade-message"),
             sessionId,
             branchId,
@@ -288,7 +288,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: MessageId.make("cascade-child-message"),
             sessionId: childSessionId,
             branchId: childBranchId,
@@ -717,7 +717,7 @@ describe("Storage", () => {
           }),
         )
 
-        const message = Message.cases.regular.make({
+        const message = Message.Regular.make({
           id: "msg-1",
           sessionId: "msg-session",
           branchId: "msg-branch",
@@ -756,7 +756,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "all-parts-msg",
             sessionId: "all-parts-session",
             branchId: "all-parts-branch",
@@ -833,7 +833,7 @@ describe("Storage", () => {
           new Branch({ id: "chunk-b", sessionId: "chunk-s", createdAt: new Date() }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "chunk-a",
             sessionId: "chunk-s",
             branchId: "chunk-b",
@@ -843,7 +843,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "chunk-b-msg",
             sessionId: "chunk-s",
             branchId: "chunk-b",
@@ -1130,7 +1130,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "count-msg-1",
             sessionId: "count-session",
             branchId: "count-branch",
@@ -1140,7 +1140,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "count-msg-2",
             sessionId: "count-session",
             branchId: "count-branch",
@@ -1175,7 +1175,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "lm1",
             sessionId: "list-msg-session",
             branchId: "list-msg-branch",
@@ -1185,7 +1185,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "lm2",
             sessionId: "list-msg-session",
             branchId: "list-msg-branch",
@@ -1222,7 +1222,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "delete-projection-a",
             sessionId: "delete-projection-session",
             branchId: "delete-projection-branch",
@@ -1232,7 +1232,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "delete-projection-b",
             sessionId: "delete-projection-session",
             branchId: "delete-projection-branch",
@@ -1277,7 +1277,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "msg-updated-at",
             sessionId: "session-updated-at",
             branchId: "branch-updated-at",
@@ -1324,7 +1324,7 @@ describe("Storage", () => {
 
         const error = yield* Effect.flip(
           storage.createMessage(
-            Message.cases.regular.make({
+            Message.Regular.make({
               id: "tx-message",
               sessionId: "tx-message-session",
               branchId: "tx-message-branch",
@@ -1365,7 +1365,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessageIfAbsent(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "if-absent-message",
             sessionId: "if-absent-session",
             branchId: "if-absent-branch",
@@ -1375,7 +1375,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessageIfAbsent(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "if-absent-message",
             sessionId: "if-absent-session",
             branchId: "if-absent-branch",
@@ -1413,7 +1413,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "b",
             sessionId: "order-session",
             branchId: "order-branch",
@@ -1423,7 +1423,7 @@ describe("Storage", () => {
           }),
         )
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "a",
             sessionId: "order-session",
             branchId: "order-branch",
@@ -1451,7 +1451,7 @@ describe("Storage", () => {
           new Branch({ id: "meta-b", sessionId: "meta-s", createdAt: new Date() }),
         )
 
-        const message = Message.cases.regular.make({
+        const message = Message.Regular.make({
           id: "meta-msg-1",
           sessionId: "meta-s",
           branchId: "meta-b",
@@ -1488,7 +1488,7 @@ describe("Storage", () => {
           new Branch({ id: "upsert-b", sessionId: "upsert-s", createdAt: new Date() }),
         )
 
-        const message = Message.cases.regular.make({
+        const message = Message.Regular.make({
           id: "upsert-msg",
           sessionId: "upsert-s",
           branchId: "upsert-b",
@@ -1518,7 +1518,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.regular.make({
+          Message.Regular.make({
             id: "no-meta-msg",
             sessionId: "no-meta-s",
             branchId: "no-meta-b",
@@ -1562,7 +1562,7 @@ describe("Storage", () => {
     )
 
     test("messageToInfo preserves metadata for transport", () => {
-      const message = Message.cases.regular.make({
+      const message = Message.Regular.make({
         id: "info-msg",
         sessionId: "info-s",
         branchId: "info-b",
@@ -1593,7 +1593,7 @@ describe("Storage", () => {
         )
 
         yield* storage.createMessage(
-          Message.cases.interjection.make({
+          Message.Interjection.make({
             id: "interjection-msg",
             sessionId: "interjection-s",
             branchId: "interjection-b",
@@ -1614,7 +1614,7 @@ describe("Storage", () => {
     )
 
     test("messageToInfo omits metadata when absent", () => {
-      const message = Message.cases.regular.make({
+      const message = Message.Regular.make({
         id: "plain-msg",
         sessionId: "plain-s",
         branchId: "plain-b",

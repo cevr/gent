@@ -268,7 +268,7 @@ const recordToolResultPhase = (params: {
       output: { type: outputType, value: params.output },
     })
 
-    const message = Message.cases.regular.make({
+    const message = Message.Regular.make({
       id: toolResultMessageIdForCommand(params.commandId),
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -384,7 +384,7 @@ const persistMessageParts = (params: {
   Effect.gen(function* () {
     if (params.parts.length === 0) return undefined
 
-    const message = Message.cases.regular.make({
+    const message = Message.Regular.make({
       id: params.messageId,
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -2832,7 +2832,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               }
               switch (command._tag) {
                 case "QueueFollowUp": {
-                  const message = Message.cases.regular.make({
+                  const message = Message.Regular.make({
                     id: MessageId.make(Bun.randomUUIDv7()),
                     sessionId: command.sessionId,
                     branchId: command.branchId,
@@ -2866,7 +2866,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   return true
                 }
                 case "Interject": {
-                  const message = Message.cases.interjection.make({
+                  const message = Message.Interjection.make({
                     id: MessageId.make(Bun.randomUUIDv7()),
                     sessionId: command.sessionId,
                     branchId: command.branchId,
@@ -3045,7 +3045,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               return
 
             case "Interject": {
-              const interjectMessage = Message.cases.interjection.make({
+              const interjectMessage = Message.Interjection.make({
                 id: MessageId.make(Bun.randomUUIDv7()),
                 sessionId: command.command.sessionId,
                 branchId: command.command.branchId,
@@ -3235,7 +3235,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
         const service: AgentLoopService = {
           runOnce: Effect.fn("AgentLoop.runOnce")(function* (input) {
-            const userMessage = Message.cases.regular.make({
+            const userMessage = Message.Regular.make({
               id: MessageId.make(Bun.randomUUIDv7()),
               sessionId: input.sessionId,
               branchId: input.branchId,
@@ -3405,7 +3405,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.gen(function* () {
                 switch (command._tag) {
                   case "QueueFollowUp": {
-                    const message = Message.cases.regular.make({
+                    const message = Message.Regular.make({
                       id: MessageId.make(Bun.randomUUIDv7()),
                       sessionId: command.sessionId,
                       branchId: command.branchId,
@@ -3465,7 +3465,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
       invokeTool: () => Effect.void,
       getState: () =>
         Effect.succeed(
-          LoopRuntimeStateSchema.cases.Idle.make({
+          LoopRuntimeStateSchema.Idle.make({
             agent: DEFAULT_AGENT_NAME,
             queue: emptyQueueSnapshot(),
           }),

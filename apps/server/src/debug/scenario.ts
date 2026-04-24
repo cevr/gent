@@ -66,7 +66,7 @@ const createParentTurnMessages = (
 ) => {
   const now = new Date()
 
-  const assistant = Message.cases.regular.make({
+  const assistant = Message.Regular.make({
     id: MessageId.make(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -109,7 +109,7 @@ const createParentTurnMessages = (
     createdAt: new Date(now.getTime() + 1),
   })
 
-  const tool = Message.cases.regular.make({
+  const tool = Message.Regular.make({
     id: MessageId.make(Bun.randomUUIDv7()),
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -185,7 +185,7 @@ const persistDebugUserMessage = (params: DebugScenarioParams, iteration: number)
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const eventStore = yield* EventStore
-    const user = Message.cases.regular.make({
+    const user = Message.Regular.make({
       id: MessageId.make(Bun.randomUUIDv7()),
       sessionId: params.sessionId,
       branchId: params.branchId,
