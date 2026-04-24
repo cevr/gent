@@ -37,4 +37,16 @@ describe("createAppRouter", () => {
     expect(router.canGoBack()).toBe(false)
     expect(router.back()).toBe(false)
   })
+
+  test("same-route navigation replaces the visible route without growing history", () => {
+    const router = createAppRouter({ current: Route.session("s1", "b1"), history: [] })
+
+    router.navigate(Route.branchPicker("s1", "Pick", []))
+    router.navigate(Route.branchPicker("s2", "Pick again", []))
+
+    expect(router.getState()).toEqual({
+      current: { _tag: "branchPicker", sessionId: "s2", sessionName: "Pick again", branches: [] },
+      history: [{ _tag: "session", sessionId: "s1", branchId: "b1" }],
+    })
+  })
 })

@@ -283,6 +283,14 @@ describe("App auth gate", () => {
 
   test("branch resume route gates auth, sends deferred prompt, and searches prompt history", async () => {
     let hasOpenAiKey = false
+    let initialAuthCheckResolved = false
+    let resolveInitialAuthCheck: (() => void) | undefined
+    const initialAuthCheck = new Promise<void>((resolve) => {
+      resolveInitialAuthCheck = () => {
+        initialAuthCheckResolved = true
+        resolve()
+      }
+    })
     const sentMessages: Array<{
       sessionId: SessionId
       branchId: BranchId
@@ -326,8 +334,8 @@ describe("App auth gate", () => {
           ]),
       },
       auth: {
-        listProviders: () =>
-          Effect.succeed([
+        listProviders: () => {
+          const providers = [
             {
               provider: "openai",
               hasKey: hasOpenAiKey,
@@ -335,7 +343,10 @@ describe("App auth gate", () => {
               source: hasOpenAiKey ? ("stored" as const) : ("none" as const),
               authType: undefined,
             },
-          ]),
+          ]
+          if (hasOpenAiKey || initialAuthCheckResolved) return Effect.succeed(providers)
+          return Effect.promise(() => initialAuthCheck).pipe(Effect.as(providers))
+        },
         listMethods: () =>
           Effect.succeed({
             openai: [{ label: "API key", type: "api" as const }],
@@ -362,7 +373,7 @@ describe("App auth gate", () => {
     const setup = await renderWithProviders(
       () => (
         <>
-          <App missingAuthProviders={["openai"]} />
+          <App missingAuthProviders={[]} />
         </>
       ),
       {
@@ -398,7 +409,12 @@ describe("App auth gate", () => {
     setup.mockInput.pressArrow("down")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
+    await setup.renderOnce()
+    await Promise.resolve()
+    await setup.renderOnce()
+    expect(sentMessages).toEqual([])
 
+    resolveInitialAuthCheck?.()
     await waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
     expect(sentMessages).toEqual([])
 
