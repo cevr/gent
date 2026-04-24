@@ -807,5 +807,169 @@ describe("extension concurrency", () => {
         ).pipe(Effect.provide(layer))
       }),
     )
+
+    it.live("terminateAll runs before already-queued same-session work", () =>
+      Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>()
+        const secondEntered = yield* Deferred.make<void>()
+        const releaseFirst = yield* Deferred.make<void>()
+        const ReadSerial = ExtensionMessage.reply(
+          "terminate-priority-executor",
+          "ReadSerial",
+          {},
+          Schema.Struct({ order: Schema.Number }),
+        )
+
+        const extensions = [
+          {
+            manifest: { id: "terminate-priority-executor", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: {
+                    ...reducerActor<{ reads: number }, never, ReturnType<typeof ReadSerial>>({
+                      id: "terminate-priority-executor",
+                      initial: { reads: 0 },
+                      reduce: (state) => ({ state }),
+                      request: (state) =>
+                        Effect.gen(function* () {
+                          if (state.reads === 0) {
+                            yield* Deferred.succeed(firstEntered, void 0)
+                            yield* Deferred.await(releaseFirst)
+                          } else {
+                            yield* Deferred.succeed(secondEntered, void 0)
+                          }
+
+                          return {
+                            state: { reads: state.reads + 1 },
+                            reply: { order: state.reads + 1 },
+                          }
+                        }),
+                    }),
+                    protocols: { ReadSerial },
+                  },
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* MachineEngine
+            const first = yield* Effect.forkScoped(
+              runtime
+                .execute(sessionId, ReadSerial.make(), branchId)
+                .pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Deferred.await(firstEntered).pipe(Effect.timeout("1 second"))
+
+            const second = yield* Effect.forkScoped(
+              runtime
+                .execute(sessionId, ReadSerial.make(), branchId)
+                .pipe(Effect.timeout("1 second")),
+            )
+            yield* Effect.yieldNow
+            expect(yield* Deferred.isDone(secondEntered)).toBe(false)
+
+            const terminated = yield* Effect.forkScoped(
+              runtime.terminateAll(sessionId).pipe(Effect.timeout("1 second")),
+            )
+            yield* Effect.yieldNow
+
+            yield* Deferred.succeed(releaseFirst, void 0)
+
+            expect(yield* Fiber.join(first)).toEqual({ order: 1 })
+            yield* Fiber.join(terminated)
+
+            const secondExit = yield* Fiber.await(second)
+            expect(secondExit._tag).toBe("Failure")
+            expect(yield* Deferred.isDone(secondEntered)).toBe(false)
+            expect(yield* runtime.getActorStatuses(sessionId)).toEqual([])
+          }).pipe(Effect.provide(layer)),
+        )
+      }),
+    )
+
+    it.live("terminateAll does not resurrect actors after in-flight spawn completes", () =>
+      Effect.gen(function* () {
+        const spawnEntered = yield* Deferred.make<void>()
+        const releaseSpawn = yield* Deferred.make<void>()
+        const terminateCompleted = yield* Deferred.make<void>()
+        let spawnCount = 0
+
+        const extensions = [
+          {
+            manifest: { id: "terminate-during-spawn", version: "1.0.0" },
+            scope: "builtin" as const,
+            sourcePath: "builtin",
+            contributions: {
+              resources: [
+                defineResource({
+                  scope: "process",
+                  layer: Layer.empty as Layer.Layer<unknown>,
+                  machine: {
+                    ...reducerActor({
+                      id: "terminate-during-spawn",
+                      initial: { started: false },
+                      reduce: (state, event) =>
+                        event._tag === "SessionStarted" ? { state: { started: true } } : { state },
+                    }),
+                    slots: () =>
+                      Effect.gen(function* () {
+                        spawnCount += 1
+                        yield* Deferred.succeed(spawnEntered, void 0)
+                        yield* Deferred.await(releaseSpawn)
+                        return {}
+                      }),
+                  },
+                }),
+              ],
+            },
+          },
+        ] as Parameters<typeof MachineEngine.fromExtensions>[0]
+
+        const layer = makeRuntimeLayer(extensions)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* MachineEngine
+            const publish = yield* Effect.forkScoped(
+              runtime
+                .publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
+                .pipe(Effect.timeout("1 second")),
+            )
+
+            yield* Deferred.await(spawnEntered).pipe(Effect.timeout("1 second"))
+
+            const terminated = yield* Effect.forkScoped(
+              runtime
+                .terminateAll(sessionId)
+                .pipe(
+                  Effect.ensuring(Deferred.succeed(terminateCompleted, void 0).pipe(Effect.asVoid)),
+                  Effect.timeout("1 second"),
+                ),
+            )
+
+            yield* Effect.yieldNow
+            expect(yield* Deferred.isDone(terminateCompleted)).toBe(false)
+
+            yield* Deferred.succeed(releaseSpawn, void 0)
+            yield* Fiber.join(publish)
+            yield* Fiber.join(terminated)
+
+            expect(spawnCount).toBe(1)
+            expect(yield* runtime.getActorStatuses(sessionId)).toEqual([])
+          }).pipe(Effect.provide(layer)),
+        )
+      }),
+    )
   })
 })

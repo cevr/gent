@@ -347,11 +347,20 @@ export const makeMachineLifecycle = (params: {
                   Effect.as([] as ActorEntry[]),
                 )
 
-          yield* Ref.update(actorsRef, (current) => {
+          const installed = yield* Ref.modify(actorsRef, (current) => {
+            const slot = current.get(sessionId)
+            if (slot?._tag !== "pending" || slot.gate !== gate) return [false, current] as const
             const next = new Map(current)
             next.set(sessionId, { _tag: "ready", entries })
-            return next
+            return [true, next] as const
           })
+          if (!installed) {
+            for (const entry of entries) {
+              yield* stopActor(entry)
+            }
+            yield* Deferred.succeed(gate, [])
+            return []
+          }
           yield* Effect.logDebug("extension.actors.session.ready").pipe(
             Effect.annotateLogs({
               sessionId,
@@ -452,6 +461,8 @@ export const makeMachineLifecycle = (params: {
           for (const entry of slot.entries) {
             yield* stopActor(entry)
           }
+        } else if (slot !== undefined && slot._tag === "pending") {
+          yield* Deferred.succeed(slot.gate, [])
         }
 
         yield* Ref.update(actorsRef, (current) => {

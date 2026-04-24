@@ -275,10 +275,7 @@ export const makeMachineEngine = (
 
       terminateAll: (sessionId) =>
         Effect.withSpan("MachineEngine.terminateAll")(
-          Effect.gen(function* () {
-            yield* lifecycle.terminateActors(sessionId)
-            yield* mailbox.shutdown(sessionId)
-          }),
+          mailbox.terminate(sessionId, lifecycle.terminateActors(sessionId)),
         ),
     } satisfies MachineEngineService
 
