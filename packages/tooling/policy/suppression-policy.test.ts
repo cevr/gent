@@ -565,7 +565,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/core/src/runtime/file-index/native-adapter.ts:16 eslint:typescript-eslint/consistent-type-imports",
   "packages/core/src/runtime/file-index/native-adapter.ts:18 eslint:typescript-eslint/consistent-type-imports",
   "packages/core/src/runtime/log-paths.ts:13 effect:nodeBuiltinImport:off",
-  "packages/core/src/runtime/make-extension-host-context.ts:272 eslint:@typescript-eslint/no-unsafe-type-assertion",
+  "packages/core/src/runtime/make-extension-host-context.ts:281 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/retry.ts:50 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/scope-brands.ts:102 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/runtime/scope-brands.ts:80 eslint:@typescript-eslint/no-unsafe-type-assertion",

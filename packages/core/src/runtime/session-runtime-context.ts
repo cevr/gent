@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, type Context } from "effect"
 import type { PermissionService } from "../domain/permission.js"
 import type { PromptSection } from "../domain/prompt.js"
 import type { Session } from "../domain/message.js"
@@ -25,6 +25,7 @@ export interface SessionEnvironment {
   readonly cwd: string
   readonly extensionRegistry: ExtensionRegistryService
   readonly extensionStateRuntime: MachineEngineService
+  readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -47,6 +48,7 @@ export type ResolvedSessionEnvironment = SessionFound | SessionMissing
 interface ActiveRuntimeBindings {
   readonly extensionRegistry: ExtensionRegistryService
   readonly extensionStateRuntime: MachineEngineService
+  readonly capabilityContext?: Context.Context<never>
   readonly driverRegistry: DriverRegistryService
   readonly permission: PermissionService
   readonly baseSections: ReadonlyArray<PromptSection>
@@ -68,6 +70,7 @@ const resolveActiveRuntimeBindings = (params: {
   extensionRegistry: params.profile?.registryService ?? params.hostDeps.extensionRegistry,
   extensionStateRuntime:
     params.profile?.extensionStateRuntime ?? params.hostDeps.extensionStateRuntime,
+  capabilityContext: params.profile?.layerContext ?? params.hostDeps.capabilityContext,
   driverRegistry: params.profile?.driverRegistryService ?? params.defaults.driverRegistry,
   permission: params.profile?.permissionService ?? params.defaults.permission,
   baseSections: params.profile?.baseSections ?? params.defaults.baseSections,
@@ -92,6 +95,9 @@ const buildSessionEnvironment = (params: {
       ...params.hostDeps,
       extensionRegistry: params.bindings.extensionRegistry,
       extensionStateRuntime: params.bindings.extensionStateRuntime,
+      ...(params.bindings.capabilityContext !== undefined
+        ? { capabilityContext: params.bindings.capabilityContext }
+        : {}),
     },
   )
 
@@ -99,6 +105,9 @@ const buildSessionEnvironment = (params: {
     cwd: hostCtx.cwd,
     extensionRegistry: params.bindings.extensionRegistry,
     extensionStateRuntime: params.bindings.extensionStateRuntime,
+    ...(params.bindings.capabilityContext !== undefined
+      ? { capabilityContext: params.bindings.capabilityContext }
+      : {}),
     driverRegistry: params.bindings.driverRegistry,
     permission: params.bindings.permission,
     baseSections: params.bindings.baseSections,

@@ -23,6 +23,14 @@ import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
 import { waitFor } from "@gent/core/test-utils/fixtures"
+import { buildExtensionLayers } from "../../src/runtime/profile"
+import { defineResource } from "@gent/core/domain/resource"
+import { BranchId, SessionId } from "@gent/core/domain/ids"
+
+class ProfileToken extends Context.Service<
+  ProfileToken,
+  { readonly read: () => Effect.Effect<string> }
+>()("@test/ProfileToken") {}
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string; cwd: string }> = []
@@ -81,31 +89,23 @@ describe("extension command RPCs", () => {
   }
 
   const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const resolved = resolveExtensions(extensions)
-        const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
-        const driverRegistryContext = yield* Layer.build(
-          DriverRegistry.fromResolved({
-            modelDrivers: resolved.modelDrivers,
-            externalDrivers: resolved.externalDrivers,
-          }),
-        )
-        const machineContext = yield* Layer.build(MachineEngine.Test())
-        return {
-          cwd,
-          extensions,
-          resolved,
-          permissionService: allowAllPermission,
-          registryService: Context.get(registryContext, ExtensionRegistry),
-          driverRegistryService: Context.get(driverRegistryContext, DriverRegistry),
-          extensionStateRuntime: Context.get(machineContext, MachineEngine),
-          subscriptionEngine: undefined,
-          baseSections: [],
-          instructions: "",
-        } satisfies SessionProfile
-      }),
-    )
+    Effect.gen(function* () {
+      const resolved = resolveExtensions(extensions)
+      const layerContext = yield* Layer.build(buildExtensionLayers(resolved))
+      return {
+        cwd,
+        extensions,
+        resolved,
+        layerContext,
+        permissionService: allowAllPermission,
+        registryService: Context.get(layerContext, ExtensionRegistry),
+        driverRegistryService: Context.get(layerContext, DriverRegistry),
+        extensionStateRuntime: Context.get(layerContext, MachineEngine),
+        subscriptionEngine: undefined,
+        baseSections: [],
+        instructions: "",
+      } satisfies SessionProfile
+    })
 
   const makeCommandExtension = (extensionId: string, commandId: string): LoadedExtension => ({
     manifest: { id: extensionId },
@@ -183,6 +183,136 @@ describe("extension command RPCs", () => {
         cwd: "/tmp/gent-extension-request-session",
       },
     ])
+  })
+
+  test("RPC request rejects missing sessions instead of using launch cwd", async () => {
+    invoked.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const ext = yield* setupCommandsExt
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
+
+          const result = yield* Effect.result(
+            client.extension.request({
+              sessionId: SessionId.make("missing-extension-request-session"),
+              extensionId: "@test/commands",
+              capabilityId: "greet",
+              intent: "write",
+              input: "should-not-run",
+              branchId: BranchId.make("missing-extension-request-branch"),
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(invoked).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC request rejects branches outside the requested session", async () => {
+    invoked.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const ext = yield* setupCommandsExt
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
+          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-request-first" })
+          const second = yield* client.session.create({
+            cwd: "/tmp/gent-extension-request-second",
+          })
+
+          const result = yield* Effect.result(
+            client.extension.request({
+              sessionId: first.sessionId,
+              extensionId: "@test/commands",
+              capabilityId: "greet",
+              intent: "write",
+              input: "wrong-branch",
+              branchId: second.branchId,
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(invoked).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC request provides profile resource services to public capabilities", async () => {
+    const profileCwd = "/tmp/gent-extension-request-profile-service"
+    const ext: LoadedExtension = {
+      manifest: { id: "@test/profile-service-request" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: {
+        resources: [
+          defineResource({
+            tag: ProfileToken,
+            scope: "process",
+            layer: Layer.succeed(ProfileToken, {
+              read: () => Effect.succeed("profile-token"),
+            }),
+          }),
+        ],
+        capabilities: [
+          {
+            id: "read-profile-token",
+            audiences: ["transport-public"],
+            intent: "read",
+            input: Schema.String,
+            output: Schema.String,
+            effect: () =>
+              Effect.gen(function* () {
+                const token = yield* ProfileToken
+                return yield* token.read()
+              }),
+          },
+        ],
+      },
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const profile = yield* makeProfile(profileCwd, [ext])
+          const sessionProfileCacheLayer = SessionProfileCache.Test(
+            new Map([[profileCwd, profile]]),
+          )
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [],
+              sessionProfileCacheLayer,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: profileCwd })
+
+          const result = yield* client.extension.request({
+            sessionId,
+            extensionId: "@test/profile-service-request",
+            capabilityId: "read-profile-token",
+            intent: "read",
+            input: "token",
+            branchId,
+          })
+
+          expect(result).toBe("profile-token")
+        }),
+      ),
+    )
   })
 
   test("RPC listStatus returns structurally tagged extension health", async () => {

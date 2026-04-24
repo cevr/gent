@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
+import { defineResource } from "@gent/core/domain/resource"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
 import type { CapabilityRef } from "@gent/core/domain/capability"
@@ -26,12 +27,18 @@ import {
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+import { buildExtensionLayers } from "../../src/runtime/profile"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
   modelDrivers: new Map(),
   externalDrivers: new Map(),
 })
+
+class ProfileToken extends Context.Service<
+  ProfileToken,
+  { readonly read: () => Effect.Effect<string> }
+>()("@test/ProfileToken") {}
 
 describe("resolveSessionEnvironment", () => {
   test("uses the stored session cwd to resolve profile-scoped permission and host context", async () => {
@@ -223,6 +230,132 @@ describe("resolveSessionEnvironment", () => {
     }
   })
 
+  test("provides profile resource services to nested capability requests", async () => {
+    const launch = mkdtempSync(join(tmpdir(), "gent-session-resource-context-launch-"))
+    const profileCwd = mkdtempSync(join(tmpdir(), "gent-session-resource-context-profile-"))
+    const ref: CapabilityRef<string, string> = {
+      extensionId: "@test/profile-resource-context",
+      capabilityId: "read-profile-token",
+      intent: "read",
+      input: Schema.String,
+      output: Schema.String,
+    }
+    const extension: LoadedExtension = {
+      manifest: { id: "@test/profile-resource-context" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: {
+        resources: [
+          defineResource({
+            tag: ProfileToken,
+            scope: "process",
+            layer: Layer.succeed(ProfileToken, {
+              read: () => Effect.succeed("profile-token"),
+            }),
+          }),
+        ],
+        capabilities: [
+          {
+            id: "read-profile-token",
+            audiences: ["agent-protocol"],
+            intent: "read",
+            input: Schema.String,
+            output: Schema.String,
+            effect: () =>
+              Effect.gen(function* () {
+                const token = yield* ProfileToken
+                return yield* token.read()
+              }),
+          },
+        ],
+      },
+    }
+    const resolvedExtensions = resolveExtensions([extension])
+    const extensionRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
+    const driverRegistryLayer = DriverRegistry.fromResolved({
+      modelDrivers: new Map(),
+      externalDrivers: new Map(),
+    })
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: launch,
+      home: launch,
+      platform: "test",
+    })
+    const testLayer = Layer.mergeAll(
+      Storage.Test(),
+      MachineEngine.Test(),
+      extensionRegistryLayer,
+      driverRegistryLayer,
+      runtimePlatformLayer,
+    )
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage
+            const extensionRegistry = yield* ExtensionRegistry
+            const extensionStateRuntime = yield* MachineEngine
+            const platform = yield* RuntimePlatform
+            const now = new Date()
+            const layerContext = yield* Layer.build(buildExtensionLayers(resolvedExtensions))
+            const profile: SessionProfile = {
+              cwd: profileCwd,
+              extensions: resolvedExtensions.extensions,
+              resolved: resolvedExtensions,
+              layerContext,
+              permissionService: AllowAllPermission,
+              registryService: Context.get(layerContext, ExtensionRegistry),
+              driverRegistryService: Context.get(layerContext, DriverRegistry),
+              extensionStateRuntime: Context.get(layerContext, MachineEngine),
+              subscriptionEngine: undefined,
+              baseSections: [],
+              instructions: "",
+            }
+            const profileCache: SessionProfileCacheService = {
+              resolve: () => Effect.succeed(profile),
+            }
+
+            yield* storage.createSession(
+              new Session({
+                id: SessionId.make("session-runtime-context-resource"),
+                cwd: profileCwd,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            )
+
+            const resolved = yield* resolveSessionEnvironment({
+              sessionId: SessionId.make("session-runtime-context-resource"),
+              branchId: BranchId.make("branch-runtime-context-resource"),
+              storage,
+              profileCache,
+              hostDeps: yield* makeAmbientExtensionHostContextDeps({
+                storage,
+                extensionRegistry,
+                extensionStateRuntime,
+                overrides: { platform },
+              }),
+              defaults: {
+                driverRegistry: yield* DriverRegistry,
+                permission: AllowAllPermission,
+                baseSections: [],
+              },
+            })
+
+            expect(resolved._tag).toBe("SessionFound")
+            expect(yield* resolved.environment.hostCtx.extension.request(ref, "token")).toBe(
+              "profile-token",
+            )
+          }).pipe(Effect.provide(testLayer)),
+        ),
+      )
+    } finally {
+      rmSync(launch, { recursive: true, force: true })
+      rmSync(profileCwd, { recursive: true, force: true })
+    }
+  })
+
   test("falls back to host deps and defaults when no session profile is available", async () => {
     const runtimePlatformLayer = RuntimePlatform.Test({
       cwd: "/tmp/runtime-context-default",
@@ -355,6 +488,7 @@ describe("resolveSessionEnvironment", () => {
           cwd: "/tmp/profile-driver-scope",
           extensions: [],
           resolved: resolveExtensions([]),
+          layerContext: Context.empty(),
           permissionService: {
             check: () => Effect.succeed("allowed" as const),
             addRule: () => Effect.void,

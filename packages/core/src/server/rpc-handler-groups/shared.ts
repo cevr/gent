@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Stream, type Context } from "effect"
 import type { AuthGuardService } from "../../domain/auth-guard.js"
 import type { AuthStoreService } from "../../domain/auth-store.js"
 import type { EventEnvelope, EventStoreService } from "../../domain/event.js"
@@ -23,6 +23,7 @@ import type { ModelRegistryService } from "../../runtime/model-registry.js"
 export interface ResolvedSessionServices {
   readonly registry: ExtensionRegistryService
   readonly stateRuntime: MachineEngineService
+  readonly capabilityContext?: Context.Context<never>
 }
 
 export interface RpcHandlerDeps {

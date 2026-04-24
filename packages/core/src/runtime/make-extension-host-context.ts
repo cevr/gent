@@ -36,6 +36,7 @@ export interface MakeExtensionHostContextDeps {
   readonly approvalService: ApprovalServiceShape
   readonly promptPresenter: PromptPresenterService
   readonly extensionRegistry: ExtensionRegistryService
+  readonly capabilityContext?: Context.Context<never>
   readonly storage: StorageService
   readonly searchStorage: SearchStorageService
   readonly agentRunner: AgentRunner
@@ -218,6 +219,7 @@ const withAmbientHostContextOverrides = <A, E, R>(
 export interface MakeAmbientExtensionHostContextDepsInput {
   readonly extensionStateRuntime: MachineEngineService
   readonly extensionRegistry: ExtensionRegistryService
+  readonly capabilityContext?: Context.Context<never>
   readonly storage: StorageService
   readonly overrides?: Partial<AmbientHostContextDefaults>
 }
@@ -236,6 +238,9 @@ export const makeAmbientExtensionHostContextDeps = (
       approvalService: defaults.approvalService,
       promptPresenter: defaults.promptPresenter,
       extensionRegistry: input.extensionRegistry,
+      ...(input.capabilityContext !== undefined
+        ? { capabilityContext: input.capabilityContext }
+        : {}),
       storage: input.storage,
       searchStorage: defaults.searchStorage,
       agentRunner: defaults.agentRunner,
@@ -269,8 +274,12 @@ export const makeExtensionHostContext = (
       const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
         intent: ref.intent,
       })
+      const provided =
+        deps.capabilityContext !== undefined
+          ? e.pipe(Effect.provideContext(deps.capabilityContext))
+          : e
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
-      return e as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
+      return provided as Effect.Effect<O, CapabilityError | CapabilityNotFoundError>
     },
   },
 

@@ -53,6 +53,7 @@ export interface SessionProfile {
   readonly cwd: string
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly resolved: ResolvedExtensions
+  readonly layerContext: Context.Context<never>
   readonly permissionService: PermissionService
   readonly registryService: ExtensionRegistryService
   readonly driverRegistryService: DriverRegistryService
@@ -142,6 +143,7 @@ export class SessionProfileCache extends Context.Service<
               cwd: profileData.cwd,
               extensions: profileData.resolved.extensions,
               resolved: profileData.resolved,
+              layerContext: runtime.layerContext,
               permissionService: runtime.permissionService,
               registryService: runtime.registryService,
               driverRegistryService: runtime.driverRegistryService,
@@ -210,36 +212,27 @@ export class SessionProfileCache extends Context.Service<
           if (existing !== undefined) return existing
           // Return a minimal profile for tests
           const resolved = resolveExtensions([])
+          const layerContext = Effect.runSync(
+            Layer.build(
+              Layer.mergeAll(
+                ExtensionRegistry.fromResolved(resolved),
+                DriverRegistry.fromResolved({
+                  modelDrivers: resolved.modelDrivers,
+                  externalDrivers: resolved.externalDrivers,
+                }),
+                MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Live)),
+              ),
+            ).pipe(Effect.scoped),
+          )
           const profile: SessionProfile = {
             cwd,
             extensions: [],
             resolved,
+            layerContext,
             permissionService: allowAllPermission,
-            registryService: Context.get(
-              Effect.runSync(
-                Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
-              ),
-              ExtensionRegistry,
-            ),
-            driverRegistryService: Context.get(
-              Effect.runSync(
-                Layer.build(
-                  DriverRegistry.fromResolved({
-                    modelDrivers: resolved.modelDrivers,
-                    externalDrivers: resolved.externalDrivers,
-                  }),
-                ).pipe(Effect.scoped),
-              ),
-              DriverRegistry,
-            ),
-            extensionStateRuntime: Context.get(
-              Effect.runSync(
-                Layer.build(
-                  MachineEngine.fromExtensions([]).pipe(Layer.provide(ExtensionTurnControl.Live)),
-                ).pipe(Effect.scoped),
-              ),
-              MachineEngine,
-            ),
+            registryService: Context.get(layerContext, ExtensionRegistry),
+            driverRegistryService: Context.get(layerContext, DriverRegistry),
+            extensionStateRuntime: Context.get(layerContext, MachineEngine),
             subscriptionEngine: undefined,
             baseSections: [],
             instructions: "",

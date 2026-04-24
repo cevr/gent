@@ -81,6 +81,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
         return {
           registry: profile.registryService,
           stateRuntime: profile.extensionStateRuntime,
+          capabilityContext: profile.layerContext,
         }
       })
 
