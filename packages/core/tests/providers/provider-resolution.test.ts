@@ -9,6 +9,7 @@ import { AuthStore, type AuthInfo } from "@gent/core/domain/auth-store"
 import {
   Provider,
   type ProviderError,
+  providerRequestFromMessages,
   type ProviderResolution,
 } from "@gent/core/providers/provider"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
@@ -408,6 +409,91 @@ describe("Provider model resolution", () => {
         type: "tool-call",
         name: "typedEcho",
         params: { text: "hi" },
+      }),
+    )
+  })
+
+  test("providerRequestFromMessages preserves typed Effect tool maps", async () => {
+    const typedEchoTool = AiTool.dynamic("typedEcho", {
+      description: "Typed echo input",
+      parameters: Schema.Struct({ text: Schema.String }),
+    })
+    type TypedTools = { readonly typedEcho: typeof typedEchoTool }
+    const typedToolkit = {
+      tools: { typedEcho: typedEchoTool },
+      handle: (name) =>
+        Effect.fail(
+          AiError.make({
+            module: "Test",
+            method: "typedToolkit.handle",
+            reason: new AiError.ToolConfigurationError({
+              toolName: String(name),
+              description: "unused in provider advertising test",
+            }),
+          }),
+        ),
+    } satisfies AiToolkit.WithHandler<TypedTools>
+
+    let capturedToolkit: AiToolkit.WithHandler<TypedTools> | undefined
+    const streamingProvider: ModelDriverContribution = {
+      id: "typed-message-toolkit-live",
+      name: "TypedMessageToolkitLive",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, {
+          generateText: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateText",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          generateObject: () =>
+            Effect.fail(
+              AiError.make({
+                module: "Test",
+                method: "generateObject",
+                reason: new AiError.UnknownError({ description: "unused" }),
+              }),
+            ),
+          streamText: (options) => {
+            capturedToolkit = options.toolkit
+            return Stream.fromIterable([
+              toolCallPart("typedEcho", { text: "from-message" }, { toolCallId: "typed-tc-2" }),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 1, outputTokens: 1 },
+              }),
+            ])
+          },
+        } satisfies LanguageModel.Service),
+      }),
+    }
+
+    const layer = buildProviderLayer([
+      makeExt("typed-message-toolkit-live-ext", [streamingProvider]),
+    ])
+
+    const parts = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const request = providerRequestFromMessages({
+          model: "typed-message-toolkit-live/gpt-5",
+          messages: [],
+          toolkit: typedToolkit,
+        })
+        const stream = yield* provider.stream(request)
+        const typedStream: Stream.Stream<Response.StreamPart<TypedTools>, ProviderError> = stream
+        return yield* Stream.runCollect(typedStream)
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(capturedToolkit).toBe(typedToolkit)
+    expect(Array.from(parts)[0]).toEqual(
+      expect.objectContaining({
+        type: "tool-call",
+        name: "typedEcho",
+        params: { text: "from-message" },
       }),
     )
   })

@@ -194,11 +194,11 @@ export interface ProviderMessageRequest<
   readonly systemPrompt?: string
 }
 
-export const providerRequestFromMessages = ({
+export const providerRequestFromMessages = <Tools extends ProviderToolMap = ProviderToolMap>({
   messages,
   systemPrompt,
   ...request
-}: ProviderMessageRequest): ProviderRequest => ({
+}: ProviderMessageRequest<Tools>): ProviderRequest<Tools> => ({
   ...request,
   prompt: toPrompt(messages, { systemPrompt }),
 })
