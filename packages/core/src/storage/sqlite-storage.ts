@@ -1157,7 +1157,7 @@ const makeStorage = Effect.gen(function* () {
             yield* sql`
               WITH RECURSIVE descendants(id) AS (
                 SELECT id FROM sessions WHERE id = ${id}
-                UNION ALL
+                UNION
                 SELECT sessions.id
                 FROM sessions
                 JOIN descendants ON sessions.parent_session_id = descendants.id

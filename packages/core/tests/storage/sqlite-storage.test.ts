@@ -524,12 +524,39 @@ describe("Storage", () => {
               sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
             )
             expect(invalidSession._tag).toBe("Failure")
+
+            yield* sql.withTransaction(
+              Effect.gen(function* () {
+                yield* sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"new-valid-session"}, ${"new-valid-branch"}, ${9}, ${9})`
+                yield* sql`INSERT INTO branches (id, session_id, created_at) VALUES (${"new-valid-branch"}, ${"new-valid-session"}, ${9})`
+              }),
+            )
+
+            const validSession = yield* storage.getSession(SessionId.make("new-valid-session"))
+            expect(validSession?.activeBranchId).toBe("new-valid-branch")
           }).pipe(Effect.provide(layer)),
         )
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
     })
+
+    it.live("deletes cyclic legacy child sessions without recursive CTE loops", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+
+        yield* sql`PRAGMA foreign_keys = OFF`
+        yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-a"}, ${"cycle-b"}, ${0}, ${0})`
+        yield* sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"cycle-b"}, ${"cycle-a"}, ${0}, ${0})`
+        yield* sql`PRAGMA foreign_keys = ON`
+
+        yield* storage.deleteSession(SessionId.make("cycle-a")).pipe(Effect.timeout("1 second"))
+
+        const remaining = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM sessions`
+        expect(remaining[0]?.count).toBe(0)
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
   })
 
   describe("Events", () => {
