@@ -18,7 +18,7 @@ import type { RpcHandlerDeps } from "./shared.js"
 import { invalidateExternalDriversFor } from "./shared.js"
 
 const authPersistenceError = (
-  action: "set" | "delete",
+  action: "read" | "set" | "delete",
   provider: string,
   cause: unknown,
 ): ProviderAuthError =>
@@ -104,13 +104,15 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
         cwd = session?.cwd
       }
       const config = yield* deps.configService.get(cwd)
-      return yield* deps.authGuard.listProviders({
-        ...(agentName !== undefined ? { agentName } : {}),
-        ...(sessionId !== undefined ? { sessionId } : {}),
-        ...(config.driverOverrides !== undefined
-          ? { driverOverrides: config.driverOverrides }
-          : {}),
-      })
+      return yield* deps.authGuard
+        .listProviders({
+          ...(agentName !== undefined ? { agentName } : {}),
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(config.driverOverrides !== undefined
+            ? { driverOverrides: config.driverOverrides }
+            : {}),
+        })
+        .pipe(Effect.mapError((error) => authPersistenceError("read", "*", error)))
     }),
 
   "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>

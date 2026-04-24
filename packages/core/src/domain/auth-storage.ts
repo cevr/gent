@@ -162,9 +162,24 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
 
         const readData = (): Effect.Effect<AuthData, AuthStorageError> =>
           fs.exists(filePath).pipe(
+            Effect.mapError(
+              (e) =>
+                new AuthStorageError({
+                  message: "Failed to read auth file",
+                  cause: e,
+                }),
+            ),
             Effect.flatMap((exists) => {
               if (!exists) return Effect.succeed("{}")
-              return fs.readFileString(filePath)
+              return fs.readFileString(filePath).pipe(
+                Effect.mapError(
+                  (e) =>
+                    new AuthStorageError({
+                      message: "Failed to read auth file",
+                      cause: e,
+                    }),
+                ),
+              )
             }),
             Effect.flatMap((content) =>
               Schema.decodeUnknownEffect(AuthDataJson)(content).pipe(
@@ -177,7 +192,6 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
                 ),
               ),
             ),
-            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const writeData = (data: AuthData): Effect.Effect<void, AuthStorageError> =>
@@ -363,21 +377,35 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
                 ),
               ),
             ),
-            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const readData = (key: CryptoKey): Effect.Effect<AuthData, AuthStorageError> =>
           fs.exists(filePath).pipe(
+            Effect.mapError(
+              (e) =>
+                new AuthStorageError({
+                  message: "Failed to read auth file",
+                  cause: e,
+                }),
+            ),
             Effect.flatMap((exists) => {
               if (!exists) return Effect.sync(() => undefined as string | undefined)
-              return fs.readFileString(filePath).pipe(Effect.map((content) => content.trim()))
+              return fs.readFileString(filePath).pipe(
+                Effect.map((content) => content.trim()),
+                Effect.mapError(
+                  (e) =>
+                    new AuthStorageError({
+                      message: "Failed to read auth file",
+                      cause: e,
+                    }),
+                ),
+              )
             }),
             Effect.flatMap((content) => {
               if (content === undefined || content.length === 0)
                 return Effect.succeed({} as AuthData)
               return decrypt(key, content)
             }),
-            Effect.catchEager(() => Effect.succeed({} as AuthData)),
           )
 
         const writeData = (key: CryptoKey, data: AuthData): Effect.Effect<void, AuthStorageError> =>

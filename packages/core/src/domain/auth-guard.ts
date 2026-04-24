@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Layer, Schema } from "effect"
-import { AuthStore, AuthType } from "./auth-store"
+import { AuthStore, AuthType, type AuthStoreError } from "./auth-store"
 import { ProviderId, parseModelProvider } from "./model"
 import { AgentName, DriverRef, resolveAgentDriver, resolveAgentModel } from "./agent.js"
 import { ExtensionRegistry } from "../runtime/extensions/registry.js"
@@ -65,10 +65,12 @@ export type AuthProviderQuery = typeof AuthProviderQuery.Type
 
 export interface AuthGuardService {
   readonly requiredProviders: (query?: AuthProviderQuery) => Effect.Effect<readonly ProviderId[]>
-  readonly listProviders: (query?: AuthProviderQuery) => Effect.Effect<readonly AuthProviderInfo[]>
+  readonly listProviders: (
+    query?: AuthProviderQuery,
+  ) => Effect.Effect<readonly AuthProviderInfo[], AuthStoreError>
   readonly missingRequiredProviders: (
     query?: AuthProviderQuery,
-  ) => Effect.Effect<readonly ProviderId[]>
+  ) => Effect.Effect<readonly ProviderId[], AuthStoreError>
 }
 
 export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
@@ -128,9 +130,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
           const providers: AuthProviderInfo[] = []
 
           for (const provider of registeredProviders) {
-            const storedInfo = yield* authStore
-              .get(provider.id)
-              .pipe(Effect.catchEager(() => Effect.void))
+            const storedInfo = yield* authStore.get(provider.id)
             const hasStored = storedInfo !== undefined
             const required = requiredSet.has(ProviderId.make(provider.id))
 

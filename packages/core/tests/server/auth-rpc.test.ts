@@ -32,6 +32,17 @@ const failingAuthStoreLayer = Layer.succeed(
   }),
 )
 
+const failingReadAuthStoreLayer = Layer.succeed(
+  AuthStore,
+  AuthStore.of({
+    get: () => Effect.fail(new AuthStoreError({ message: "read failed" })),
+    set: () => Effect.void,
+    remove: () => Effect.void,
+    list: () => Effect.succeed([]),
+    listInfo: () => Effect.succeed({}),
+  }),
+)
+
 const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
   const pendingCallbacks = new Map<string, (code?: string) => string>()
   const oauthProvider: ModelDriverContribution = {
@@ -144,6 +155,25 @@ describe("auth.listProviders", () => {
 })
 
 describe("auth persistence RPC failures", () => {
+  it.live("auth.listProviders surfaces auth read failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authStoreLayer: failingReadAuthStoreLayer,
+          }),
+        )
+
+        const exit = yield* Effect.exit(client.auth.listProviders({}))
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("read failed")
+      }),
+    ),
+  )
+
   it.live("auth.setKey surfaces write failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
