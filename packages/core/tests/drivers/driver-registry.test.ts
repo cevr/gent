@@ -1,8 +1,8 @@
 /**
  * DriverRegistry — unit tests for the unified driver lookup.
  *
- * Covers both kinds (model + external) under one registry, scope precedence
- * across kinds, requireModel/requireExternal failure, and filterModelCatalog
+ * Covers both categories (model + external) under one registry, scope precedence
+ * across categories, requireModel/requireExternal failure, and filterModelCatalog
  * composition. Pinned at this seam because every agent turn dispatches through
  * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence or
  * the require* fallthrough silently breaks per-cwd extension resolution.
@@ -145,24 +145,26 @@ describe("DriverRegistry", () => {
 
   test("requireModel fails with DriverError when missing", async () => {
     const layer = buildRegistry([])
-    const result = await Effect.runPromiseExit(
+    const result = await Effect.runPromise(
       Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.requireModel("nonexistent")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(layer), Effect.flip),
     )
-    expect(result._tag).toBe("Failure")
+    expect(result.driver._tag).toBe("model")
+    expect(result.driver.id).toBe("nonexistent")
   })
 
   test("requireExternal fails with DriverError when missing", async () => {
     const layer = buildRegistry([])
-    const result = await Effect.runPromiseExit(
+    const result = await Effect.runPromise(
       Effect.gen(function* () {
         const reg = yield* DriverRegistry
         return yield* reg.requireExternal("missing")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide(layer), Effect.flip),
     )
-    expect(result._tag).toBe("Failure")
+    expect(result.driver._tag).toBe("external")
+    expect(result.driver.id).toBe("missing")
   })
 
   test("filterModelCatalog composes every driver's listModels filter", async () => {

@@ -10,7 +10,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
 import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent"
-import { DriverInfo, DriverListResult } from "@gent/core/server/transport-contract"
+import { DriverListResult } from "@gent/core/server/transport-contract"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../extensions/helpers/test-preset"
@@ -23,7 +23,7 @@ describe("DriverRpcs", () => {
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const before = yield* client.driver.list()
         expect(before).toBeInstanceOf(DriverListResult)
-        expect(before.drivers[0]).toBeInstanceOf(DriverInfo)
+        expect(before.drivers[0]?._tag).toBeDefined()
         // Built-in agents extension contributes the "anthropic" model driver
         // (and friends); the registered list should be non-empty even when no
         // overrides are set.
@@ -39,7 +39,7 @@ describe("DriverRpcs", () => {
         const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
-        const someModel = drivers.find((d) => d.kind === "model")
+        const someModel = drivers.find((d) => d._tag === "model")
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
           agentName: "cowork",
@@ -73,7 +73,7 @@ describe("DriverRpcs", () => {
         const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list()).drivers
-        const someModel = drivers.find((d) => d.kind === "model")
+        const someModel = drivers.find((d) => d._tag === "model")
         if (someModel === undefined) throw new Error("no model driver registered in test layer")
         yield* client.driver.set({
           agentName: "cowork",

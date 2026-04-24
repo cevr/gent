@@ -46,7 +46,7 @@ describe("auth.listProviders", () => {
           // (asserts the no-override case below) but the override branch
           // is skipped.
           const drivers = (yield* client.driver.list()).drivers
-          const externalDriver = drivers.find((d) => d.kind === "external")
+          const externalDriver = drivers.find((d) => d._tag === "external")
 
           // Baseline: without an override, cowork (anthropic-modeled) should
           // include "anthropic" in its required providers.

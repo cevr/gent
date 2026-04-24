@@ -65,16 +65,31 @@ export default defineClientExtension("@gent/driver-ui", {
               })
             return
           }
-          // Heuristic: external driver ids are namespaced (e.g. "acp-…");
-          // anything else is treated as a model-driver id. Server validates
-          // existence in either registry and rejects with NotFoundError.
-          const driver = driverArg.includes("-")
-            ? ExternalDriverRef.make({ id: driverArg })
-            : ModelDriverRef.make({ id: driverArg })
           void runtime
-            .run(client.driver.set({ agentName, driver }))
-            .then(() => {
-              shell.sendMessage(`Set "${agentName}" → driver "${driverArg}".`)
+            .run(
+              Effect.gen(function* () {
+                const { drivers } = yield* client.driver.list()
+                const matches = drivers.filter((driver) => driver.id === driverArg)
+                if (matches.length === 0) {
+                  shell.sendMessage(`Unknown driver "${driverArg}".`)
+                  return false
+                }
+                if (matches.length > 1) {
+                  shell.sendMessage(`Ambiguous driver "${driverArg}".`)
+                  return false
+                }
+                const [match] = matches
+                if (match === undefined) return false
+                const driver =
+                  match._tag === "external"
+                    ? ExternalDriverRef.make({ id: match.id })
+                    : ModelDriverRef.make({ id: match.id })
+                yield* client.driver.set({ agentName, driver })
+                return true
+              }),
+            )
+            .then((changed) => {
+              if (changed) shell.sendMessage(`Set "${agentName}" → driver "${driverArg}".`)
             })
             .catch((err: unknown) => {
               shell.sendMessage(`Failed to set driver: ${String(err)}`)

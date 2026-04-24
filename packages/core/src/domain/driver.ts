@@ -53,9 +53,18 @@ export { DriverRef, ModelDriverRef, ExternalDriverRef } from "./agent.js"
 // ── Failure type ──
 
 /** Failure raised when a driver lookup or dispatch fails. */
+export const DriverFailureRef = TaggedEnumClass("DriverFailureRef", {
+  model: {
+    id: Schema.String,
+  },
+  external: {
+    id: Schema.String,
+  },
+})
+export type DriverFailureRef = typeof DriverFailureRef.Type
+
 export class DriverError extends Schema.TaggedErrorClass<DriverError>()("DriverError", {
-  kind: Schema.Literals(["model", "external"]),
-  id: Schema.String,
+  driver: DriverFailureRef,
   reason: Schema.String,
 }) {}
 

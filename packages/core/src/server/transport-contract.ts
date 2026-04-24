@@ -456,13 +456,18 @@ export type ExtensionHealthSnapshot = typeof ExtensionHealthSnapshot.Type
 // Driver routing
 // ---------------------------------------------------------------------------
 
-/** Per-driver descriptor returned by `driver.list`. `kind` distinguishes
- *  model drivers (provider-routed) from external drivers (e.g. ACP). */
-export class DriverInfo extends Schema.Class<DriverInfo>("DriverInfo")({
-  id: Schema.String,
-  kind: Schema.Literals(["model", "external"]),
-  description: Schema.optional(Schema.String),
-}) {}
+/** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
+export const DriverInfo = TaggedEnumClass("DriverInfo", {
+  model: {
+    id: Schema.String,
+    description: Schema.optional(Schema.String),
+  },
+  external: {
+    id: Schema.String,
+    description: Schema.optional(Schema.String),
+  },
+})
+export type DriverInfo = typeof DriverInfo.Type
 
 /** Snapshot returned by `driver.list`. Carries every registered driver
  *  and the active per-agent override map. The TUI joins these against

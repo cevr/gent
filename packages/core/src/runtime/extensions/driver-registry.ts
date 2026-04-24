@@ -24,7 +24,7 @@ import type {
   ProviderAuthInfo,
   TurnExecutor,
 } from "../../domain/driver.js"
-import { DriverError } from "../../domain/driver.js"
+import { DriverError, DriverFailureRef } from "../../domain/driver.js"
 import { Model } from "../../domain/model.js"
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
@@ -81,8 +81,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
             const decoded = decodeModelCatalog(nextCatalog)
             if (decoded._tag === "None") {
               return yield* new DriverError({
-                kind: "model",
-                id: driver.id,
+                driver: DriverFailureRef.cases.model.make({ id: driver.id }),
                 reason: `Model driver "${driver.id}" returned an invalid model catalog`,
               })
             }
@@ -95,8 +94,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           const found = resolved.modelDrivers.get(id)
           if (found === undefined) {
             return yield* new DriverError({
-              kind: "model",
-              id,
+              driver: DriverFailureRef.cases.model.make({ id }),
               reason: `No model driver registered for id "${id}"`,
             })
           }
@@ -107,8 +105,7 @@ export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegist
           const found = resolved.externalDrivers.get(id)
           if (found === undefined) {
             return yield* new DriverError({
-              kind: "external",
-              id,
+              driver: DriverFailureRef.cases.external.make({ id }),
               reason: `No external driver registered for id "${id}"`,
             })
           }
