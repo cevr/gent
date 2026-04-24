@@ -27,6 +27,7 @@ import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
+import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
@@ -104,17 +105,27 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     EventPublisherLive,
     Layer.merge(baseDeps, eventStoreLive),
   )
+  const sessionMutationsLive = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
+  )
 
   const sessionRuntimeLive = Layer.provide(
     SessionRuntime.Live({
       baseSections: [{ id: "base", content: "test system prompt", priority: 0 }],
     }),
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive),
+    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionMutationsLive),
   )
 
   return Layer.provideMerge(
     AppServicesLive,
-    Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionRuntimeLive),
+    Layer.mergeAll(
+      baseDeps,
+      eventStoreLive,
+      eventPublisherLive,
+      sessionMutationsLive,
+      sessionRuntimeLive,
+    ),
   )
 }
 

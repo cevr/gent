@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
 import type { GentExtension, LoadedExtension } from "../../src/domain/extension.js"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
 import {
   ExtensionRegistry,
   listSlashCommands,
@@ -18,6 +18,7 @@ import { e2ePreset, toolPreset } from "../extensions/helpers/test-preset"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
+import { waitFor } from "@gent/core/test-utils/fixtures"
 
 describe("extension command RPCs", () => {
   const invoked: Array<{ args: string; sessionId: string }> = []
@@ -170,6 +171,73 @@ describe("extension command RPCs", () => {
     )
 
     expect(invoked).toEqual([{ args: "rpc-world", sessionId: createdSessionId }])
+  })
+
+  test("model tool execution receives live session mutation capabilities", async () => {
+    const ext: LoadedExtension = {
+      manifest: { id: "@test/session-mutations" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: {
+        capabilities: [
+          {
+            id: "create-branch",
+            description: "Create a branch through the extension host session API.",
+            audiences: ["model"],
+            intent: "write",
+            input: Schema.Struct({}),
+            output: Schema.String,
+            effect: (_input, ctx) =>
+              ctx.session
+                .createBranch({ name: "from extension rpc" })
+                .pipe(Effect.map(({ branchId }) => branchId)),
+          },
+        ],
+      },
+    }
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([
+            toolCallStep("create-branch", {}),
+            textStep("done"),
+          ])
+          const { client } = yield* Gent.test(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+
+          yield* client.message.send({
+            sessionId,
+            branchId,
+            content: "create a branch",
+          })
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.messages.some((message) =>
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    part.toolName === "create-branch" &&
+                    part.output.type === "json",
+                ),
+              ),
+            5_000,
+            "create-branch tool result",
+          )
+          const createdBranchId = snapshot.messages
+            .flatMap((message) => message.parts)
+            .find((part) => part.type === "tool-result" && part.toolName === "create-branch")
+            ?.output.value
+
+          expect(typeof createdBranchId).toBe("string")
+          expect(createdBranchId).not.toBe(branchId)
+        }),
+      ),
+    )
   })
 
   test("RPC listCommands omits human-slash capabilities that are not transport-public", async () => {

@@ -58,8 +58,6 @@
     "./domain/resource.js": "./src/domain/resource.ts",
     "./domain/schema-tagged-enum-class": "./src/domain/schema-tagged-enum-class.ts",
     "./domain/schema-tagged-enum-class.js": "./src/domain/schema-tagged-enum-class.ts",
-    "./domain/session-deleter": "./src/domain/session-deleter.ts",
-    "./domain/session-deleter.js": "./src/domain/session-deleter.ts",
     "./domain/task": "./src/domain/task.ts",
     "./domain/task.js": "./src/domain/task.ts",
     "./domain/tool": "./src/domain/tool.ts",

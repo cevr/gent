@@ -1,9 +1,8 @@
 import { DateTime, Effect, Layer, Context, Stream } from "effect"
 import { EventPublisher } from "../domain/event-publisher.js"
-import { SessionMutations } from "../domain/session-mutations.js"
+import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { BranchId, MessageId, SessionId } from "../domain/ids.js"
-import { SessionDeleter } from "../domain/session-deleter.js"
 import { Branch, Message, Session, TextPart, copyMessageToBranch } from "../domain/message.js"
 import type { QueueSnapshot } from "../domain/queue.js"
 import type { SteerCommand } from "../domain/steer.js"
@@ -104,6 +103,251 @@ export interface SessionCommandsService {
     input: UpdateSessionReasoningLevelInput,
   ) => Effect.Effect<UpdateSessionReasoningLevelResult, AppServiceError>
 }
+
+const makeSessionMutationsService: Effect.Effect<
+  SessionMutationsService,
+  never,
+  | Storage
+  | EventStore
+  | EventPublisher
+  | SessionStorage
+  | BranchStorage
+  | MessageStorage
+  | MachineEngine
+  | SessionCwdRegistry
+> = Effect.gen(function* () {
+  const storage = yield* Storage
+  const sessionStorage = yield* SessionStorage
+  const branchStorage = yield* BranchStorage
+  const messageStorage = yield* MessageStorage
+  const eventStore = yield* EventStore
+  const eventPublisher = yield* EventPublisher
+  const extensionStateRuntime = yield* MachineEngine
+  const sessionCwdRegistry = yield* SessionCwdRegistry
+
+  const transactWithEvent = <A, E, R>(
+    mutation: Effect.Effect<A, E, R>,
+    event: AgentEvent,
+  ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
+    Effect.gen(function* () {
+      const committed = yield* storage.withTransaction(
+        Effect.gen(function* () {
+          const result = yield* mutation
+          const envelope = yield* eventPublisher.append(event)
+          return { result, envelope }
+        }),
+      )
+      yield* eventPublisher.deliver(committed.envelope)
+      return committed.result
+    })
+
+  const validateMessageCursor = Effect.fn("SessionMutations.validateMessageCursor")(
+    function* (input: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly afterMessageId?: MessageId
+    }) {
+      if (input.afterMessageId === undefined) return
+      const cursor = yield* messageStorage.getMessage(input.afterMessageId)
+      if (
+        cursor === undefined ||
+        cursor.sessionId !== input.sessionId ||
+        cursor.branchId !== input.branchId
+      ) {
+        return yield* Effect.die(`Message "${input.afterMessageId}" not found in current branch`)
+      }
+    },
+  )
+
+  return {
+    renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
+      const trimmed = input.name.trim().slice(0, 80)
+      if (trimmed.length === 0) return { renamed: false as const }
+      const session = yield* sessionStorage.getSession(input.sessionId)
+      if (session === undefined) return { renamed: false as const }
+      if (session.name === trimmed) return { renamed: false as const }
+      yield* transactWithEvent(
+        sessionStorage.updateSession(
+          new Session({
+            ...session,
+            name: trimmed,
+            updatedAt: yield* DateTime.nowAsDate,
+          }),
+        ),
+        SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed }),
+      )
+      return { renamed: true as const, name: trimmed }
+    }),
+
+    createSessionBranch: Effect.fn("SessionMutations.createSessionBranch")(function* (input) {
+      const branch = new Branch({
+        id: BranchId.make(Bun.randomUUIDv7()),
+        sessionId: input.sessionId,
+        parentBranchId: input.parentBranchId,
+        name: input.name,
+        createdAt: yield* DateTime.nowAsDate,
+      })
+      yield* transactWithEvent(
+        branchStorage.createBranch(branch),
+        BranchCreated.make({
+          sessionId: branch.sessionId,
+          branchId: branch.id,
+          ...(branch.parentBranchId !== undefined ? { parentBranchId: branch.parentBranchId } : {}),
+        }),
+      )
+      return { branchId: branch.id }
+    }),
+
+    forkSessionBranch: Effect.fn("SessionMutations.forkSessionBranch")(function* (input) {
+      const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+      if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+        return yield* Effect.die("Branch not found")
+      }
+
+      const messages = yield* messageStorage.listMessages(input.fromBranchId)
+      const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
+      if (targetIndex === -1) {
+        return yield* Effect.die("Message not found in branch")
+      }
+
+      const branch = new Branch({
+        id: BranchId.make(Bun.randomUUIDv7()),
+        sessionId: input.sessionId,
+        parentBranchId: input.fromBranchId,
+        parentMessageId: input.atMessageId,
+        name: input.name,
+        createdAt: yield* DateTime.nowAsDate,
+      })
+      yield* transactWithEvent(
+        Effect.gen(function* () {
+          yield* branchStorage.createBranch(branch)
+          for (const message of messages.slice(0, targetIndex + 1)) {
+            yield* messageStorage.createMessage(
+              copyMessageToBranch(message, {
+                id: MessageId.make(Bun.randomUUIDv7()),
+                branchId: branch.id,
+              }),
+            )
+          }
+        }),
+        BranchCreated.make({
+          sessionId: branch.sessionId,
+          branchId: branch.id,
+          ...(branch.parentBranchId !== undefined ? { parentBranchId: branch.parentBranchId } : {}),
+          ...(branch.parentMessageId !== undefined
+            ? { parentMessageId: branch.parentMessageId }
+            : {}),
+        }),
+      )
+      return { branchId: branch.id }
+    }),
+
+    switchActiveBranch: Effect.fn("SessionMutations.switchActiveBranch")(function* (input) {
+      const session = yield* sessionStorage.getSession(input.sessionId)
+      if (session === undefined) return yield* Effect.die("Current session not found")
+      const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+      if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
+        return yield* Effect.die(`Branch "${input.fromBranchId}" not found in current session`)
+      }
+      const toBranch = yield* branchStorage.getBranch(input.toBranchId)
+      if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
+        return yield* Effect.die(`Branch "${input.toBranchId}" not found in current session`)
+      }
+      yield* transactWithEvent(
+        sessionStorage.updateSession(
+          new Session({
+            ...session,
+            activeBranchId: input.toBranchId,
+            updatedAt: yield* DateTime.nowAsDate,
+          }),
+        ),
+        BranchSwitched.make({
+          sessionId: input.sessionId,
+          fromBranchId: input.fromBranchId,
+          toBranchId: input.toBranchId,
+        }),
+      )
+    }),
+
+    createChildSession: Effect.fn("SessionMutations.createChildSession")(function* (input) {
+      const sessionId = SessionId.make(Bun.randomUUIDv7())
+      const branchId = BranchId.make(Bun.randomUUIDv7())
+      const now = yield* DateTime.nowAsDate
+      const session = new Session({
+        id: sessionId,
+        name: input.name ?? "child session",
+        cwd: input.cwd,
+        parentSessionId: input.parentSessionId,
+        parentBranchId: input.parentBranchId,
+        activeBranchId: branchId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      const branch = new Branch({
+        id: branchId,
+        sessionId,
+        createdAt: now,
+      })
+      const committed = yield* storage
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sessionStorage.createSession(session)
+            yield* branchStorage.createBranch(branch)
+            if (input.cwd !== undefined) {
+              yield* sessionCwdRegistry.record(sessionId, input.cwd)
+            }
+            const envelope = yield* eventPublisher.append(
+              SessionStarted.make({ sessionId, branchId }),
+            )
+            return { envelope }
+          }),
+        )
+        .pipe(Effect.onError(() => sessionCwdRegistry.forget(sessionId)))
+      yield* eventPublisher.deliver(committed.envelope)
+      return { sessionId, branchId }
+    }),
+
+    deleteSession: Effect.fn("SessionMutations.deleteSession")(function* (sessionId) {
+      yield* extensionStateRuntime.terminateAll(sessionId).pipe(
+        // Session deletion owns cleanup best-effort actor termination, then
+        // propagates durable store failures below.
+        Effect.catchDefect(() => Effect.void),
+      )
+      yield* eventPublisher.terminateSession(sessionId)
+      yield* eventStore.removeSession(sessionId)
+      yield* sessionStorage.deleteSession(sessionId)
+      yield* sessionCwdRegistry.forget(sessionId)
+      yield* Effect.logInfo("session.deleted").pipe(Effect.annotateLogs({ sessionId }))
+    }),
+
+    deleteBranch: Effect.fn("SessionMutations.deleteBranch")(function* (input) {
+      if (input.branchId === input.currentBranchId) {
+        return yield* Effect.die("Cannot delete the current branch")
+      }
+      const session = yield* sessionStorage.getSession(input.sessionId)
+      if (session === undefined) {
+        return yield* Effect.die("Current session not found")
+      }
+      if (session.activeBranchId === input.branchId) {
+        return yield* Effect.die("Cannot delete the active branch")
+      }
+      const branch = yield* branchStorage.getBranch(input.branchId)
+      if (branch === undefined || branch.sessionId !== input.sessionId) {
+        return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+      }
+      yield* branchStorage.deleteBranch(input.branchId)
+    }),
+
+    deleteMessages: Effect.fn("SessionMutations.deleteMessages")(function* (input) {
+      const branch = yield* branchStorage.getBranch(input.branchId)
+      if (branch === undefined || branch.sessionId !== input.sessionId) {
+        return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+      }
+      yield* validateMessageCursor(input)
+      yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
+    }),
+  } satisfies SessionMutationsService
+})
 
 export class SessionCommands extends Context.Service<SessionCommands, SessionCommandsService>()(
   "@gent/core/src/server/session-commands/SessionCommands",
@@ -602,6 +846,18 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         if (branch === undefined || branch.sessionId !== input.sessionId) {
           return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
         }
+        if (input.afterMessageId !== undefined) {
+          const cursor = yield* messageStorage.getMessage(input.afterMessageId)
+          if (
+            cursor === undefined ||
+            cursor.sessionId !== input.sessionId ||
+            cursor.branchId !== input.branchId
+          ) {
+            return yield* Effect.die(
+              `Message "${input.afterMessageId}" not found in current branch`,
+            )
+          }
+        }
         yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
       })
 
@@ -631,41 +887,5 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
     }),
   )
 
-  /**
-   * Domain-tier deleter Layer — projects `SessionCommands.deleteSession`
-   * onto the `SessionDeleter` Tag so the runtime can call into the
-   * destructive cleanup path without importing `server/`. See
-   * `domain/session-deleter.ts` for the inversion rationale.
-   */
-  static SessionDeleterLive = Layer.effect(
-    SessionDeleter,
-    Effect.gen(function* () {
-      const cmds = yield* SessionCommands
-      return {
-        // SessionDeleter is the domain-tier interface — failures swallowed
-        // here so callers (extension host context) don't need to know the
-        // server-tier error channel. The runtime caller catches its own
-        // error tail via `Effect.catchEager` regardless.
-        deleteSession: (sessionId) =>
-          cmds.deleteSession(sessionId).pipe(Effect.catchEager(() => Effect.void)),
-      }
-    }),
-  )
-
-  static SessionMutationsLive = Layer.effect(
-    SessionMutations,
-    Effect.gen(function* () {
-      const cmds = yield* SessionCommands
-      return {
-        renameSession: (input) => cmds.renameSession(input),
-        createSessionBranch: (input) => cmds.createSessionBranch(input),
-        forkSessionBranch: (input) => cmds.forkSessionBranch(input),
-        switchActiveBranch: (input) => cmds.switchActiveBranch(input),
-        createChildSession: (input) => cmds.createChildSession(input),
-        deleteSession: (sessionId) => cmds.deleteSession(sessionId),
-        deleteBranch: (input) => cmds.deleteBranch(input),
-        deleteMessages: (input) => cmds.deleteMessages(input),
-      }
-    }),
-  )
+  static SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMutationsService)
 }

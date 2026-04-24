@@ -33,6 +33,8 @@ import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control.
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
 import { ResourceManagerLive } from "../../src/runtime/resource-manager"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
+import { SessionCommands } from "../../src/server/session-commands"
 import { Storage, StorageError } from "@gent/core/storage/sqlite-storage"
 import {
   SessionRuntime,
@@ -94,11 +96,16 @@ const makeRuntimeLayer = (
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    SessionCwdRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
 }
 
@@ -126,11 +133,16 @@ const makeRuntimeLayerWithEventPublisher = (
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    SessionCwdRegistry.Test(),
   )
   const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, baseDeps)
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.merge(baseDeps, providedEventPublisherLayer),
+  )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, providedEventPublisherLayer),
+    Layer.mergeAll(baseDeps, providedEventPublisherLayer, sessionMutationsLayer),
   )
 }
 

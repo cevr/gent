@@ -39,8 +39,10 @@ import {
   type MachineEngineService,
 } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { EventPublisherLive } from "../../src/server/event-publisher"
+import { SessionCommands } from "../../src/server/session-commands"
 import { Permission } from "@gent/core/domain/permission"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
+import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { ServerProfileService } from "../../src/runtime/scope-brands"
 import {
   SessionRuntime,
@@ -148,13 +150,18 @@ const makeLiveAgentRunnerLayer = (providerLayer: Layer.Layer<Provider>) => {
     ConfigService.Test(),
     BunServices.layer,
     ResourceManagerLive,
+    SessionCwdRegistry.Test(),
     ephemeralParentDeps,
+  )
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.merge(baseDeps, eventPublisherLayer),
   )
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
-  const deps = Layer.mergeAll(baseDeps, sessionRuntimeLayer)
+  const deps = Layer.mergeAll(baseDeps, sessionMutationsLayer, sessionRuntimeLayer)
   const runnerLayer = InProcessRunner({}).pipe(Layer.provide(deps))
   return Layer.mergeAll(deps, runnerLayer)
 }

@@ -95,7 +95,6 @@ const approvedPublicCoreSubpaths = {
     "read-only",
     "resource",
     "schema-tagged-enum-class",
-    "session-deleter",
     "task",
     "tool",
     "tool-output",

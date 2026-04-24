@@ -80,8 +80,6 @@
       "@gent/core/domain/schema-tagged-enum-class.js": [
         "./packages/core/src/domain/schema-tagged-enum-class.ts"
       ],
-      "@gent/core/domain/session-deleter": ["./packages/core/src/domain/session-deleter.ts"],
-      "@gent/core/domain/session-deleter.js": ["./packages/core/src/domain/session-deleter.ts"],
       "@gent/core/domain/task": ["./packages/core/src/domain/task.ts"],
       "@gent/core/domain/task.js": ["./packages/core/src/domain/task.ts"],
       "@gent/core/domain/tool": ["./packages/core/src/domain/tool.ts"],

@@ -581,6 +581,74 @@ describe("session command persistence", () => {
       expect(remaining.map((message) => message.id)).toEqual([firstMessageId])
     }).pipe(Effect.provide(sessionCommandsLayer())),
   )
+
+  it.live("deleteMessages rejects a cursor from another session", () =>
+    Effect.gen(function* () {
+      const commands = yield* SessionCommands
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const messages = yield* MessageStorage
+      const sessionId = SessionId.make("session-delete-messages-owner")
+      const branchId = BranchId.make("branch-delete-messages-owner")
+      const otherSessionId = SessionId.make("session-delete-messages-other")
+      const otherBranchId = BranchId.make("branch-delete-messages-other")
+      const foreignMessageId = MessageId.make("message-delete-foreign")
+      const ownerMessageId = MessageId.make("message-delete-owner")
+      const now = new Date()
+
+      yield* sessions.createSession(
+        new Session({
+          id: sessionId,
+          name: "owner",
+          activeBranchId: branchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* sessions.createSession(
+        new Session({
+          id: otherSessionId,
+          name: "other",
+          activeBranchId: otherBranchId,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      )
+      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* branches.createBranch(
+        new Branch({ id: otherBranchId, sessionId: otherSessionId, createdAt: now }),
+      )
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: foreignMessageId,
+          sessionId: otherSessionId,
+          branchId: otherBranchId,
+          role: "user",
+          parts: [new TextPart({ type: "text", text: "foreign" })],
+          createdAt: now,
+        }),
+      )
+      yield* messages.createMessage(
+        Message.cases.regular.make({
+          id: ownerMessageId,
+          sessionId,
+          branchId,
+          role: "assistant",
+          parts: [new TextPart({ type: "text", text: "owner" })],
+          createdAt: new Date(now.getTime() + 1),
+        }),
+      )
+
+      const exit = yield* Effect.exit(
+        commands.deleteMessages({ sessionId, branchId, afterMessageId: foreignMessageId }),
+      )
+
+      expect(exit._tag).toBe("Failure")
+      expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
+        ownerMessageId,
+      ])
+    }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
 })
 
 describe("session.delete", () => {

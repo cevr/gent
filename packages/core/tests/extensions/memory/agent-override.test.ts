@@ -66,13 +66,17 @@ const makeCommandsLayer = (providerLayer: Layer.Layer<Provider>) => {
     SessionCwdRegistry.Test(),
   )
   const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const sessionMutationsLayer = Layer.provide(
+    SessionCommands.SessionMutationsLive,
+    Layer.merge(baseDeps, eventPublisherLayer),
+  )
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer),
   )
   return Layer.provideMerge(
     SessionCommands.Live,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionMutationsLayer, sessionRuntimeLayer),
   )
 }
 

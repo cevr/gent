@@ -43,6 +43,7 @@ import { ResourceManagerLive } from "../runtime/resource-manager.js"
 import { SessionRuntime } from "../runtime/session-runtime.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { EventPublisherLive } from "../server/event-publisher.js"
+import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
@@ -242,6 +243,10 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         EventPublisherLive,
         Layer.merge(baseDeps, baseEventStoreLive),
       )
+      const sessionMutationsLive = Layer.provide(
+        SessionCommands.SessionMutationsLive,
+        Layer.mergeAll(baseDeps, baseEventStoreLive, eventPublisherLive),
+      )
       const approvalLayer =
         config.approvalLayer === undefined
           ? ApprovalService.Test()
@@ -252,7 +257,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         SessionRuntime.Live({
           baseSections: [{ id: "base", content: "e2e test system prompt", priority: 0 }],
         }),
-        Layer.mergeAll(depsWithApproval, baseEventStoreLive, eventPublisherLive, toolRunnerLive),
+        Layer.mergeAll(
+          depsWithApproval,
+          baseEventStoreLive,
+          eventPublisherLive,
+          toolRunnerLive,
+          sessionMutationsLive,
+        ),
       )
 
       return Layer.provideMerge(
@@ -262,6 +273,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           baseEventStoreLive,
           eventPublisherLive,
           toolRunnerLive,
+          sessionMutationsLive,
           sessionRuntimeLive,
         ),
       )

@@ -26,6 +26,7 @@ import { InteractionStorage } from "../storage/interaction-storage.js"
 import { decodeInteractionParams } from "../domain/interaction-request.js"
 import { EventStoreLive } from "../runtime/event-store-live.js"
 import { makeEventPublisherRouter } from "./event-publisher.js"
+import { SessionCommands } from "./session-commands.js"
 import { SessionProfileCache } from "../runtime/session-profile.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { FileIndexLive } from "../runtime/file-index/index.js"
@@ -300,6 +301,8 @@ export const createDependencies = (config: DependenciesConfig) => {
     allDeps,
   )
 
+  const sessionMutationsLive = Layer.provide(SessionCommands.SessionMutationsLive, allDeps)
+
   const sessionRuntimeLive = Layer.provide(
     Layer.unwrap(
       Effect.gen(function* () {
@@ -307,10 +310,15 @@ export const createDependencies = (config: DependenciesConfig) => {
         return SessionRuntime.Live({ baseSections })
       }),
     ),
-    Layer.mergeAll(allDeps, sessionProfileCacheLive),
+    Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionMutationsLive),
   )
 
-  const allWithRuntime = Layer.mergeAll(allDeps, sessionProfileCacheLive, sessionRuntimeLive)
+  const allWithRuntime = Layer.mergeAll(
+    allDeps,
+    sessionProfileCacheLive,
+    sessionMutationsLive,
+    sessionRuntimeLive,
+  )
 
   const agentRuntimeLive = Layer.provide(
     Layer.unwrap(
