@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { AuthApi } from "../../domain/auth-store.js"
+import { ProviderAuthError } from "../../domain/driver.js"
 import { SessionId } from "../../domain/ids.js"
 import { NotFoundError } from "../errors.js"
 import { DriverInfo, DriverListResult } from "../transport-contract.js"
@@ -15,6 +16,16 @@ import type {
 } from "../transport-contract.js"
 import type { RpcHandlerDeps } from "./shared.js"
 import { invalidateExternalDriversFor } from "./shared.js"
+
+const authPersistenceError = (
+  action: "set" | "delete",
+  provider: string,
+  cause: unknown,
+): ProviderAuthError =>
+  new ProviderAuthError({
+    message: `Failed to ${action} auth for provider "${provider}"`,
+    cause,
+  })
 
 export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
   "permission.listRules": () => deps.configService.getPermissionRules(),
@@ -105,24 +116,12 @@ export const buildConfigRpcHandlers = (deps: RpcHandlerDeps) => ({
   "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>
     deps.authStore
       .set(provider, new AuthApi({ type: "api", key }))
-      .pipe(
-        Effect.catchEager((error) =>
-          Effect.logWarning("failed to set auth key").pipe(
-            Effect.annotateLogs({ error: String(error) }),
-          ),
-        ),
-      ),
+      .pipe(Effect.mapError((error) => authPersistenceError("set", provider, error))),
 
   "auth.deleteKey": ({ provider }: DeleteAuthKeyInput) =>
     deps.authStore
       .remove(provider)
-      .pipe(
-        Effect.catchEager((error) =>
-          Effect.logWarning("failed to delete auth key").pipe(
-            Effect.annotateLogs({ error: String(error) }),
-          ),
-        ),
-      ),
+      .pipe(Effect.mapError((error) => authPersistenceError("delete", provider, error))),
 
   "auth.listMethods": () => deps.providerAuth.listMethods(),
 

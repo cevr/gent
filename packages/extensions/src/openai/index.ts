@@ -194,7 +194,11 @@ export const buildOpenAIModelDriver = (
       Effect.gen(function* () {
         const entry = pendingCallbacks.get(ctx.authorizationId)
         pendingCallbacks.delete(ctx.authorizationId)
-        if (entry === undefined) return
+        if (entry === undefined) {
+          return yield* new ProviderAuthError({
+            message: "OpenAI OAuth callback state is missing or expired",
+          })
+        }
         clearTimeout(entry.timeoutId)
         const cb = entry.cb
         const result = yield* Effect.tryPromise({

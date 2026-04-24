@@ -70,6 +70,8 @@ export interface E2ELayerConfig {
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
+  /** AuthStore override. Use for public RPC auth failure-path tests. */
+  readonly authStoreLayer?: Layer.Layer<AuthStore>
   /** Per-extension layer overrides (e.g., memory vault test layer) */
   readonly layerOverrides?: Record<string, () => Layer.Layer<never>>
 }
@@ -190,7 +192,8 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       )
 
       // Auth
-      const authStoreLive = Layer.provide(AuthStore.Live, AuthStorage.Test())
+      const authStoreLive =
+        config.authStoreLayer ?? Layer.provide(AuthStore.Live, AuthStorage.Test())
       const extensionRegistryLive = ExtensionRegistry.fromResolved(resolved)
       const driverRegistryLive = DriverRegistry.fromResolved({
         modelDrivers: resolved.modelDrivers,

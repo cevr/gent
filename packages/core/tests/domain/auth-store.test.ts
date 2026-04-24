@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { AuthApi, AuthOauth, AuthStore } from "@gent/core/domain/auth-store"
-import { AuthStorage } from "@gent/core/domain/auth-storage"
+import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
 import { Effect, Layer } from "effect"
 
 describe("AuthStore", () => {
@@ -22,6 +22,45 @@ describe("AuthStore", () => {
     AuthStore.use((auth) => auth.get("anthropic")).pipe(
       Effect.tap((result) => Effect.sync(() => expect(result?.type).toBe("api"))),
       Effect.provide(storeLayer({ anthropic: "sk-test-key" })),
+    ),
+  )
+
+  it.live("legacy OAuth JSON decodes as OAuth, not an API key", () =>
+    Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const result = yield* auth.get("openai")
+      expect(result?.type).toBe("oauth")
+      if (result?.type === "oauth") {
+        expect(result.access).toBe("access-token")
+        expect(result.refresh).toBe("refresh-token")
+        expect(result.accountId).toBe("account-1")
+      }
+    }).pipe(
+      Effect.provide(
+        storeLayer({
+          openai:
+            '{"type":"oauth","access":"access-token","refresh":"refresh-token","expires":4102444800000,"accountId":"account-1"}',
+        }),
+      ),
+    ),
+  )
+
+  it.live("raw string fallback is reserved for raw API keys", () =>
+    Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const rawKey = yield* auth.get("openai")
+      expect(rawKey?.type).toBe("api")
+      if (rawKey?.type === "api") expect(rawKey.key).toBe("sk-raw")
+
+      const invalidJson = yield* Effect.exit(auth.get("broken"))
+      expect(invalidJson._tag).toBe("Failure")
+    }).pipe(
+      Effect.provide(
+        storeLayer({
+          openai: "sk-raw",
+          broken: '{"type":"oauth","access":"missing-required-fields"}',
+        }),
+      ),
     ),
   )
 
@@ -72,6 +111,21 @@ describe("AuthStore", () => {
       expect(result).toBeUndefined()
     }).pipe(Effect.provide(storeLayer())),
   )
+
+  it.live("remove surfaces storage failures", () => {
+    const failingStorage = Layer.succeed(AuthStorage, {
+      get: () => Effect.succeed(undefined),
+      set: () => Effect.void,
+      delete: () => Effect.fail(new AuthStorageError({ message: "delete failed" })),
+      list: () => Effect.succeed([]),
+    })
+
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const exit = yield* Effect.exit(auth.remove("openai"))
+      expect(exit._tag).toBe("Failure")
+    }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
+  })
 
   it.live("lists all stored provider IDs", () =>
     Effect.gen(function* () {

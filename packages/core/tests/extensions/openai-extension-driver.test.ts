@@ -82,6 +82,30 @@ const openaiHappyResponse = () => ({
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState): Promise<void> =>
   Effect.runPromise(oneGenerate(layer, state, openaiHappyResponse))
 
+describe("buildOpenAIModelDriver — OAuth callback state", () => {
+  test("stale callback state fails instead of reporting success", async () => {
+    const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)
+    const driver = buildOpenAIModelDriver(credentialCellRef, noopCallbacks())
+    const callback = driver.auth?.callback
+    if (callback === undefined) throw new Error("OpenAI driver callback missing")
+
+    const exit = await Effect.runPromise(
+      Effect.exit(
+        callback({
+          sessionId: "s1",
+          methodIndex: 0,
+          authorizationId: "missing-authorization",
+          code: "code",
+          persist: () => Effect.void,
+        }),
+      ),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(exit.cause.toString()).toContain("missing or expired")
+  })
+})
+
 describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => {
   test("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", async () => {
     const credentialCellRef = Ref.makeUnsafe<CredentialCacheCell>(EMPTY_CREDENTIAL_CELL)

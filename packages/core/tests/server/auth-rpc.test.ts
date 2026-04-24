@@ -10,12 +10,76 @@
  * `configService.get(cwd)` → `driverOverrides`.
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { AuthMethod } from "@gent/core/domain/auth-method"
+import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import { ExternalDriverRef } from "@gent/core/domain/agent"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../extensions/helpers/test-preset"
+import type { ModelDriverContribution } from "../../src/domain/driver.js"
+import type { LoadedExtension } from "../../src/domain/extension.js"
+
+const failingAuthStoreLayer = Layer.succeed(
+  AuthStore,
+  AuthStore.of({
+    get: () => Effect.succeed(undefined),
+    set: () => Effect.fail(new AuthStoreError({ message: "write failed" })),
+    remove: () => Effect.fail(new AuthStoreError({ message: "delete failed" })),
+    list: () => Effect.succeed([]),
+    listInfo: () => Effect.succeed({}),
+  }),
+)
+
+const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
+  const pendingCallbacks = new Map<string, (code?: string) => string>()
+  const oauthProvider: ModelDriverContribution = {
+    id: "persisting-oauth",
+    name: "Persisting OAuth",
+    resolveModel: () => ({}),
+    auth: {
+      methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+      authorize: (ctx) =>
+        Effect.sync(() => {
+          pendingCallbacks.set(ctx.authorizationId, (code) => code ?? "")
+          return {
+            url: "http://example.com/auth",
+            method: "code" as const,
+          }
+        }),
+      callback: (ctx) =>
+        Effect.gen(function* () {
+          const code = pendingCallbacks.get(ctx.authorizationId)?.(ctx.code) ?? ""
+          yield* ctx.persist({ type: "api", key: code })
+        }),
+    },
+  }
+  const authorizePersistProvider: ModelDriverContribution = {
+    id: "persisting-authorize",
+    name: "Persisting Authorize",
+    resolveModel: () => ({}),
+    auth: {
+      methods: [AuthMethod.make({ type: "oauth", label: "Done" })],
+      authorize: (ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.persist({ type: "api", key: "sk-authorize" })
+          return {
+            url: "",
+            method: "done" as const,
+          }
+        }),
+    },
+  }
+  return [
+    {
+      manifest: { id: "test-auth-providers" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: { modelDrivers: [oauthProvider, authorizePersistProvider] },
+    },
+  ]
+}
 
 describe("auth.listProviders", () => {
   it.live("returns providers without sessionId (back-compat with launch-cwd default)", () =>
@@ -76,5 +140,106 @@ describe("auth.listProviders", () => {
           }
         }),
       ),
+  )
+})
+
+describe("auth persistence RPC failures", () => {
+  it.live("auth.setKey surfaces write failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authStoreLayer: failingAuthStoreLayer,
+          }),
+        )
+
+        const exit = yield* Effect.exit(client.auth.setKey({ provider: "openai", key: "sk-test" }))
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("Failed to set auth")
+      }),
+    ),
+  )
+
+  it.live("auth.deleteKey surfaces delete failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            authStoreLayer: failingAuthStoreLayer,
+          }),
+        )
+
+        const exit = yield* Effect.exit(client.auth.deleteKey({ provider: "openai" }))
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("Failed to delete auth")
+      }),
+    ),
+  )
+
+  it.live("auth.authorize surfaces credentials persisted during authorize", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: makePersistingExtensions(),
+            authStoreLayer: failingAuthStoreLayer,
+          }),
+        )
+
+        const exit = yield* Effect.exit(
+          client.auth.authorize({
+            sessionId: "auth-rpc-session",
+            provider: "persisting-authorize",
+            method: 0,
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("Failed to persist auth")
+      }),
+    ),
+  )
+
+  it.live("auth.callback surfaces callback credential persistence failures", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { client } = yield* Gent.test(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: makePersistingExtensions(),
+            authStoreLayer: failingAuthStoreLayer,
+          }),
+        )
+
+        const authorization = yield* client.auth.authorize({
+          sessionId: "auth-rpc-session",
+          provider: "persisting-oauth",
+          method: 0,
+        })
+        if (authorization === null) return yield* Effect.dieMessage("auth setup failed")
+
+        const exit = yield* Effect.exit(
+          client.auth.callback({
+            sessionId: "auth-rpc-session",
+            provider: "persisting-oauth",
+            method: 0,
+            authorizationId: authorization.authorizationId,
+            code: "sk-callback",
+          }),
+        )
+        expect(exit._tag).toBe("Failure")
+        expect(exit.cause.toString()).toContain("Failed to persist auth")
+      }),
+    ),
   )
 })
