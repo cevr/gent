@@ -263,7 +263,7 @@ export const makeExtensionHostContext = (
       const ctx = {
         sessionId: runInfo.sessionId,
         branchId: runInfo.branchId,
-        cwd: deps.platform.cwd,
+        cwd: runInfo.sessionCwd ?? deps.platform.cwd,
         home: deps.platform.home,
       }
       const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {

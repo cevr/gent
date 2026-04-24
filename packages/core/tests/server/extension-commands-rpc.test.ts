@@ -25,7 +25,7 @@ import { SessionProfileCache, type SessionProfile } from "../../src/runtime/sess
 import { waitFor } from "@gent/core/test-utils/fixtures"
 
 describe("extension command RPCs", () => {
-  const invoked: Array<{ args: string; sessionId: string }> = []
+  const invoked: Array<{ args: string; sessionId: string; cwd: string }> = []
 
   // Slash commands are now Capabilities with `audiences:["human-slash"]`.
   // The command's display description comes from `promptSnippet` (capabilities
@@ -45,7 +45,7 @@ describe("extension command RPCs", () => {
             output: Schema.Void,
             effect: (args: string, ctx) =>
               Effect.sync(() => {
-                invoked.push({ args, sessionId: ctx.sessionId })
+                invoked.push({ args, sessionId: ctx.sessionId, cwd: ctx.cwd })
               }),
           },
           {
@@ -150,7 +150,9 @@ describe("extension command RPCs", () => {
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const { sessionId, branchId } = yield* client.session.create({
+            cwd: "/tmp/gent-extension-request-session",
+          })
           createdSessionId = sessionId
 
           const commands = yield* client.extension.listCommands({ sessionId })
@@ -174,7 +176,13 @@ describe("extension command RPCs", () => {
       ),
     )
 
-    expect(invoked).toEqual([{ args: "rpc-world", sessionId: createdSessionId }])
+    expect(invoked).toEqual([
+      {
+        args: "rpc-world",
+        sessionId: createdSessionId,
+        cwd: "/tmp/gent-extension-request-session",
+      },
+    ])
   })
 
   test("RPC listStatus returns structurally tagged extension health", async () => {

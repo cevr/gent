@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PermissionRule } from "@gent/core/domain/permission"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Session } from "@gent/core/domain/message"
+import type { CapabilityRef } from "@gent/core/domain/capability"
+import type { LoadedExtension } from "../../src/domain/extension"
 import { ConfigService } from "../../src/runtime/config-service"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extensions/registry"
@@ -120,6 +122,104 @@ describe("resolveSessionEnvironment", () => {
       rmSync(launch, { recursive: true, force: true })
       rmSync(secondary, { recursive: true, force: true })
       rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test("uses the stored session cwd for nested capability requests", async () => {
+    const launch = mkdtempSync(join(tmpdir(), "gent-session-request-context-launch-"))
+    const secondary = mkdtempSync(join(tmpdir(), "gent-session-request-context-secondary-"))
+    const seenCwd: string[] = []
+    const ref: CapabilityRef<string, string> = {
+      extensionId: "@test/session-request-context",
+      capabilityId: "echo-cwd",
+      intent: "read",
+      input: Schema.String,
+      output: Schema.String,
+    }
+    const extension: LoadedExtension = {
+      manifest: { id: "@test/session-request-context" },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: {
+        capabilities: [
+          {
+            id: "echo-cwd",
+            audiences: ["agent-protocol"],
+            intent: "read",
+            input: Schema.String,
+            output: Schema.String,
+            effect: (_input, ctx) =>
+              Effect.sync(() => {
+                seenCwd.push(ctx.cwd)
+                return ctx.cwd
+              }),
+          },
+        ],
+      },
+    }
+    const resolvedExtensions = resolveExtensions([extension])
+    const extensionRegistryLayer = ExtensionRegistry.fromResolved(resolvedExtensions)
+    const driverRegistryLayer = DriverRegistry.fromResolved({
+      modelDrivers: resolvedExtensions.modelDrivers,
+      externalDrivers: resolvedExtensions.externalDrivers,
+    })
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: launch,
+      home: launch,
+      platform: "test",
+    })
+    const testLayer = Layer.mergeAll(
+      Storage.Test(),
+      MachineEngine.Test(),
+      extensionRegistryLayer,
+      driverRegistryLayer,
+      runtimePlatformLayer,
+    )
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const storage = yield* Storage
+          const extensionRegistry = yield* ExtensionRegistry
+          const extensionStateRuntime = yield* MachineEngine
+          const platform = yield* RuntimePlatform
+          const now = new Date()
+
+          yield* storage.createSession(
+            new Session({
+              id: SessionId.make("session-runtime-context-request"),
+              cwd: secondary,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          )
+
+          const resolved = yield* resolveSessionEnvironment({
+            sessionId: SessionId.make("session-runtime-context-request"),
+            branchId: BranchId.make("branch-runtime-context-request"),
+            storage,
+            hostDeps: yield* makeAmbientExtensionHostContextDeps({
+              storage,
+              extensionRegistry,
+              extensionStateRuntime,
+              overrides: { platform },
+            }),
+            defaults: {
+              driverRegistry: yield* DriverRegistry,
+              permission: AllowAllPermission,
+              baseSections: [],
+            },
+          })
+
+          expect(resolved._tag).toBe("SessionFound")
+          const result = yield* resolved.environment.hostCtx.extension.request(ref, "cwd")
+          expect(result).toBe(secondary)
+          expect(seenCwd).toEqual([secondary])
+        }).pipe(Effect.provide(testLayer)),
+      )
+    } finally {
+      rmSync(launch, { recursive: true, force: true })
+      rmSync(secondary, { recursive: true, force: true })
     }
   })
 

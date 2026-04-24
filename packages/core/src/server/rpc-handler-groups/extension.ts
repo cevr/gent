@@ -78,6 +78,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     branchId,
   }: RequestCapabilityInput) =>
     Effect.gen(function* () {
+      const session = yield* deps.loadSession(sessionId)
       const { registry } = yield* deps.resolveSessionServices(sessionId)
       const capabilities = registry.getResolved().capabilities
       return yield* capabilities
@@ -89,7 +90,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           {
             sessionId: SessionId.make(sessionId),
             branchId: BranchId.make(branchId),
-            cwd: deps.platform.cwd,
+            cwd: session?.cwd ?? deps.platform.cwd,
             home: deps.platform.home,
           },
           { intent },
