@@ -436,19 +436,63 @@ export const ExtensionSchedulerHealth = TaggedEnumClass("ExtensionSchedulerHealt
 })
 export type ExtensionSchedulerHealth = typeof ExtensionSchedulerHealth.Type
 
-const ExtensionHealthFields = {
+const ExtensionHealthIdentityFields = {
   manifest: ExtensionManifestInfo,
   scope: Schema.Literals(["builtin", "user", "project"]),
   sourcePath: Schema.String,
+}
+
+const HealthyExtensionActorStatusInfo = Schema.Union([
+  ExtensionActorStatusInfo.cases.starting,
+  ExtensionActorStatusInfo.cases.running,
+  ExtensionActorStatusInfo.cases.restarting,
+])
+
+const ExtensionHealthFields = {
+  ...ExtensionHealthIdentityFields,
   activation: ExtensionActivationHealth,
   actor: Schema.optional(ExtensionActorStatusInfo),
   scheduler: ExtensionSchedulerHealth,
 }
 
-export const ExtensionHealth = TaggedEnumClass("ExtensionHealth", {
-  healthy: ExtensionHealthFields,
+const HealthyExtensionHealthFields = {
+  ...ExtensionHealthIdentityFields,
+  activation: ExtensionActivationHealth.cases.active,
+  actor: Schema.optional(HealthyExtensionActorStatusInfo),
+  scheduler: ExtensionSchedulerHealth.cases.healthy,
+}
+
+const ExtensionHealthState = TaggedEnumClass("ExtensionHealth", {
+  healthy: HealthyExtensionHealthFields,
   degraded: ExtensionHealthFields,
 })
+
+const isDegradedExtensionHealth = (health: typeof ExtensionHealthState.Type): boolean =>
+  health.activation._tag === "failed" ||
+  health.actor?._tag === "failed" ||
+  health.scheduler._tag === "degraded"
+
+export const ExtensionHealth = Object.assign(
+  ExtensionHealthState.pipe(
+    Schema.check(
+      Schema.makeFilter<typeof ExtensionHealthState.Type>(
+        (health) => {
+          if (health._tag === "healthy") return undefined
+          return isDegradedExtensionHealth(health)
+            ? undefined
+            : "degraded extension health must include failed activation, failed actor, or degraded scheduler"
+        },
+        { expected: "consistent extension health state" },
+      ),
+    ),
+  ),
+  {
+    cases: ExtensionHealthState.cases,
+    guards: ExtensionHealthState.guards,
+    isAnyOf: ExtensionHealthState.isAnyOf,
+    match: ExtensionHealthState.match,
+  },
+)
 export type ExtensionHealth = typeof ExtensionHealth.Type
 
 export const ExtensionHealthSummary = TaggedEnumClass("ExtensionHealthSummary", {

@@ -147,16 +147,34 @@ describe("buildExtensionHealthSnapshot", () => {
             sourcePath: "builtin",
             _tag: "healthy",
             activation: {
-              _tag: "active",
-              error: "should not fit active state",
+              _tag: "failed",
+              phase: "startup",
+              error: "startup boom",
             },
             scheduler: {
-              _tag: "degraded",
-              failures: [],
+              _tag: "healthy",
             },
           },
         ],
-        summary: { _tag: "healthy", failedExtensions: ["@gent/memory"] },
+        summary: { _tag: "healthy" },
+      }),
+    ).toThrow()
+  })
+
+  test("transport rejects degraded health without a degraded component", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
+        extensions: [
+          {
+            manifest: { id: "@gent/memory" },
+            scope: "builtin",
+            sourcePath: "builtin",
+            _tag: "degraded",
+            activation: { _tag: "active" },
+            scheduler: { _tag: "healthy" },
+          },
+        ],
+        summary: { _tag: "healthy" },
       }),
     ).toThrow()
   })
