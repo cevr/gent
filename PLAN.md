@@ -16,9 +16,10 @@ batch, and recursive audit until no material findings remain.
 
 - **In**: verification gate semantics, runtime mutation failure propagation,
   causal builtin follow-up queueing, destructive session mutation ownership,
-  session relationship integrity, provider auth persistence, extension health
-  modeling and RPC coverage, extension API/package boundaries, SDK stale
-  supervisor deletion, final recursive audit.
+  session relationship integrity, provider auth persistence,
+  `TaggedEnumClass` constructor API migration, extension health modeling and RPC
+  coverage, extension API/package boundaries, SDK stale supervisor deletion,
+  final recursive audit.
 - **Out**: P3 polish, compatibility bridges kept only for comfort, unrelated UI
   refinements, PR workflow.
 
@@ -57,47 +58,48 @@ bun run test:e2e
 
 ## Principle Grounding
 
-| Principle                                 | Application                                                                                  |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `prove-it-works`                          | Gates must observe correctness without mutating source; final audit must verify real paths.  |
-| `test-through-public-interfaces`          | Health, send failures, and auth failures need RPC/runtime acceptance coverage.               |
-| `serialize-shared-state-mutations`        | Runtime queue and destructive session mutations must have one causal owner.                  |
-| `make-operations-idempotent`              | Storage relationships and durable auth writes must not leave partial, lying state.           |
-| `use-the-platform`                        | SQLite should enforce session relationships instead of convention-only checks.               |
-| `boundary-discipline`                     | Public extension/package APIs must not leak storage/runtime/source-tree internals.           |
-| `small-interface-deep-implementation`     | SDK and extension APIs should expose capabilities, not proxy layers or implementation seams. |
-| `make-impossible-states-unrepresentable`  | Extension health must not encode contradictory health/snapshot states.                       |
-| `migrate-callers-then-delete-legacy-apis` | Delete stale local supervisor and wildcard export paths in the same wave callers migrate.    |
-| `fix-root-causes`                         | Fix ownership/model boundaries, not only the observed failing call sites.                    |
+| Principle                                 | Application                                                                                                            |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `prove-it-works`                          | Gates must observe correctness without mutating source; final audit must verify real paths.                            |
+| `test-through-public-interfaces`          | Health, send failures, and auth failures need RPC/runtime acceptance coverage.                                         |
+| `serialize-shared-state-mutations`        | Runtime queue and destructive session mutations must have one causal owner.                                            |
+| `make-operations-idempotent`              | Storage relationships and durable auth writes must not leave partial, lying state.                                     |
+| `use-the-platform`                        | SQLite should enforce session relationships instead of convention-only checks.                                         |
+| `boundary-discipline`                     | Public extension/package APIs must not leak storage/runtime/source-tree internals.                                     |
+| `small-interface-deep-implementation`     | SDK and extension APIs should expose capabilities, not proxy layers or implementation seams.                           |
+| `make-impossible-states-unrepresentable`  | Extension health must not encode contradictory health/snapshot states.                                                 |
+| `migrate-callers-then-delete-legacy-apis` | Delete stale local supervisor, wildcard export paths, and transitional `.cases` APIs in the same wave callers migrate. |
+| `fix-root-causes`                         | Fix ownership/model boundaries, not only the observed failing call sites.                                              |
 
 ## Fresh Audit Results
 
-| Point                                    | Result   | Summary                                                                                                                                  |
-| ---------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| runtime ownership / actor-model clarity  | Material | Public send masks loop persistence failure; builtin follow-up queue is fire-and-forget; extension host still owns destructive mutations. |
-| extension API boundaries                 | Material | `@gent/extensions` wildcard exposes internals; public host context leaks storage types.                                                  |
-| Effect-native AI integration             | Material | Provider auth persistence failures can be reported as success.                                                                           |
-| storage model                            | Material | `sessions` parent/active relationships are not SQLite-enforced.                                                                          |
-| domain modeling / constructor discipline | Material | Extension health snapshot still allows contradictory constructor/snapshot states.                                                        |
-| suppression debt / boundary discipline   | Material | Suppression accounting holds; remaining wildcard exports bypass boundary policy.                                                         |
-| SDK/TUI adapter debt                     | Material | Dead local supervisor proxy path remains in SDK.                                                                                         |
-| test taxonomy / behavioral coverage      | Material | `bun run gate` mutates source; extension health lacks RPC acceptance coverage.                                                           |
+| Point                                    | Result   | Summary                                                                                                                                                               |
+| ---------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| runtime ownership / actor-model clarity  | Material | Public send masks loop persistence failure; builtin follow-up queue is fire-and-forget; extension host still owns destructive mutations.                              |
+| extension API boundaries                 | Material | `@gent/extensions` wildcard exposes internals; public host context leaks storage types.                                                                               |
+| Effect-native AI integration             | Material | Provider auth persistence failures can be reported as success.                                                                                                        |
+| storage model                            | Material | `sessions` parent/active relationships are not SQLite-enforced.                                                                                                       |
+| domain modeling / constructor discipline | Material | Extension health snapshot still allows contradictory constructor/snapshot states; `TaggedEnumClass` keeps transitional `.cases` constructors and non-Pascal variants. |
+| suppression debt / boundary discipline   | Material | Suppression accounting holds; remaining wildcard exports bypass boundary policy.                                                                                      |
+| SDK/TUI adapter debt                     | Material | Dead local supervisor proxy path remains in SDK.                                                                                                                      |
+| test taxonomy / behavioral coverage      | Material | `bun run gate` mutates source; extension health lacks RPC acceptance coverage.                                                                                        |
 
 ## Material Findings
 
-| Severity | Finding                                                         | Evidence                                                                                                                                                                                                                                                                                                                                                                     |
-| -------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1       | Public send masks loop persistence failures.                    | `packages/core/src/runtime/session-runtime.ts:329-363`; `packages/core/src/server/session-commands.ts:526-544`; `packages/core/tests/runtime/agent-loop.test.ts:1999-2034`; `packages/core/tests/runtime/session-runtime.test.ts:513-856`                                                                                                                                    |
-| P2       | Builtin follow-up queue is fire-and-forget.                     | `packages/core/src/runtime/extensions/turn-control.ts:55-68`; `packages/core/src/runtime/extensions/extension-actor-shared.ts:50-59`; `packages/core/src/runtime/agent/agent-loop.ts:3028-3058,3214-3239`; `packages/extensions/src/auto.ts:372-444`                                                                                                                         |
-| P2       | Extension host still owns direct destructive session mutations. | `packages/core/src/domain/extension-host-context.ts:150-162`; `packages/core/src/runtime/make-extension-host-context.ts:326-351`; `packages/core/src/server/session-commands.ts:547-615`                                                                                                                                                                                     |
-| P2       | Session relationships bypass SQLite integrity.                  | `packages/core/src/storage/sqlite-storage.ts:799-810,1044,1110`; probe showed `PRAGMA foreign_key_list(sessions) = []` and orphan child sessions survive parent delete.                                                                                                                                                                                                      |
-| P2       | Provider auth write failures can report success.                | `packages/core/src/domain/driver.ts:108-120`; `packages/core/src/domain/auth-store.ts:41-47,95-104`; `packages/core/src/providers/provider-auth.ts:62-83`; `packages/extensions/src/openai/index.ts:166-210`; `packages/extensions/src/anthropic/index.ts:169-195`; `packages/core/src/server/errors.ts:23-44`; `packages/core/tests/providers/provider-auth.test.ts:66-113` |
-| P2       | Extension health snapshot still encodes contradictions.         | `packages/core/src/server/transport-contract.ts:451-513`; `packages/core/tests/server/extension-health.test.ts:140`                                                                                                                                                                                                                                                          |
-| P2       | Extension health lacks RPC acceptance coverage.                 | `packages/core/src/server/rpcs/extension.ts:29-33`; `packages/core/src/server/rpc-handler-groups/extension.ts:17-23`; `packages/sdk/src/namespaced-client.ts:83-87,140-145`; `packages/core/tests/server/extension-health.test.ts:6-180`; `packages/core/tests/server/extension-commands-rpc.test.ts:136-260`                                                                |
-| P2       | Public extension host context leaks storage layer types.        | `packages/core/src/extensions/api.ts:179`; `packages/core/src/domain/extension-host-context.ts:19-20,81-162`; `packages/core/src/storage/search-storage.ts:36-53`; `packages/core/src/storage/sqlite-storage.ts:77-82`                                                                                                                                                       |
-| P2       | Wildcard package exports still bypass boundary policy.          | `packages/core/package.json:71,139`; `packages/extensions/package.json:13-17`; `tsconfig.json:16,179,188`; `packages/tooling/policy/architecture-policy.test.ts:250-317,320-374,465-489`                                                                                                                                                                                     |
-| P2       | Stale local supervisor path remains in SDK.                     | `ARCHITECTURE.md:236-240`; `packages/sdk/package.json:5`; `packages/sdk/src/local-supervisor.ts:79-223`; `packages/sdk/src/supervisor-boundary.ts:24`; `packages/sdk/src/namespaced-client.ts:59`; `packages/sdk/tests/local-supervisor.test.ts:5`                                                                                                                           |
-| P2       | Gate mutates source instead of checking it.                     | `package.json:13-19`; `PLAN.md` previous gate requirements                                                                                                                                                                                                                                                                                                                   |
+| Severity | Finding                                                                                                 | Evidence                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1       | Public send masks loop persistence failures.                                                            | `packages/core/src/runtime/session-runtime.ts:329-363`; `packages/core/src/server/session-commands.ts:526-544`; `packages/core/tests/runtime/agent-loop.test.ts:1999-2034`; `packages/core/tests/runtime/session-runtime.test.ts:513-856`                                                                                                                                    |
+| P2       | Builtin follow-up queue is fire-and-forget.                                                             | `packages/core/src/runtime/extensions/turn-control.ts:55-68`; `packages/core/src/runtime/extensions/extension-actor-shared.ts:50-59`; `packages/core/src/runtime/agent/agent-loop.ts:3028-3058,3214-3239`; `packages/extensions/src/auto.ts:372-444`                                                                                                                         |
+| P2       | Extension host still owns direct destructive session mutations.                                         | `packages/core/src/domain/extension-host-context.ts:150-162`; `packages/core/src/runtime/make-extension-host-context.ts:326-351`; `packages/core/src/server/session-commands.ts:547-615`                                                                                                                                                                                     |
+| P2       | Session relationships bypass SQLite integrity.                                                          | `packages/core/src/storage/sqlite-storage.ts:799-810,1044,1110`; probe showed `PRAGMA foreign_key_list(sessions) = []` and orphan child sessions survive parent delete.                                                                                                                                                                                                      |
+| P2       | Provider auth write failures can report success.                                                        | `packages/core/src/domain/driver.ts:108-120`; `packages/core/src/domain/auth-store.ts:41-47,95-104`; `packages/core/src/providers/provider-auth.ts:62-83`; `packages/extensions/src/openai/index.ts:166-210`; `packages/extensions/src/anthropic/index.ts:169-195`; `packages/core/src/server/errors.ts:23-44`; `packages/core/tests/providers/provider-auth.test.ts:66-113` |
+| P2       | Tagged enum constructors still require transitional `.cases` access and allow non-Pascal variant names. | `packages/core/src/domain/schema-tagged-enum-class.ts:8-14,118-190,241-296`; `packages/core/src/domain/message.ts:93-124`; `packages/core/src/domain/driver.ts:56-66,199-247`; `packages/core/src/domain/queue.ts:13-22`; `packages/core/tests/domain/schema-tagged-enum-class.test.ts:24-293`                                                                               |
+| P2       | Extension health snapshot still encodes contradictions.                                                 | `packages/core/src/server/transport-contract.ts:451-513`; `packages/core/tests/server/extension-health.test.ts:140`                                                                                                                                                                                                                                                          |
+| P2       | Extension health lacks RPC acceptance coverage.                                                         | `packages/core/src/server/rpcs/extension.ts:29-33`; `packages/core/src/server/rpc-handler-groups/extension.ts:17-23`; `packages/sdk/src/namespaced-client.ts:83-87,140-145`; `packages/core/tests/server/extension-health.test.ts:6-180`; `packages/core/tests/server/extension-commands-rpc.test.ts:136-260`                                                                |
+| P2       | Public extension host context leaks storage layer types.                                                | `packages/core/src/extensions/api.ts:179`; `packages/core/src/domain/extension-host-context.ts:19-20,81-162`; `packages/core/src/storage/search-storage.ts:36-53`; `packages/core/src/storage/sqlite-storage.ts:77-82`                                                                                                                                                       |
+| P2       | Wildcard package exports still bypass boundary policy.                                                  | `packages/core/package.json:71,139`; `packages/extensions/package.json:13-17`; `tsconfig.json:16,179,188`; `packages/tooling/policy/architecture-policy.test.ts:250-317,320-374,465-489`                                                                                                                                                                                     |
+| P2       | Stale local supervisor path remains in SDK.                                                             | `ARCHITECTURE.md:236-240`; `packages/sdk/package.json:5`; `packages/sdk/src/local-supervisor.ts:79-223`; `packages/sdk/src/supervisor-boundary.ts:24`; `packages/sdk/src/namespaced-client.ts:59`; `packages/sdk/tests/local-supervisor.test.ts:5`                                                                                                                           |
+| P2       | Gate mutates source instead of checking it.                                                             | `package.json:13-19`; `PLAN.md` previous gate requirements                                                                                                                                                                                                                                                                                                                   |
 
 ## Clean Areas
 
@@ -298,7 +300,49 @@ failed, leaving the next model turn to fail later.
 
 ---
 
-## Commit 7: `fix(server): make extension health snapshot structurally consistent`
+## Commit 7: `refactor(domain): collapse tagged enum variant constructors`
+
+**Justification**: `TaggedEnumClass` still exposes a transitional
+`X.cases.Y` constructor surface and permits non-Pascal variant keys. That keeps
+the domain model split between ergonomic module re-exports and internal
+wrapper shape, and it preserves a compatibility API we already know we want to
+delete.
+
+**Principles**:
+
+- `make-impossible-states-unrepresentable`: variant members should have one canonical constructor path.
+- `migrate-callers-then-delete-legacy-apis`: migrate every caller and delete `.cases` in the same wave.
+- `boundary-discipline`: public schemas should expose domain constructors, not wrapper implementation structure.
+
+**Skills**: `architecture`, `effect-v4`, `test`, `code-style`, `bun`
+
+**Changes**:
+
+| File                                                          | Change                                                                                                                | Lines                   |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `packages/core/src/domain/schema-tagged-enum-class.ts`        | Move per-variant constructors to direct `X.Y` members; reject non-Pascal variant names; delete `.cases`.              | ~8-14, ~118-296         |
+| Tagged enum domain definitions                                | Rename lowercase/kebab variant keys to PascalCase while preserving existing `_tag` wire literals.                     | discovered by typecheck |
+| Repo callers                                                  | Migrate `X.cases.Y.make(...)`, `typeof X.cases.Y.Type`, and `instanceof X.cases.Y` to direct `X.Y`.                   | discovered by `rg`      |
+| `packages/core/tests/domain/schema-tagged-enum-class.test.ts` | Lock direct constructor API, PascalCase enforcement, wire-tag preservation, decode identity, and no `.cases` surface. | existing                |
+| `packages/tooling/policy/architecture-policy.test.ts`         | Add policy lock rejecting production `TaggedEnumClass(... { lower/kebab })` definitions and `.cases` usage.           | existing                |
+
+**Migration rules**:
+
+- Variant object keys must be PascalCase TypeScript member names.
+- Wire `_tag` literals must not change for persisted/transported data. Where an existing wire tag is lowercase or kebab-case, use the new factory migration hook to bind `Message.Regular` to `_tag: "regular"` and `TurnEvent.TextDelta` to `_tag: "text-delta"`.
+- Delete the old `.cases` API from the factory after callers migrate. No compatibility bridge.
+- High-blast-radius rule applies: if the migration crosses 20+ files, split the wave into reviewable sub-commits that each pass `bun run gate`, then run one review for the completed batch.
+
+**Verification**:
+
+- `bun test packages/core/tests/domain/schema-tagged-enum-class.test.ts packages/core/tests/domain/message.test.ts packages/core/tests/providers/ai-transcript.test.ts`
+- `bun test packages/tooling/policy/architecture-policy.test.ts`
+- `bun run gate`
+- `bun run test:e2e`
+
+---
+
+## Commit 8: `fix(server): make extension health snapshot structurally consistent`
 
 **Justification**: Health DTOs are tagged, but degraded constructors and snapshot
 summary can still encode contradictory states.
@@ -329,7 +373,7 @@ summary can still encode contradictory states.
 
 ---
 
-## Commit 8: `refactor(extensions): decouple host context from storage types`
+## Commit 9: `refactor(extensions): decouple host context from storage types`
 
 **Justification**: Public `ExtensionHostContext` exposes storage-layer
 `StorageError` and `SearchResult`, making extension authoring APIs depend on
@@ -358,7 +402,7 @@ SQLite/search internals.
 
 ---
 
-## Commit 9: `refactor(packages): close remaining wildcard exports`
+## Commit 10: `refactor(packages): close remaining wildcard exports`
 
 **Justification**: `@gent/core/debug/*`, `@gent/core/test-utils/*`, and
 `@gent/extensions/*` still publish source-tree layout as public API.
@@ -390,7 +434,7 @@ SQLite/search internals.
 
 ---
 
-## Commit 10: `refactor(sdk): delete dead local supervisor path`
+## Commit 11: `refactor(sdk): delete dead local supervisor path`
 
 **Justification**: `local-supervisor.ts` is unexported, unused by production, and
 kept alive only by tests while mirroring RPC by hand.
@@ -421,7 +465,7 @@ kept alive only by tests while mirroring RPC by hand.
 
 ---
 
-## Commit 11: `chore(audit): recursively verify remaining plan targets`
+## Commit 12: `chore(audit): recursively verify remaining plan targets`
 
 **Justification**: The plan is complete only when a fresh audit of the same
 original target points reports no P1/P2 findings.
@@ -474,6 +518,7 @@ Stop only when all eight fresh audits report no P1/P2 findings.
 - [ ] Extension host destructive session mutations route through command ownership.
 - [ ] SQLite enforces session parent/active relationships or delete semantics explicitly converge.
 - [ ] Provider auth persistence/callback failures surface to callers.
+- [ ] `TaggedEnumClass` exposes direct PascalCase constructors, preserves legacy wire tags where needed, and has no `.cases` compatibility API.
 - [ ] Extension health snapshot cannot encode contradictory states and is covered through RPC.
 - [ ] Public extension host context has no storage-layer type leaks.
 - [ ] Core/extensions package exports have no broad wildcard public side doors.
