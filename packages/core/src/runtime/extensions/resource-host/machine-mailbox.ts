@@ -32,8 +32,21 @@ export const makeSessionMailbox = (
         ),
       )
 
+    const runJob = (sessionId: SessionId, job: Effect.Effect<void>) =>
+      job.pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
+          return Effect.logWarning("extension.mailbox.job.failed").pipe(
+            Effect.annotateLogs({
+              sessionId,
+              error: String(Cause.squash(cause)),
+            }),
+          )
+        }),
+      )
+
     const mailboxWorker = (sessionId: SessionId, slot: SessionMailboxSlot) =>
-      Effect.forever(takeNextJob(slot).pipe(Effect.flatMap((job) => job))).pipe(
+      Effect.forever(takeNextJob(slot).pipe(Effect.flatMap((job) => runJob(sessionId, job)))).pipe(
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) return Effect.void
           return Effect.logWarning("extension.mailbox.worker.failed").pipe(

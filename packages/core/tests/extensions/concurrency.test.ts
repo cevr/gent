@@ -4,7 +4,7 @@
  * - ordered delivery across actor restarts
  */
 import { describe, it, expect } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { EventStore, SessionStarted, StreamStarted, TurnCompleted } from "@gent/core/domain/event"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
@@ -23,6 +23,7 @@ import { EventPublisherLive } from "@gent/core/server/event-publisher"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform"
 import { defineResource } from "@gent/core/domain/contribution"
 import { reducerActor } from "./helpers/reducer-actor"
+import { makeSessionMailbox } from "../../src/runtime/extensions/resource-host/machine-mailbox"
 
 const sessionId = SessionId.make("test-session")
 const branchId = BranchId.make("test-branch")
@@ -178,6 +179,30 @@ describe("extension concurrency", () => {
   })
 
   describe("same-session mailbox reentrancy", () => {
+    it.live("failed posted job does not kill later same-session work", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtimeScope = yield* Scope.make()
+          yield* Effect.addFinalizer(() => Scope.close(runtimeScope, Exit.void))
+          const mailbox = yield* makeSessionMailbox(runtimeScope)
+          const delivered = yield* Deferred.make<void>()
+
+          yield* mailbox.submit(
+            sessionId,
+            Effect.gen(function* () {
+              yield* mailbox.post(sessionId, Effect.die("posted mailbox boom"))
+              yield* mailbox.post(
+                sessionId,
+                Deferred.succeed(delivered, void 0).pipe(Effect.asVoid),
+              )
+            }),
+          )
+
+          yield* Deferred.await(delivered).pipe(Effect.timeout("1 second"))
+        }),
+      ),
+    )
+
     it.live("nested publish from a subscription handler is queued without deadlocking", () =>
       Effect.gen(function* () {
         const completed = yield* Deferred.make<void>()
