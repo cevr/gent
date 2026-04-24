@@ -15,7 +15,7 @@ import { makeAmbientExtensionHostContextDeps } from "./make-extension-host-conte
 import { MachineEngine } from "./extensions/resource-host/machine-engine.js"
 import { SessionProfileCache } from "./session-profile.js"
 import { SteerCommand, type SteerCommand as SteerCommandType } from "../domain/steer.js"
-import { AllowAllPermission, resolveSessionEnvironment } from "./session-runtime-context.js"
+import { AllowAllPermission, resolveSessionEnvironmentOrFail } from "./session-runtime-context.js"
 import { LoopRuntimeStateSchema, type LoopRuntimeState } from "./agent/agent-loop.state.js"
 
 export class SessionRuntimeError extends Schema.TaggedErrorClass<SessionRuntimeError>()(
@@ -253,6 +253,24 @@ export const respondInteractionCommand = (
   ...input,
 })
 
+const runtimeCommandTarget = (command: RuntimeCommand): SessionRuntimeTarget => {
+  switch (command._tag) {
+    case "SendUserMessage":
+    case "RecordToolResult":
+    case "InvokeTool":
+    case "RespondInteraction":
+      return {
+        sessionId: command.sessionId,
+        branchId: command.branchId,
+      }
+    case "ApplySteer":
+      return {
+        sessionId: command.command.sessionId,
+        branchId: command.command.branchId,
+      }
+  }
+}
+
 interface RunPromptInput {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -293,21 +311,37 @@ const makeLiveSessionRuntime: Effect.Effect<
   const dispatchCommand = Effect.fn("SessionRuntime.dispatchCommand")(function* (
     command: RuntimeCommand,
   ) {
+    const requireDispatchSession = (target: SessionRuntimeTarget) =>
+      resolveSessionEnvironmentOrFail({
+        sessionId: target.sessionId,
+        branchId: target.branchId,
+        storage,
+        hostDeps,
+        profileCache,
+        defaults: {
+          driverRegistry,
+          permission: defaultPermission,
+          baseSections: [],
+        },
+      }).pipe(
+        Effect.flatMap((resolved) =>
+          resolved._tag === "SessionFound"
+            ? Effect.succeed(resolved)
+            : Effect.fail(
+                new SessionRuntimeError({
+                  message: `Session not found: ${target.sessionId}`,
+                }),
+              ),
+        ),
+      )
+
+    const target = runtimeCommandTarget(command)
+    const resolved = yield* requireDispatchSession(target)
+
     switch (command._tag) {
       case "SendUserMessage": {
         const commandId = command.commandId ?? makeCommandId()
-        const { environment } = yield* resolveSessionEnvironment({
-          sessionId: command.sessionId,
-          branchId: command.branchId,
-          storage,
-          hostDeps,
-          profileCache,
-          defaults: {
-            driverRegistry,
-            permission: defaultPermission,
-            baseSections: [],
-          },
-        })
+        const { environment } = resolved
         const content = yield* environment.extensionRegistry.runtimeSlots.normalizeMessageInput(
           {
             content: command.content,

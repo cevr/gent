@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +17,7 @@ import { MachineEngine } from "../../src/runtime/extensions/resource-host/machin
 import {
   AllowAllPermission,
   resolveSessionEnvironment,
+  resolveSessionEnvironmentOrFail,
   type SessionEnvironmentDefaults,
 } from "../../src/runtime/session-runtime-context"
 import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
@@ -26,7 +27,7 @@ import {
   type SessionProfile,
   type SessionProfileCacheService,
 } from "../../src/runtime/session-profile"
-import { Storage } from "@gent/core/storage/sqlite-storage"
+import { Storage, StorageError, type StorageService } from "@gent/core/storage/sqlite-storage"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -425,6 +426,88 @@ describe("resolveSessionEnvironment", () => {
         expect(resolved.environment.baseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
+      }).pipe(Effect.provide(testLayer)),
+    )
+  })
+
+  test("preserves storage lookup failures when fallback is disabled", async () => {
+    const runtimePlatformLayer = RuntimePlatform.Test({
+      cwd: "/tmp/runtime-context-fail",
+      home: "/tmp/runtime-context-home",
+      platform: "test",
+    })
+    const testLayer = Layer.mergeAll(
+      Storage.Test(),
+      MachineEngine.Test(),
+      emptyRegistryLayer,
+      emptyDriverRegistryLayer,
+      runtimePlatformLayer,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const extensionRegistry = yield* ExtensionRegistry
+        const extensionStateRuntime = yield* MachineEngine
+        const platform = yield* RuntimePlatform
+        const failingStorage: StorageService = {
+          ...storage,
+          getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
+        }
+
+        const exit = yield* Effect.exit(
+          resolveSessionEnvironment({
+            sessionId: SessionId.make("session-runtime-context-storage-failure"),
+            branchId: BranchId.make("branch-runtime-context-storage-failure"),
+            storage: failingStorage,
+            hostDeps: yield* makeAmbientExtensionHostContextDeps({
+              storage: failingStorage,
+              extensionRegistry,
+              extensionStateRuntime,
+              overrides: { platform },
+            }),
+            defaults: {
+              driverRegistry: yield* DriverRegistry,
+              permission: AllowAllPermission,
+              baseSections: [],
+            },
+          }),
+        )
+
+        expect(exit._tag).toBe("Success")
+        if (exit._tag === "Success") {
+          expect(exit.value._tag).toBe("SessionMissing")
+        }
+        const strict = yield* Effect.exit(
+          resolveSessionEnvironmentOrFail({
+            sessionId: SessionId.make("session-runtime-context-storage-failure"),
+            branchId: BranchId.make("branch-runtime-context-storage-failure"),
+            storage: failingStorage,
+            hostDeps: yield* makeAmbientExtensionHostContextDeps({
+              storage: failingStorage,
+              extensionRegistry,
+              extensionStateRuntime,
+              overrides: { platform },
+            }),
+            defaults: {
+              driverRegistry: yield* DriverRegistry,
+              permission: AllowAllPermission,
+              baseSections: [],
+            },
+          }),
+        )
+
+        expect(strict._tag).toBe("Failure")
+        if (strict._tag === "Failure") {
+          const error = Cause.findErrorOption(strict.cause)
+          expect(Option.isSome(error)).toBe(true)
+          if (Option.isSome(error)) {
+            expect(error.value).toBeInstanceOf(StorageError)
+            expect(error.value instanceof StorageError ? error.value.message : undefined).toBe(
+              "lookup failed",
+            )
+          }
+        }
       }).pipe(Effect.provide(testLayer)),
     )
   })

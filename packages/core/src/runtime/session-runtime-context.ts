@@ -5,7 +5,7 @@ import type { Session } from "../domain/message.js"
 import type { AgentName } from "../domain/agent.js"
 import type { BranchId, SessionId } from "../domain/ids.js"
 import type { ExtensionHostContext } from "../domain/extension-host-context.js"
-import type { StorageService } from "../storage/sqlite-storage.js"
+import type { StorageError, StorageService } from "../storage/sqlite-storage.js"
 import type { DriverRegistryService } from "./extensions/driver-registry.js"
 import type { ExtensionRegistryService } from "./extensions/registry.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
@@ -122,7 +122,7 @@ export const AllowAllPermission: PermissionService = {
   getRules: () => Effect.succeed([]),
 }
 
-export const resolveSessionEnvironment = (params: {
+interface ResolveSessionEnvironmentParams {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly storage: StorageService
@@ -130,14 +130,14 @@ export const resolveSessionEnvironment = (params: {
   readonly profileCache?: SessionProfileCacheService
   readonly defaults: SessionEnvironmentDefaults
   readonly agentName?: AgentName
-}): Effect.Effect<ResolvedSessionEnvironment> =>
-  Effect.gen(function* () {
-    const session = yield* params.storage
-      .getSession(params.sessionId)
-      .pipe(Effect.orElseSucceed(() => undefined))
+}
 
+const buildResolvedSessionEnvironment = (
+  params: ResolveSessionEnvironmentParams & { readonly session: Session | undefined },
+): Effect.Effect<ResolvedSessionEnvironment> =>
+  Effect.gen(function* () {
     const profile = yield* resolveSessionProfile({
-      session,
+      session: params.session,
       profileCache: params.profileCache,
     })
     const bindings = resolveActiveRuntimeBindings({
@@ -149,12 +149,12 @@ export const resolveSessionEnvironment = (params: {
       sessionId: params.sessionId,
       branchId: params.branchId,
       agentName: params.agentName,
-      session,
+      session: params.session,
       bindings,
       hostDeps: params.hostDeps,
     })
 
-    if (session === undefined) {
+    if (params.session === undefined) {
       return {
         _tag: "SessionMissing",
         environment,
@@ -163,7 +163,25 @@ export const resolveSessionEnvironment = (params: {
 
     return {
       _tag: "SessionFound",
-      session,
+      session: params.session,
       environment,
     }
+  })
+
+export const resolveSessionEnvironment = (
+  params: ResolveSessionEnvironmentParams,
+): Effect.Effect<ResolvedSessionEnvironment> =>
+  Effect.gen(function* () {
+    const session = yield* params.storage
+      .getSession(params.sessionId)
+      .pipe(Effect.orElseSucceed(() => undefined))
+    return yield* buildResolvedSessionEnvironment({ ...params, session })
+  })
+
+export const resolveSessionEnvironmentOrFail = (
+  params: ResolveSessionEnvironmentParams,
+): Effect.Effect<ResolvedSessionEnvironment, StorageError> =>
+  Effect.gen(function* () {
+    const session = yield* params.storage.getSession(params.sessionId)
+    return yield* buildResolvedSessionEnvironment({ ...params, session })
   })

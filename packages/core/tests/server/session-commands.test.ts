@@ -1146,4 +1146,29 @@ describe("message.send", () => {
       }),
     ),
   )
+
+  it.live("rejects a deleted session before provider dispatch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+          textStep("should not run"),
+        ])
+        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({ cwd: process.cwd() })
+
+        yield* client.session.delete({ sessionId: created.sessionId })
+
+        const exit = yield* Effect.exit(
+          client.message.send({
+            sessionId: created.sessionId,
+            branchId: created.branchId,
+            content: "deleted session",
+          }),
+        )
+
+        expect(exit._tag).toBe("Failure")
+        expect(yield* controls.callCount).toBe(0)
+      }),
+    ),
+  )
 })
