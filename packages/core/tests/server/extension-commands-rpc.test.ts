@@ -26,6 +26,8 @@ import { waitFor } from "@gent/core/test-utils/fixtures"
 import { buildExtensionLayers } from "../../src/runtime/profile"
 import { defineResource } from "@gent/core/domain/resource"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
+import { ExtensionMessage } from "@gent/core/domain/extension-protocol"
+import { reducerActor } from "../extensions/helpers/reducer-actor"
 
 class ProfileToken extends Context.Service<
   ProfileToken,
@@ -124,6 +126,53 @@ describe("extension command RPCs", () => {
       ],
     },
   })
+
+  const boundaryReceived: Array<{ kind: "send" | "ask"; label: string }> = []
+  const BoundaryProtocol = {
+    Touch: ExtensionMessage.command("@test/transport-boundary", "Touch", {
+      label: Schema.String,
+    }),
+    Ping: ExtensionMessage.reply(
+      "@test/transport-boundary",
+      "Ping",
+      { label: Schema.String },
+      Schema.Struct({ ok: Schema.Boolean }),
+    ),
+  }
+  const boundaryExtension: LoadedExtension = {
+    manifest: { id: "@test/transport-boundary" },
+    scope: "builtin",
+    sourcePath: "test",
+    contributions: {
+      resources: [
+        defineResource({
+          scope: "process",
+          layer: Layer.empty as Layer.Layer<unknown>,
+          machine: {
+            ...reducerActor({
+              id: "@test/transport-boundary",
+              initial: {},
+              stateSchema: Schema.Struct({}),
+              reduce: (state) => ({ state }),
+              messageSchema: Schema.Unknown,
+              requestSchema: Schema.Unknown,
+              receive: (state, message) => {
+                const payload = message as { readonly label: string }
+                boundaryReceived.push({ kind: "send", label: payload.label })
+                return { state }
+              },
+              request: (state, message) => {
+                const payload = message as { readonly label: string }
+                boundaryReceived.push({ kind: "ask", label: payload.label })
+                return Effect.succeed({ state, reply: { ok: true } })
+              },
+            }),
+            protocols: BoundaryProtocol,
+          },
+        }),
+      ],
+    },
+  }
 
   test("listCommands returns registered commands", async () => {
     await Effect.runPromise(
@@ -244,6 +293,130 @@ describe("extension command RPCs", () => {
 
           expect(result._tag).toBe("Failure")
           expect(invoked).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC send rejects missing sessions before actor dispatch", async () => {
+    boundaryReceived.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [boundaryExtension],
+            }),
+          )
+
+          const result = yield* Effect.result(
+            client.extension.send({
+              sessionId: SessionId.make("missing-extension-send-session"),
+              branchId: BranchId.make("missing-extension-send-branch"),
+              message: BoundaryProtocol.Touch.make({ label: "should-not-run" }),
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(boundaryReceived).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC send rejects branches outside the requested session", async () => {
+    boundaryReceived.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [boundaryExtension],
+            }),
+          )
+          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-send-first" })
+          const second = yield* client.session.create({ cwd: "/tmp/gent-extension-send-second" })
+
+          const result = yield* Effect.result(
+            client.extension.send({
+              sessionId: first.sessionId,
+              branchId: second.branchId,
+              message: BoundaryProtocol.Touch.make({ label: "wrong-branch" }),
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(boundaryReceived).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC ask rejects missing sessions before actor dispatch", async () => {
+    boundaryReceived.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [boundaryExtension],
+            }),
+          )
+
+          const result = yield* Effect.result(
+            client.extension.ask({
+              sessionId: SessionId.make("missing-extension-ask-session"),
+              branchId: BranchId.make("missing-extension-ask-branch"),
+              message: BoundaryProtocol.Ping.make({ label: "should-not-run" }),
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(boundaryReceived).toEqual([])
+        }),
+      ),
+    )
+  })
+
+  test("RPC ask rejects branches outside the requested session", async () => {
+    boundaryReceived.length = 0
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { client } = yield* Gent.test(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [boundaryExtension],
+            }),
+          )
+          const first = yield* client.session.create({ cwd: "/tmp/gent-extension-ask-first" })
+          const second = yield* client.session.create({ cwd: "/tmp/gent-extension-ask-second" })
+
+          const result = yield* Effect.result(
+            client.extension.ask({
+              sessionId: first.sessionId,
+              branchId: second.branchId,
+              message: BoundaryProtocol.Ping.make({ label: "wrong-branch" }),
+            }),
+          )
+
+          expect(result._tag).toBe("Failure")
+          expect(boundaryReceived).toEqual([])
         }),
       ),
     )

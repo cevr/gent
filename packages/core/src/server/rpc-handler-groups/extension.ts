@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
+import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
 import { buildExtensionHealthSnapshot } from "../extension-health.js"
 import { CommandInfo } from "../transport-contract.js"
@@ -16,13 +17,83 @@ import type { RpcHandlerDeps } from "./shared.js"
 const extensionRequestError = (params: {
   readonly extensionId: string
   readonly capabilityId: string
+  readonly phase?: "command" | "request"
   readonly message: string
 }) =>
   new ExtensionProtocolError({
     extensionId: params.extensionId,
     tag: params.capabilityId,
-    phase: "request",
+    phase: params.phase ?? "request",
     message: params.message,
+  })
+
+const resolveExtensionSession = (
+  deps: RpcHandlerDeps,
+  params: {
+    readonly extensionId: string
+    readonly tag: string
+    readonly phase: "command" | "request"
+    readonly sessionId: string
+    readonly branchId?: string
+  },
+): Effect.Effect<
+  { readonly sessionId: SessionId; readonly branchId?: BranchId; readonly session: Session },
+  ExtensionProtocolError
+> =>
+  Effect.gen(function* () {
+    if (deps.storage === undefined) {
+      return yield* extensionRequestError({
+        extensionId: params.extensionId,
+        capabilityId: params.tag,
+        phase: params.phase,
+        message: "Session storage unavailable for extension transport",
+      })
+    }
+
+    const requestSessionId = SessionId.make(params.sessionId)
+    const requestBranchId =
+      params.branchId === undefined ? undefined : BranchId.make(params.branchId)
+    const session = yield* deps.storage.getSession(requestSessionId).pipe(
+      Effect.mapError((error) =>
+        extensionRequestError({
+          extensionId: params.extensionId,
+          capabilityId: params.tag,
+          phase: params.phase,
+          message: `Session lookup failed: ${error.message}`,
+        }),
+      ),
+    )
+    if (session === undefined) {
+      return yield* extensionRequestError({
+        extensionId: params.extensionId,
+        capabilityId: params.tag,
+        phase: params.phase,
+        message: "Session not found for extension transport",
+      })
+    }
+
+    if (requestBranchId !== undefined) {
+      const branch = yield* deps.storage.getBranch(requestBranchId).pipe(
+        Effect.mapError((error) =>
+          extensionRequestError({
+            extensionId: params.extensionId,
+            capabilityId: params.tag,
+            phase: params.phase,
+            message: `Branch lookup failed: ${error.message}`,
+          }),
+        ),
+      )
+      if (branch === undefined || branch.sessionId !== requestSessionId) {
+        return yield* extensionRequestError({
+          extensionId: params.extensionId,
+          capabilityId: params.tag,
+          phase: params.phase,
+          message: "Branch does not belong to extension transport session",
+        })
+      }
+    }
+
+    return { sessionId: requestSessionId, branchId: requestBranchId, session }
   })
 
 export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
@@ -37,6 +108,13 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
   "extension.send": ({ sessionId, message, branchId }: SendExtensionMessageInput) =>
     Effect.gen(function* () {
+      const scope = yield* resolveExtensionSession(deps, {
+        extensionId: message.extensionId,
+        tag: message._tag,
+        phase: "command",
+        sessionId,
+        branchId,
+      })
       yield* Effect.logDebug("rpc.extension.send.received").pipe(
         Effect.annotateLogs({
           sessionId,
@@ -46,14 +124,14 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         }),
       )
       const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
-      yield* stateRuntime.send(sessionId, message, branchId)
+      yield* stateRuntime.send(scope.sessionId, message, scope.branchId)
       if (deps.bus !== undefined) {
         yield* deps.bus
           .emit({
             channel: `${message.extensionId}:${message._tag}`,
             payload: message,
-            sessionId,
-            branchId,
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
           })
           .pipe(Effect.catchEager(() => Effect.void))
       }
@@ -61,6 +139,13 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
 
   "extension.ask": ({ sessionId, message, branchId }: AskExtensionMessageInput) =>
     Effect.gen(function* () {
+      const scope = yield* resolveExtensionSession(deps, {
+        extensionId: message.extensionId,
+        tag: message._tag,
+        phase: "request",
+        sessionId,
+        branchId,
+      })
       yield* Effect.logDebug("rpc.extension.ask.received").pipe(
         Effect.annotateLogs({
           sessionId,
@@ -70,7 +155,7 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         }),
       )
       const { stateRuntime } = yield* deps.resolveSessionServices(sessionId)
-      const reply = yield* stateRuntime.execute(sessionId, message, branchId)
+      const reply = yield* stateRuntime.execute(scope.sessionId, message, scope.branchId)
       yield* Effect.logDebug("rpc.extension.ask.replied").pipe(
         Effect.annotateLogs({
           sessionId,
@@ -90,54 +175,25 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
     branchId,
   }: RequestCapabilityInput) =>
     Effect.gen(function* () {
-      if (deps.storage === undefined) {
-        return yield* extensionRequestError({
-          extensionId,
-          capabilityId,
-          message: "Session storage unavailable for extension request",
-        })
-      }
-
-      const requestSessionId = SessionId.make(sessionId)
-      const requestBranchId = BranchId.make(branchId)
-      const session = yield* deps.storage.getSession(requestSessionId).pipe(
-        Effect.mapError((error) =>
-          extensionRequestError({
-            extensionId,
-            capabilityId,
-            message: `Session lookup failed: ${error.message}`,
-          }),
-        ),
-      )
-      if (session === undefined) {
-        return yield* extensionRequestError({
-          extensionId,
-          capabilityId,
-          message: "Session not found for extension request",
-        })
-      }
-      if (session.cwd === undefined) {
+      const scope = yield* resolveExtensionSession(deps, {
+        extensionId,
+        tag: capabilityId,
+        phase: "request",
+        sessionId,
+        branchId,
+      })
+      if (scope.session.cwd === undefined) {
         return yield* extensionRequestError({
           extensionId,
           capabilityId,
           message: "Session cwd unavailable for extension request",
         })
       }
-
-      const branch = yield* deps.storage.getBranch(requestBranchId).pipe(
-        Effect.mapError((error) =>
-          extensionRequestError({
-            extensionId,
-            capabilityId,
-            message: `Branch lookup failed: ${error.message}`,
-          }),
-        ),
-      )
-      if (branch === undefined || branch.sessionId !== requestSessionId) {
+      if (scope.branchId === undefined) {
         return yield* extensionRequestError({
           extensionId,
           capabilityId,
-          message: "Branch does not belong to extension request session",
+          message: "Branch unavailable for extension request",
         })
       }
 
@@ -150,9 +206,9 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
           "transport-public",
           input,
           {
-            sessionId: requestSessionId,
-            branchId: requestBranchId,
-            cwd: session.cwd,
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            cwd: scope.session.cwd,
             home: deps.platform.home,
           },
           { intent },
