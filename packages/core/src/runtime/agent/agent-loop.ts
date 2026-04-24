@@ -950,14 +950,20 @@ const collectExternalTurnResponse = (params: {
             }
             case "tool-failed": {
               const toolName = toolNamesById.get(event.toolCallId) ?? "external"
+              // Mirror the model-driver failure shape from tool-runner: the
+              // canonical `error-json` value is a discriminated object
+              // `{ error: string }`. Downstream consumers (prompt
+              // reconstruction, TUI) expect this structure regardless of
+              // driver kind.
+              const failurePayload = { error: event.error }
               responseParts.push(
                 Response.makePart("tool-result", {
                   id: event.toolCallId,
                   name: toolName,
-                  result: event.error,
+                  result: failurePayload,
                   isFailure: true,
                   providerExecuted: false,
-                  encodedResult: event.error,
+                  encodedResult: failurePayload,
                   preliminary: false,
                 }),
               )
@@ -1361,12 +1367,17 @@ const runTurnStreamPhase = (params: {
     })
 
     if (source === undefined) {
+      // `resolveTurnEventStream` returns undefined only when the resolved
+      // driver is external and its executor is missing — classify the
+      // failed turn by the requested driver kind so the outer loop's
+      // `driverKind === "external"` break still fires if the stream-failed
+      // check is ever reordered.
       return {
         responseParts: [],
         messageProjection: { assistant: [], tool: [] },
         interrupted: false,
         streamFailed: true,
-        driverKind: "model",
+        driverKind: params.resolved.driver?._tag === "external" ? "external" : "model",
       } satisfies CollectedTurnResponse
     }
 

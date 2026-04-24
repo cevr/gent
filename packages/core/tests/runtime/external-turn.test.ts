@@ -757,6 +757,9 @@ describe("ExternalDriverContribution end-to-end", () => {
           expect(toolResultParts.length).toBe(1)
           expect(toolResultParts[0]?.toolName).toBe("bash")
           expect(toolResultParts[0]?.output.type).toBe("error-json")
+          // Failure payload must mirror the model-driver shape: a
+          // discriminated `{ error: string }` object, not a bare string.
+          expect(toolResultParts[0]?.output.value).toEqual({ error: "permission denied" })
 
           const events = yield* Ref.get(eventsRef)
           const failed = events.find((e) => e._tag === "ToolCallFailed")
