@@ -596,6 +596,83 @@ describe("SessionRuntime", () => {
     )
   })
 
+  test("recordToolResult waits for the active turn mutation owner", async () => {
+    let markStreamStarted: () => void = () => {}
+    let releaseStream: () => void = () => {}
+    const streamStarted = new Promise<void>((resolve) => {
+      markStreamStarted = resolve
+    })
+    const streamReleased = new Promise<void>((resolve) => {
+      releaseStream = resolve
+    })
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.promise(async () => {
+          markStreamStarted()
+          await streamReleased
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      generate: () => Effect.succeed("test"),
+    })
+    const layer = makeRuntimeLayer(providerLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const storage = yield* Storage
+        const { sessionId, branchId } = yield* createSessionBranch
+
+        const submitFiber = yield* Effect.forkChild(
+          sessionRuntime.dispatch(
+            sendUserMessageCommand({
+              sessionId,
+              branchId,
+              content: "hold the turn open",
+            }),
+          ),
+        )
+        yield* Effect.promise(() => streamStarted).pipe(Effect.timeout("5 seconds"))
+
+        const recordFiber = yield* Effect.forkChild(
+          sessionRuntime.dispatch(
+            recordToolResultCommand({
+              commandId: ActorCommandId.make("record-tool-active-owner"),
+              sessionId,
+              branchId,
+              toolCallId: ToolCallId.make("tool-call-active-owner"),
+              toolName: "read",
+              output: { value: "blocked until turn completes" },
+            }),
+          ),
+        )
+        const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("200 millis"))
+        const messagesBeforeRelease = yield* storage.listMessages(branchId)
+
+        expect(earlyRecord._tag).toBe("None")
+        expect(messagesBeforeRelease.some((message) => message.role === "tool")).toBe(false)
+
+        releaseStream()
+        yield* Fiber.join(submitFiber)
+        yield* Fiber.join(recordFiber)
+
+        const messagesAfterRelease = yield* waitFor(
+          storage.listMessages(branchId),
+          (messages) => messages.some((message) => message.role === "tool"),
+          5_000,
+          "tool result after active turn releases ownership",
+        )
+        expect(messagesAfterRelease.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+        ])
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   test("dispatch ApplySteer interjects ahead of queued follow-ups", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
       createSequenceProvider([

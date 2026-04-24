@@ -1989,10 +1989,34 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         // into Stream/Machine task signatures.
         const configServiceForRun = yield* ConfigService
         const loopsRef = yield* Ref.make<Map<string, LoopHandle>>(new Map())
+        const mutationSemaphoresRef = yield* Ref.make<Map<string, Semaphore.Semaphore>>(new Map())
         const loopsSemaphore = yield* Semaphore.make(1)
         const loopWatcherScope = yield* Scope.make()
 
         const stateKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+
+        const getMutationSemaphore = Effect.fn("AgentLoop.getMutationSemaphore")(function* (
+          sessionId: SessionId,
+          branchId: BranchId,
+        ) {
+          const key = stateKey(sessionId, branchId)
+          const existing = (yield* Ref.get(mutationSemaphoresRef)).get(key)
+          if (existing !== undefined) return existing
+
+          const semaphore = yield* Semaphore.make(1)
+          return yield* loopsSemaphore.withPermits(1)(
+            Effect.gen(function* () {
+              const current = (yield* Ref.get(mutationSemaphoresRef)).get(key)
+              if (current !== undefined) return current
+              yield* Ref.update(mutationSemaphoresRef, (semaphores) => {
+                const next = new Map(semaphores)
+                next.set(key, semaphore)
+                return next
+              })
+              return semaphore
+            }),
+          )
+        })
 
         const removeLoopIfCurrent = (
           sessionId: SessionId,
@@ -2048,6 +2072,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const makeLoop = (
           sessionId: SessionId,
           branchId: BranchId,
+          sideMutationSemaphore: Semaphore.Semaphore,
           initialQueue: LoopQueueState = emptyLoopQueueState(),
         ) =>
           Effect.gen(function* () {
@@ -2114,7 +2139,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const queueRef = yield* Ref.make(initialQueue)
             const idlePersistedRef = yield* SubscriptionRef.make(0)
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
-            const sideMutationSemaphore = yield* Semaphore.make(1)
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const runtimeStateRef = yield* SubscriptionRef.make(
               runtimeStateFromLoopState(buildIdleState({ currentAgent }), initialQueue),
@@ -2537,13 +2561,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               .task(
                 AgentLoopState.Running,
                 ({ state }) =>
-                  runTurn(state).pipe(
-                    Effect.annotateLogs({ sessionId, branchId }),
-                    Effect.withSpan("AgentLoop.turn"),
-                    Effect.tapCause((cause) =>
-                      recordTurnFailure(cause).pipe(
-                        Effect.andThen(
-                          publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
+                  sideMutationSemaphore.withPermits(1)(
+                    runTurn(state).pipe(
+                      Effect.annotateLogs({ sessionId, branchId }),
+                      Effect.withSpan("AgentLoop.turn"),
+                      Effect.tapCause((cause) =>
+                        recordTurnFailure(cause).pipe(
+                          Effect.andThen(
+                            publishPhaseFailure({ publishEvent, sessionId, branchId, cause }),
+                          ),
                         ),
                       ),
                     ),
@@ -2639,6 +2665,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           branchId: BranchId,
         ) {
           const key = stateKey(sessionId, branchId)
+          const sideMutationSemaphore = yield* getMutationSemaphore(sessionId, branchId)
           // Allocate + register under semaphore, then start outside.
           // Machine.spawn returns an unstarted actor — fibers don't run
           // until actor.start. This prevents the self-deadlock where
@@ -2649,7 +2676,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               Effect.gen(function* () {
                 const existing = (yield* Ref.get(loopsRef)).get(key)
                 if (existing !== undefined) return undefined
-                const handle = yield* makeLoop(sessionId, branchId)
+                const handle = yield* makeLoop(sessionId, branchId, sideMutationSemaphore)
                 yield* Ref.update(loopsRef, (loops) => {
                   const next = new Map(loops)
                   next.set(key, handle)
@@ -2873,19 +2900,22 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const recordToolResult = Effect.fn("AgentLoop.recordToolResultPhase")(function* (
           command: RecordToolResultCommand,
         ) {
-          const loop = yield* getLoop(command.sessionId, command.branchId)
-          yield* loop.sideMutationSemaphore
+          const mutationSemaphore = yield* getMutationSemaphore(command.sessionId, command.branchId)
+          yield* mutationSemaphore
             .withPermits(1)(
-              recordToolResultPhase({
-                storage,
-                eventPublisher,
-                commandId: command.commandId ?? makeCommandId(),
-                sessionId: command.sessionId,
-                branchId: command.branchId,
-                toolCallId: command.toolCallId,
-                toolName: command.toolName,
-                output: command.output,
-                ...(command.isError !== undefined ? { isError: command.isError } : {}),
+              Effect.gen(function* () {
+                yield* getLoop(command.sessionId, command.branchId)
+                yield* recordToolResultPhase({
+                  storage,
+                  eventPublisher,
+                  commandId: command.commandId ?? makeCommandId(),
+                  sessionId: command.sessionId,
+                  branchId: command.branchId,
+                  toolCallId: command.toolCallId,
+                  toolName: command.toolName,
+                  output: command.output,
+                  ...(command.isError !== undefined ? { isError: command.isError } : {}),
+                })
               }),
             )
             .pipe(Effect.catchCause((cause) => Effect.fail(actorCauseFailure(cause))))
@@ -2894,10 +2924,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         const invokeTool = Effect.fn("AgentLoop.invokeToolPhase")(function* (
           command: InvokeToolCommand,
         ) {
-          const loop = yield* getLoop(command.sessionId, command.branchId)
-          yield* loop.sideMutationSemaphore
+          const mutationSemaphore = yield* getMutationSemaphore(command.sessionId, command.branchId)
+          yield* mutationSemaphore
             .withPermits(1)(
               Effect.gen(function* () {
+                const loop = yield* getLoop(command.sessionId, command.branchId)
                 const commandId = command.commandId ?? makeCommandId()
                 const currentTurnAgent = (yield* currentRuntimeState(loop)).agent
                 const environment = yield* loop.resolveTurnProfile
