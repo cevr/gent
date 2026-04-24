@@ -352,7 +352,9 @@ describe("transport-only extension widgets", () => {
 
       expect(borderLabel).toBeDefined()
 
-      await Effect.runPromise(Deferred.succeed(requestDeferred, [{ subject: "missing id" }]))
+      await Effect.runPromise(
+        Deferred.succeed(requestDeferred, [{ subject: "missing id", status: "pending" }]),
+      )
       await Promise.resolve()
       await Promise.resolve()
 
