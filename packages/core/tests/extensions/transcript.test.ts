@@ -201,6 +201,20 @@ describe("composePromptWithTranscript", () => {
     expect(result).not.toContain(big)
   })
 
+  test("preserves oversized inline image payloads on the live user message", () => {
+    const big = `data:image/png;base64,${"A".repeat(2_000)}`
+    const live = {
+      role: "user",
+      parts: [
+        { type: "text", text: "inspect this" },
+        { type: "image", image: big, mediaType: "image/png" },
+      ],
+    }
+    const result = composePromptWithTranscript([live], live)
+    expect(result).toContain(`src="${big}"`)
+    expect(result).not.toContain("(truncated")
+  })
+
   test("returns live text unchanged when history has no renderable content", () => {
     const messages = [
       { role: "user", parts: [{ type: "text", text: "" }] },

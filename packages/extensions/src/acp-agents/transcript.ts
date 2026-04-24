@@ -97,17 +97,24 @@ const renderToolResult = (part: TranscriptPart): string => {
   return `<result tool_id="${escapeXml(id)}" status="${escapeXml(status)}">${escapeXml(value)}</result>`
 }
 
-const renderImage = (part: TranscriptPart): string => {
+const renderImage = (
+  part: TranscriptPart,
+  options: { readonly truncatePayload: boolean },
+): string => {
   const mediaAttr =
     part.mediaType !== undefined && part.mediaType.length > 0
       ? ` mediaType="${escapeXml(part.mediaType)}"`
       : ""
   const src = part.image
   if (src === undefined || src.length === 0) return `<image${mediaAttr} />`
-  return `<image${mediaAttr} src="${escapeXml(renderImagePayload(src))}" />`
+  const renderedSrc = options.truncatePayload ? renderImagePayload(src) : src
+  return `<image${mediaAttr} src="${escapeXml(renderedSrc)}" />`
 }
 
-const renderPart = (part: TranscriptPart): string | undefined => {
+const renderPart = (
+  part: TranscriptPart,
+  options: { readonly truncateImagePayloads: boolean },
+): string | undefined => {
   switch (part.type) {
     case "text":
       return renderText(part)
@@ -118,14 +125,16 @@ const renderPart = (part: TranscriptPart): string | undefined => {
     case "tool-result":
       return renderToolResult(part)
     case "image":
-      return renderImage(part)
+      return renderImage(part, { truncatePayload: options.truncateImagePayloads })
     default:
       return undefined
   }
 }
 
 const renderMessage = (msg: MessageLike): string | undefined => {
-  const rendered = msg.parts.map(renderPart).filter((s): s is string => s !== undefined)
+  const rendered = msg.parts
+    .map((part) => renderPart(part, { truncateImagePayloads: true }))
+    .filter((s): s is string => s !== undefined)
   if (rendered.length === 0) return undefined
   const role = escapeXml(msg.role)
   return `<${role}>\n${rendered.join("\n")}\n</${role}>`
@@ -179,7 +188,9 @@ export const findLastUserMessage = (
 
 export const renderLiveUserPrompt = (message: MessageLike | undefined): string => {
   if (message === undefined) return ""
-  const rendered = message.parts.map(renderPart).filter((s): s is string => s !== undefined)
+  const rendered = message.parts
+    .map((part) => renderPart(part, { truncateImagePayloads: false }))
+    .filter((s): s is string => s !== undefined)
   if (rendered.length === 0) return ""
   const [only] = message.parts
   if (message.parts.length === 1 && only?.type === "text") return only.text ?? ""
