@@ -125,11 +125,6 @@ export class AuthStorage extends Context.Service<AuthStorage, AuthStorageService
           delete: (provider) =>
             execSecurity(["delete-generic-password", "-s", serviceName, "-a", provider]).pipe(
               Effect.asVoid,
-              Effect.catchEager((e) =>
-                Effect.logWarning("failed to delete keychain entry").pipe(
-                  Effect.annotateLogs({ error: String(e) }),
-                ),
-              ),
             ),
 
           list: () =>

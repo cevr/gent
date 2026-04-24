@@ -127,6 +127,23 @@ describe("AuthStore", () => {
     }).pipe(Effect.provide(Layer.provide(AuthStore.Live, failingStorage)))
   })
 
+  it.live("keychain-style delete failures reach AuthStore", () => {
+    const keychainLikeStorage = Layer.succeed(AuthStorage, {
+      get: () => Effect.succeed("sk-existing"),
+      set: () => Effect.void,
+      delete: () =>
+        Effect.fail(new AuthStorageError({ message: "Keychain command failed: denied" })),
+      list: () => Effect.succeed(["openai"]),
+    })
+
+    return Effect.gen(function* () {
+      const auth = yield* AuthStore
+      const exit = yield* Effect.exit(auth.remove("openai"))
+      expect(exit._tag).toBe("Failure")
+      expect(exit.cause.toString()).toContain("Keychain command failed")
+    }).pipe(Effect.provide(Layer.provide(AuthStore.Live, keychainLikeStorage)))
+  })
+
   it.live("lists all stored provider IDs", () =>
     Effect.gen(function* () {
       const auth = yield* AuthStore
