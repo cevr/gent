@@ -511,8 +511,11 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
       yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM extension_state WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND active_branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`UPDATE sessions SET active_branch_id = NULL WHERE active_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.active_branch_id AND branches.session_id = sessions.id)`
       yield* sql`UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IS NOT NULL AND parent_session_id NOT IN (SELECT id FROM sessions)`
+      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_session_id IS NULL`
       yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND parent_branch_id NOT IN (SELECT id FROM branches)`
+      yield* sql`UPDATE sessions SET parent_branch_id = NULL WHERE parent_branch_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM branches WHERE branches.id = sessions.parent_branch_id AND branches.session_id = sessions.parent_session_id)`
     }),
   )
 })
@@ -554,6 +557,42 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
     yield* sql.unsafe(`PRAGMA foreign_keys = OFF`)
     yield* sql.withTransaction(
       Effect.gen(function* () {
+        yield* sql.unsafe(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
+        )
+        yield* migrateTableForeignKeys({
+          table: "sessions",
+          columns: [
+            "id",
+            "name",
+            "cwd",
+            "bypass",
+            "reasoning_level",
+            "active_branch_id",
+            "parent_session_id",
+            "parent_branch_id",
+            "created_at",
+            "updated_at",
+          ],
+          expectedParents: ["branches", "sessions"],
+          createSql: `
+          CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            cwd TEXT,
+            bypass INTEGER,
+            reasoning_level TEXT,
+            active_branch_id TEXT,
+            parent_session_id TEXT,
+            parent_branch_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
+            FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+          )
+        `,
+        })
         yield* migrateTableForeignKeys({
           table: "branches",
           columns: [
@@ -803,10 +842,14 @@ const initSchema = Effect.gen(function* () {
       cwd TEXT,
       bypass INTEGER,
       reasoning_level TEXT,
+      active_branch_id TEXT,
       parent_session_id TEXT,
       parent_branch_id TEXT,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (active_branch_id, id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED,
+      FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
     )
   `)
 
@@ -1111,7 +1154,16 @@ const makeStorage = Effect.gen(function* () {
       sql
         .withTransaction(
           Effect.gen(function* () {
-            yield* sql`DELETE FROM messages_fts WHERE session_id = ${id}`
+            yield* sql`
+              WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM sessions WHERE id = ${id}
+                UNION ALL
+                SELECT sessions.id
+                FROM sessions
+                JOIN descendants ON sessions.parent_session_id = descendants.id
+              )
+              DELETE FROM messages_fts WHERE session_id IN (SELECT id FROM descendants)
+            `
             yield* sql`DELETE FROM sessions WHERE id = ${id}`
             yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
           }),

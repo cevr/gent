@@ -103,6 +103,27 @@ const postCommitFailingSessionCommandsLayer = () => {
   return Layer.provideMerge(SessionCommands.Live, deps)
 }
 
+const createActiveSessionFixture = Effect.fn("createActiveSessionFixture")(function* (input: {
+  readonly sessions: SessionStorage
+  readonly branches: BranchStorage
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly now: Date
+  readonly name?: string
+}) {
+  const session = new Session({
+    id: input.sessionId,
+    name: input.name,
+    createdAt: input.now,
+    updatedAt: input.now,
+  })
+  yield* input.sessions.createSession(session)
+  yield* input.branches.createBranch(
+    new Branch({ id: input.branchId, sessionId: input.sessionId, createdAt: input.now }),
+  )
+  yield* input.sessions.updateSession(new Session({ ...session, activeBranchId: input.branchId }))
+})
+
 const sendFailingSessionCommandsLayer = () => {
   const storageLayer = Storage.MemoryWithSql()
   const failingRuntimeLayer = Layer.succeed(SessionRuntime, {
@@ -232,16 +253,14 @@ describe("session command persistence", () => {
       const messageId = MessageId.make("message-source")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "rollback",
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+        name: "rollback",
+      })
       yield* messages.createMessage(
         Message.cases.regular.make({
           id: messageId,
@@ -272,19 +291,19 @@ describe("session command persistence", () => {
     Effect.gen(function* () {
       const commands = yield* SessionCommands
       const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-rename-rollback")
       const branchId = BranchId.make("branch-rename-rollback")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "before",
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+        name: "before",
+      })
 
       const exit = yield* Effect.exit(commands.renameSession({ sessionId, name: "after" }))
 
@@ -303,16 +322,14 @@ describe("session command persistence", () => {
       const toBranchId = BranchId.make("branch-switch-to")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "switch",
-          activeBranchId: fromBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: fromBranchId, sessionId, createdAt: now }))
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: fromBranchId,
+        now,
+        name: "switch",
+      })
       yield* branches.createBranch(new Branch({ id: toBranchId, sessionId, createdAt: now }))
 
       const exit = yield* Effect.exit(
@@ -340,28 +357,22 @@ describe("session command persistence", () => {
       const toBranchId = BranchId.make("branch-switch-owner-foreign")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "switch owner",
-          activeBranchId: fromBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* sessions.createSession(
-        new Session({
-          id: otherSessionId,
-          name: "other",
-          activeBranchId: toBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: fromBranchId, sessionId, createdAt: now }))
-      yield* branches.createBranch(
-        new Branch({ id: toBranchId, sessionId: otherSessionId, createdAt: now }),
-      )
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: fromBranchId,
+        now,
+        name: "switch owner",
+      })
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: otherSessionId,
+        branchId: toBranchId,
+        now,
+        name: "other",
+      })
 
       const exit = yield* Effect.exit(
         commands.switchActiveBranch({
@@ -380,19 +391,19 @@ describe("session command persistence", () => {
     Effect.gen(function* () {
       const commands = yield* SessionCommands
       const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
       const sessionId = SessionId.make("session-settings-rollback")
       const branchId = BranchId.make("branch-settings-rollback")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "settings",
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+        name: "settings",
+      })
 
       const exit = yield* Effect.exit(
         commands.updateSessionReasoningLevel({ sessionId, reasoningLevel: "high" }),
@@ -425,16 +436,14 @@ describe("session command persistence", () => {
       const deletedBranchId = BranchId.make("branch-delete-target")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "delete branch",
-          activeBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: activeBranchId, sessionId, createdAt: now }))
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: activeBranchId,
+        now,
+        name: "delete branch",
+      })
       yield* branches.createBranch(new Branch({ id: deletedBranchId, sessionId, createdAt: now }))
 
       yield* commands.deleteBranch({
@@ -458,16 +467,14 @@ describe("session command persistence", () => {
       const currentBranchId = BranchId.make("branch-current-delete")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "delete active",
-          activeBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: activeBranchId, sessionId, createdAt: now }))
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId: activeBranchId,
+        now,
+        name: "delete active",
+      })
       yield* branches.createBranch(new Branch({ id: currentBranchId, sessionId, createdAt: now }))
 
       const exit = yield* Effect.exit(
@@ -494,30 +501,22 @@ describe("session command persistence", () => {
       const otherBranchId = BranchId.make("branch-delete-other-target")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: ownerSessionId,
-          name: "owner",
-          activeBranchId: currentBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* sessions.createSession(
-        new Session({
-          id: otherSessionId,
-          name: "other",
-          activeBranchId: otherBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(
-        new Branch({ id: currentBranchId, sessionId: ownerSessionId, createdAt: now }),
-      )
-      yield* branches.createBranch(
-        new Branch({ id: otherBranchId, sessionId: otherSessionId, createdAt: now }),
-      )
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: ownerSessionId,
+        branchId: currentBranchId,
+        now,
+        name: "owner",
+      })
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: otherSessionId,
+        branchId: otherBranchId,
+        now,
+        name: "other",
+      })
 
       const exit = yield* Effect.exit(
         commands.deleteBranch({
@@ -544,16 +543,14 @@ describe("session command persistence", () => {
       const secondMessageId = MessageId.make("message-delete-2")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "delete messages",
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+        name: "delete messages",
+      })
       yield* messages.createMessage(
         Message.cases.regular.make({
           id: firstMessageId,
@@ -596,28 +593,22 @@ describe("session command persistence", () => {
       const ownerMessageId = MessageId.make("message-delete-owner")
       const now = new Date()
 
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "owner",
-          activeBranchId: branchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* sessions.createSession(
-        new Session({
-          id: otherSessionId,
-          name: "other",
-          activeBranchId: otherBranchId,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
-      yield* branches.createBranch(
-        new Branch({ id: otherBranchId, sessionId: otherSessionId, createdAt: now }),
-      )
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId,
+        branchId,
+        now,
+        name: "owner",
+      })
+      yield* createActiveSessionFixture({
+        sessions,
+        branches,
+        sessionId: otherSessionId,
+        branchId: otherBranchId,
+        now,
+        name: "other",
+      })
       yield* messages.createMessage(
         Message.cases.regular.make({
           id: foreignMessageId,

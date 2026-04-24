@@ -196,6 +196,47 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
+    it.live("rejects invalid session parent and active branch relationships", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const now = new Date()
+
+        yield* storage.createSession(
+          new Session({ id: "parent-a", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "parent-a-branch", sessionId: "parent-a", createdAt: now }),
+        )
+        yield* storage.createSession(
+          new Session({ id: "parent-b", createdAt: now, updatedAt: now }),
+        )
+        yield* storage.createBranch(
+          new Branch({ id: "parent-b-branch", sessionId: "parent-b", createdAt: now }),
+        )
+
+        const orphanParentExit = yield* Effect.exit(
+          sql`INSERT INTO sessions (id, parent_session_id, created_at, updated_at) VALUES (${"orphan-child"}, ${"missing-parent"}, ${now.getTime()}, ${now.getTime()})`,
+        )
+        expect(orphanParentExit._tag).toBe("Failure")
+
+        const wrongParentBranchExit = yield* Effect.exit(
+          sql`INSERT INTO sessions (id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"wrong-parent-branch"}, ${"parent-a"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
+        )
+        expect(wrongParentBranchExit._tag).toBe("Failure")
+
+        const missingActiveBranchExit = yield* Effect.exit(
+          sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"missing-active"}, ${"missing-branch"}, ${now.getTime()}, ${now.getTime()})`,
+        )
+        expect(missingActiveBranchExit._tag).toBe("Failure")
+
+        const wrongActiveBranchExit = yield* Effect.exit(
+          sql`INSERT INTO sessions (id, active_branch_id, created_at, updated_at) VALUES (${"wrong-active"}, ${"parent-b-branch"}, ${now.getTime()}, ${now.getTime()})`,
+        )
+        expect(wrongActiveBranchExit._tag).toBe("Failure")
+      }).pipe(Effect.provide(Storage.TestWithSql())),
+    )
+
     it.live("deletes session children and storage projections", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
@@ -203,6 +244,8 @@ describe("Storage", () => {
         const now = new Date()
         const sessionId = SessionId.make("cascade-session")
         const branchId = BranchId.make("cascade-branch")
+        const childSessionId = SessionId.make("cascade-child-session")
+        const childBranchId = BranchId.make("cascade-child-branch")
 
         yield* storage.createSession(
           new Session({
@@ -218,6 +261,22 @@ describe("Storage", () => {
             createdAt: now,
           }),
         )
+        yield* storage.createSession(
+          new Session({
+            id: childSessionId,
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+        yield* storage.createBranch(
+          new Branch({
+            id: childBranchId,
+            sessionId: childSessionId,
+            createdAt: now,
+          }),
+        )
         yield* storage.createMessage(
           Message.cases.regular.make({
             id: MessageId.make("cascade-message"),
@@ -225,6 +284,16 @@ describe("Storage", () => {
             branchId,
             role: "user",
             parts: [new TextPart({ type: "text", text: "cascade projection" })],
+            createdAt: now,
+          }),
+        )
+        yield* storage.createMessage(
+          Message.cases.regular.make({
+            id: MessageId.make("cascade-child-message"),
+            sessionId: childSessionId,
+            branchId: childBranchId,
+            role: "user",
+            parts: [new TextPart({ type: "text", text: "cascade child projection" })],
             createdAt: now,
           }),
         )
@@ -239,6 +308,7 @@ describe("Storage", () => {
 
         yield* storage.deleteSession(sessionId)
 
+        const sessions = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM sessions`
         const branches = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM branches`
         const messages = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages`
         const events = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM events`
@@ -246,6 +316,7 @@ describe("Storage", () => {
         const chunks = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM content_chunks`
         const fts = yield* sql<{ count: number }>`SELECT COUNT(*) as count FROM messages_fts`
 
+        expect(sessions[0]?.count).toBe(0)
         expect(branches[0]?.count).toBe(0)
         expect(messages[0]?.count).toBe(0)
         expect(events[0]?.count).toBe(0)
@@ -415,6 +486,10 @@ describe("Storage", () => {
             const branchParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(branches)`
             const messageParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(messages)`
             const eventParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(events)`
+            const sessionParents = yield* sql<{ table: string }>`PRAGMA foreign_key_list(sessions)`
+            expect(sessionParents.map((row) => row.table)).toEqual(
+              expect.arrayContaining(["branches", "sessions"]),
+            )
             expect(branchParents.map((row) => row.table)).toContain("sessions")
             expect(messageParents.map((row) => row.table)).toEqual(
               expect.arrayContaining(["branches", "sessions"]),
@@ -444,6 +519,11 @@ describe("Storage", () => {
               sql`INSERT INTO messages (id, session_id, branch_id, role, parts, created_at, turn_duration_ms) VALUES (${"new-orphan"}, ${"legacy-session"}, ${"missing-branch"}, ${"user"}, ${"[]"}, ${7}, ${null})`,
             )
             expect(rejected._tag).toBe("Failure")
+
+            const invalidSession = yield* Effect.exit(
+              sql`INSERT INTO sessions (id, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at) VALUES (${"new-invalid-session"}, ${"valid-branch"}, ${"other-session"}, ${"valid-branch"}, ${8}, ${8})`,
+            )
+            expect(invalidSession._tag).toBe("Failure")
           }).pipe(Effect.provide(layer)),
         )
       } finally {

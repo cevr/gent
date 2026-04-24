@@ -574,7 +574,7 @@ const APPROVED_SUPPRESSION_LOCATIONS = new Set<string>([
   "packages/core/src/server/build-fingerprint.ts:40 effect:globalErrorInEffectCatch:off",
   "packages/core/src/server/build-fingerprint.ts:40 effect:globalErrorInEffectFailure:off",
   "packages/core/src/server/rpc-handlers.ts:67 effect:effectSucceedWithVoid:off",
-  "packages/core/src/storage/sqlite-storage.ts:1588 effect:strictEffectProvide:off",
+  "packages/core/src/storage/sqlite-storage.ts:1640 effect:strictEffectProvide:off",
   "packages/core/src/storage/sqlite-storage.ts:73 eslint:@typescript-eslint/no-unsafe-type-assertion",
   "packages/core/src/test-utils/e2e-layer.ts:134 effect:anyUnknownInErrorContext:off",
   "packages/core/src/test-utils/e2e-layer.ts:135 eslint:@typescript-eslint/no-explicit-any",
