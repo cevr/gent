@@ -648,6 +648,7 @@ interface CollectedTurnResponse {
   readonly messageProjection: TurnResponseMessages
   readonly interrupted: boolean
   readonly streamFailed: boolean
+  readonly driverKind: "model" | "external"
 }
 
 interface ExternalTurnUsage {
@@ -680,6 +681,7 @@ const collectNormalizedResponse = (params: {
   responseParts: ReadonlyArray<Response.AnyPart>
   streamFailed: boolean
   interrupted: boolean
+  driverKind: "model" | "external"
 }): CollectedTurnResponse => {
   const normalized = normalizeResponseParts(params.responseParts)
   const messages = projectResponsePartsToMessageParts(normalized)
@@ -697,6 +699,7 @@ const collectNormalizedResponse = (params: {
     },
     interrupted: params.interrupted,
     streamFailed: params.streamFailed,
+    driverKind: params.driverKind,
   }
 }
 
@@ -794,7 +797,12 @@ const collectModelTurnResponse = (params: {
     )
 
     const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    return collectNormalizedResponse({ responseParts, streamFailed, interrupted })
+    return collectNormalizedResponse({
+      responseParts,
+      streamFailed,
+      interrupted,
+      driverKind: "model",
+    })
   })
 
 const collectFailedModelTurnResponse = (params: {
@@ -829,6 +837,7 @@ const collectFailedModelTurnResponse = (params: {
       responseParts: [],
       streamFailed: !interrupted,
       interrupted,
+      driverKind: "model",
     })
   })
 
@@ -842,6 +851,13 @@ const collectExternalTurnResponse = (params: {
 }) =>
   Effect.gen(function* () {
     const responseParts: Response.AnyPart[] = []
+    // External drivers emit `ToolCompleted`/`ToolFailed` without the
+    // `toolName` (ACP's status-update payload doesn't carry it). Track
+    // name by id from `tool-call`/`tool-started` so completion events
+    // and persisted `tool-result` parts carry the real tool name
+    // instead of a hardcoded "external".
+    const toolNamesById = new Map<string, string>()
+    const toolCallIdsSeen = new Set<string>()
 
     const streamFailed = yield* Stream.runForEach(
       params.turnStream.pipe(
@@ -866,16 +882,32 @@ const collectExternalTurnResponse = (params: {
               responseParts.push(Response.makePart("reasoning", { text: event.text }))
               return
             case "tool-call":
-              responseParts.push(
-                Response.makePart("tool-call", {
-                  id: event.toolCallId,
-                  name: event.toolName,
-                  params: event.input,
-                  providerExecuted: false,
-                }),
-              )
+              toolNamesById.set(event.toolCallId, event.toolName)
+              if (!toolCallIdsSeen.has(event.toolCallId)) {
+                toolCallIdsSeen.add(event.toolCallId)
+                responseParts.push(
+                  Response.makePart("tool-call", {
+                    id: event.toolCallId,
+                    name: event.toolName,
+                    params: event.input,
+                    providerExecuted: false,
+                  }),
+                )
+              }
               return
             case "tool-started":
+              toolNamesById.set(event.toolCallId, event.toolName)
+              if (!toolCallIdsSeen.has(event.toolCallId)) {
+                toolCallIdsSeen.add(event.toolCallId)
+                responseParts.push(
+                  Response.makePart("tool-call", {
+                    id: event.toolCallId,
+                    name: event.toolName,
+                    params: event.input ?? {},
+                    providerExecuted: false,
+                  }),
+                )
+              }
               yield* params
                 .publishEvent(
                   ToolCallStarted.make({
@@ -887,31 +919,61 @@ const collectExternalTurnResponse = (params: {
                 )
                 .pipe(Effect.orDie)
               return
-            case "tool-completed":
+            case "tool-completed": {
+              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
+              const output = event.output ?? null
+              responseParts.push(
+                Response.makePart("tool-result", {
+                  id: event.toolCallId,
+                  name: toolName,
+                  result: output,
+                  isFailure: false,
+                  providerExecuted: false,
+                  // `encodedResult` is what `projectResponsePartsToMessageParts`
+                  // reads into `ToolResultPart.output.value` — must mirror
+                  // `result` or the stored tool message loses the output.
+                  encodedResult: output,
+                  preliminary: false,
+                }),
+              )
               yield* params
                 .publishEvent(
                   ToolCallSucceeded.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName: "external",
+                    toolName,
                   }),
                 )
                 .pipe(Effect.orDie)
               return
-            case "tool-failed":
+            }
+            case "tool-failed": {
+              const toolName = toolNamesById.get(event.toolCallId) ?? "external"
+              responseParts.push(
+                Response.makePart("tool-result", {
+                  id: event.toolCallId,
+                  name: toolName,
+                  result: event.error,
+                  isFailure: true,
+                  providerExecuted: false,
+                  encodedResult: event.error,
+                  preliminary: false,
+                }),
+              )
               yield* params
                 .publishEvent(
                   ToolCallFailed.make({
                     sessionId: params.sessionId,
                     branchId: params.branchId,
                     toolCallId: ToolCallId.make(event.toolCallId),
-                    toolName: "external",
+                    toolName,
                     output: event.error,
                   }),
                 )
                 .pipe(Effect.orDie)
               return
+            }
             case "finished":
               responseParts.push(
                 Response.makePart("finish", {
@@ -964,7 +1026,12 @@ const collectExternalTurnResponse = (params: {
     )
 
     const interrupted = yield* Ref.get(params.activeStream.interruptedRef)
-    return collectNormalizedResponse({ responseParts, streamFailed, interrupted })
+    return collectNormalizedResponse({
+      responseParts,
+      streamFailed,
+      interrupted,
+      driverKind: "external",
+    })
   })
 
 /** InteractionPendingError enriched with the toolCallId that triggered it */
@@ -1299,7 +1366,8 @@ const runTurnStreamPhase = (params: {
         messageProjection: { assistant: [], tool: [] },
         interrupted: false,
         streamFailed: true,
-      }
+        driverKind: "model",
+      } satisfies CollectedTurnResponse
     }
 
     yield* params
@@ -2561,6 +2629,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   streamFailed = true
                   break
                 }
+
+                // External drivers own their own tool execution — tool-call
+                // parts we collected are historical transcript, not pending work.
+                if (collected.driverKind === "external") break
 
                 // No tool calls → LLM is done
                 const toolCalls = toolCallsFromResponseParts(collected.responseParts)

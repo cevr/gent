@@ -23,6 +23,7 @@ import {
   Finished,
   ReasoningDelta,
   TextDelta,
+  ToolCall,
   ToolCompleted,
   ToolFailed,
   ToolStarted,
@@ -556,6 +557,303 @@ describe("ExternalDriverContribution end-to-end", () => {
           )
           const combined = allText.join("")
           expect(combined).toContain(expectedText)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("external-driver tool calls and results persist into the assistant transcript", async () => {
+    // Regression lock: before this fix, `collectExternalTurnResponse`
+    // only pushed a `tool-call` response part when the executor emitted
+    // `TurnEvent.ToolCall`. ACP executors (claude-code-executor) skip
+    // that variant and go straight from `tool-started` to
+    // `tool-completed`, so stored messages lost the tool history and
+    // the next turn sent the model a transcript with no record of the
+    // tool turn. The tool-completed branch also hardcoded
+    // `toolName: "external"` — dropping the real name from the
+    // `ToolCallSucceeded` event.
+    const e2eSessionId = SessionId.make("e2e-tool-session")
+    const e2eBranchId = BranchId.make("e2e-tool-branch")
+
+    const toolInput = { path: "/tmp/example" }
+    const toolOutput = { contents: "hello" }
+    const e2eExecutor: TurnExecutor = {
+      executeTurn: () =>
+        Stream.fromIterable<TurnEvent, TurnError>([
+          ToolStarted.make({ toolCallId: "tc-A", toolName: "read_file", input: toolInput }),
+          ToolCompleted.make({ toolCallId: "tc-A", output: toolOutput }),
+          TextDelta.make({ text: "done" }),
+          Finished.make({ stopReason: "stop" }),
+        ]),
+    }
+
+    const e2eAgent = AgentDefinition.make({
+      name: "tool-test-agent" as never,
+      driver: ExternalDriverRef.make({ id: "tool-test-driver" }),
+    })
+
+    const e2eResolved = resolveExtensions([
+      {
+        manifest: { id: "e2e-tool-ext" },
+        scope: "builtin" as const,
+        sourcePath: "test",
+        contributions: {
+          agents: [e2eAgent],
+          externalDrivers: [
+            { id: "tool-test-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+          ],
+        },
+      },
+    ])
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      generate: () => Effect.succeed("unused"),
+    })
+    const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
+
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      providerLayer,
+      ExtensionRegistry.fromResolved(e2eResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: e2eResolved.modelDrivers,
+        externalDrivers: e2eResolved.externalDrivers,
+      }),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      makeCountingEventStore(eventsRef),
+      ToolRunner.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          yield* runAgentLoopOnce(agentLoop, {
+            sessionId: e2eSessionId,
+            branchId: e2eBranchId,
+            agentName: "tool-test-agent",
+            prompt: "do the tool",
+          })
+
+          const storage = yield* Storage
+          const messages = yield* storage.listMessages(e2eBranchId)
+
+          const toolCallParts = messages.flatMap((m) =>
+            m.parts.flatMap((p) => (p.type === "tool-call" ? [p] : [])),
+          )
+          const toolResultParts = messages.flatMap((m) =>
+            m.parts.flatMap((p) => (p.type === "tool-result" ? [p] : [])),
+          )
+
+          expect(toolCallParts.length).toBe(1)
+          expect(toolCallParts[0]?.toolName).toBe("read_file")
+          expect(toolResultParts.length).toBe(1)
+          expect(toolResultParts[0]?.toolName).toBe("read_file")
+          expect(toolResultParts[0]?.output.type).toBe("json")
+
+          // And the observability event records the real tool name
+          // rather than the hardcoded "external".
+          const events = yield* Ref.get(eventsRef)
+          const succeeded = events.find((e) => e._tag === "ToolCallSucceeded")
+          expect(succeeded).toBeDefined()
+          if (succeeded !== undefined && "toolName" in succeeded) {
+            expect(succeeded.toolName).toBe("read_file")
+          }
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("external-driver tool-failed events persist with real toolName", async () => {
+    const e2eSessionId = SessionId.make("e2e-tool-fail-session")
+    const e2eBranchId = BranchId.make("e2e-tool-fail-branch")
+
+    const e2eExecutor: TurnExecutor = {
+      executeTurn: () =>
+        Stream.fromIterable<TurnEvent, TurnError>([
+          ToolStarted.make({ toolCallId: "tc-F", toolName: "bash" }),
+          ToolFailed.make({ toolCallId: "tc-F", error: "permission denied" }),
+          TextDelta.make({ text: "ok" }),
+          Finished.make({ stopReason: "stop" }),
+        ]),
+    }
+
+    const e2eAgent = AgentDefinition.make({
+      name: "tool-fail-agent" as never,
+      driver: ExternalDriverRef.make({ id: "tool-fail-driver" }),
+    })
+
+    const e2eResolved = resolveExtensions([
+      {
+        manifest: { id: "e2e-tool-fail-ext" },
+        scope: "builtin" as const,
+        sourcePath: "test",
+        contributions: {
+          agents: [e2eAgent],
+          externalDrivers: [
+            { id: "tool-fail-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+          ],
+        },
+      },
+    ])
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      generate: () => Effect.succeed("unused"),
+    })
+    const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
+
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      providerLayer,
+      ExtensionRegistry.fromResolved(e2eResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: e2eResolved.modelDrivers,
+        externalDrivers: e2eResolved.externalDrivers,
+      }),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      makeCountingEventStore(eventsRef),
+      ToolRunner.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          yield* runAgentLoopOnce(agentLoop, {
+            sessionId: e2eSessionId,
+            branchId: e2eBranchId,
+            agentName: "tool-fail-agent",
+            prompt: "trigger a failure",
+          })
+
+          const storage = yield* Storage
+          const messages = yield* storage.listMessages(e2eBranchId)
+
+          const toolResultParts = messages.flatMap((m) =>
+            m.parts.flatMap((p) => (p.type === "tool-result" ? [p] : [])),
+          )
+          expect(toolResultParts.length).toBe(1)
+          expect(toolResultParts[0]?.toolName).toBe("bash")
+          expect(toolResultParts[0]?.output.type).toBe("error-json")
+
+          const events = yield* Ref.get(eventsRef)
+          const failed = events.find((e) => e._tag === "ToolCallFailed")
+          expect(failed).toBeDefined()
+          if (failed !== undefined && "toolName" in failed) {
+            expect(failed.toolName).toBe("bash")
+          }
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("explicit ToolCall event de-duplicates against ToolStarted for the same id", async () => {
+    // Some external drivers emit `ToolCall` before `ToolStarted`; both
+    // carry the toolName. The collector must record exactly one
+    // `tool-call` response part per id (not two), otherwise the stored
+    // transcript has a duplicated tool-call that the model sees on the
+    // next turn.
+    const e2eSessionId = SessionId.make("e2e-tool-dup-session")
+    const e2eBranchId = BranchId.make("e2e-tool-dup-branch")
+
+    const e2eExecutor: TurnExecutor = {
+      executeTurn: () =>
+        Stream.fromIterable<TurnEvent, TurnError>([
+          ToolCall.make({ toolCallId: "tc-dup", toolName: "write_file", input: {} }),
+          ToolStarted.make({ toolCallId: "tc-dup", toolName: "write_file" }),
+          ToolCompleted.make({ toolCallId: "tc-dup", output: {} }),
+          Finished.make({ stopReason: "stop" }),
+        ]),
+    }
+
+    const e2eAgent = AgentDefinition.make({
+      name: "tool-dup-agent" as never,
+      driver: ExternalDriverRef.make({ id: "tool-dup-driver" }),
+    })
+
+    const e2eResolved = resolveExtensions([
+      {
+        manifest: { id: "e2e-tool-dup-ext" },
+        scope: "builtin" as const,
+        sourcePath: "test",
+        contributions: {
+          agents: [e2eAgent],
+          externalDrivers: [
+            { id: "tool-dup-driver", executor: e2eExecutor, invalidate: () => Effect.void },
+          ],
+        },
+      },
+    ])
+
+    const providerLayer = Layer.succeed(Provider, {
+      stream: () => Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
+      generate: () => Effect.succeed("unused"),
+    })
+    const eventsRef = await Effect.runPromise(Ref.make<AgentEvent[]>([]))
+
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      providerLayer,
+      ExtensionRegistry.fromResolved(e2eResolved),
+      DriverRegistry.fromResolved({
+        modelDrivers: e2eResolved.modelDrivers,
+        externalDrivers: e2eResolved.externalDrivers,
+      }),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      makeCountingEventStore(eventsRef),
+      ToolRunner.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+    )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+          yield* runAgentLoopOnce(agentLoop, {
+            sessionId: e2eSessionId,
+            branchId: e2eBranchId,
+            agentName: "tool-dup-agent",
+            prompt: "write a file",
+          })
+
+          const storage = yield* Storage
+          const messages = yield* storage.listMessages(e2eBranchId)
+          const toolCallParts = messages.flatMap((m) =>
+            m.parts.flatMap((p) => (p.type === "tool-call" ? [p] : [])),
+          )
+          expect(toolCallParts.length).toBe(1)
+          expect(toolCallParts[0]?.toolName).toBe("write_file")
         }).pipe(Effect.provide(layer)),
       ),
     )
