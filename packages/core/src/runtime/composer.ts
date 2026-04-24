@@ -49,7 +49,7 @@ import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { EventStore } from "../domain/event.js"
-import { EventPublisher } from "../domain/event-publisher.js"
+import { BuiltinEventSink, EventPublisher } from "../domain/event-publisher.js"
 import { ApprovalService } from "./approval-service.js"
 import { PromptPresenter } from "../domain/prompt-presenter.js"
 import { ResourceManager } from "./resource-manager.js"
@@ -122,7 +122,7 @@ export interface EphemeralOverrides {
   readonly storage?: OpaqueLayer
   /** Event store for ephemeral child. Omits EventStore. */
   readonly eventStore?: OpaqueLayer
-  /** Event publisher wired to local bus. Omits EventPublisher. */
+  /** Event publisher wired to local bus. Omits EventPublisher + BuiltinEventSink. */
   readonly eventPublisher?: OpaqueLayer
   /** Approval service (typically auto-resolve for child agents). Omits ApprovalService. */
   readonly approval?: OpaqueLayer
@@ -154,6 +154,7 @@ type EphemeralOverrideProvides =
   | SearchStorage
   | EventStore
   | EventPublisher
+  | BuiltinEventSink
   | ApprovalService
   | PromptPresenter
   | ResourceManager
@@ -185,7 +186,9 @@ const OVERRIDE_TAG_SETS: Record<
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   eventStore: [EventStore] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
-  eventPublisher: [EventPublisher] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
+  eventPublisher: [EventPublisher, BuiltinEventSink] as unknown as ReadonlyArray<
+    Context.Key<unknown, unknown>
+  >,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
   approval: [ApprovalService] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary

@@ -28,6 +28,7 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ExtensionStateStorage } from "@gent/core/storage/extension-state-storage"
+import { BuiltinEventSink, EventPublisher } from "@gent/core/domain/event-publisher"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
   "@gent/core/tests/scope-brands/FakeService",
@@ -168,6 +169,61 @@ describe("scope brand type fences", () => {
         omitted(
           yield* Effect.serviceOption(ExtensionStateStorage).pipe(Effect.provide(composed.layer)),
         )
+      }),
+    )
+  })
+
+  test("withOverrides treats EventPublisher and BuiltinEventSink as one override family", () => {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const parentPublisher = EventPublisher.of({
+          append: () => Effect.die("parent append should be omitted"),
+          deliver: () => Effect.die("parent deliver should be omitted"),
+          publish: () => Effect.die("parent publish should be omitted"),
+          terminateSession: () => Effect.die("parent terminate should be omitted"),
+        })
+        const parentServices = Context.empty().pipe(
+          Context.add(EventPublisher, parentPublisher),
+          Context.add(BuiltinEventSink, {
+            publish: () => Effect.die("parent builtin sink should be omitted"),
+          }),
+        ) as Context.Context<never>
+
+        const serverParent = {
+          cwd: "/tmp",
+          resolved: { kinds: {} } as never,
+          __brand: undefined as never,
+        } as ServerProfile
+
+        const childPublisher = EventPublisher.of({
+          append: () => Effect.die("child append is unused"),
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+          terminateSession: () => Effect.void,
+        })
+        const childEventPublisherLayer = Layer.effectContext(
+          Effect.succeed(
+            Context.empty().pipe(
+              Context.add(EventPublisher, childPublisher),
+              Context.add(BuiltinEventSink, {
+                publish: childPublisher.publish,
+              }),
+            ),
+          ),
+        )
+
+        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
+          .withOverrides({ eventPublisher: childEventPublisherLayer })
+          .build()
+
+        const { publisher, sink } = yield* Effect.gen(function* () {
+          const publisher = yield* EventPublisher
+          const sink = yield* BuiltinEventSink
+          return { publisher, sink }
+        }).pipe(Effect.provide(composed.layer))
+
+        expect(publisher).toBe(childPublisher)
+        expect(sink.publish).toBe(childPublisher.publish)
       }),
     )
   })

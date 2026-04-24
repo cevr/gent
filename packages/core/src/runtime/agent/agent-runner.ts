@@ -29,7 +29,11 @@ import {
   type EventStoreService,
   type EventEnvelope,
 } from "../../domain/event.js"
-import { EventPublisher, type EventPublisherService } from "../../domain/event-publisher.js"
+import {
+  BuiltinEventSink,
+  EventPublisher,
+  type EventPublisherService,
+} from "../../domain/event-publisher.js"
 import {
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   AgentRunError,
@@ -518,16 +522,21 @@ const buildEphemeralLayer = (params: {
   // child loop can complete, but do not run local extension reduction on
   // those synthetic session ids; mirrored parent observers handle the
   // subset of child events that should escape.
-  const eventPublisherLayer = Layer.effect(
-    EventPublisher,
+  const eventPublisherLayer = Layer.effectContext(
     Effect.gen(function* () {
       const baseEventStore = yield* EventStore
-      return EventPublisher.of({
+      const publisher = EventPublisher.of({
         append: (event) => baseEventStore.append(event),
         deliver: (envelope) => baseEventStore.broadcast(envelope),
         publish: (event) => baseEventStore.publish(event),
         terminateSession: () => Effect.void,
       })
+      return Context.empty().pipe(
+        Context.add(EventPublisher, publisher),
+        Context.add(BuiltinEventSink, {
+          publish: publisher.publish,
+        }),
+      )
     }),
   ).pipe(Layer.provide(eventStoreLayer))
   const toolRunnerLayer = Layer.provideMerge(
