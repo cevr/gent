@@ -1563,6 +1563,16 @@ describe("session.delete", () => {
 
           // Fail-closed: registry lookup error propagates, deleteSession aborts.
           expect(exit._tag).toBe("Failure")
+          // The StorageError survives in the cause — locks the contract against
+          // a refactor that swaps the typed error for a defect or different tag.
+          if (exit._tag === "Failure") {
+            const error = Cause.findErrorOption(exit.cause)
+            expect(Option.isSome(error)).toBe(true)
+            if (Option.isSome(error)) {
+              expect(error.value).toBeInstanceOf(StorageError)
+              expect((error.value as StorageError).message).toBe("registry lookup failed")
+            }
+          }
           // The MachineEngine probe MUST NOT be called: routing through the
           // ambient runtime when we can't resolve the owning cwd is exactly
           // the wrong-runtime delivery the contract forbids.
