@@ -2,7 +2,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { SqlClient } from "effect/unstable/sql"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -2095,19 +2095,53 @@ describe("Storage", () => {
   })
 
   describe("Concurrent writes", () => {
-    // SQLite (WAL mode) serializes writes at the database level. The
-    // storage layer adds no in-memory locking, so the contract under
-    // test is that parallel calls through the Effect surface produce N
-    // committed rows with no lost writes and no partial state.
-    it.live("createSession in parallel produces N independent rows", () =>
+    // The storage layer adds no in-memory locking on top of the SQL
+    // client; the contract under test is that N concurrent calls through
+    // the Effect surface produce N committed rows with no lost writes.
+    //
+    // Negative control: each test wraps the per-item write with a
+    // `maxConcurrent` Ref counter — increment-on-enter, decrement-on-exit
+    // — and asserts the observed peak was > 1. If a future refactor
+    // accidentally drops `concurrency: "unbounded"` to `1`, the peak
+    // collapses to 1 and the assertion fails. This proves the test
+    // exercises real fiber interleaving rather than accidental
+    // serialization.
+    const trackedConcurrency = <A, E, R>(
+      active: Ref.Ref<number>,
+      peak: Ref.Ref<number>,
+      body: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E, R> =>
+      Effect.acquireUseRelease(
+        Effect.gen(function* () {
+          const n = yield* Ref.updateAndGet(active, (m) => m + 1)
+          yield* Ref.update(peak, (p) => (n > p ? n : p))
+          // Yield to the scheduler so peer fibers in `Effect.forEach`
+          // get a chance to enter before this one completes its body.
+          // Without this, bun:sqlite's synchronous calls cause each
+          // fiber to run start-to-finish on the event loop, collapsing
+          // observed concurrency to 1.
+          yield* Effect.yieldNow
+        }),
+        () => body,
+        () => Ref.update(active, (n) => n - 1),
+      )
+
+    it.live("createSession with N concurrent fibers produces N independent rows", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
-        const ids = Array.from({ length: 16 }, (_, i) => `cs-${i}`)
+        const N = 16
+        const ids = Array.from({ length: N }, (_, i) => `cs-${i}`)
+        const active = yield* Ref.make(0)
+        const peak = yield* Ref.make(0)
         yield* Effect.forEach(
           ids,
           (id) =>
-            storage.createSession(
-              new Session({ id, createdAt: new Date(), updatedAt: new Date() }),
+            trackedConcurrency(
+              active,
+              peak,
+              storage.createSession(
+                new Session({ id, createdAt: new Date(), updatedAt: new Date() }),
+              ),
             ),
           { concurrency: "unbounded" },
         )
@@ -2117,10 +2151,12 @@ describe("Storage", () => {
         for (const id of ids) {
           expect(seen.has(id)).toBe(true)
         }
+        // Negative control: real interleaving, not accidental serialization.
+        expect(yield* Ref.get(peak)).toBeGreaterThan(1)
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
     )
 
-    it.live("appendEvent in parallel produces N envelopes with strictly increasing ids", () =>
+    it.live("appendEvent with N concurrent fibers produces N envelopes with unique ids", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sessionId = SessionId.make("ce-session")
@@ -2131,24 +2167,29 @@ describe("Storage", () => {
         yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
 
         const N = 32
+        const active = yield* Ref.make(0)
+        const peak = yield* Ref.make(0)
         const envelopes = yield* Effect.forEach(
           Array.from({ length: N }, () => 0),
-          () => storage.appendEvent(SessionStarted.make({ sessionId, branchId })),
+          () =>
+            trackedConcurrency(
+              active,
+              peak,
+              storage.appendEvent(SessionStarted.make({ sessionId, branchId })),
+            ),
           { concurrency: "unbounded" },
         )
 
-        // All N writes succeeded — no lost writes.
         expect(envelopes.length).toBe(N)
-        // All envelope ids are unique.
         const idSet = new Set(envelopes.map((e) => e.id))
         expect(idSet.size).toBe(N)
-        // Persisted row count matches.
         const persisted = yield* storage.listEvents({ sessionId, branchId })
         expect(persisted.length).toBe(N)
+        expect(yield* Ref.get(peak)).toBeGreaterThan(1)
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
     )
 
-    it.live("createMessage in parallel produces N rows with no lost writes", () =>
+    it.live("createMessage with N concurrent fibers produces N rows with no lost writes", () =>
       Effect.gen(function* () {
         const storage = yield* Storage
         const sessionId = SessionId.make("cm-session")
@@ -2160,18 +2201,24 @@ describe("Storage", () => {
 
         const N = 24
         const ids = Array.from({ length: N }, (_, i) => MessageId.make(`cm-${i}`))
+        const active = yield* Ref.make(0)
+        const peak = yield* Ref.make(0)
         yield* Effect.forEach(
           ids,
           (id) =>
-            storage.createMessage(
-              Message.Regular.make({
-                id,
-                sessionId,
-                branchId,
-                role: "user",
-                parts: [new TextPart({ type: "text", text: id })],
-                createdAt: new Date(),
-              }),
+            trackedConcurrency(
+              active,
+              peak,
+              storage.createMessage(
+                Message.Regular.make({
+                  id,
+                  sessionId,
+                  branchId,
+                  role: "user",
+                  parts: [new TextPart({ type: "text", text: id })],
+                  createdAt: new Date(),
+                }),
+              ),
             ),
           { concurrency: "unbounded" },
         )
@@ -2182,6 +2229,7 @@ describe("Storage", () => {
         for (const id of ids) {
           expect(seen.has(id)).toBe(true)
         }
+        expect(yield* Ref.get(peak)).toBeGreaterThan(1)
       }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
     )
   })
