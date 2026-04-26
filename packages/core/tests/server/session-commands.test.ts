@@ -684,6 +684,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("NotFoundError")
+      }
       expect((yield* sessions.getSession(sessionId))?.activeBranchId).toBe(fromBranchId)
     }).pipe(Effect.provide(failingSessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
@@ -812,6 +817,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("InvalidStateError")
+      }
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* branches.getBranch(childBranchId)).toBeDefined()
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
@@ -851,6 +861,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("InvalidStateError")
+      }
       expect(yield* branches.getBranch(parentBranchId)).toBeDefined()
       expect(yield* sessions.getSession(child.sessionId)).toBeDefined()
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
@@ -885,6 +900,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("InvalidStateError")
+      }
       expect(yield* branches.getBranch(activeBranchId)).toBeDefined()
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
@@ -926,6 +946,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("NotFoundError")
+      }
       expect(yield* branches.getBranch(otherBranchId)).toBeDefined()
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
   )
@@ -1034,6 +1059,11 @@ describe("session command persistence", () => {
       )
 
       expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const fail = exit.cause.reasons.find(Cause.isFailReason)
+        expect(fail).toBeDefined()
+        expect(fail?.error._tag).toBe("NotFoundError")
+      }
       expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
         ownerMessageId,
       ])
