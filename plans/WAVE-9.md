@@ -5,10 +5,14 @@
 Wave 7 hardened the W6 substrate (brand passes, domain
 back-imports, server hardening, test gap closure). Wave 8 dropped
 `effect-machine` from the agent-loop and left it as a plain
-`Effect.gen` + `Ref<Phase>` driver. The substrate is now ready for
-the architectural shift: replace `Resource.machine` /
-`MachineEngine` / `runtime.*` slot / `subscriptions` machinery with
-a single actor primitive.
+`Effect.gen` fiber driving a single `SubscriptionRef<AgentLoopState>`
+— a flat `LoopState = TaggedEnumClass(...)` (`Idle | Running |
+WaitingForInteraction`) plus its queue, persisted directly through
+`agent-loop.checkpoint.ts`. Durable suspension and queue drain are
+pinned by regression tests at `tests/runtime/agent-loop.test.ts`.
+The substrate is now ready for the architectural shift: replace
+`Resource.machine` / `MachineEngine` / `runtime.*` slot /
+`subscriptions` machinery with a single actor primitive.
 
 Wave 9 is **foundation only**. It introduces the new shape in
 `domain/actor.ts` and wires the engine, the Receptionist, and the
@@ -262,9 +266,9 @@ peers re-tell on resume).
 **Files**:
 
 - `packages/core/src/runtime/extensions/actor-engine.ts` (extend
-  with snapshot/restore hooks); checkpoint surface integration
-  (`agent-loop.checkpoint.ts` or wherever W8 left the checkpoint
-  hub) — actors plug into the same hub.
+  with snapshot/restore hooks); checkpoint surface integration in
+  `packages/core/src/runtime/agent/agent-loop.checkpoint.ts` —
+  actors plug into the same checkpoint record alongside `LoopState`.
 - `packages/core/tests/runtime/actor-persistence.test.ts` (new —
   spawn, send, snapshot, simulate restart with new ActorEngine,
   verify state matches; verify mailbox is _not_ replayed).
