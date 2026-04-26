@@ -47,6 +47,7 @@ import { RelationshipStorage } from "../storage/relationship-storage.js"
 import { ExtensionStateStorage } from "../storage/extension-state-storage.js"
 import { CheckpointStorage } from "../storage/checkpoint-storage.js"
 import { InteractionStorage } from "../storage/interaction-storage.js"
+import { InteractionPendingReader } from "../storage/interaction-pending-reader.js"
 import { SearchStorage } from "../storage/search-storage.js"
 import { EventStore } from "../domain/event.js"
 import { BuiltinEventSink, EventPublisher } from "../domain/event-publisher.js"
@@ -151,6 +152,7 @@ type EphemeralOverrideProvides =
   | ExtensionStateStorage
   | CheckpointStorage
   | InteractionStorage
+  | InteractionPendingReader
   | SearchStorage
   | EventStore
   | EventPublisher
@@ -181,6 +183,7 @@ const OVERRIDE_TAG_SETS: Record<
     ExtensionStateStorage,
     CheckpointStorage,
     InteractionStorage,
+    InteractionPendingReader,
     SearchStorage,
   ] as unknown as ReadonlyArray<Context.Key<unknown, unknown>>,
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary

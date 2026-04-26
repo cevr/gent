@@ -78,6 +78,8 @@
     "./storage/event-storage.js": "./src/storage/event-storage.ts",
     "./storage/extension-state-storage": "./src/storage/extension-state-storage.ts",
     "./storage/extension-state-storage.js": "./src/storage/extension-state-storage.ts",
+    "./storage/interaction-pending-reader": "./src/storage/interaction-pending-reader.ts",
+    "./storage/interaction-pending-reader.js": "./src/storage/interaction-pending-reader.ts",
     "./storage/interaction-storage": "./src/storage/interaction-storage.ts",
     "./storage/interaction-storage.js": "./src/storage/interaction-storage.ts",
     "./storage/message-storage": "./src/storage/message-storage.ts",

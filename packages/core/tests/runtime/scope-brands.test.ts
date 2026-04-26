@@ -27,6 +27,7 @@ import { MessageStorage } from "@gent/core/storage/message-storage"
 import { EventStorage } from "@gent/core/storage/event-storage"
 import { RelationshipStorage } from "@gent/core/storage/relationship-storage"
 import { ExtensionStateStorage } from "@gent/core/storage/extension-state-storage"
+import { InteractionPendingReader } from "@gent/core/storage/interaction-pending-reader"
 import { BuiltinEventSink, EventPublisher } from "@gent/core/domain/event-publisher"
 
 class FakeService extends Context.Service<FakeService, { readonly value: number }>()(
@@ -120,17 +121,24 @@ describe("scope brand type fences", () => {
   })
 
   test("withOverrides omits Storage sub-Tags from parent context", () => {
-    // Construct a parent context with Storage + SessionStorage.
-    // After withOverrides({ storage: ... }), the parent's versions
-    // must be stripped — the child's in-memory layer should win.
+    // Construct a parent context with Storage + SessionStorage +
+    // InteractionPendingReader. After withOverrides({ storage: ... }),
+    // the parent's versions must be stripped — the child's in-memory
+    // layer should win, and InteractionPendingReader from the parent
+    // (which is bound to the parent's interaction store) must NOT
+    // leak through. Otherwise ephemeral subagents read parent's
+    // durable interactions while writing to a fresh in-memory store.
     return Effect.runPromise(
       Effect.gen(function* () {
         // Build a parent with a sentinel Storage + SessionStorage
+        // + InteractionPendingReader.
         const sentinelStorage = { sentinel: "parent-storage" } as never
         const sentinelSession = { sentinel: "parent-session" } as never
+        const sentinelPending = { sentinel: "parent-pending" } as never
         const parentServices = Context.empty().pipe(
           Context.add(Storage, sentinelStorage),
           Context.add(SessionStorage, sentinelSession),
+          Context.add(InteractionPendingReader, sentinelPending),
         ) as Context.Context<never>
 
         const serverParent = {
@@ -167,6 +175,11 @@ describe("scope brand type fences", () => {
         )
         omitted(
           yield* Effect.serviceOption(ExtensionStateStorage).pipe(Effect.provide(composed.layer)),
+        )
+        omitted(
+          yield* Effect.serviceOption(InteractionPendingReader).pipe(
+            Effect.provide(composed.layer),
+          ),
         )
       }),
     )

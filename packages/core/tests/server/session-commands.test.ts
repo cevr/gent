@@ -397,6 +397,95 @@ const sessionCommandsLayerWithProfileMachineProbes = (params: {
 }
 
 /**
+ * Variant of the racy layer with a profile cache. Simulates the W6-11
+ * race: late descendant created AFTER pre-collect (so it's only in
+ * `postDeleteOnly`), and after the cascade tx the child's row is gone
+ * before runtime termination runs. The fix routes termination through
+ * `SessionCwdRegistry.lookup` — which still holds the cwd recorded at
+ * create time — instead of `sessionStorage.getSession()`.
+ */
+const racySessionCommandsLayerWithProfileCache = (params: {
+  readonly primaryTerminated: Array<SessionId>
+  readonly profileTerminated: Map<string, Array<SessionId>>
+  readonly lateChild: {
+    sessionId: SessionId
+    branchId: BranchId
+    cwd: string
+  }
+}) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const baseSubTags = subTagLayers(storageLayer)
+  const cwdRegistryLayer = SessionCwdRegistry.Test()
+  const racingSessionStorageLayer = Layer.effect(
+    SessionStorage,
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      const cwdRegistry = yield* SessionCwdRegistry
+      let fired = false
+      return {
+        ...sessions,
+        deleteSession: (rootId: SessionId) =>
+          Effect.gen(function* () {
+            if (!fired) {
+              fired = true
+              const now = new Date("2026-01-01T00:00:00.000Z")
+              yield* sessions.createSession(
+                new Session({
+                  id: params.lateChild.sessionId,
+                  cwd: params.lateChild.cwd,
+                  parentSessionId: rootId,
+                  createdAt: now,
+                  updatedAt: now,
+                }),
+              )
+              yield* branches.createBranch(
+                new Branch({
+                  id: params.lateChild.branchId,
+                  sessionId: params.lateChild.sessionId,
+                  createdAt: now,
+                }),
+              )
+              // The production createChildSession path records cwd in the
+              // registry; mirror that here so the termination fallback has
+              // something to find after the cascade removes the row.
+              yield* cwdRegistry.record(params.lateChild.sessionId, params.lateChild.cwd)
+            }
+            return yield* sessions.deleteSession(rootId)
+          }),
+      }
+    }),
+  ).pipe(Layer.provide(Layer.mergeAll(baseSubTags, cwdRegistryLayer)))
+
+  const primaryMachineLayer = Layer.succeed(
+    MachineEngine,
+    makeMachineProbe(params.primaryTerminated),
+  )
+  const profileCacheLayer = SessionProfileCache.Test(
+    new Map(
+      [...params.profileTerminated].map(([cwd, terminated]) => [
+        cwd,
+        makeProfile(cwd, makeMachineProbe(terminated)),
+      ]),
+    ),
+  )
+  const deps = Layer.mergeAll(
+    storageLayer,
+    baseSubTags,
+    racingSessionStorageLayer,
+    SessionRuntime.Test(),
+    SessionCommands.SessionRuntimeTerminatorLive,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    primaryMachineLayer,
+    profileCacheLayer,
+    cwdRegistryLayer,
+  )
+  return Layer.provideMerge(SessionCommands.Live, deps)
+}
+
+/**
  * SessionCommands layer that injects a child-session create into the DB
  * between the pre-collect and the durable `deleteSession` tx. Simulates the
  * race the audit flagged: a new descendant committing after
@@ -1261,6 +1350,45 @@ describe("session.delete", () => {
             lateChild: {
               sessionId: lateChildSessionId,
               branchId: lateChildBranchId,
+            },
+          }),
+        ),
+        Effect.timeout("4 seconds"),
+      ),
+    )
+  })
+
+  it.live("post-cascade cleanup routes through cwd profile via SessionCwdRegistry (W6-11)", () => {
+    const primaryTerminated: Array<SessionId> = []
+    const profileTerminated = new Map<string, Array<SessionId>>([
+      ["/tmp/race-parent", []],
+      ["/tmp/racing-late-child", []],
+    ])
+    const lateChildSessionId = SessionId.make("late-child-cwd-fallback")
+    const lateChildBranchId = BranchId.make("late-child-cwd-fallback-branch")
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const parent = yield* commands.createSession({ cwd: "/tmp/race-parent" })
+
+        yield* commands.deleteSession(parent.sessionId)
+
+        // Late child injected mid-cascade: row removed by tx, but the
+        // racy layer recorded its cwd in SessionCwdRegistry, so the
+        // post-delete-only termination path resolves the cwd profile
+        // through the registry rather than the (now-empty) session row.
+        expect(profileTerminated.get("/tmp/racing-late-child")).toContain(lateChildSessionId)
+        expect(profileTerminated.get("/tmp/race-parent")).toContain(parent.sessionId)
+        expect(primaryTerminated).not.toContain(lateChildSessionId)
+      }).pipe(
+        Effect.provide(
+          racySessionCommandsLayerWithProfileCache({
+            primaryTerminated,
+            profileTerminated,
+            lateChild: {
+              sessionId: lateChildSessionId,
+              branchId: lateChildBranchId,
+              cwd: "/tmp/racing-late-child",
             },
           }),
         ),

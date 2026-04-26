@@ -87,19 +87,27 @@ const terminateSessionMachineRuntime = Effect.fn("SessionCommands.terminateSessi
   function* (input: {
     readonly sessionId: SessionId
     readonly sessionStorage: SessionStorageService
+    readonly sessionCwdRegistry: SessionCwdRegistryService
     readonly ambientRuntime: MachineEngineService
     readonly profileCache?: SessionProfileCacheService
   }) {
-    const session = yield* input.sessionStorage.getSession(input.sessionId)
+    // Prefer the in-memory cwd registry: descendants caught by the post-delete
+    // cleanup have no durable row to read from, but the registry still holds
+    // their cwd until forgetDeletedSessionRuntimeState runs.
+    const cachedCwd = yield* input.sessionCwdRegistry
+      .lookup(input.sessionId)
+      .pipe(Effect.catchEager(() => Effect.succeed<string | undefined>(undefined)))
+    const cwd = cachedCwd ?? (yield* input.sessionStorage.getSession(input.sessionId))?.cwd
+
     const runtime =
-      session?.cwd !== undefined && input.profileCache !== undefined
-        ? yield* input.profileCache.resolve(session.cwd).pipe(
+      cwd !== undefined && input.profileCache !== undefined
+        ? yield* input.profileCache.resolve(cwd).pipe(
             Effect.map((profile) => profile.extensionStateRuntime),
             Effect.catchCause((cause) =>
               Effect.logWarning("session.delete.profileRuntimeLookupFailed").pipe(
                 Effect.annotateLogs({
                   sessionId: input.sessionId,
-                  cwd: session.cwd,
+                  cwd,
                   error: String(cause),
                 }),
                 Effect.as(undefined),
