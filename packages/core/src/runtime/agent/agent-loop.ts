@@ -2838,6 +2838,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       const state = yield* currentLoopState
                       if (state._tag !== "WaitingForInteraction") return
                       yield* Ref.set(interruptedRef, true)
+                      // Preserve `startedAtMs` so turn-duration metrics
+                      // include time spent in WaitingForInteraction —
+                      // matches FSM-era semantics.
                       const resumed = buildRunningState(
                         { currentAgent: state.currentAgent },
                         {
@@ -2850,6 +2853,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                             ? { interactive: state.interactive }
                             : {}),
                         },
+                        { startedAtMs: state.startedAtMs },
                       )
                       yield* saveCheckpoint(resumed)
                       yield* forkTurn(resumed)
@@ -2884,6 +2888,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                         if (state._tag !== "WaitingForInteraction") return
                         // Clear stale interrupt before resuming the suspended turn.
                         yield* Ref.set(interruptedRef, false)
+                        // Preserve `startedAtMs` so turn-duration metrics
+                        // include time spent in WaitingForInteraction —
+                        // matches FSM-era semantics.
                         const resumed = buildRunningState(
                           { currentAgent: state.currentAgent },
                           {
@@ -2896,6 +2903,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                               ? { interactive: state.interactive }
                               : {}),
                           },
+                          { startedAtMs: state.startedAtMs },
                         )
                         yield* saveCheckpoint(resumed)
                         yield* forkTurn(resumed)

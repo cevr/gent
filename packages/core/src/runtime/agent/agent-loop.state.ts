@@ -287,11 +287,12 @@ export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleS
 export const buildRunningState = (
   base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
+  options?: { startedAtMs?: number },
 ): RunningState =>
   LoopState.Running.make({
     currentAgent: base.currentAgent,
     message: item.message,
-    startedAtMs: Date.now(),
+    startedAtMs: options?.startedAtMs ?? Date.now(),
     agentOverride: item.agentOverride,
     runSpec: item.runSpec,
     interactive: item.interactive,
