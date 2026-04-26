@@ -1,5 +1,5 @@
 import { describe, it, expect } from "effect-bun-test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import {
   EventStore,
   SessionStarted,
@@ -7,6 +7,7 @@ import {
   ToolCallSucceeded,
 } from "@gent/core/domain/event"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { AUTO_EXTENSION_ID, AutoExtension, type AutoState } from "@gent/extensions/auto"
 import { AutoProjection } from "@gent/extensions/auto-projection"
@@ -17,6 +18,16 @@ import { ensureStorageParents, testSetupCtx } from "@gent/core/test-utils"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
 import { ExtensionTurnControl } from "../../src/runtime/extensions/turn-control"
 import { Storage } from "@gent/core/storage/sqlite-storage"
+
+const AutoIntent = TaggedEnumClass("AutoIntent", {
+  StartAuto: { goal: Schema.String, maxIterations: Schema.optional(Schema.Number) },
+  CancelAuto: {},
+  ToggleAuto: {
+    goal: Schema.optional(Schema.String),
+    maxIterations: Schema.optional(Schema.Number),
+  },
+})
+type AutoIntent = Schema.Schema.Type<typeof AutoIntent>
 
 // ── Runtime integration tests ──
 
@@ -75,13 +86,7 @@ const getSnapshot = (runtime: MachineEngine) =>
     return { model } as { readonly model: AutoSnapshotReply }
   })
 
-const sendAuto = (
-  runtime: MachineEngine,
-  intent:
-    | { readonly _tag: "StartAuto"; readonly goal: string; readonly maxIterations?: number }
-    | { readonly _tag: "CancelAuto" }
-    | { readonly _tag: "ToggleAuto"; readonly goal?: string; readonly maxIterations?: number },
-) => {
+const sendAuto = (runtime: MachineEngine, intent: AutoIntent) => {
   switch (intent._tag) {
     case "StartAuto":
       return runtime.send(
@@ -129,7 +134,10 @@ describe("Auto runtime integration", () => {
       })
 
       // Start auto
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "fix all bugs", maxIterations: 3 })
+      yield* sendAuto(
+        runtime,
+        AutoIntent.StartAuto.make({ goal: "fix all bugs", maxIterations: 3 }),
+      )
 
       const snap1 = yield* getSnapshot(runtime)
       const ui1 = snap1!.model as AutoSnapshotReply
@@ -179,7 +187,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // TurnCompleted should not change UI iteration
       yield* runtime.publish(turnCompleted(), { sessionId, branchId })
@@ -198,10 +206,10 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: true })
 
-      yield* sendAuto(runtime, { _tag: "CancelAuto" })
+      yield* sendAuto(runtime, AutoIntent.CancelAuto.make({}))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
@@ -214,7 +222,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // Move to AwaitingReview
       yield* runtime.publish(checkpointSignal({ status: "continue", summary: "x" }), {
@@ -223,7 +231,7 @@ describe("Auto runtime integration", () => {
       })
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ phase: "awaiting-review" })
 
-      yield* sendAuto(runtime, { _tag: "CancelAuto" })
+      yield* sendAuto(runtime, AutoIntent.CancelAuto.make({}))
       expect((yield* getSnapshot(runtime))!.model).toMatchObject({ active: false })
     }).pipe(Effect.provide(makeLayer())),
   )
@@ -236,7 +244,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // 5 turns without checkpoint
       for (let i = 0; i < 5; i++) {
@@ -286,7 +294,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test" }))
 
       // An unrelated tool call must not transition the machine
       yield* runtime.publish(
@@ -315,7 +323,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 3 })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // Review fired without a preceding checkpoint — must not advance
       yield* runtime.publish(reviewSignal(), { sessionId, branchId })
@@ -335,7 +343,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 3 })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 3 }))
 
       // First checkpoint moves to AwaitingReview
       yield* runtime.publish(checkpointSignal({ status: "continue", summary: "first" }), {
@@ -364,7 +372,7 @@ describe("Auto runtime integration", () => {
         branchId,
       })
 
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "test", maxIterations: 1 })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "test", maxIterations: 1 }))
 
       // Checkpoint continue at iteration 1/1
       yield* runtime.publish(checkpointSignal({ status: "continue", summary: "done" }), {
@@ -430,7 +438,7 @@ describe("Auto runtime integration", () => {
     Effect.gen(function* () {
       const runtime = yield* MachineEngine
       yield* runtime.publish(SessionStarted.make({ sessionId, branchId }), { sessionId, branchId })
-      yield* sendAuto(runtime, { _tag: "StartAuto", goal: "research caching strategies" })
+      yield* sendAuto(runtime, AutoIntent.StartAuto.make({ goal: "research caching strategies" }))
       yield* runtime.publish(
         checkpointSignal({
           status: "continue",
