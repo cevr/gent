@@ -37,7 +37,7 @@
  * brand itself is type-only — class declarations use `declare readonly`,
  * never assigning the property at runtime.
  */
-export const ReadOnlyBrand: unique symbol = Symbol.for("@gent/core/ReadOnlyBrand")
+export const ReadOnlyBrand: unique symbol = Symbol("@gent/core/ReadOnlyBrand")
 
 /** Phantom brand applied to read-only service identifiers + shapes. */
 export interface ReadOnlyTag {

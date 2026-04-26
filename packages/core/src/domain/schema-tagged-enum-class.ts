@@ -30,7 +30,7 @@ import { Schema } from "effect"
  */
 export type VariantFields = Schema.Struct.Fields
 
-const taggedEnumVariantDefinitionMarker: unique symbol = Symbol.for(
+const taggedEnumVariantDefinitionMarker: unique symbol = Symbol(
   "@gent/core/TaggedEnumClass/variant",
 )
 

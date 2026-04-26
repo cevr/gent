@@ -238,7 +238,7 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
 /** Symbol under which `request({...})` attaches a typed `CapabilityRef` to its
  *  returned token. Read with `ref(token)`. Authors should not consume the
  *  symbol directly — the typed accessor preserves Input/Output parameters. */
-export const CAPABILITY_REF: unique symbol = Symbol.for("@gent/core/capability/ref")
+export const CAPABILITY_REF: unique symbol = Symbol("@gent/core/capability/ref")
 
 /**
  * Read the typed `CapabilityRef` attached to a `request(...)` token. Returns

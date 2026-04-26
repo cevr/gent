@@ -159,8 +159,8 @@ type ExtensionProtocolMetadata = ExtensionCommandMetadata | ExtensionRequestMeta
 export type ExtensionMessageMetadata = ExtensionProtocolMetadata
 type ExtensionDefinitionMetadata = ExtensionProtocolMetadata
 
-const ExtensionMessageMetadataSymbol = Symbol.for("@gent/core/extension-protocol/message-metadata")
-const ExtensionDefinitionMetadataSymbol = Symbol.for(
+const ExtensionMessageMetadataSymbol = Symbol("@gent/core/extension-protocol/message-metadata")
+const ExtensionDefinitionMetadataSymbol = Symbol(
   "@gent/core/extension-protocol/definition-metadata",
 )
 
