@@ -14,6 +14,7 @@ import { Effect, Fiber, Schema } from "effect"
 import {
   AgentName as AgentNameSchema,
   type AgentDefinition,
+  DEFAULT_AGENT_NAME,
   resolveAgentModel,
   type AgentName,
   type ReasoningEffort,
@@ -282,7 +283,7 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  const defaultAgent: AgentName = props.initialAgent ?? AgentNameSchema.make("cowork")
+  const defaultAgent: AgentName = props.initialAgent ?? DEFAULT_AGENT_NAME
   const client = props.client
   const runtime = props.runtime
   const log = props.log
@@ -863,8 +864,8 @@ export function ClientProvider(props: ClientProviderProps) {
       // disagree with what's actually running.
       if (agentStore.lastModelId !== undefined) return agentStore.lastModelId
       const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- cowork always registered
-      return resolveAgentModel(agentDef ?? AgentsByName["cowork"]!)
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- DEFAULT_AGENT_NAME always registered
+      return resolveAgentModel(agentDef ?? AgentsByName[DEFAULT_AGENT_NAME]!)
     },
     // Derived accessors
     isStreaming: () => agentStore.status._tag === "streaming",
