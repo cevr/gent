@@ -292,6 +292,45 @@ const sessionMutationsLayerWithMachineProbe = (
   return Layer.provideMerge(SessionCommands.SessionMutationsLive, deps)
 }
 
+const failingCwdRegistryLayer = Layer.succeed(SessionCwdRegistry, {
+  record: () => Effect.void,
+  lookup: () => Effect.fail(new StorageError({ message: "registry lookup failed" })),
+  forget: () => Effect.void,
+})
+
+const sessionCommandsLayerWithFailingCwdRegistry = (
+  terminated: Array<SessionId>,
+  runtimeTerminated: Array<SessionId>,
+  runtimeRestored: Array<SessionId>,
+) => {
+  const storageLayer = Storage.MemoryWithSql()
+  const machineProbeLayer = Layer.succeed(MachineEngine, {
+    publish: () => Effect.succeed([]),
+    send: () => Effect.void,
+    execute: () => Effect.die("unexpected machine request"),
+    getActorStatuses: () => Effect.succeed([]),
+    terminateAll: (sessionId) =>
+      Effect.sync(() => {
+        terminated.push(sessionId)
+      }),
+  } satisfies MachineEngineService)
+  const deps = Layer.mergeAll(
+    storageLayer,
+    subTagLayers(storageLayer),
+    sessionRuntimeProbeLayer(runtimeTerminated, runtimeRestored),
+    SessionCommands.SessionRuntimeTerminatorLive,
+    EventStore.Memory,
+    EventPublisher.Test(),
+    Provider.Debug(),
+    machineProbeLayer,
+    failingCwdRegistryLayer,
+  )
+  return Layer.provideMerge(
+    SessionCommands.Live.pipe(Layer.provideMerge(SessionCommands.SessionMutationsLive)),
+    deps,
+  )
+}
+
 const failingDeleteSessionCommandsLayerWithMachineProbe = (
   terminated: Array<SessionId>,
   runtimeTerminated: Array<SessionId>,
@@ -1497,6 +1536,61 @@ describe("session.delete", () => {
       ),
     )
   })
+
+  it.live(
+    "fails closed when sessionCwdRegistry.lookup fails — does not terminate ambient runtime or durably delete",
+    () => {
+      const terminated: Array<SessionId> = []
+      const runtimeTerminated: Array<SessionId> = []
+      const runtimeRestored: Array<SessionId> = []
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const commands = yield* SessionCommands
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const sessionId = SessionId.make("registry-failure-session")
+          const branchId = BranchId.make("registry-failure-branch")
+
+          yield* createActiveSessionFixture({
+            sessions,
+            branches,
+            sessionId,
+            branchId,
+            now: new Date("2026-01-01T00:00:00.000Z"),
+          })
+
+          const exit = yield* Effect.exit(commands.deleteSession(sessionId))
+
+          // Fail-closed: registry lookup error propagates, deleteSession aborts.
+          expect(exit._tag).toBe("Failure")
+          // The MachineEngine probe MUST NOT be called: routing through the
+          // ambient runtime when we can't resolve the owning cwd is exactly
+          // the wrong-runtime delivery the contract forbids.
+          expect(terminated).toEqual([])
+          // Pre-collect runs `sessionRuntimeTerminator.terminateSession` BEFORE
+          // `terminateSessionMachineRuntime`, so the runtime probe records the
+          // tombstone attempt before the registry lookup fails.
+          expect(runtimeTerminated).toEqual([sessionId])
+          // No restore — the cleanup aborts BEFORE `sessionStorage.deleteSession`
+          // so deleteSessionCascade's onError (which only fires for the durable
+          // delete) never runs. This distinguishes the registry-fail mode from
+          // the durable-delete-fail mode, where runtimeRestored = [sessionId].
+          expect(runtimeRestored).toEqual([])
+          // Cleanup aborts before the durable cascade — the row stays.
+          expect(yield* sessions.getSession(sessionId)).not.toBeUndefined()
+        }).pipe(
+          Effect.provide(
+            sessionCommandsLayerWithFailingCwdRegistry(
+              terminated,
+              runtimeTerminated,
+              runtimeRestored,
+            ),
+          ),
+          Effect.timeout("4 seconds"),
+        ),
+      )
+    },
+  )
 
   it.live("terminates descendant sessions through their owning cwd profile runtime", () => {
     const primaryTerminated: Array<SessionId> = []
