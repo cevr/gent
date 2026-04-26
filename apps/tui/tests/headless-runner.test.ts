@@ -42,6 +42,55 @@ describe("runHeadless", () => {
     expect(sent).toBe(true)
   })
 
+  test("retries reuse the same sendRequestId so the server-side dedup collapses them onto one mutation", async () => {
+    const sessionId = SessionId.make("session-test")
+    const branchId = BranchId.make("branch-test")
+    const observedRequestIds: Array<string> = []
+    let sendAttempts = 0
+
+    const completed = EventEnvelope.make({
+      id: 1 as EventEnvelope["id"],
+      event: TurnCompleted.make({
+        sessionId,
+        branchId,
+        durationMs: 1,
+      }),
+      createdAt: Date.now(),
+    })
+
+    const client = createMockClient({
+      session: {
+        events: () => Stream.concat(Stream.make(completed), Stream.never),
+      },
+      message: {
+        send: (input: { requestId?: string }) => {
+          observedRequestIds.push(input.requestId ?? "<missing>")
+          sendAttempts += 1
+          // Fail the first two attempts with a transport-shape error so the
+          // retry policy fires; succeed on the third.
+          if (sendAttempts < 3) {
+            return Effect.fail(new Error("RpcClientError: transient socket close"))
+          }
+          return Effect.void
+        },
+      },
+    })
+
+    const exit = await Effect.runPromiseExit(
+      runHeadless(client, sessionId, branchId, "Say hi").pipe(Effect.timeout("5 seconds")),
+    )
+
+    expect(exit._tag).toBe("Success")
+    expect(sendAttempts).toBe(3)
+    // Same id across all attempts: server-side dedup collapses retries onto
+    // a single mutation. If the runner generated a fresh id each retry, the
+    // server would treat each as a new send and double-deliver.
+    expect(observedRequestIds.length).toBe(3)
+    expect(new Set(observedRequestIds).size).toBe(1)
+    // Never empty — runner must always supply an id.
+    expect(observedRequestIds[0]).not.toBe("<missing>")
+  })
+
   test("fails when the event stream ends before turn completion", async () => {
     const sessionId = SessionId.make("session-test")
     const branchId = BranchId.make("branch-test")
