@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { State } from "effect-machine"
 import type { AnyCapabilityContribution } from "../../domain/capability.js"
 import {
   AgentName,
@@ -228,9 +227,14 @@ export type ResolvedTurn = {
   driverSource?: DriverSource
 }
 
-// ── 3-State Machine ──
+// ── Phase-tagged loop state (flat, persisted) ──
+//
+// Replaces the `effect-machine` `State()` / `Machine` driver from
+// pre-W8-2. The loop is a single fiber + Phase Ref now; this enum is
+// the source of truth for "where is the loop?". Persisted directly via
+// `agent-loop.checkpoint.ts`.
 
-export const LoopMachineState = State({
+export const LoopState = TaggedEnumClass("LoopState", {
   /** No turn in progress. */
   Idle: LoopStateBaseFields,
   /** Agentic loop running: resolve → stream → tools → repeat. */
@@ -246,7 +250,7 @@ export const LoopMachineState = State({
 
 // ── Type aliases ──
 
-export type LoopState = typeof LoopMachineState.Type
+export type LoopState = Schema.Schema.Type<typeof LoopState>
 export type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
@@ -276,7 +280,7 @@ export const isLoopRuntimeIdle = (state: LoopRuntimeState): boolean => state._ta
 // ── State builders ──
 
 export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
-  LoopMachineState.Idle({
+  LoopState.Idle.make({
     currentAgent: params?.currentAgent,
   })
 
@@ -284,7 +288,7 @@ export const buildRunningState = (
   base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
 ): RunningState =>
-  LoopMachineState.Running({
+  LoopState.Running.make({
     currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: Date.now(),
@@ -299,7 +303,13 @@ export const toWaitingForInteractionState = (params: {
   pendingRequestId: string
   pendingToolCallId: string
 }): WaitingForInteractionState =>
-  LoopMachineState.WaitingForInteraction.with(params.state, {
+  LoopState.WaitingForInteraction.make({
+    currentAgent: params.state.currentAgent,
+    message: params.state.message,
+    startedAtMs: params.state.startedAtMs,
+    agentOverride: params.state.agentOverride,
+    runSpec: params.state.runSpec,
+    interactive: params.state.interactive,
     currentTurnAgent: params.currentTurnAgent,
     pendingRequestId: params.pendingRequestId,
     pendingToolCallId: params.pendingToolCallId,
@@ -308,7 +318,19 @@ export const toWaitingForInteractionState = (params: {
 export const updateCurrentAgentOnState = <S extends LoopState>(
   state: S,
   currentAgent: AgentNameType,
-): S => LoopMachineState.with(state, { currentAgent })
+): S => {
+  switch (state._tag) {
+    case "Idle":
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
+      return LoopState.Idle.make({ ...state, currentAgent }) as S
+    case "Running":
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
+      return LoopState.Running.make({ ...state, currentAgent }) as S
+    case "WaitingForInteraction":
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- variant constructor preserves the narrowed type S
+      return LoopState.WaitingForInteraction.make({ ...state, currentAgent }) as S
+  }
+}
 
 export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
   toQueueSnapshot(queue.steering, queue.followUp)

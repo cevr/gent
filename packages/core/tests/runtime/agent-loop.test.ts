@@ -16,7 +16,7 @@ import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { ConfigService } from "../../src/runtime/config-service"
 import { ExtensionTurnControl, TurnControlError } from "../../src/runtime/extensions/turn-control"
 import { ToolRunner } from "../../src/runtime/agent/tool-runner"
-import { AgentDefinition, ExternalDriverRef } from "@gent/core/domain/agent"
+import { AgentDefinition, AgentName, ExternalDriverRef } from "@gent/core/domain/agent"
 import {
   Provider,
   ProviderError,
@@ -74,7 +74,7 @@ import {
   appendSteeringItem,
   buildRunningState,
   emptyLoopQueueState,
-  type LoopState,
+  LoopState,
 } from "../../src/runtime/agent/agent-loop.state"
 import { EventStoreLive } from "../../src/runtime/event-store-live"
 import { CheckpointStorage } from "@gent/core/storage/checkpoint-storage"
@@ -2605,7 +2605,7 @@ describe("recovery", () => {
       buildLoopCheckpointRecord({
         sessionId: message.sessionId,
         branchId: message.branchId,
-        state: { _tag: "Idle", currentAgent: "cowork" } as LoopState,
+        state: LoopState.Idle.make({ currentAgent: AgentName.make("cowork") }),
         queue: appendSteeringItem(emptyLoopQueueState(), { message: interjection }),
       }),
     )
@@ -2665,10 +2665,9 @@ describe("recovery", () => {
         createdAt: new Date(),
       })
 
-      const idleWithQueue = {
-        _tag: "Idle" as const,
-        currentAgent: "cowork" as const,
-      } as LoopState
+      const idleWithQueue = LoopState.Idle.make({
+        currentAgent: AgentName.make("cowork"),
+      })
       const idleQueue = appendFollowUpQueueState(emptyLoopQueueState(), {
         message: queuedMessage,
       })

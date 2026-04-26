@@ -1,11 +1,11 @@
 import { Clock, Effect, Schema } from "effect"
 import { BranchId, SessionId } from "../../domain/ids.js"
-import { LoopMachineState, LoopQueueState, type LoopState } from "./agent-loop.state.js"
+import { LoopState, LoopQueueState } from "./agent-loop.state.js"
 
 export const AGENT_LOOP_CHECKPOINT_VERSION = 1
 
 export const AgentLoopCheckpointState = Schema.Struct({
-  state: LoopMachineState,
+  state: LoopState,
   queue: LoopQueueState,
 })
 export type AgentLoopCheckpointState = typeof AgentLoopCheckpointState.Type
