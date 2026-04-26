@@ -100,6 +100,8 @@
     "./providers/provider.js": "./src/providers/provider.ts",
     "./providers/provider-auth": "./src/providers/provider-auth.ts",
     "./providers/provider-auth.js": "./src/providers/provider-auth.ts",
+    "./runtime/extensions/actor-engine": "./src/runtime/extensions/actor-engine.ts",
+    "./runtime/extensions/actor-engine.js": "./src/runtime/extensions/actor-engine.ts",
     "./runtime/extensions/disabled": "./src/runtime/extensions/disabled.ts",
     "./runtime/extensions/disabled.js": "./src/runtime/extensions/disabled.ts",
     "./runtime/extensions/registry": "./src/runtime/extensions/registry.ts",

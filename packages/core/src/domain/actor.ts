@@ -67,6 +67,16 @@ export interface ActorContext<M> {
     msg: N,
     replyKey: (a: A) => N,
   ) => Effect.Effect<A, ActorAskTimeout>
+  /**
+   * Fulfill the ask correlation that delivered the current message.
+   *
+   * Only valid inside a `receive` invocation that was triggered by an
+   * `ask`. Outside that scope, `reply` is a no-op (the engine drops
+   * replies that don't match a pending correlation). The answer type
+   * is `unknown` at this seam — the asker pins it via the `replyKey`
+   * type parameter on `ask`.
+   */
+  readonly reply: (answer: unknown) => Effect.Effect<void>
   readonly find: <N>(key: ServiceKey<N>) => Effect.Effect<ReadonlyArray<ActorRef<N>>>
   readonly subscribe: <N>(key: ServiceKey<N>) => Stream.Stream<ActorRef<N>>
 }
