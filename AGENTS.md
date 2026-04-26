@@ -73,6 +73,7 @@ Use `effect` skill. Key patterns:
 - Every service: `Live` + `Test` layers
 - Schema validation everywhere
 - Discriminated unions via `Schema.TaggedClass`
+- **Tagged/discriminated unions ALWAYS use `TaggedEnumClass`** (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Never hand-roll `{ _tag: "X" } | { _tag: "Y" }` literal unions, even for internal driver/state events. Construct via `Variant.make({...})`. Extract types with `type X = Schema.Schema.Type<typeof X>`.
 - **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
 
 ## Package Structure

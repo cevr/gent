@@ -13,17 +13,8 @@ import {
   Scope,
   Stream,
   SubscriptionRef,
+  type Fiber,
 } from "effect"
-import {
-  type AnyInspectionEvent,
-  ActorScope,
-  type ActorExit,
-  combineInspectors,
-  InspectorService,
-  Machine,
-  makeInspectorEffect,
-  tracingInspector,
-} from "effect-machine"
 import {
   AgentDefinition,
   AgentName,
@@ -38,6 +29,7 @@ import {
 } from "../../domain/agent.js"
 import { type AnyCapabilityContribution } from "../../domain/capability.js"
 import { emptyQueueSnapshot, type QueueSnapshot } from "../../domain/queue.js"
+import { TaggedEnumClass } from "../../domain/schema-tagged-enum-class.js"
 import {
   AgentSwitched,
   StreamStarted,
@@ -51,7 +43,6 @@ import {
   ProviderRetrying,
   TurnCompleted,
   TurnRecoveryApplied,
-  MachineInspected,
   type AgentEvent,
   type EventEnvelope,
 } from "../../domain/event.js"
@@ -116,8 +107,6 @@ import {
   shouldRetainLoopCheckpoint,
 } from "./agent-loop.checkpoint.js"
 import {
-  AgentLoopEvent,
-  LoopMachineState,
   appendFollowUpQueueState,
   appendSteeringItem,
   buildIdleState,
@@ -135,9 +124,9 @@ import {
   type AgentLoopState,
   type LoopQueueState,
   type AssistantDraft,
-  type LoopActor,
   type LoopRuntimeState,
   type LoopState,
+  QueuedTurnItemSchema,
   type QueuedTurnItem,
   type ResolvedTurn,
   type RunningState,
@@ -1849,8 +1838,18 @@ const applyAgentOverrides = (
   })
 }
 
+// Driver event surface that replaces effect-machine's `actor.call(Event)`.
+// Internal driver-event union. Each variant maps to a transition the FSM
+// driver previously owned. Not persisted.
+const LoopDriverEvent = TaggedEnumClass("LoopDriverEvent", {
+  Start: { item: QueuedTurnItemSchema },
+  Interrupt: {},
+  SwitchAgent: { agent: AgentName },
+  InteractionResponded: { requestId: Schema.String },
+})
+type LoopDriverEvent = Schema.Schema.Type<typeof LoopDriverEvent>
+
 type LoopHandle = {
-  actor: LoopActor
   activeStreamRef: Ref.Ref<ActiveStreamHandle | undefined>
   loopRef: SubscriptionRef.SubscriptionRef<AgentLoopState>
   idlePersistedRef: SubscriptionRef.SubscriptionRef<number>
@@ -1877,6 +1876,14 @@ type LoopHandle = {
   ) => Effect.Effect<void, AgentLoopError>
   persistQueueCurrentState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
   persistQueueState: (queue: LoopQueueState) => Effect.Effect<void, AgentLoopError>
+  /** Read the current FSM state. Replaces effect-machine `actor.snapshot`. */
+  snapshot: Effect.Effect<LoopState>
+  /** Apply a driver event under the side-mutation semaphore. */
+  dispatch: (event: LoopDriverEvent) => Effect.Effect<void, AgentLoopError>
+  /** Recover from persisted checkpoint, then start the initial turn fiber if Running. */
+  start: Effect.Effect<void>
+  /** Resolves once the loop scope is closed. */
+  awaitExit: Effect.Effect<void>
   resourceManager: ResourceManagerService
   closed: Deferred.Deferred<void>
   scope: Scope.Closeable
@@ -1914,24 +1921,15 @@ const publishPhaseFailure = (params: {
       Effect.asVoid,
     )
 
-const actorCauseFailure = (cause: Cause.Cause<unknown>) => {
+const causeToAgentLoopError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause)
   return Schema.is(AgentLoopError)(error)
     ? error
     : new AgentLoopError({
-        message: "Agent loop actor failed",
+        message: "Agent loop turn failed",
         cause: error,
       })
 }
-
-const failActorExit = (exit: ActorExit<typeof LoopMachineState.Type>) =>
-  Effect.fail(
-    exit._tag === "Defect"
-      ? actorCauseFailure(exit.cause)
-      : new AgentLoopError({
-          message: `Agent loop actor exited before turn completed (${exit._tag})`,
-        }),
-  )
 
 const awaitIdlePersisted = (
   loop: LoopHandle,
@@ -1980,41 +1978,6 @@ const failIfTurnFailedSince = (
     const current = yield* SubscriptionRef.get(loop.turnFailureRef)
     if (current.count > baseline) return yield* failTurnFailureState(current)
   })
-
-const makePublishingInspector = (params: {
-  publishEvent: (event: AgentEvent) => Effect.Effect<void, never>
-  sessionId: SessionId
-  branchId: BranchId
-}) =>
-  combineInspectors(
-    tracingInspector<{ readonly _tag: string }, { readonly _tag: string }>({
-      attributes: () => ({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-      }),
-    }),
-    makeInspectorEffect<{ readonly _tag: string }, { readonly _tag: string }>(
-      (event: AnyInspectionEvent) =>
-        params
-          .publishEvent(
-            MachineInspected.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              actorId: event.actorId,
-              inspectionType: event.type,
-              payload: event,
-            }),
-          )
-          .pipe(
-            Effect.withSpan("Machine.inspect.publish"),
-            Effect.catchEager((error) =>
-              Effect.logWarning("failed to publish MachineInspected").pipe(
-                Effect.annotateLogs({ error: String(error) }),
-              ),
-            ),
-          ),
-    ),
-  )
 
 type LoopRecoveryDecision = {
   state: LoopState
@@ -2282,30 +2245,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             Effect.ignore,
           )
 
-        const mapLoopActorCause = <A>(
-          sessionId: SessionId,
-          branchId: BranchId,
-          handle: LoopHandle,
-          effect: Effect.Effect<A>,
-        ): Effect.Effect<A, AgentLoopError> =>
-          effect.pipe(
-            Effect.catchCause((cause) =>
-              cleanupLoopIfCurrent(sessionId, branchId, handle).pipe(
-                Effect.andThen(Effect.fail(actorCauseFailure(cause))),
-              ),
-            ),
-          )
-
-        const failLoopExit = (
-          sessionId: SessionId,
-          branchId: BranchId,
-          handle: LoopHandle,
-          exit: ActorExit<typeof LoopMachineState.Type>,
-        ) =>
-          cleanupLoopIfCurrent(sessionId, branchId, handle).pipe(
-            Effect.andThen(failActorExit(exit)),
-          )
-
         const makeLoop = (
           sessionId: SessionId,
           branchId: BranchId,
@@ -2379,12 +2318,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const closed = yield* Deferred.make<void>()
-            let loopActor: LoopActor | undefined
-            const inspector = makePublishingInspector({
-              publishEvent: publishEventOrDie,
-              sessionId,
-              branchId,
-            })
+            // Plain-Effect driver state. Replaces effect-machine actor.
+            const turnFiberRef = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(
+              Option.none(),
+            )
+            let started = false
 
             const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
               Effect.gen(function* () {
@@ -2394,16 +2332,20 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 if (!shouldRetainLoopCheckpoint({ state, queue })) {
                   yield* checkpointStorage.remove({ sessionId, branchId })
                   yield* Effect.logDebug("checkpoint.save.removed")
-                  if (state._tag === "Idle") {
-                    const count = yield* SubscriptionRef.get(idlePersistedRef)
-                    yield* SubscriptionRef.set(idlePersistedRef, count + 1)
-                  }
+                  // Update loopRef BEFORE the idle-bump signal so any
+                  // `awaitIdlePersisted` waiter sees the new state when it
+                  // wakes up. Bumping idlePersistedRef first makes that
+                  // waiter race the loopRef update.
                   yield* SubscriptionRef.update(loopRef, (s) => ({
                     ...s,
                     state,
                     queue,
                     startingState: undefined,
                   }))
+                  if (state._tag === "Idle") {
+                    const count = yield* SubscriptionRef.get(idlePersistedRef)
+                    yield* SubscriptionRef.set(idlePersistedRef, count + 1)
+                  }
                   return
                 }
                 yield* checkpointStorage.upsert(
@@ -2443,29 +2385,31 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 const current = yield* SubscriptionRef.get(turnFailureRef)
                 yield* SubscriptionRef.set(turnFailureRef, {
                   count: current.count + 1,
-                  error: actorCauseFailure(cause),
+                  error: causeToAgentLoopError(cause),
                 })
               })
 
+            const currentLoopState = SubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.state))
+
             const refreshRuntimeState = Effect.gen(function* () {
-              if (loopActor === undefined) return
-              yield* persistRuntimeState(yield* loopActor.snapshot)
+              if (!started) return
+              yield* persistRuntimeState(yield* currentLoopState)
             })
 
             const updateQueue = (update: (queue: LoopQueueState) => LoopQueueState) =>
               queueMutationSemaphore.withPermits(1)(
                 Effect.gen(function* () {
-                  if (loopActor === undefined) return
+                  if (!started) return
                   const current = yield* SubscriptionRef.get(loopRef)
                   const nextQueue = update(current.queue)
-                  yield* persistRuntimeSnapshot(yield* loopActor.snapshot, nextQueue)
+                  yield* persistRuntimeSnapshot(current.state, nextQueue)
                 }),
               )
 
             const persistQueueState = (nextQueue: LoopQueueState) =>
               Effect.gen(function* () {
-                if (loopActor === undefined) return
-                yield* persistRuntimeSnapshot(yield* loopActor.snapshot, nextQueue)
+                if (!started) return
+                yield* persistRuntimeSnapshot(yield* currentLoopState, nextQueue)
               })
 
             const persistQueueSnapshot = (state: LoopState, nextQueue: LoopQueueState) =>
@@ -2512,6 +2456,19 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
                 return updateCurrentAgentOnState(state, next)
               }).pipe(Effect.orDie) as Effect.Effect<S>
+
+            // The result of a single Running turn. The driver branches on this
+            // to decide the next state transition (W8-2: replaces the FSM
+            // event return previously consumed by `Machine.task`).
+            const TurnOutcome = TaggedEnumClass("TurnOutcome", {
+              Done: {},
+              InteractionRequested: {
+                pendingRequestId: Schema.String,
+                pendingToolCallId: Schema.String,
+                currentTurnAgent: AgentName,
+              },
+            })
+            type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
 
             // ── The inner agentic loop ──
             // resolve → stream → tools → repeat until LLM returns no tool calls
@@ -2574,7 +2531,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
                     if (interactionSignal !== undefined) {
                       const { pending, toolCallId } = interactionSignal
-                      return AgentLoopEvent.InteractionRequested({
+                      return TurnOutcome.InteractionRequested.make({
                         pendingRequestId: pending.requestId,
                         pendingToolCallId: toolCallId as string,
                         currentTurnAgent,
@@ -2717,7 +2674,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
                 if (interactionSignal !== undefined) {
                   const { pending, toolCallId } = interactionSignal
-                  return AgentLoopEvent.InteractionRequested({
+                  return TurnOutcome.InteractionRequested.make({
                     pendingRequestId: pending.requestId,
                     pendingToolCallId: toolCallId as string,
                     currentTurnAgent: resolved.currentTurnAgent,
@@ -2743,102 +2700,54 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 hostCtx: turnHostCtx,
               })
 
-              return AgentLoopEvent.TurnDone
+              return TurnOutcome.Done.make({})
             })
 
-            const loopMachine = Machine.make({
-              state: LoopMachineState,
-              event: AgentLoopEvent,
-              initial: initialLoopState,
-            })
-              // Idle → Running
-              .on(LoopMachineState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
-                buildRunningState(state, event.item),
+            // ── Plain-Effect driver (replaces effect-machine FSM) ──
+            //
+            // The previous FSM driver mediated state via `Machine.spawn`'s
+            // event queue + transition table. With state already collapsed to
+            // a single SubscriptionRef (W8-1), the driver is now a switch on
+            // `state._tag` inside each method. The per-turn fiber is forked
+            // with `Effect.forkIn(loopScope)` and stored in `turnFiberRef`;
+            // its completion runs the post-turn transition (Done/Failed →
+            // drain queue, Interaction → cold state) inline.
+
+            // Persistence is invoked at every state mutation that the FSM
+            // previously handled via `lifecycle.durability.save`. The
+            // `persistenceFailure` deferred mirrors the FSM's failure
+            // channel so `awaitIdlePersisted` races can short-circuit;
+            // the failure also propagates back through the dispatcher so
+            // callers (e.g. `submit`) see the error directly — matching
+            // the prior `actor.call(Event.Start)` semantics.
+            const saveCheckpoint = (next: LoopState): Effect.Effect<void, AgentLoopError> =>
+              persistRuntimeState(next).pipe(
+                Effect.catchEager((error) =>
+                  Deferred.fail(persistenceFailure, error).pipe(
+                    Effect.asVoid,
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+                ),
+                Effect.withSpan("AgentLoop.durability.save"),
               )
-              .on(
-                [
-                  LoopMachineState.Idle,
-                  LoopMachineState.Running,
-                  LoopMachineState.WaitingForInteraction,
-                ],
-                AgentLoopEvent.SwitchAgent,
-                ({ state, event }) => switchAgentOnState(state, event.agent),
-              )
-              .on(LoopMachineState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
-              .on(LoopMachineState.Running, AgentLoopEvent.Interrupt, ({ state }) =>
-                Effect.gen(function* () {
-                  yield* Ref.set(interruptedRef, true)
-                  yield* interruptActiveStream(activeStreamRef)
-                  return state
-                }),
-              )
-              // Running → Idle (turn done), or re-enter Running (queued follow-up)
-              .reenter(LoopMachineState.Running, AgentLoopEvent.TurnDone, ({ state }) =>
-                Effect.gen(function* () {
-                  const { nextItem } = yield* takeNextQueuedTurnSerialized
-                  if (nextItem !== undefined) {
-                    yield* Ref.set(interruptedRef, false)
-                    return buildRunningState({ currentAgent: state.currentAgent }, nextItem)
-                  }
-                  yield* Ref.set(interruptedRef, false)
-                  return buildIdleState({ currentAgent: state.currentAgent })
-                }),
-              )
-              .on(LoopMachineState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
-                Effect.gen(function* () {
-                  const { nextItem } = yield* takeNextQueuedTurnSerialized
-                  yield* Ref.set(interruptedRef, false)
-                  if (nextItem !== undefined) {
-                    return buildRunningState({ currentAgent: state.currentAgent }, nextItem)
-                  }
-                  return buildIdleState({ currentAgent: state.currentAgent })
-                }),
-              )
-              // Running → WaitingForInteraction
-              .on(
-                LoopMachineState.Running,
-                AgentLoopEvent.InteractionRequested,
-                ({ state, event }) =>
-                  toWaitingForInteractionState({
-                    state,
-                    currentTurnAgent: event.currentTurnAgent,
-                    pendingRequestId: event.pendingRequestId,
-                    pendingToolCallId: event.pendingToolCallId,
-                  }),
-              )
-              // WaitingForInteraction — cold state, no task fiber
-              .on(LoopMachineState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
-                Effect.gen(function* () {
-                  // Transition to Running with interrupt set — task will finalize immediately
-                  yield* Ref.set(interruptedRef, true)
-                  return LoopMachineState.Running.with(state, {
-                    message: state.message,
-                    startedAtMs: state.startedAtMs,
-                    agentOverride: state.agentOverride,
-                    runSpec: state.runSpec,
-                    interactive: state.interactive,
-                  })
-                }),
-              )
-              // WaitingForInteraction → Running (resume)
-              .on(
-                LoopMachineState.WaitingForInteraction,
-                AgentLoopEvent.InteractionResponded,
-                ({ state }) =>
-                  LoopMachineState.Running.with(state, {
-                    message: state.message,
-                    startedAtMs: state.startedAtMs,
-                    agentOverride: state.agentOverride,
-                    runSpec: state.runSpec,
-                    interactive: state.interactive,
-                  }),
-              )
-              // Running task — the agentic loop
-              .task(
-                LoopMachineState.Running,
-                ({ state }) =>
-                  sideMutationSemaphore.withPermits(1)(
-                    runTurn(state).pipe(
+
+            // Forked per-turn fiber. Runs `runTurn`, then handles the outcome:
+            //   Done             → next queued or Idle
+            //   InteractionReq   → cold WaitingForInteraction
+            //   Failure (cause)  → record failure, drain queue or Idle
+            //
+            // `sideMutationSemaphore` brackets the entire body. This matches
+            // the FSM driver: `recordToolResult` / `invokeTool` and other
+            // side-mutation dispatchers acquire the semaphore and therefore
+            // wait for the active turn before applying. `Interrupt` is the
+            // sole exception — it does NOT acquire the semaphore (see
+            // `dispatch` below), so it can race the running turn the way
+            // the FSM's actor event queue did.
+            const runTurnFiber = (startState: RunningState): Effect.Effect<void, never> =>
+              sideMutationSemaphore
+                .withPermits(1)(
+                  Effect.gen(function* () {
+                    const outcome = yield* runTurn(startState).pipe(
                       Effect.annotateLogs({ sessionId, branchId }),
                       Effect.withSpan("AgentLoop.turn"),
                       Effect.tapCause((cause) =>
@@ -2848,79 +2757,205 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                           ),
                         ),
                       ),
+                    )
+
+                    if (outcome._tag === "InteractionRequested") {
+                      const next = toWaitingForInteractionState({
+                        state: startState,
+                        currentTurnAgent: outcome.currentTurnAgent,
+                        pendingRequestId: outcome.pendingRequestId,
+                        pendingToolCallId: outcome.pendingToolCallId,
+                      })
+                      yield* saveCheckpoint(next)
+                      return
+                    }
+
+                    // Done — drain queue or transition to Idle
+                    const { nextItem } = yield* takeNextQueuedTurnSerialized
+                    yield* Ref.set(interruptedRef, false)
+                    if (nextItem !== undefined) {
+                      const nextRunning = buildRunningState(
+                        { currentAgent: startState.currentAgent },
+                        nextItem,
+                      )
+                      yield* saveCheckpoint(nextRunning)
+                      yield* forkTurn(nextRunning)
+                      return
+                    }
+                    yield* saveCheckpoint(buildIdleState({ currentAgent: startState.currentAgent }))
+                  }),
+                )
+                .pipe(
+                  // Failure path mirrors the FSM's `onFailure: TurnFailed`:
+                  // drain queue, replay if non-empty, otherwise Idle.
+                  Effect.catchCause(() =>
+                    sideMutationSemaphore.withPermits(1)(
+                      Effect.gen(function* () {
+                        const { nextItem } = yield* takeNextQueuedTurnSerialized
+                        const current = yield* currentLoopState
+                        yield* Ref.set(interruptedRef, false)
+                        if (nextItem !== undefined) {
+                          const nextRunning = buildRunningState(
+                            { currentAgent: current.currentAgent },
+                            nextItem,
+                          )
+                          yield* saveCheckpoint(nextRunning)
+                          yield* forkTurn(nextRunning)
+                          return
+                        }
+                        yield* saveCheckpoint(
+                          buildIdleState({ currentAgent: current.currentAgent }),
+                        )
+                      }),
                     ),
                   ),
-                { name: "turn", onFailure: () => AgentLoopEvent.TurnFailed },
-              )
+                  Effect.ignore,
+                )
 
-            const spawnedLoopActor = yield* Machine.spawn(loopMachine, {
-              id: `agent-loop:${sessionId}:${branchId}`,
-              lifecycle: {
-                recovery: {
-                  resolve: (_ctx) =>
-                    Effect.withSpan("AgentLoop.recovery.resolve")(
-                      Effect.gen(function* () {
-                        const record = yield* checkpointStorage.get({ sessionId, branchId })
-                        if (record === undefined) return Option.none<LoopState>()
-                        if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
-                          yield* checkpointStorage.remove({ sessionId, branchId })
-                          return Option.none<LoopState>()
-                        }
-                        const decoded = yield* Effect.option(
-                          decodeLoopCheckpointState(record.stateJson),
+            const forkTurn = (startState: RunningState): Effect.Effect<void> =>
+              Effect.gen(function* () {
+                const fiber = yield* Effect.forkIn(runTurnFiber(startState), loopScope)
+                yield* Ref.set(turnFiberRef, Option.some(fiber))
+              })
+
+            // Public dispatch surface — replaces `actor.call(Event)` /
+            // `actor.send(Event)`. Most events serialize via
+            // `sideMutationSemaphore`. `Interrupt` for a running turn does
+            // NOT acquire the semaphore — it must race the running turn,
+            // mirroring the FSM driver where Interrupt was an event-queue
+            // signal that ran independently of the in-flight `task`.
+            const dispatch = (event: LoopDriverEvent): Effect.Effect<void, AgentLoopError> =>
+              Effect.gen(function* () {
+                if (event._tag === "Interrupt") {
+                  // Race-safe: setting the flag + cancelling the stream are
+                  // both single-step writes. The running turn observes the
+                  // flag at its next checkpoint and exits.
+                  const snap = yield* currentLoopState
+                  if (snap._tag === "Idle") return
+                  if (snap._tag === "Running") {
+                    yield* Ref.set(interruptedRef, true)
+                    yield* interruptActiveStream(activeStreamRef)
+                    return
+                  }
+                  // WaitingForInteraction → Running with interrupt flag.
+                  // The forked turn re-enters runTurn at step 0 and exits
+                  // immediately because `interruptedRef === true`. State
+                  // transition still needs the semaphore.
+                  yield* sideMutationSemaphore.withPermits(1)(
+                    Effect.gen(function* () {
+                      const state = yield* currentLoopState
+                      if (state._tag !== "WaitingForInteraction") return
+                      yield* Ref.set(interruptedRef, true)
+                      const resumed = buildRunningState(
+                        { currentAgent: state.currentAgent },
+                        {
+                          message: state.message,
+                          ...(state.agentOverride !== undefined
+                            ? { agentOverride: state.agentOverride }
+                            : {}),
+                          ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
+                          ...(state.interactive !== undefined
+                            ? { interactive: state.interactive }
+                            : {}),
+                        },
+                      )
+                      yield* saveCheckpoint(resumed)
+                      yield* forkTurn(resumed)
+                    }),
+                  )
+                  return
+                }
+
+                yield* sideMutationSemaphore.withPermits(1)(
+                  Effect.gen(function* () {
+                    const state = yield* currentLoopState
+
+                    switch (event._tag) {
+                      case "Start": {
+                        if (state._tag !== "Idle") return
+                        const next = buildRunningState(state, event.item)
+                        yield* saveCheckpoint(next)
+                        yield* forkTurn(next)
+                        return
+                      }
+                      case "SwitchAgent": {
+                        const next = yield* switchAgentOnState(state, event.agent)
+                        if (next === state) return
+                        yield* saveCheckpoint(next)
+                        return
+                      }
+                      case "InteractionResponded": {
+                        if (state._tag !== "WaitingForInteraction") return
+                        const resumed = buildRunningState(
+                          { currentAgent: state.currentAgent },
+                          {
+                            message: state.message,
+                            ...(state.agentOverride !== undefined
+                              ? { agentOverride: state.agentOverride }
+                              : {}),
+                            ...(state.runSpec !== undefined ? { runSpec: state.runSpec } : {}),
+                            ...(state.interactive !== undefined
+                              ? { interactive: state.interactive }
+                              : {}),
+                          },
                         )
-                        if (Option.isNone(decoded)) {
-                          yield* checkpointStorage.remove({ sessionId, branchId })
-                          return Option.none<LoopState>()
-                        }
-                        const recovered = yield* makeRecoveryDecision({
-                          checkpoint: decoded.value,
-                          storage,
-                          extensionRegistry,
-                          currentAgent,
-                          publishEvent: publishEventOrDie,
-                          sessionId,
-                          branchId,
-                        }).pipe(
-                          Effect.catchEager(() =>
-                            Effect.succeed(Option.none<LoopRecoveryDecision>()),
-                          ),
-                        )
-                        if (Option.isNone(recovered)) {
-                          return Option.none<LoopState>()
-                        }
-                        yield* SubscriptionRef.update(loopRef, (s) => ({
-                          ...s,
-                          state: recovered.value.state,
-                          queue: recovered.value.queue,
-                          startingState: undefined,
-                        }))
-                        return Option.some(recovered.value.state)
-                      }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopState>()))),
-                    ),
-                },
-                durability: {
-                  save: (commit) =>
-                    Effect.withSpan("AgentLoop.durability.save")(
-                      persistRuntimeState(commit.nextState).pipe(
-                        Effect.catchEager((error) =>
-                          Deferred.fail(persistenceFailure, error).pipe(
-                            Effect.asVoid,
-                            Effect.andThen(Effect.fail(error)),
-                          ),
-                        ),
-                      ),
-                    ).pipe(Effect.orDie),
-                },
-              },
-            }).pipe(
-              Effect.provideService(InspectorService, inspector),
-              Effect.provideService(ActorScope, loopScope),
-            )
-            loopActor = spawnedLoopActor
+                        yield* saveCheckpoint(resumed)
+                        yield* forkTurn(resumed)
+                        return
+                      }
+                    }
+                  }),
+                )
+              })
+
+            // Recovery + initial fork. Replaces `Machine.spawn`'s
+            // `lifecycle.recovery.resolve` + auto-start. Idempotent — guarded
+            // by `started`.
+            const start = Effect.gen(function* () {
+              if (started) return
+              started = true
+
+              const record = yield* checkpointStorage
+                .get({ sessionId, branchId })
+                .pipe(Effect.catchEager(() => Effect.succeed(undefined)))
+              if (record === undefined) return
+              if (record.version !== AGENT_LOOP_CHECKPOINT_VERSION) {
+                yield* checkpointStorage
+                  .remove({ sessionId, branchId })
+                  .pipe(Effect.catchEager(() => Effect.void))
+                return
+              }
+              const decoded = yield* Effect.option(decodeLoopCheckpointState(record.stateJson))
+              if (Option.isNone(decoded)) {
+                yield* checkpointStorage
+                  .remove({ sessionId, branchId })
+                  .pipe(Effect.catchEager(() => Effect.void))
+                return
+              }
+              const recovered = yield* makeRecoveryDecision({
+                checkpoint: decoded.value,
+                storage,
+                extensionRegistry,
+                currentAgent,
+                publishEvent: publishEventOrDie,
+                sessionId,
+                branchId,
+              }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<LoopRecoveryDecision>())))
+
+              if (Option.isNone(recovered)) return
+
+              yield* SubscriptionRef.update(loopRef, (s) => ({
+                ...s,
+                state: recovered.value.state,
+                queue: recovered.value.queue,
+                startingState: undefined,
+              }))
+              if (recovered.value.state._tag === "Running") {
+                yield* forkTurn(recovered.value.state as RunningState)
+              }
+            }).pipe(Effect.withSpan("AgentLoop.recovery.resolve"))
 
             return {
-              actor: spawnedLoopActor,
               activeStreamRef,
               loopRef,
               idlePersistedRef,
@@ -2935,10 +2970,14 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               persistQueueSnapshot,
               persistQueueCurrentState,
               persistQueueState,
+              snapshot: currentLoopState,
+              dispatch,
+              start,
+              awaitExit: Deferred.await(closed),
               resourceManager,
               closed,
               scope: loopScope,
-            }
+            } satisfies LoopHandle
           })
 
         const getLoop = Effect.fn("AgentLoop.getLoop")(function* (
@@ -2947,11 +2986,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
         ) {
           const key = stateKey(sessionId, branchId)
           const sideMutationSemaphore = yield* getMutationSemaphore(sessionId, branchId)
-          // Allocate + register under semaphore, then start outside.
-          // Machine.spawn returns an unstarted actor — fibers don't run
-          // until actor.start. This prevents the self-deadlock where
-          // background fibers re-enter getLoop before the handle is
-          // installed in loopsRef.
+          // Allocate + register under semaphore, then run `start` outside.
+          // The plain-Effect driver does not auto-fork its turn fiber until
+          // `start` is invoked, so the handle must be installed in loopsRef
+          // before recovery runs — otherwise a recovered Running turn would
+          // re-enter getLoop and deadlock waiting on the same semaphore.
           const created = yield* Effect.withSpan("AgentLoop.getLoop.semaphore")(
             loopsSemaphore.withPermits(1)(
               Effect.gen(function* () {
@@ -2974,7 +3013,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           )
           if (created !== undefined) {
             yield* Effect.gen(function* () {
-              yield* created.actor.start
+              yield* created.start
               if (yield* Deferred.isDone(created.closed)) {
                 return yield* new AgentLoopError({
                   message: `Session runtime terminated: ${sessionId}`,
@@ -2982,7 +3021,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               }
               yield* created.refreshRuntimeState
               yield* Effect.forkIn(
-                created.actor.awaitExit.pipe(
+                created.awaitExit.pipe(
                   Effect.flatMap(() => cleanupLoopIfCurrent(sessionId, branchId, created)),
                   Effect.catchCause((cause) =>
                     Effect.logWarning("agent-loop.exit-cleanup failed").pipe(
@@ -3253,12 +3292,17 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             ),
           )
           if (reservedStart !== undefined) {
-            yield* mapLoopActorCause(
-              command.message.sessionId,
-              command.message.branchId,
-              loop,
-              loop.actor.call(AgentLoopEvent.Start({ item })),
-            )
+            yield* loop
+              .dispatch(LoopDriverEvent.Start.make({ item }))
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoopIfCurrent(
+                    command.message.sessionId,
+                    command.message.branchId,
+                    loop,
+                  ).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
           }
         })
 
@@ -3267,7 +3311,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const item = buildQueuedTurnItem(command)
           const start = yield* loop.queueMutationSemaphore.withPermits(1)(
             Effect.gen(function* () {
-              const initialState = yield* loop.actor.snapshot
+              const initialState = yield* loop.snapshot
               if (initialState._tag !== "Idle") {
                 const nextQueue = appendFollowUpQueueState(
                   yield* SubscriptionRef.get(loop.loopRef).pipe(Effect.map((s) => s.queue)),
@@ -3278,27 +3322,30 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               }
               const idlePersistedBaseline = yield* SubscriptionRef.get(loop.idlePersistedRef)
               const turnFailureBaseline = (yield* SubscriptionRef.get(loop.turnFailureRef)).count
-              yield* loop.actor.send(AgentLoopEvent.Start({ item }))
               return { idlePersistedBaseline, turnFailureBaseline }
             }),
           )
           if (start === undefined) {
             return
           }
+          yield* loop
+            .dispatch(LoopDriverEvent.Start.make({ item }))
+            .pipe(
+              Effect.catchEager((error) =>
+                cleanupLoopIfCurrent(
+                  command.message.sessionId,
+                  command.message.branchId,
+                  loop,
+                ).pipe(Effect.andThen(Effect.fail(error))),
+              ),
+            )
 
           yield* Effect.raceFirst(
             Effect.raceFirst(
-              Effect.raceFirst(
-                awaitIdlePersisted(loop, start.idlePersistedBaseline),
-                awaitTurnFailure(loop, start.turnFailureBaseline),
-              ),
-              loop.persistenceFailure,
+              awaitIdlePersisted(loop, start.idlePersistedBaseline),
+              awaitTurnFailure(loop, start.turnFailureBaseline),
             ),
-            loop.actor.awaitExit.pipe(
-              Effect.flatMap((exit) =>
-                failLoopExit(command.message.sessionId, command.message.branchId, loop, exit),
-              ),
-            ),
+            loop.persistenceFailure,
           ).pipe(
             Effect.catchEager((error) =>
               cleanupLoopIfCurrent(command.message.sessionId, command.message.branchId, loop).pipe(
@@ -3317,11 +3364,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
 
           switch (command.command._tag) {
             case "SwitchAgent":
-              yield* mapLoopActorCause(
-                command.command.sessionId,
-                command.command.branchId,
-                loop,
-                loop.actor.call(AgentLoopEvent.SwitchAgent({ agent: command.command.agent })),
+              yield* loop.dispatch(
+                LoopDriverEvent.SwitchAgent.make({ agent: command.command.agent }),
               )
               return
 
@@ -3331,22 +3375,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 projectedState._tag === "Running" ||
                 projectedState._tag === "WaitingForInteraction"
               ) {
-                yield* mapLoopActorCause(
-                  command.command.sessionId,
-                  command.command.branchId,
-                  loop,
-                  loop.actor.call(AgentLoopEvent.Interrupt),
-                )
+                yield* loop.dispatch(LoopDriverEvent.Interrupt.make({}))
                 return
               }
-              const loopState = yield* loop.actor.snapshot
+              const loopState = yield* loop.snapshot
               if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-                yield* mapLoopActorCause(
-                  command.command.sessionId,
-                  command.command.branchId,
-                  loop,
-                  loop.actor.call(AgentLoopEvent.Interrupt),
-                )
+                yield* loop.dispatch(LoopDriverEvent.Interrupt.make({}))
               }
               return
 
@@ -3372,7 +3406,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     item,
                   )
                   yield* loop.persistQueueState(nextQueue)
-                  const loopState = yield* loop.actor.snapshot
+                  const loopState = yield* loop.snapshot
                   return projectedState._tag === "Running" || loopState._tag === "Running"
                 }),
               )
@@ -3391,14 +3425,11 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           if (loop === undefined) return
           const projectedState = yield* currentRuntimeState(loop)
           if (projectedState._tag !== "WaitingForInteraction") {
-            const state = yield* loop.actor.snapshot
+            const state = yield* loop.snapshot
             if (state._tag !== "WaitingForInteraction") return
           }
-          yield* mapLoopActorCause(
-            command.sessionId,
-            command.branchId,
-            loop,
-            loop.actor.call(AgentLoopEvent.InteractionResponded({ requestId: command.requestId })),
+          yield* loop.dispatch(
+            LoopDriverEvent.InteractionResponded.make({ requestId: command.requestId }),
           )
         })
 
@@ -3423,7 +3454,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 })
               }),
             )
-            .pipe(Effect.catchCause((cause) => Effect.fail(actorCauseFailure(cause))))
+            .pipe(Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))))
         })
 
         const invokeTool = Effect.fn("AgentLoop.invokeToolPhase")(function* (
@@ -3459,7 +3490,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 })
               }),
             )
-            .pipe(Effect.catchCause((cause) => Effect.fail(actorCauseFailure(cause))))
+            .pipe(Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))))
         })
 
         const dispatchLoopCommand = Effect.fn("AgentLoop.dispatchLoopCommand")(function* (
@@ -3542,12 +3573,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             ),
           )
           if (reservedStart !== undefined) {
-            yield* mapLoopActorCause(
-              message.sessionId,
-              message.branchId,
-              loop,
-              loop.actor.call(AgentLoopEvent.Start({ item })),
-            )
+            yield* loop
+              .dispatch(LoopDriverEvent.Start.make({ item }))
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoopIfCurrent(message.sessionId, message.branchId, loop).pipe(
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+                ),
+              )
           }
         })
 
@@ -3690,14 +3724,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               const loop = yield* findOrRestoreLoop(input.sessionId, input.branchId)
               if (loop !== undefined) {
                 const state = yield* loop.queueMutationSemaphore.withPermits(1)(
-                  Effect.gen(function* () {
-                    const liveLoopState = yield* loop.actor.snapshot
-                    const next = yield* SubscriptionRef.modify(loop.loopRef, (s) => {
-                      const nextAggregate = { ...s, state: liveLoopState }
-                      return [projectRuntimeState(nextAggregate), nextAggregate]
-                    })
-                    return next
-                  }),
+                  SubscriptionRef.get(loop.loopRef).pipe(Effect.map(projectRuntimeState)),
                 )
                 return state
               }

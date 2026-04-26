@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { type ActorRef, Event, State } from "effect-machine"
+import { State } from "effect-machine"
 import type { AnyCapabilityContribution } from "../../domain/capability.js"
 import {
   AgentName,
@@ -25,7 +25,7 @@ import { messageText, getSingleText } from "./agent-loop.utils.js"
 
 // ── Queue ──
 
-const QueuedTurnItemSchema = Schema.Struct({
+export const QueuedTurnItemSchema = Schema.Struct({
   message: Message,
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
@@ -244,27 +244,12 @@ export const LoopMachineState = State({
   },
 })
 
-export const AgentLoopEvent = Event({
-  Start: { item: QueuedTurnItemSchema },
-  TurnDone: {},
-  TurnFailed: {},
-  InteractionRequested: {
-    pendingRequestId: Schema.String,
-    pendingToolCallId: Schema.String,
-    currentTurnAgent: AgentName,
-  },
-  InteractionResponded: { requestId: Schema.String },
-  SwitchAgent: { agent: AgentName },
-  Interrupt: {},
-})
-
 // ── Type aliases ──
 
 export type LoopState = typeof LoopMachineState.Type
 export type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
-export type LoopActor = ActorRef<typeof LoopMachineState.Type, typeof AgentLoopEvent.Type>
 
 // ── Runtime projection (transport/UI) ──
 // Public runtime state mirrors the machine directly. No parallel `phase/status`
