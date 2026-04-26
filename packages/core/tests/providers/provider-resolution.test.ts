@@ -147,12 +147,13 @@ describe("Provider model resolution", () => {
     expect(result._tag).toBe("Failure")
   })
 
-  test("wraps extension resolveModel errors as ProviderError", async () => {
+  test("wraps extension resolveModel errors as ProviderError preserving cause", async () => {
+    const original = new Error("kaboom")
     const throwingProvider: ModelDriverContribution = {
       id: "broken",
       name: "Broken",
       resolveModel: () => {
-        throw new Error("kaboom")
+        throw original
       },
     }
     const layer = buildProviderLayer([makeExt("broken-ext", [throwingProvider])])
@@ -166,6 +167,17 @@ describe("Provider model resolution", () => {
       }).pipe(Effect.provide(layer)),
     )
     expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(errOpt._tag).toBe("Some")
+      if (errOpt._tag === "Some") {
+        const err = errOpt.value as ProviderError
+        // W6-13: the original `Error` thrown from the driver must be
+        // preserved as `cause` so the upstream chain is debuggable.
+        expect(err._tag).toBe("ProviderError")
+        expect(err.cause).toBe(original)
+      }
+    }
   })
 
   test("driver ProviderAuthError surfaces typed at the provider boundary", async () => {
@@ -206,6 +218,43 @@ describe("Provider model resolution", () => {
         if (Schema.is(ProviderAuthError)(err)) {
           expect(err.message).toContain("credentials unavailable")
         }
+      }
+    }
+  })
+
+  test("BedrockExtension resolveModel fails closed as ProviderAuthError (W6-14)", async () => {
+    // W6-14: bedrock has no @effect/ai provider at beta.47. The contribution
+    // throws on resolveModel — that throw must surface as ProviderAuthError
+    // (fail-closed) rather than being wrapped as transient ProviderError and
+    // retried. Use a test contribution that mirrors the BedrockExtension
+    // shape so this test is provider-boundary-only and stays in core.
+    const bedrockShaped: ModelDriverContribution = {
+      id: "bedrock",
+      name: "AWS Bedrock",
+      resolveModel: () => {
+        throw new ProviderAuthError({
+          message: "AWS Bedrock is temporarily unsupported.",
+        })
+      },
+    }
+    const layer = buildProviderLayer([makeExt("bedrock-shaped-ext", [bedrockShaped])])
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        yield* provider.stream({
+          model: "bedrock/some-model",
+          prompt: [],
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(errOpt._tag).toBe("Some")
+      if (errOpt._tag === "Some") {
+        expect(Schema.is(ProviderAuthError)(errOpt.value)).toBe(true)
       }
     }
   })

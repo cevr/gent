@@ -96,7 +96,7 @@ describe("ProviderAuth", () => {
     pendingCallbacks.clear()
     const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
     const layer = Layer.provideMerge(
-      ProviderAuth.Test(),
+      ProviderAuth.Live,
       Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
     )
 
@@ -123,7 +123,7 @@ describe("ProviderAuth", () => {
   it("listMethods returns methods from extension providers", async () => {
     const authStoreLayer = Layer.provide(AuthStore.Live, AuthStorage.Test())
     const layer = Layer.provideMerge(
-      ProviderAuth.Test(),
+      ProviderAuth.Live,
       Layer.mergeAll(authStoreLayer, testRegistry, testDriverRegistry),
     )
 
@@ -142,7 +142,7 @@ describe("ProviderAuth", () => {
 
   it("authorize surfaces credential persistence failures", async () => {
     const layer = Layer.provideMerge(
-      ProviderAuth.Test(),
+      ProviderAuth.Live,
       Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
     )
 
@@ -160,7 +160,7 @@ describe("ProviderAuth", () => {
   it("callback surfaces credential persistence failures", async () => {
     pendingCallbacks.clear()
     const layer = Layer.provideMerge(
-      ProviderAuth.Test(),
+      ProviderAuth.Live,
       Layer.mergeAll(failingAuthStoreLayer, testRegistry, testDriverRegistry),
     )
 

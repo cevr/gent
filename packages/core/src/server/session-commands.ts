@@ -93,10 +93,11 @@ const terminateSessionMachineRuntime = Effect.fn("SessionCommands.terminateSessi
   }) {
     // Prefer the in-memory cwd registry: descendants caught by the post-delete
     // cleanup have no durable row to read from, but the registry still holds
-    // their cwd until forgetDeletedSessionRuntimeState runs.
-    const cachedCwd = yield* input.sessionCwdRegistry
-      .lookup(input.sessionId)
-      .pipe(Effect.catchEager(() => Effect.succeed<string | undefined>(undefined)))
+    // their cwd until forgetDeletedSessionRuntimeState runs. Per the registry's
+    // own contract (session-cwd-registry.ts), `lookup` propagates StorageError
+    // on transient failures (fail-closed) — so the caller distinguishes
+    // "not found" from "storage failed" and avoids wrong-runtime delivery.
+    const cachedCwd = yield* input.sessionCwdRegistry.lookup(input.sessionId)
     const cwd = cachedCwd ?? (yield* input.sessionStorage.getSession(input.sessionId))?.cwd
 
     const runtime =

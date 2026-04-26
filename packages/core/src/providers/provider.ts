@@ -131,6 +131,7 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
         return new ProviderError({
           message: `Extension provider "${providerName}" failed: ${e instanceof Error ? e.message : String(e)}`,
           model: modelId,
+          cause: e,
         })
       },
     })
@@ -598,6 +599,48 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       const registry = yield* DriverRegistry
       const getModel = makeModelResolver(authStore, registry)
 
+      const streamImpl = Effect.fn("Provider.stream")(function* (request: ProviderRequest) {
+        const hints: ProviderHints = {
+          reasoning: request.reasoning,
+          maxTokens: request.maxTokens,
+          temperature: request.temperature,
+        }
+        const resolution = yield* getModel(
+          request.model,
+          hints,
+          request.driverRegistry,
+          request.driverId,
+        )
+        const modelLayer = resolution.layer
+
+        const withHandler =
+          request.toolkit ?? (request.tools !== undefined ? convertTools(request.tools) : undefined)
+
+        const rawStream =
+          withHandler !== undefined
+            ? LanguageModel.streamText({
+                prompt: request.prompt,
+                toolkit: withHandler,
+                disableToolCallResolution: true as const,
+              })
+            : LanguageModel.streamText({
+                prompt: request.prompt,
+              })
+
+        return rawStream.pipe(
+          Stream.provide(modelLayer),
+          Stream.catch((error: unknown) =>
+            Stream.fail(
+              new ProviderError({
+                message: AiError.isAiError(error) ? error.message : String(error),
+                model: request.model,
+                cause: error,
+              }),
+            ),
+          ),
+        )
+      })
+
       function stream<Tools extends ProviderToolMap>(
         request: ProviderRequest<Tools> & { readonly toolkit: AiToolkit.WithHandler<Tools> },
       ): Effect.Effect<ProviderStream<Tools>, ProviderError | ProviderAuthError>
@@ -610,48 +653,10 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
       function stream(
         request: ProviderRequest,
       ): Effect.Effect<ProviderStream, ProviderError | ProviderAuthError> {
-        return Effect.gen(function* () {
-          const hints: ProviderHints = {
-            reasoning: request.reasoning,
-            maxTokens: request.maxTokens,
-            temperature: request.temperature,
-          }
-          const resolution = yield* getModel(
-            request.model,
-            hints,
-            request.driverRegistry,
-            request.driverId,
-          )
-          const modelLayer = resolution.layer
-
-          const withHandler =
-            request.toolkit ??
-            (request.tools !== undefined ? convertTools(request.tools) : undefined)
-
-          const rawStream =
-            withHandler !== undefined
-              ? LanguageModel.streamText({
-                  prompt: request.prompt,
-                  toolkit: withHandler,
-                  disableToolCallResolution: true as const,
-                })
-              : LanguageModel.streamText({
-                  prompt: request.prompt,
-                })
-
-          return rawStream.pipe(
-            Stream.provide(modelLayer),
-            Stream.catch((error: unknown) =>
-              Stream.fail(
-                new ProviderError({
-                  message: AiError.isAiError(error) ? error.message : String(error),
-                  model: request.model,
-                  cause: error,
-                }),
-              ),
-            ),
-          )
-        })
+        return streamImpl(request) as Effect.Effect<
+          ProviderStream,
+          ProviderError | ProviderAuthError
+        >
       }
       return {
         stream,

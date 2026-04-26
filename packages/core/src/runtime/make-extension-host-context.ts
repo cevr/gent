@@ -16,7 +16,12 @@ import {
   ExtensionHostSearchResult,
   type ExtensionHostContext,
 } from "../domain/extension-host-context.js"
-import type { AgentRunner, AgentName } from "../domain/agent.js"
+import {
+  AgentRunnerService,
+  DEFAULT_MODEL_ID,
+  type AgentRunner,
+  type AgentName,
+} from "../domain/agent.js"
 import { BranchId, SessionId } from "../domain/ids.js"
 import type { MachineEngineService } from "./extensions/resource-host/machine-engine.js"
 import { RuntimePlatform, type RuntimePlatformShape } from "./runtime-platform.js"
@@ -28,7 +33,6 @@ import { SearchStorage, type SearchStorageService } from "../storage/search-stor
 import type { Message } from "../domain/message.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import { estimateContextPercent } from "./context-estimation.js"
-import { AgentRunnerService } from "../domain/agent.js"
 
 export interface MakeExtensionHostContextDeps {
   readonly platform: RuntimePlatformShape
@@ -327,7 +331,7 @@ export const makeExtensionHostContext = (
     estimateContextPercent: (options) =>
       Effect.gen(function* () {
         const messages: ReadonlyArray<Message> = yield* deps.storage.listMessages(runInfo.branchId)
-        const modelId = options?.modelId ?? "anthropic/claude-opus-4-6"
+        const modelId = options?.modelId ?? DEFAULT_MODEL_ID
         return estimateContextPercent(messages, modelId)
       }).pipe(Effect.mapError(toHostError("session.estimateContextPercent"))),
     search: (query, options) =>

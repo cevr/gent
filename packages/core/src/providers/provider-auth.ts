@@ -36,15 +36,6 @@ export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthServ
       return yield* makeProviderAuth(driverRegistry)
     }),
   )
-
-  static Test = (): Layer.Layer<ProviderAuth, never, AuthStore | DriverRegistry> =>
-    Layer.effect(
-      ProviderAuth,
-      Effect.gen(function* () {
-        const driverRegistry = yield* DriverRegistry
-        return yield* makeProviderAuth(driverRegistry)
-      }),
-    )
 }
 
 const makeProviderAuth = (
