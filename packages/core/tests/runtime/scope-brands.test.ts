@@ -11,7 +11,7 @@
  * and `gent/no-scope-brand-cast`.
  */
 import { describe, test, expect } from "bun:test"
-import { Effect, Layer, Context, type Scope } from "effect"
+import { Effect, Exit, Layer, Context, Scope } from "effect"
 import {
   type CwdProfile,
   type EphemeralProfile,
@@ -237,6 +237,54 @@ describe("scope brand type fences", () => {
         expect(publisher).toBe(childPublisher)
         expect(sink.publish).toBe(childPublisher.publish)
       }),
+    )
+  })
+
+  test("composer-built layer attaches owned-layer finalizers to the build scope", () => {
+    // Contract: `Effect.scoped` at the runner site (agent-runner.ts:794) is
+    // load-bearing only because the composer correctly attaches owned-layer
+    // finalizers to whatever scope `Layer.buildWithScope` is invoked with.
+    // Asserting the scope-close ↔ finalizer-runs invariant directly: if the
+    // composer's `Layer.fresh` wrapper, `.own(...)` flow, or merge order
+    // ever stripped finalizers, the in-memory storage / event-store /
+    // approval-service handles would leak across ephemeral runs.
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const events: Array<string> = []
+        const serverParent = {
+          cwd: "/tmp",
+          resolved: { kinds: {} } as never,
+          __brand: undefined as never,
+        } as ServerProfile
+        const parentServices = Context.empty() as Context.Context<never>
+
+        const scopedFakeLayer = Layer.effect(
+          FakeService,
+          Effect.gen(function* () {
+            events.push("acquired")
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                events.push("finalized")
+              }),
+            )
+            return { value: 1 }
+          }),
+        )
+
+        const composed = RuntimeComposer.ephemeral({ parent: serverParent, parentServices })
+          .own(ownService(FakeService, scopedFakeLayer))
+          .build()
+
+        // Build under an explicit scope, then close it. Acquisition runs at
+        // build; the finalizer must run at scope close. If the composer
+        // dropped finalizers anywhere along the build path, only "acquired"
+        // would land.
+        const scope = yield* Scope.make()
+        yield* Layer.buildWithScope(composed.layer, scope)
+        expect(events).toEqual(["acquired"])
+        yield* Scope.close(scope, Exit.succeed(void 0))
+        expect(events).toEqual(["acquired", "finalized"])
+      }).pipe(Effect.timeout("2 seconds")),
     )
   })
 
