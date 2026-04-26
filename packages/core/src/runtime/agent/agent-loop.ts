@@ -2873,6 +2873,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                     switch (event._tag) {
                       case "Start": {
                         if (state._tag !== "Idle") return
+                        // Clear stale interrupt before forking — prevents a stray
+                        // Interrupt that latched after the prior turn ended from
+                        // aborting this fresh turn.
+                        yield* Ref.set(interruptedRef, false)
                         const next = buildRunningState(state, event.item)
                         yield* saveCheckpoint(next)
                         yield* forkTurn(next)
@@ -2886,6 +2890,8 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                       }
                       case "InteractionResponded": {
                         if (state._tag !== "WaitingForInteraction") return
+                        // Clear stale interrupt before resuming the suspended turn.
+                        yield* Ref.set(interruptedRef, false)
                         const resumed = buildRunningState(
                           { currentAgent: state.currentAgent },
                           {
@@ -3362,9 +3368,22 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           const loop = yield* getLoop(command.command.sessionId, command.command.branchId)
           const projectedState = yield* currentRuntimeState(loop)
 
+          const wrapDispatch = (event: LoopDriverEvent) =>
+            loop
+              .dispatch(event)
+              .pipe(
+                Effect.catchEager((error) =>
+                  cleanupLoopIfCurrent(
+                    command.command.sessionId,
+                    command.command.branchId,
+                    loop,
+                  ).pipe(Effect.andThen(Effect.fail(error))),
+                ),
+              )
+
           switch (command.command._tag) {
             case "SwitchAgent":
-              yield* loop.dispatch(
+              yield* wrapDispatch(
                 LoopDriverEvent.SwitchAgent.make({ agent: command.command.agent }),
               )
               return
@@ -3375,12 +3394,12 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 projectedState._tag === "Running" ||
                 projectedState._tag === "WaitingForInteraction"
               ) {
-                yield* loop.dispatch(LoopDriverEvent.Interrupt.make({}))
+                yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
                 return
               }
               const loopState = yield* loop.snapshot
               if (loopState._tag === "Running" || loopState._tag === "WaitingForInteraction") {
-                yield* loop.dispatch(LoopDriverEvent.Interrupt.make({}))
+                yield* wrapDispatch(LoopDriverEvent.Interrupt.make({}))
               }
               return
 
@@ -3428,9 +3447,15 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const state = yield* loop.snapshot
             if (state._tag !== "WaitingForInteraction") return
           }
-          yield* loop.dispatch(
-            LoopDriverEvent.InteractionResponded.make({ requestId: command.requestId }),
-          )
+          yield* loop
+            .dispatch(LoopDriverEvent.InteractionResponded.make({ requestId: command.requestId }))
+            .pipe(
+              Effect.catchEager((error) =>
+                cleanupLoopIfCurrent(command.sessionId, command.branchId, loop).pipe(
+                  Effect.andThen(Effect.fail(error)),
+                ),
+              ),
+            )
         })
 
         const recordToolResult = Effect.fn("AgentLoop.recordToolResultPhase")(function* (
