@@ -156,41 +156,43 @@ const forgetDeletedSessionRuntimeState = Effect.fn(
   yield* input.sessionCwdRegistry.forget(input.sessionId)
 })
 
+// Common error union for SessionCommands mutations: storage/event errors plus
+// the typed business errors surfaced from validation paths.
+export type SessionCommandError = StorageError | EventStoreError | NotFoundError | InvalidStateError
+
 export interface SessionCommandsService {
   readonly createSession: (
     input: CreateSessionInput,
   ) => Effect.Effect<CreateSessionResult, AppServiceError>
-  readonly deleteSession: (
-    sessionId: SessionId,
-  ) => Effect.Effect<void, StorageError | EventStoreError>
+  readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionCommandError>
   readonly deleteBranch: (input: {
     readonly sessionId: SessionId
     readonly currentBranchId: BranchId
     readonly branchId: BranchId
-  }) => Effect.Effect<void, StorageError>
+  }) => Effect.Effect<void, SessionCommandError>
   readonly deleteMessages: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly afterMessageId?: MessageId
-  }) => Effect.Effect<void, StorageError>
+  }) => Effect.Effect<void, SessionCommandError>
   readonly createBranch: (
     input: CreateBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
   readonly renameSession: (input: {
     readonly sessionId: SessionId
     readonly name: string
-  }) => Effect.Effect<{ renamed: boolean; name?: string }, StorageError | EventStoreError>
+  }) => Effect.Effect<{ renamed: boolean; name?: string }, SessionCommandError>
   readonly createSessionBranch: (input: {
     readonly sessionId: SessionId
     readonly parentBranchId?: BranchId
     readonly name?: string
-  }) => Effect.Effect<CreateBranchResult, StorageError | EventStoreError>
+  }) => Effect.Effect<CreateBranchResult, SessionCommandError>
   readonly switchBranch: (input: SwitchBranchInput) => Effect.Effect<void, AppServiceError>
   readonly switchActiveBranch: (input: {
     readonly sessionId: SessionId
     readonly fromBranchId: BranchId
     readonly toBranchId: BranchId
-  }) => Effect.Effect<void, StorageError | EventStoreError>
+  }) => Effect.Effect<void, SessionCommandError>
   readonly forkBranch: (
     input: ForkBranchInput,
   ) => Effect.Effect<CreateBranchResult, AppServiceError>
@@ -199,13 +201,13 @@ export interface SessionCommandsService {
     readonly fromBranchId: BranchId
     readonly atMessageId: MessageId
     readonly name?: string
-  }) => Effect.Effect<CreateBranchResult, StorageError | EventStoreError>
+  }) => Effect.Effect<CreateBranchResult, SessionCommandError>
   readonly createChildSession: (input: {
     readonly parentSessionId: SessionId
     readonly parentBranchId: BranchId
     readonly name?: string
     readonly cwd?: string
-  }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, StorageError | EventStoreError>
+  }) => Effect.Effect<{ sessionId: SessionId; branchId: BranchId }, SessionCommandError>
   readonly sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError>
   readonly steer: (command: SteerCommand) => Effect.Effect<void, AppServiceError>
   readonly drainQueuedMessages: (input: {
@@ -271,7 +273,10 @@ const makeSessionMutationsService: Effect.Effect<
         cursor.sessionId !== input.sessionId ||
         cursor.branchId !== input.branchId
       ) {
-        return yield* Effect.die(`Message "${input.afterMessageId}" not found in current branch`)
+        return yield* new NotFoundError({
+          message: `Message "${input.afterMessageId}" not found in current branch`,
+          entity: "message",
+        })
       }
     },
   )
@@ -426,13 +431,16 @@ const makeSessionMutationsService: Effect.Effect<
     forkSessionBranch: Effect.fn("SessionMutations.forkSessionBranch")(function* (input) {
       const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
       if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-        return yield* Effect.die("Branch not found")
+        return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
       }
 
       const messages = yield* messageStorage.listMessages(input.fromBranchId)
       const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
       if (targetIndex === -1) {
-        return yield* Effect.die("Message not found in branch")
+        return yield* new NotFoundError({
+          message: "Message not found in branch",
+          entity: "message",
+        })
       }
 
       const branch = new Branch({
@@ -469,14 +477,25 @@ const makeSessionMutationsService: Effect.Effect<
 
     switchActiveBranch: Effect.fn("SessionMutations.switchActiveBranch")(function* (input) {
       const session = yield* sessionStorage.getSession(input.sessionId)
-      if (session === undefined) return yield* Effect.die("Current session not found")
+      if (session === undefined) {
+        return yield* new NotFoundError({
+          message: "Current session not found",
+          entity: "session",
+        })
+      }
       const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
       if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-        return yield* Effect.die(`Branch "${input.fromBranchId}" not found in current session`)
+        return yield* new NotFoundError({
+          message: `Branch "${input.fromBranchId}" not found in current session`,
+          entity: "branch",
+        })
       }
       const toBranch = yield* branchStorage.getBranch(input.toBranchId)
       if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-        return yield* Effect.die(`Branch "${input.toBranchId}" not found in current session`)
+        return yield* new NotFoundError({
+          message: `Branch "${input.toBranchId}" not found in current session`,
+          entity: "branch",
+        })
       }
       yield* transactWithEvent(
         sessionStorage.updateSession(
@@ -538,18 +557,30 @@ const makeSessionMutationsService: Effect.Effect<
 
     deleteBranch: Effect.fn("SessionMutations.deleteBranch")(function* (input) {
       if (input.branchId === input.currentBranchId) {
-        return yield* Effect.die("Cannot delete the current branch")
+        return yield* new InvalidStateError({
+          message: "Cannot delete the current branch",
+          operation: "deleteBranch",
+        })
       }
       const session = yield* sessionStorage.getSession(input.sessionId)
       if (session === undefined) {
-        return yield* Effect.die("Current session not found")
+        return yield* new NotFoundError({
+          message: "Current session not found",
+          entity: "session",
+        })
       }
       if (session.activeBranchId === input.branchId) {
-        return yield* Effect.die("Cannot delete the active branch")
+        return yield* new InvalidStateError({
+          message: "Cannot delete the active branch",
+          operation: "deleteBranch",
+        })
       }
       const branch = yield* branchStorage.getBranch(input.branchId)
       if (branch === undefined || branch.sessionId !== input.sessionId) {
-        return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+        return yield* new NotFoundError({
+          message: `Branch "${input.branchId}" not found in current session`,
+          entity: "branch",
+        })
       }
       yield* validateBranchDeletion(input)
       yield* branchStorage.deleteBranch(input.branchId)
@@ -558,7 +589,10 @@ const makeSessionMutationsService: Effect.Effect<
     deleteMessages: Effect.fn("SessionMutations.deleteMessages")(function* (input) {
       const branch = yield* branchStorage.getBranch(input.branchId)
       if (branch === undefined || branch.sessionId !== input.sessionId) {
-        return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+        return yield* new NotFoundError({
+          message: `Branch "${input.branchId}" not found in current session`,
+          entity: "branch",
+        })
       }
       yield* validateMessageCursor(input)
       yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
@@ -906,14 +940,25 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         readonly toBranchId: BranchId
       }) {
         const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) return yield* Effect.die("Current session not found")
+        if (session === undefined) {
+          return yield* new NotFoundError({
+            message: "Current session not found",
+            entity: "session",
+          })
+        }
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* Effect.die(`Branch "${input.fromBranchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${input.fromBranchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         const toBranch = yield* branchStorage.getBranch(input.toBranchId)
         if (toBranch === undefined || toBranch.sessionId !== input.sessionId) {
-          return yield* Effect.die(`Branch "${input.toBranchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${input.toBranchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         yield* transactWithEvent(
           sessionStorage.updateSession(
@@ -1011,13 +1056,16 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       }) {
         const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
         if (fromBranch === undefined || fromBranch.sessionId !== input.sessionId) {
-          return yield* Effect.die("Branch not found")
+          return yield* new NotFoundError({ message: "Branch not found", entity: "branch" })
         }
 
         const messages = yield* messageStorage.listMessages(input.fromBranchId)
         const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
         if (targetIndex === -1) {
-          return yield* Effect.die("Message not found in branch")
+          return yield* new NotFoundError({
+            message: "Message not found in branch",
+            entity: "message",
+          })
         }
 
         const branch = new Branch({
@@ -1254,26 +1302,44 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         readonly branchId: BranchId
       }) {
         if (input.branchId === input.currentBranchId) {
-          return yield* Effect.die("Cannot delete the current branch")
+          return yield* new InvalidStateError({
+            message: "Cannot delete the current branch",
+            operation: "deleteBranch",
+          })
         }
         const session = yield* sessionStorage.getSession(input.sessionId)
         if (session === undefined) {
-          return yield* Effect.die("Current session not found")
+          return yield* new NotFoundError({
+            message: "Current session not found",
+            entity: "session",
+          })
         }
         if (session.activeBranchId === input.branchId) {
-          return yield* Effect.die("Cannot delete the active branch")
+          return yield* new InvalidStateError({
+            message: "Cannot delete the active branch",
+            operation: "deleteBranch",
+          })
         }
         const branch = yield* branchStorage.getBranch(input.branchId)
         if (branch === undefined || branch.sessionId !== input.sessionId) {
-          return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${input.branchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         const branches = yield* branchStorage.listBranches(input.sessionId)
         if (branches.some((candidate) => candidate.parentBranchId === input.branchId)) {
-          return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child branches`)
+          return yield* new InvalidStateError({
+            message: `Cannot delete branch "${input.branchId}" with child branches`,
+            operation: "deleteBranch",
+          })
         }
         const childSessions = yield* storage.getChildSessions(input.sessionId)
         if (childSessions.some((session) => session.parentBranchId === input.branchId)) {
-          return yield* Effect.die(`Cannot delete branch "${input.branchId}" with child sessions`)
+          return yield* new InvalidStateError({
+            message: `Cannot delete branch "${input.branchId}" with child sessions`,
+            operation: "deleteBranch",
+          })
         }
         yield* branchStorage.deleteBranch(input.branchId)
       })
@@ -1285,7 +1351,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
       }) {
         const branch = yield* branchStorage.getBranch(input.branchId)
         if (branch === undefined || branch.sessionId !== input.sessionId) {
-          return yield* Effect.die(`Branch "${input.branchId}" not found in current session`)
+          return yield* new NotFoundError({
+            message: `Branch "${input.branchId}" not found in current session`,
+            entity: "branch",
+          })
         }
         if (input.afterMessageId !== undefined) {
           const cursor = yield* messageStorage.getMessage(input.afterMessageId)
@@ -1294,9 +1363,10 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             cursor.sessionId !== input.sessionId ||
             cursor.branchId !== input.branchId
           ) {
-            return yield* Effect.die(
-              `Message "${input.afterMessageId}" not found in current branch`,
-            )
+            return yield* new NotFoundError({
+              message: `Message "${input.afterMessageId}" not found in current branch`,
+              entity: "message",
+            })
           }
         }
         yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
