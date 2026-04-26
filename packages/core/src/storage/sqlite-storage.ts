@@ -603,7 +603,6 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
                 "id",
                 "name",
                 "cwd",
-                "bypass",
                 "reasoning_level",
                 "active_branch_id",
                 "parent_session_id",
@@ -617,7 +616,6 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             id TEXT PRIMARY KEY,
             name TEXT,
             cwd TEXT,
-            bypass INTEGER,
             reasoning_level TEXT,
             active_branch_id TEXT,
             parent_session_id TEXT,
@@ -879,7 +877,6 @@ const initSchema = Effect.gen(function* () {
       id TEXT PRIMARY KEY,
       name TEXT,
       cwd TEXT,
-      bypass INTEGER,
       reasoning_level TEXT,
       active_branch_id TEXT,
       parent_session_id TEXT,
@@ -895,7 +892,6 @@ const initSchema = Effect.gen(function* () {
 
   // Migrations
   yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN cwd TEXT`).pipe(Effect.ignoreCause)
-  yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN bypass INTEGER`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`ALTER TABLE sessions ADD COLUMN reasoning_level TEXT`).pipe(Effect.ignoreCause)
   yield* sql
     .unsafe(`ALTER TABLE sessions ADD COLUMN active_branch_id TEXT`)
