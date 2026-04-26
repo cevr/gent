@@ -23,7 +23,7 @@ import { AllBuiltinAgents } from "@gent/extensions/all-agents.js"
 const AgentsByName: Record<string, AgentDefinition> = Object.fromEntries(
   AllBuiltinAgents.map((a) => [a.name, a]),
 )
-import { type Model } from "@gent/core/domain/model.js"
+import { type Model, type ModelId } from "@gent/core/domain/model.js"
 import type { EventEnvelope } from "@gent/core/domain/event.js"
 import { BranchId, SessionId } from "@gent/core/domain/ids.js"
 import type { MessageId } from "@gent/core/domain/ids.js"
@@ -59,7 +59,12 @@ type SteerCommandInput =
 const resolveModelInfo = (
   models: Record<string, Model>,
   agent: AgentName | undefined,
+  lastModelId: ModelId | undefined,
 ): Model | undefined => {
+  if (lastModelId !== undefined) {
+    const live = models[lastModelId]
+    if (live !== undefined) return live
+  }
   if (agent === undefined) return undefined
   const agentDef = AgentsByName[agent]
   return agentDef !== undefined ? models[resolveAgentModel(agentDef)] : undefined
@@ -86,6 +91,13 @@ export interface AgentState {
   agent: AgentName | undefined
   status: AgentStatus
   cost: number
+  /**
+   * Server-authoritative model id from `SessionSnapshot.metrics.lastModelId`.
+   * Mirrors the cost field's flow: hydrated from snapshot, refreshed on
+   * `StreamEnded`. Falls back to the agent's default model only when no
+   * stream has ended yet for the active session.
+   */
+  lastModelId: ModelId | undefined
 }
 
 // =============================================================================
@@ -333,6 +345,7 @@ export function ClientProvider(props: ClientProviderProps) {
     agent: props.initialSession !== undefined ? props.initialAgent : defaultAgent,
     status: AgentStatus.idle(),
     cost: 0,
+    lastModelId: undefined,
   })
   const [latestInputTokens, setLatestInputTokens] = createSignal(0)
   const [connectionState, setConnectionState] = createSignal<ConnectionState | undefined>(
@@ -491,7 +504,10 @@ export function ClientProvider(props: ClientProviderProps) {
               client.actor.getMetrics({ sessionId: s.sessionId, branchId: s.branchId }).pipe(
                 Effect.tap((metrics) =>
                   Effect.sync(() => {
-                    setAgentStore({ cost: metrics.costUsd })
+                    setAgentStore({
+                      cost: metrics.costUsd,
+                      lastModelId: metrics.lastModelId,
+                    })
                     setLatestInputTokens(metrics.lastInputTokens)
                   }),
                 ),
@@ -584,7 +600,12 @@ export function ClientProvider(props: ClientProviderProps) {
                   }
                   const rt = snapshot.runtime
                   const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
-                  setAgentStore({ agent: rt.agent, status, cost: snapshot.metrics.costUsd })
+                  setAgentStore({
+                    agent: rt.agent,
+                    status,
+                    cost: snapshot.metrics.costUsd,
+                    lastModelId: snapshot.metrics.lastModelId,
+                  })
                   setLatestInputTokens(snapshot.metrics.lastInputTokens)
 
                   // No initial-snapshot fan-out: the UI snapshot channel is gone.
@@ -668,7 +689,12 @@ export function ClientProvider(props: ClientProviderProps) {
               // banners / extension-health from the previous session.
               // Create always transitions out of a prior session (or from
               // "none"), so the extensionHealth reset is unconditional.
-              setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+              setAgentStore({
+                agent: defaultAgent,
+                status: AgentStatus.idle(),
+                cost: 0,
+                lastModelId: undefined,
+              })
               setLatestInputTokens(0)
               setConnectionIssue(null)
               setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -698,7 +724,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name, agent) => {
       const currentSessionId = session()?.sessionId
-      setAgentStore({ agent, status: AgentStatus.idle(), cost: 0 })
+      setAgentStore({ agent, status: AgentStatus.idle(), cost: 0, lastModelId: undefined })
       setLatestInputTokens(0)
       setConnectionIssue(null)
       if (currentSessionId !== sessionId) {
@@ -712,7 +738,12 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       dispatchSession({ _tag: "Clear" })
-      setAgentStore({ agent: defaultAgent, status: AgentStatus.idle(), cost: 0 })
+      setAgentStore({
+        agent: defaultAgent,
+        status: AgentStatus.idle(),
+        cost: 0,
+        lastModelId: undefined,
+      })
       setLatestInputTokens(0)
       setConnectionIssue(null)
       setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -820,6 +851,11 @@ export function ClientProvider(props: ClientProviderProps) {
     agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
+      // Server-authoritative `lastModelId` from `metrics` is the single source
+      // of truth — server-side agent overrides (`runSpec.agentName`) can swap
+      // to a different driver mid-turn, so the local agent default would
+      // disagree with what's actually running.
+      if (agentStore.lastModelId !== undefined) return agentStore.lastModelId
       const agentDef = agentStore.agent !== undefined ? AgentsByName[agentStore.agent] : undefined
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- cowork always registered
       return resolveAgentModel(agentDef ?? AgentsByName["cowork"]!)
@@ -829,7 +865,8 @@ export function ClientProvider(props: ClientProviderProps) {
     isError: () => agentStore.status._tag === "error",
     error: () => (agentStore.status._tag === "error" ? agentStore.status.error : null),
     latestInputTokens,
-    modelInfo: () => resolveModelInfo(modelStore.modelsById, agentStore.agent),
+    modelInfo: () =>
+      resolveModelInfo(modelStore.modelsById, agentStore.agent, agentStore.lastModelId),
     setError: (error) =>
       setAgentStore({ status: error !== null ? AgentStatus.error(error) : AgentStatus.idle() }),
   }
