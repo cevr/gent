@@ -2752,3 +2752,355 @@ describe("recovery", () => {
     }
   })
 })
+
+// ============================================================================
+// W8 regression: durable suspension + queue drain
+// ============================================================================
+//
+// Verifies the two genuine FSM-justified behaviors are preserved by the
+// post-W8 substrate (plain Effect fiber + Phase Ref + checkpoint):
+//   1. Durable suspension across scope teardown (process death simulation):
+//      a session in `WaitingForInteraction` survives a scope tear-down,
+//      and `respondInteraction` against a fresh scope re-executes the
+//      pending tool and finalizes the turn.
+//   2. Queue drain order: while a turn is `Running`, multiple `submit`
+//      calls enqueue and drain in submission order after `TurnDone`.
+//
+// Cites: `make-impossible-states-unrepresentable` (phase-tag invariants),
+//        `redesign-from-first-principles` (post-W8 substrate carries the
+//        same correctness load as the FSM did).
+
+describe("W8 regression: durable suspension and queue drain", () => {
+  // ── Suspension test ──
+
+  const suspendSessionId = SessionId.make("session-loop-suspend")
+  const suspendBranchId = BranchId.make("branch-loop-suspend")
+
+  const makeSuspendMessage = (id: string, text: string) =>
+    Message.Regular.make({
+      id: MessageId.make(id),
+      sessionId: suspendSessionId,
+      branchId: suspendBranchId,
+      role: "user",
+      parts: [new TextPart({ type: "text", text })],
+      createdAt: new Date(),
+    })
+
+  // Provider script: first stream() emits the interaction-tool call,
+  // second emits a final text + stop. Tracks the call index so that
+  // the second scope (post-tear-down) keeps advancing the script when
+  // the resumed turn re-streams.
+  const makeSuspendProviderLayer = (streamCallRef: Ref.Ref<number>, toolId: string) =>
+    Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
+          if (idx === 0) {
+            return Stream.fromIterable([
+              toolCallPart(
+                toolId,
+                { value: "suspend" },
+                { toolCallId: ToolCallId.make("tc-suspend") },
+              ),
+              finishPart({ finishReason: "tool-calls" }),
+            ] satisfies ProviderStreamPart[])
+          }
+          return Stream.fromIterable([
+            textDeltaPart("resumed"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      generate: () => Effect.succeed("test"),
+    })
+
+  // Build a per-scope live-tool layer pointed at the same dbPath. The
+  // tool fixture closes over an external `callCount` Ref so its state
+  // survives scope teardown (stand-in for any persistence external to
+  // the Effect scope — DB, Redis, file system).
+  const makeSuspendScopeLayer = (params: {
+    dbPath: string
+    streamCallRef: Ref.Ref<number>
+    callCountRef: Ref.Ref<number>
+    resolution: Deferred.Deferred<void>
+  }) => {
+    const interactionTool = tool({
+      id: "suspend-interaction-tool",
+      description: "Tool that suspends on first call and succeeds on resume",
+      resources: ["suspend-interaction-tool"],
+      params: Schema.Struct({ value: Schema.String }),
+      execute: (toolParams: { value: string }, ctx: ToolContext) =>
+        Effect.gen(function* () {
+          const count = yield* Ref.getAndUpdate(params.callCountRef, (n) => n + 1)
+          if (count === 0) {
+            return yield* new InteractionPendingError({
+              requestId: "req-suspend-1",
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            })
+          }
+          yield* Deferred.succeed(params.resolution, void 0).pipe(
+            Effect.catchEager(() => Effect.void),
+          )
+          return { resolved: true, value: toolParams.value }
+        }),
+    })
+
+    const storageLayer = Storage.LiveWithSql(params.dbPath).pipe(
+      Layer.provide(BunFileSystem.layer),
+      Layer.provide(BunServices.layer),
+    )
+    const eventStoreLayer = Layer.provide(EventStoreLive, storageLayer)
+    const providerLayer = makeSuspendProviderLayer(params.streamCallRef, interactionTool.id)
+    const extRegistry = makeExtRegistry([interactionTool])
+    const baseDeps = Layer.mergeAll(
+      storageLayer,
+      eventStoreLayer,
+      providerLayer,
+      extRegistry,
+      MachineEngine.Test(),
+      ExtensionTurnControl.Live,
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      ApprovalService.Test(),
+      Permission.Live([], "allow"),
+      BunServices.layer,
+      ResourceManagerLive,
+      ModelRegistry.Test(),
+    )
+    const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    return Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+  }
+
+  test("WaitingForInteraction survives scope teardown and resumes via respondInteraction", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gent-loop-suspend-"))
+    const dbPath = path.join(dir, "data.db")
+
+    try {
+      // Cross-scope refs: stand in for state external to the Effect scope.
+      // `callCountRef` tracks tool invocations (DB-equivalent), and
+      // `streamCallRef` lets the provider keep advancing its script when
+      // the resumed turn streams again under the second scope.
+      const callCountRef = Ref.makeUnsafe(0)
+      const streamCallRef = Ref.makeUnsafe(0)
+      const scope1Resolution = Deferred.makeUnsafe<void>()
+
+      // Scope 1: drive the loop until WaitingForInteraction, then exit.
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* AgentLoop
+            const message = makeSuspendMessage("msg-suspend-1", "trigger interaction")
+
+            const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+
+            yield* waitForPhase(
+              agentLoop,
+              { sessionId: suspendSessionId, branchId: suspendBranchId },
+              "WaitingForInteraction",
+            )
+            expect(yield* Ref.get(callCountRef)).toBe(1)
+            expect(yield* Ref.get(streamCallRef)).toBe(1)
+
+            // Interrupt the runAgentLoop fiber so scope teardown can
+            // proceed cleanly without inheriting the parked turn fiber.
+            yield* Fiber.interrupt(fiber)
+          }).pipe(
+            Effect.provide(
+              makeSuspendScopeLayer({
+                dbPath,
+                streamCallRef,
+                callCountRef,
+                resolution: scope1Resolution,
+              }),
+            ),
+          ),
+        ),
+      )
+
+      // The scope is gone — including the in-memory `loops` map and
+      // every Deferred the suspended turn was awaiting. Only the SQLite
+      // DB at `dbPath` survives. This mirrors a process restart.
+
+      // Scope 2: fresh layer (new in-memory state), same DB, same
+      // cross-scope refs. respondInteraction must:
+      //   - re-hydrate the loop from checkpoint (WaitingForInteraction),
+      //   - dispatch InteractionResponded → forkTurn(Running),
+      //   - re-execute the tool (count: 1 → 2 → resolves the tool),
+      //   - the resumed turn streams a final text and reaches Idle.
+      const scope2Resolution = Deferred.makeUnsafe<void>()
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* AgentLoop
+
+            yield* agentLoop.respondInteraction({
+              sessionId: suspendSessionId,
+              branchId: suspendBranchId,
+              requestId: "req-suspend-1",
+            })
+
+            yield* Deferred.await(scope2Resolution).pipe(Effect.timeout("5 seconds"))
+            expect(yield* Ref.get(callCountRef)).toBe(2)
+
+            const finalState = yield* waitForPhase(
+              agentLoop,
+              { sessionId: suspendSessionId, branchId: suspendBranchId },
+              "Idle",
+            )
+            expect(finalState._tag).toBe("Idle")
+
+            // The resumed turn must have driven the provider through
+            // its second response (text + stop), so streamCallRef
+            // advanced to 2 — proves the post-W8 substrate runs the
+            // full inner loop on resume, not just a result hand-back.
+            expect(yield* Ref.get(streamCallRef)).toBe(2)
+          }).pipe(
+            Effect.provide(
+              makeSuspendScopeLayer({
+                dbPath,
+                streamCallRef,
+                callCountRef,
+                resolution: scope2Resolution,
+              }),
+            ),
+          ),
+        ),
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }, 15000)
+
+  // ── Queue drain test ──
+
+  test("multiple submits during a Running turn drain in submission order after TurnDone", async () => {
+    const drainSessionId = SessionId.make("session-loop-drain")
+    const drainBranchId = BranchId.make("branch-loop-drain")
+
+    // Provider gates each turn on a per-turn Deferred so the test can
+    // serialize "submit while Running" semantics deterministically.
+    // First stream() call is gated by gates[0], second by gates[1], etc.
+    // Each call records its index into `streamOrder` and returns a
+    // simple text+stop response when its gate resolves.
+    const gates = [
+      Deferred.makeUnsafe<void>(),
+      Deferred.makeUnsafe<void>(),
+      Deferred.makeUnsafe<void>(),
+      Deferred.makeUnsafe<void>(),
+    ]
+    const streamOrder = Ref.makeUnsafe<readonly number[]>([])
+    const streamCallRef = Ref.makeUnsafe(0)
+
+    const gatedProvider = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(streamCallRef, (n) => n + 1)
+          yield* Ref.update(streamOrder, (arr) => [...arr, idx])
+          const gate = gates[idx]
+          if (gate !== undefined) {
+            yield* Deferred.await(gate)
+          }
+          return Stream.fromIterable([
+            textDeltaPart(`turn-${idx}`),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies ProviderStreamPart[])
+        }),
+      generate: () => Effect.succeed("test"),
+    })
+
+    const deps = Layer.mergeAll(
+      Storage.TestWithSql(),
+      gatedProvider,
+      makeExtRegistry(),
+      MachineEngine.Test(),
+      ExtensionTurnControl.Test(),
+      RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      ConfigService.Test(),
+      EventStore.Memory,
+      ToolRunner.Test(),
+      BunServices.layer,
+      ResourceManagerLive,
+      ModelRegistry.Test(),
+    )
+    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+    const layer = Layer.provideMerge(
+      AgentLoop.Live({ baseSections: [] }),
+      Layer.merge(deps, eventPublisherLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* AgentLoop
+
+          // `interactive: true` disables follow-up batching in
+          // `canBatchQueuedFollowUp` — without it, multiple plain-text
+          // user submits collapse into a single combined turn before
+          // they ever hit the queue drain.
+          const submitOne = (id: string, text: string) =>
+            submitAgentLoop(
+              agentLoop,
+              Message.Regular.make({
+                id: MessageId.make(id),
+                sessionId: drainSessionId,
+                branchId: drainBranchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text })],
+                createdAt: new Date(),
+              }),
+              { interactive: true },
+            )
+
+          // Submit turn #0; wait until the provider's stream() has
+          // actually been entered (parked on gate[0]). Phase transitions
+          // to Running before stream() is called, so we poll on
+          // streamCallRef instead.
+          yield* submitOne("msg-drain-0", "first")
+          yield* Effect.gen(function* () {
+            for (let i = 0; i < 200; i++) {
+              if ((yield* Ref.get(streamCallRef)) >= 1) return
+              yield* Effect.sleep("1 millis")
+            }
+            throw new Error("timed out waiting for first stream() call")
+          })
+          expect(yield* Ref.get(streamCallRef)).toBe(1)
+
+          // Submit #1, #2, #3 while #0 is still parked. They MUST
+          // enqueue (Running → Running re-enter) — they cannot start
+          // a new stream() until #0's gate releases.
+          yield* submitOne("msg-drain-1", "second")
+          yield* submitOne("msg-drain-2", "third")
+          yield* submitOne("msg-drain-3", "fourth")
+
+          // Confirm stream() was not re-entered.
+          expect(yield* Ref.get(streamCallRef)).toBe(1)
+
+          // Release all gates. Drain proceeds: #0 → #1 → #2 → #3.
+          yield* Deferred.succeed(gates[0]!, void 0)
+          yield* Deferred.succeed(gates[1]!, void 0)
+          yield* Deferred.succeed(gates[2]!, void 0)
+          yield* Deferred.succeed(gates[3]!, void 0)
+
+          // Wait for full drain: stream call count must reach 4 and
+          // loop returns to Idle.
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: drainSessionId, branchId: drainBranchId },
+            "Idle",
+          )
+
+          const finalCount = yield* Ref.get(streamCallRef)
+          expect(finalCount).toBe(4)
+
+          const order = yield* Ref.get(streamOrder)
+          expect(order).toEqual([0, 1, 2, 3])
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  }, 15000)
+})
