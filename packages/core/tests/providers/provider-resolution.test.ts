@@ -752,4 +752,96 @@ describe("Provider model resolution", () => {
       ),
     ).toBe(false)
   })
+
+  // Cause-preservation contract (provider.ts:631-639, provider.ts:673-680):
+  // when the underlying LanguageModel fails, both `Provider.stream`'s
+  // `Stream.catch` and `Provider.generate`'s `Effect.mapError` must wrap
+  // the original error as `ProviderError.cause`. Loss of cause severs
+  // the upstream chain — the resulting ProviderError reads as a generic
+  // wrapper with the underlying AiError.reason / driver-specific detail
+  // unrecoverable.
+  test("Provider.stream preserves the underlying AiError as ProviderError.cause", async () => {
+    const originalAiError = AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.UnknownError({ description: "stream-cause-marker" }),
+    })
+    const causeProvidingModel: LanguageModel.Service = {
+      ...failingLanguageModel,
+      streamText: () => Stream.fail(originalAiError),
+    }
+    const causeProvider: ModelDriverContribution = {
+      id: "cause-stream",
+      name: "CauseStream",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
+      }),
+    }
+    const layer = buildProviderLayer([makeExt("cause-stream-ext", [causeProvider])])
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        const stream = yield* provider.stream({
+          model: "cause-stream/gpt-5",
+          prompt: [],
+        })
+        yield* Stream.runHead(stream)
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(errOpt._tag).toBe("Some")
+      if (errOpt._tag === "Some") {
+        const err = errOpt.value as ProviderError
+        expect(err._tag).toBe("ProviderError")
+        // The original AiError must be preserved by reference. A future
+        // refactor that constructed a fresh error or stringified the
+        // cause would break this — and would silently sever the upstream
+        // chain in production at the same time.
+        expect(err.cause).toBe(originalAiError)
+      }
+    }
+  })
+
+  test("Provider.generate preserves the underlying AiError as ProviderError.cause", async () => {
+    const originalAiError = AiError.make({
+      module: "Test",
+      method: "generateText",
+      reason: new AiError.UnknownError({ description: "generate-cause-marker" }),
+    })
+    const causeProvidingModel: LanguageModel.Service = {
+      ...failingLanguageModel,
+      generateText: () => Effect.fail(originalAiError),
+    }
+    const causeProvider: ModelDriverContribution = {
+      id: "cause-generate",
+      name: "CauseGenerate",
+      resolveModel: () => ({
+        layer: Layer.succeed(LanguageModel.LanguageModel, causeProvidingModel),
+      }),
+    }
+    const layer = buildProviderLayer([makeExt("cause-generate-ext", [causeProvider])])
+
+    const result = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const provider = yield* Provider
+        yield* provider.generate({
+          model: "cause-generate/gpt-5",
+          prompt: [],
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      const errOpt = Cause.findErrorOption(result.cause)
+      expect(errOpt._tag).toBe("Some")
+      if (errOpt._tag === "Some") {
+        const err = errOpt.value as ProviderError
+        expect(err._tag).toBe("ProviderError")
+        expect(err.cause).toBe(originalAiError)
+      }
+    }
+  })
 })
