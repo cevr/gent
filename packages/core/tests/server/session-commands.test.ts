@@ -1,5 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Context, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
@@ -2160,5 +2161,72 @@ describe("requestId idempotency", () => {
       // origin + 1 forked branch
       expect(yield* branches.listBranches(sessionId)).toHaveLength(2)
     }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("4 seconds")),
+  )
+
+  // W7-C8.5a: dedup-cache TTL eviction. The cache schedules a delayed
+  // eviction via `Effect.forkDetach(Effect.sleep(60s))` after each
+  // success. Beyond the TTL window, a retry of the same `requestId`
+  // must NOT collide with the prior outcome — it must execute fresh.
+  // Drive `Effect.sleep` deterministically via `TestClock` so the test
+  // does not actually wait 60s.
+  it.effect(
+    "dedup cache evicts success entry past TTL — retried requestId creates a new session",
+    () =>
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const sessions = yield* SessionStorage
+        const first = yield* commands.createSession({
+          cwd: "/tmp/ttl",
+          requestId: "req-ttl-1",
+        })
+        // Advance past the 60s TTL so the detached eviction fork wakes
+        // up and removes the cache entry.
+        yield* TestClock.adjust("61 seconds")
+        const second = yield* commands.createSession({
+          cwd: "/tmp/ttl",
+          requestId: "req-ttl-1",
+        })
+        expect(second.sessionId).not.toBe(first.sessionId)
+        expect((yield* sessions.listSessions()).length).toBe(2)
+      }).pipe(Effect.provide(sessionCommandsLayer())),
+  )
+
+  // W7-C8.5a: dedup-cache hard-cap eviction. The cache caps at 1024
+  // entries; on overflow the oldest insertion-ordered entry is evicted
+  // before insert. After overflow, the original `requestId` is no
+  // longer cached and a retry must execute fresh. Use 1025 distinct
+  // requestIds to force exactly one eviction (the first one).
+  it.live(
+    "dedup cache evicts oldest entry once size exceeds 1024 — first requestId no longer cached",
+    () =>
+      Effect.gen(function* () {
+        const commands = yield* SessionCommands
+        const sessions = yield* SessionStorage
+        // First entry that should be evicted by overflow.
+        const first = yield* commands.createSession({
+          cwd: "/tmp/cap",
+          requestId: "req-cap-first",
+        })
+        // Fire 1024 more distinct requestIds. Map size becomes 1025
+        // momentarily, then on the next insert the size>=1024 check
+        // evicts the oldest (req-cap-first). After this loop, the
+        // cache no longer contains req-cap-first.
+        // We need 1024 fillers (after first there's 1; after 1024 fillers
+        // total is 1025 → one eviction triggered on the last insert).
+        for (let i = 0; i < 1024; i++) {
+          yield* commands.createSession({
+            cwd: `/tmp/cap-fill-${i}`,
+            requestId: `req-cap-fill-${i}`,
+          })
+        }
+        // Retry the first requestId. Cache miss → new session created.
+        const retry = yield* commands.createSession({
+          cwd: "/tmp/cap",
+          requestId: "req-cap-first",
+        })
+        expect(retry.sessionId).not.toBe(first.sessionId)
+        // 1 (first) + 1024 (fillers) + 1 (retry) = 1026 sessions.
+        expect((yield* sessions.listSessions()).length).toBe(1026)
+      }).pipe(Effect.provide(sessionCommandsLayer()), Effect.timeout("30 seconds")),
   )
 })
