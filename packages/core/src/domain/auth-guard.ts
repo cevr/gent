@@ -54,7 +54,7 @@ export const AuthProviderQuery = Schema.Struct({
    * skipped — the external driver owns its own auth (e.g. Claude Code SDK
    * via OAuth keychain).
    *
-   * Passed as a parameter (not yielded as a service) so AuthGuard.Live
+   * Passed as a parameter (not yielded as a service) so AuthGuardLive
    * does not gain a ConfigService dependency.
    */
   driverOverrides: Schema.optional(Schema.Record(Schema.String, DriverRef)),

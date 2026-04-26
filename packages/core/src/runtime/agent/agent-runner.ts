@@ -39,6 +39,7 @@ import {
   AgentRunError,
   AgentRunnerService,
   DEFAULT_AGENT_NAME,
+  makeRunSpec,
   resolveRunPersistence,
   type AgentRunResult,
   type AgentRunToolCall,
@@ -758,7 +759,12 @@ const runEphemeralAgent = (params: {
     return yield* Effect.gen(function* () {
       const runSpec: RunSpec | undefined =
         params.toolCallId !== undefined
-          ? { ...(normalizedRunSpec ?? {}), parentToolCallId: params.toolCallId }
+          ? makeRunSpec({
+              persistence: normalizedRunSpec?.persistence,
+              overrides: normalizedRunSpec?.overrides,
+              tags: normalizedRunSpec?.tags,
+              parentToolCallId: params.toolCallId,
+            })
           : normalizedRunSpec
       yield* runWithTimeout(
         sessionRuntime.runPrompt({
@@ -975,7 +981,12 @@ export const InProcessRunner = (
 
                 const durableRunSpec: RunSpec | undefined =
                   toolCallId !== undefined
-                    ? { ...(normalizedRunSpec ?? {}), parentToolCallId: toolCallId }
+                    ? makeRunSpec({
+                        persistence: normalizedRunSpec?.persistence,
+                        overrides: normalizedRunSpec?.overrides,
+                        tags: normalizedRunSpec?.tags,
+                        parentToolCallId: toolCallId,
+                      })
                     : normalizedRunSpec
                 yield* runWithTimeout(
                   sessionRuntime.runPrompt({
@@ -1122,7 +1133,12 @@ export const SubprocessRunner = (
                 // Merge parentToolCallId into runSpec for subprocess
                 const subprocessRunSpec: RunSpec | undefined =
                   toolCallId !== undefined
-                    ? { ...(params.runSpec ?? {}), parentToolCallId: toolCallId }
+                    ? makeRunSpec({
+                        persistence: params.runSpec?.persistence,
+                        overrides: params.runSpec?.overrides,
+                        tags: params.runSpec?.tags,
+                        parentToolCallId: toolCallId,
+                      })
                     : params.runSpec
                 const runSpecJson =
                   subprocessRunSpec !== undefined
