@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { Effect, Ref, Layer, type Path } from "effect"
+import { Effect, Fiber, Layer, Ref, type Path } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { FileLockService } from "@gent/core/domain/file-lock"
 
@@ -99,6 +99,39 @@ describe("FileLockService", () => {
 
         const result = yield* Ref.get(order)
         expect(result).toEqual(["fail-start", "success"])
+      }),
+    ))
+
+  test("evicts lock entry once all holders release — map size returns to 0", () =>
+    run(
+      Effect.gen(function* () {
+        const lock = yield* FileLockService
+        expect(yield* lock.currentSize()).toBe(0)
+
+        // Acquire 100 distinct paths sequentially. After each release the
+        // entry must drop out — refcount-bounded design, not unbounded.
+        for (let i = 0; i < 100; i++) {
+          yield* lock.withLock(`/p/${i}`, Effect.void)
+        }
+        expect(yield* lock.currentSize()).toBe(0)
+
+        // While a lock is held the entry is present.
+        const held = yield* Effect.forkChild(lock.withLock("/held/path", Effect.sleep("50 millis")))
+        yield* Effect.sleep("5 millis")
+        expect(yield* lock.currentSize()).toBe(1)
+        yield* Fiber.join(held)
+        expect(yield* lock.currentSize()).toBe(0)
+      }),
+    ))
+
+  test("evicts entry even when the held effect fails", () =>
+    run(
+      Effect.gen(function* () {
+        const lock = yield* FileLockService
+        yield* lock
+          .withLock("/boom/path", Effect.fail("boom" as const))
+          .pipe(Effect.catch(() => Effect.void))
+        expect(yield* lock.currentSize()).toBe(0)
       }),
     ))
 })
