@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { BranchId, SessionId } from "../../domain/ids.js"
+import { BranchId, ExtensionId, SessionId } from "../../domain/ids.js"
 import { ExtensionProtocolError } from "../../domain/extension-protocol.js"
 import type { Session } from "../../domain/message.js"
 import { listSlashCommands } from "../../runtime/extensions/registry.js"
@@ -25,7 +25,7 @@ const extensionRequestError = (params: {
   readonly message: string
 }) =>
   new ExtensionProtocolError({
-    extensionId: params.extensionId,
+    extensionId: ExtensionId.make(params.extensionId),
     tag: params.capabilityId,
     phase: params.phase ?? "request",
     message: params.message,

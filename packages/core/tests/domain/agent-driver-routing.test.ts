@@ -4,6 +4,7 @@
 import { describe, test, expect } from "bun:test"
 import {
   AgentDefinition,
+  type AgentName,
   ExternalDriverRef,
   ModelDriverRef,
   resolveAgentDriver,
@@ -22,7 +23,7 @@ describe("resolveAgentDriver", () => {
     const agent = makeAgent("special", {
       driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
     })
-    const overrides: Record<string, DriverRef> = {
+    const overrides: Record<AgentName, DriverRef> = {
       special: ExternalDriverRef.make({ id: "acp-opencode" }),
     }
     const result = resolveAgentDriver(agent, overrides)
@@ -35,7 +36,7 @@ describe("resolveAgentDriver", () => {
 
   test("config override applies when the agent has no hardcoded driver", () => {
     const agent = makeAgent("cowork")
-    const overrides: Record<string, DriverRef> = {
+    const overrides: Record<AgentName, DriverRef> = {
       cowork: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
@@ -62,7 +63,7 @@ describe("resolveAgentDriver", () => {
 
   test("override for a different agent does not match", () => {
     const agent = makeAgent("cowork")
-    const overrides: Record<string, DriverRef> = {
+    const overrides: Record<AgentName, DriverRef> = {
       deepwork: ExternalDriverRef.make({ id: "acp-claude-code" }),
     }
     const result = resolveAgentDriver(agent, overrides)
@@ -72,7 +73,7 @@ describe("resolveAgentDriver", () => {
 
   test("model-driver override is honoured the same way as external", () => {
     const agent = makeAgent("cowork")
-    const overrides: Record<string, DriverRef> = {
+    const overrides: Record<AgentName, DriverRef> = {
       cowork: ModelDriverRef.make({ id: "anthropic" }),
     }
     const result = resolveAgentDriver(agent, overrides)

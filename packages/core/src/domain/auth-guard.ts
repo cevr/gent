@@ -57,7 +57,7 @@ export const AuthProviderQuery = Schema.Struct({
    * Passed as a parameter (not yielded as a service) so AuthGuardLive
    * does not gain a ConfigService dependency.
    */
-  driverOverrides: Schema.optional(Schema.Record(Schema.String, DriverRef)),
+  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
 })
 export type AuthProviderQuery = typeof AuthProviderQuery.Type
 

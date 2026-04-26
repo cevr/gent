@@ -41,7 +41,7 @@
 
 import { type Effect, Schema } from "effect"
 import type { ExtensionHostContext } from "./extension-host-context.js"
-import type { BranchId, SessionId, ToolCallId } from "./ids.js"
+import { ExtensionId, type BranchId, type SessionId, type ToolCallId } from "./ids.js"
 import type { PermissionRule } from "./permission.js"
 import type { PromptSection } from "./prompt.js"
 
@@ -49,7 +49,7 @@ import type { PromptSection } from "./prompt.js"
 export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
   "@gent/core/src/domain/capability/CapabilityError",
   {
-    extensionId: Schema.String,
+    extensionId: ExtensionId,
     capabilityId: Schema.String,
     reason: Schema.String,
   },
@@ -59,7 +59,7 @@ export class CapabilityError extends Schema.TaggedErrorClass<CapabilityError>()(
 export class CapabilityNotFoundError extends Schema.TaggedErrorClass<CapabilityNotFoundError>()(
   "@gent/core/src/domain/capability/CapabilityNotFoundError",
   {
-    extensionId: Schema.String,
+    extensionId: ExtensionId,
     capabilityId: Schema.String,
   },
 ) {}
@@ -228,7 +228,7 @@ export interface CapabilityToken<
  * `ExtensionHostContext.Extension.request(ref, input)`.
  */
 export interface CapabilityRef<Input = unknown, Output = unknown> {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly capabilityId: string
   readonly intent: Intent
   readonly input: Schema.Decoder<Input, never>

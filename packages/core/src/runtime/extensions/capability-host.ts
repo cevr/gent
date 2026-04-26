@@ -27,6 +27,7 @@
  * @module
  */
 import { Effect, Schema } from "effect"
+import type { ExtensionId } from "../../domain/ids.js"
 import type { LoadedExtension } from "../../domain/extension.js"
 import {
   CapabilityError,
@@ -102,7 +103,7 @@ export interface CompiledCapabilities {
    *  `options.intent` is supplied — the registered Capability's `intent` does
    *  not match. */
   readonly run: (
-    extensionId: string,
+    extensionId: ExtensionId,
     capabilityId: string,
     audience: Audience,
     input: unknown,

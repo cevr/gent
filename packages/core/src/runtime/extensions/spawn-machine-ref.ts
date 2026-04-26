@@ -1,7 +1,7 @@
 import { Effect, Exit, Option, Ref, Schema, Scope } from "effect"
 import { ActorScope, Machine, Slot, type Lifecycle, type SlotsDef } from "effect-machine"
 import type { ExtensionRef } from "../../domain/extension.js"
-import type { BranchId, SessionId } from "../../domain/ids.js"
+import { ExtensionId, type BranchId, type SessionId } from "../../domain/ids.js"
 import type { ResourceMachine } from "../../domain/resource.js"
 import type {
   AnyExtensionCommandMessage,
@@ -22,7 +22,7 @@ import { SubscriptionEngine } from "./resource-host/subscription-engine.js"
 export class ExtensionPersistenceFailure extends Schema.TaggedErrorClass<ExtensionPersistenceFailure>()(
   "ExtensionPersistenceFailure",
   {
-    extensionId: Schema.String,
+    extensionId: ExtensionId,
     message: Schema.String,
     cause: Schema.optional(Schema.Defect),
   },
@@ -34,7 +34,7 @@ export const spawnMachineExtensionRef = <
   SlotsR,
   SD extends SlotsDef = Record<string, never>,
 >(
-  extensionId: string,
+  extensionId: ExtensionId,
   actor: ResourceMachine<State, Event, SlotsR, SD>,
   ctx: {
     readonly sessionId: SessionId

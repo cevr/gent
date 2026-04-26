@@ -10,7 +10,7 @@ import {
 import { EventEnvelope } from "../domain/event.js"
 import { ExtensionMessageEnvelope } from "../domain/extension-protocol.js"
 import { ExtensionActorFailurePhase, ExtensionActorStatusInfo } from "../domain/extension.js"
-import { BranchId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
+import { BranchId, ExtensionId, InteractionRequestId, MessageId, SessionId } from "../domain/ids.js"
 import { MessageMetadata, MessagePart } from "../domain/message.js"
 // PermissionDecision removed — permissions are now default-allow with deny rules
 import { QueueSnapshot } from "../domain/queue.js"
@@ -373,7 +373,7 @@ export type AskExtensionMessageInput = typeof AskExtensionMessageInput.Type
  */
 export const RequestCapabilityInput = Schema.Struct({
   sessionId: SessionId,
-  extensionId: Schema.String,
+  extensionId: ExtensionId,
   capabilityId: Schema.String,
   intent: Schema.Literals(["read", "write"]),
   input: Schema.Unknown,
@@ -402,7 +402,7 @@ export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
   category: Schema.optional(Schema.String),
   /** Author-supplied keybind hint (display-only). */
   keybind: Schema.optional(Schema.String),
-  extensionId: Schema.String,
+  extensionId: ExtensionId,
   capabilityId: Schema.String,
   intent: Schema.Literals(["read", "write"]),
 }) {}

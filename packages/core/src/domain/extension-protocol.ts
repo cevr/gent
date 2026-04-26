@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import type { Brand } from "effect/Brand"
+import { ExtensionId } from "./ids.js"
 
 type ExtensionFields = Schema.Struct.Fields
 type PayloadType<F extends ExtensionFields> = Schema.Schema.Type<Schema.Struct<F>>
@@ -23,7 +24,7 @@ export type ExtractExtensionReply<M> = M extends ExtensionReplyTypeBrand<infer R
 export class ExtensionProtocolError extends Schema.TaggedErrorClass<ExtensionProtocolError>()(
   "ExtensionProtocolError",
   {
-    extensionId: Schema.String,
+    extensionId: ExtensionId,
     tag: Schema.String,
     phase: Schema.Literals([
       "command",
@@ -389,7 +390,7 @@ export const listExtensionProtocolDefinitions = (
     const metadata = getExtensionDefinitionMetadata(value)
     if (typeof value !== "object" || value === null || metadata === undefined) {
       throw new ExtensionProtocolError({
-        extensionId: metadata?.extensionId ?? "(unknown)",
+        extensionId: ExtensionId.make(metadata?.extensionId ?? "(unknown)"),
         tag: key,
         phase: "registration",
         message: `protocol entry "${key}" is not a message definition`,
@@ -397,7 +398,7 @@ export const listExtensionProtocolDefinitions = (
     }
     if (typeof metadata.extensionId !== "string" || typeof metadata.tag !== "string") {
       throw new ExtensionProtocolError({
-        extensionId: metadata.extensionId,
+        extensionId: ExtensionId.make(metadata.extensionId),
         tag: metadata.tag,
         phase: "registration",
         message: `protocol entry "${key}" is not a valid message definition`,
@@ -405,7 +406,7 @@ export const listExtensionProtocolDefinitions = (
     }
     if (metadata._tag === "request" && metadata.replySchema === undefined) {
       throw new ExtensionProtocolError({
-        extensionId: metadata.extensionId,
+        extensionId: ExtensionId.make(metadata.extensionId),
         tag: metadata.tag,
         phase: "registration",
         message: `request protocol entry "${key}" is missing a reply schema`,

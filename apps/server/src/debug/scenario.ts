@@ -22,7 +22,7 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "@gent/core/domain/message.js"
-import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
+import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids.js"
 import { SessionStorage } from "@gent/core/storage/session-storage.js"
 import { BranchStorage } from "@gent/core/storage/branch-storage.js"
 import { MessageStorage } from "@gent/core/storage/message-storage.js"
@@ -589,9 +589,16 @@ const runTaskLifecycle = (params: DebugScenarioParams) =>
       },
       input: unknown,
     ): Effect.Effect<T, CapabilityError | CapabilityNotFoundError> => {
-      const e = capabilities.run(ref.extensionId, ref.capabilityId, "agent-protocol", input, ctx, {
-        intent: ref.intent,
-      })
+      const e = capabilities.run(
+        ExtensionId.make(ref.extensionId),
+        ref.capabilityId,
+        "agent-protocol",
+        input,
+        ctx,
+        {
+          intent: ref.intent,
+        },
+      )
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
       return e as Effect.Effect<T, CapabilityError | CapabilityNotFoundError>
     }

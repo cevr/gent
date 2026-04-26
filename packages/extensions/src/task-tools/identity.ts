@@ -9,9 +9,9 @@
  * @module
  */
 import { Schema } from "effect"
-import { TaskId, TaskStatus } from "@gent/core/extensions/api"
+import { ExtensionId, TaskId, TaskStatus } from "@gent/core/extensions/api"
 
-export const TASK_TOOLS_EXTENSION_ID = "@gent/task-tools"
+export const TASK_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/task-tools")
 
 /** Schema for individual task entries in the UI snapshot (subset of full Task). */
 export const TaskEntrySchema = Schema.Struct({

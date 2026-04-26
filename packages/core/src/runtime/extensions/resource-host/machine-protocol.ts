@@ -1,5 +1,6 @@
 import { Cause, Effect, Schema } from "effect"
 import type { ExtensionScope, LoadedExtension, ExtensionRef } from "../../../domain/extension.js"
+import { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceMachine } from "../../../domain/resource.js"
 import { SCOPE_PRECEDENCE } from "../disabled.js"
 import type {
@@ -21,7 +22,7 @@ export interface ActorEntry {
 }
 
 export interface ActorSpawnSpec {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly scope: ExtensionScope
   readonly actor: AnyResourceMachine
 }
@@ -55,7 +56,7 @@ export const protocolError = (
   message: string,
 ) =>
   new ExtensionProtocolError({
-    extensionId,
+    extensionId: ExtensionId.make(extensionId),
     tag,
     phase,
     message,

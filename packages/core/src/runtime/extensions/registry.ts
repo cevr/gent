@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { resolveAgentModel, type AgentDefinition } from "../../domain/agent.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "../../domain/driver.js"
+import type { ExtensionId } from "../../domain/ids.js"
 import type { ModelId } from "../../domain/model.js"
 import type {
   ExtensionStatusInfo,
@@ -33,7 +34,7 @@ export interface SlashCommand {
   readonly category?: string
   /** Author-supplied keybind hint (display-only). */
   readonly keybind?: string
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly capabilityId: string
   readonly intent: "read" | "write"
 }
@@ -95,7 +96,10 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (extensionId: string, cap: AnyCapabilityContribution): SlashCommand => {
+const capabilityToCommand = (
+  extensionId: ExtensionId,
+  cap: AnyCapabilityContribution,
+): SlashCommand => {
   // Prefer cap.description (author-supplied, human-readable) over
   // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
   // to duplicate the same string into both fields.
@@ -391,7 +395,7 @@ export const listSlashCommands = (
 ): ReadonlyArray<SlashCommand> => {
   const winners = new Map<
     string,
-    { readonly extensionId: string; readonly cap: AnyCapabilityContribution }
+    { readonly extensionId: ExtensionId; readonly cap: AnyCapabilityContribution }
   >()
   for (const ext of sortExtensionsByScope(extensions)) {
     for (const cap of ext.contributions.capabilities ?? []) {
