@@ -390,7 +390,8 @@ describe("EventPublisher per-cwd router", () => {
       subscriptionEngine: undefined,
       baseSections: [],
       instructions: "",
-    } as SessionProfile
+      pulseByTag: new Map(),
+    } satisfies SessionProfile
 
     // SessionCwdRegistry knows which session belongs to which cwd
     const cwdRegistryLayer = SessionCwdRegistry.Test(
@@ -496,7 +497,8 @@ describe("EventPublisher per-cwd router", () => {
       subscriptionEngine: secondaryBus,
       baseSections: [],
       instructions: "",
-    } as SessionProfile
+      pulseByTag: new Map(),
+    } satisfies SessionProfile
 
     const cwdRegistryLayer = SessionCwdRegistry.Test(
       new Map([
