@@ -18,6 +18,7 @@ import { ToolRunner } from "../../src/extensions/internal.js"
 import { ToolResultPart } from "../../src/domain/message.js"
 import { BranchId, SessionId, type ToolCallId } from "../../src/domain/ids.js"
 import type { ExtensionHostContext } from "../../src/domain/extension-host-context.js"
+import type { ToolContext } from "../../src/domain/tool.js"
 import { mapAcpUpdateToTurnEvent } from "@gent/extensions/acp-agents/executor"
 import { SessionNotification } from "@gent/extensions/acp-agents/schema"
 import { startCodemodeServer } from "@gent/extensions/acp-agents/mcp-codemode"
@@ -257,7 +258,7 @@ describe("codemode proxy", () => {
 // `Effect.runPromiseWith`, or pulling ToolRunner from the wrong context)
 // surfaces here and not in the stubbed test above.
 
-const makeStubHostCtx = (): Omit<ExtensionHostContext, "toolCallId"> => ({
+const makeStubHostCtx = (): Omit<ToolContext, "toolCallId"> => ({
   sessionId: SessionId.make("ses-acp-boundary-test"),
   branchId: BranchId.make("br-acp-boundary-test"),
   cwd: "/tmp/gent-acp-boundary-test",

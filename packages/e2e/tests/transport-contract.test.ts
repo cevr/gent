@@ -191,18 +191,27 @@ describe("GentClient transport contract", () => {
             // Each session's snapshot must contain ONLY its own user message.
             // A regression where the per-cwd EventPublisher router fans out
             // events to the wrong session's stream would surface here.
+            //
+            // Wait until BOTH sessions have observed their own message before
+            // running absence checks. If we only awaited A first, a delayed
+            // mis-routed msg-B could arrive into A's stream after the first
+            // poll succeeded but before the absence check ran, masking a
+            // genuine routing leak.
+            yield* waitFor(
+              client.session
+                .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
+                .pipe(Effect.mapError((error) => new Error(String(error)))),
+              (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-B"),
+            )
             const snapshotA = yield* waitFor(
               client.session
                 .getSnapshot({ sessionId: a.sessionId, branchId: a.branchId })
                 .pipe(Effect.mapError((error) => new Error(String(error)))),
               (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-A"),
             )
-            const snapshotB = yield* waitFor(
-              client.session
-                .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
-                .pipe(Effect.mapError((error) => new Error(String(error)))),
-              (s) => s.messages.some((m) => m.role === "user" && extractText(m.parts) === "msg-B"),
-            )
+            const snapshotB = yield* client.session
+              .getSnapshot({ sessionId: b.sessionId, branchId: b.branchId })
+              .pipe(Effect.mapError((error) => new Error(String(error))))
             expect(
               snapshotA.messages.every(
                 (m) => m.role !== "user" || extractText(m.parts) !== "msg-B",
