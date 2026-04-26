@@ -2093,4 +2093,96 @@ describe("Storage", () => {
       }).pipe(Effect.provide(layer)),
     )
   })
+
+  describe("Concurrent writes", () => {
+    // SQLite (WAL mode) serializes writes at the database level. The
+    // storage layer adds no in-memory locking, so the contract under
+    // test is that parallel calls through the Effect surface produce N
+    // committed rows with no lost writes and no partial state.
+    it.live("createSession in parallel produces N independent rows", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const ids = Array.from({ length: 16 }, (_, i) => `cs-${i}`)
+        yield* Effect.forEach(
+          ids,
+          (id) =>
+            storage.createSession(
+              new Session({ id, createdAt: new Date(), updatedAt: new Date() }),
+            ),
+          { concurrency: "unbounded" },
+        )
+
+        const sessions = yield* storage.listSessions()
+        const seen = new Set(sessions.map((s) => s.id))
+        for (const id of ids) {
+          expect(seen.has(id)).toBe(true)
+        }
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+    )
+
+    it.live("appendEvent in parallel produces N envelopes with strictly increasing ids", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sessionId = SessionId.make("ce-session")
+        const branchId = BranchId.make("ce-branch")
+        yield* storage.createSession(
+          new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+
+        const N = 32
+        const envelopes = yield* Effect.forEach(
+          Array.from({ length: N }, () => 0),
+          () => storage.appendEvent(SessionStarted.make({ sessionId, branchId })),
+          { concurrency: "unbounded" },
+        )
+
+        // All N writes succeeded — no lost writes.
+        expect(envelopes.length).toBe(N)
+        // All envelope ids are unique.
+        const idSet = new Set(envelopes.map((e) => e.id))
+        expect(idSet.size).toBe(N)
+        // Persisted row count matches.
+        const persisted = yield* storage.listEvents({ sessionId, branchId })
+        expect(persisted.length).toBe(N)
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+    )
+
+    it.live("createMessage in parallel produces N rows with no lost writes", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sessionId = SessionId.make("cm-session")
+        const branchId = BranchId.make("cm-branch")
+        yield* storage.createSession(
+          new Session({ id: sessionId, createdAt: new Date(), updatedAt: new Date() }),
+        )
+        yield* storage.createBranch(new Branch({ id: branchId, sessionId, createdAt: new Date() }))
+
+        const N = 24
+        const ids = Array.from({ length: N }, (_, i) => MessageId.make(`cm-${i}`))
+        yield* Effect.forEach(
+          ids,
+          (id) =>
+            storage.createMessage(
+              Message.Regular.make({
+                id,
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [new TextPart({ type: "text", text: id })],
+                createdAt: new Date(),
+              }),
+            ),
+          { concurrency: "unbounded" },
+        )
+
+        const persisted = yield* storage.listMessages(branchId)
+        expect(persisted.length).toBe(N)
+        const seen = new Set(persisted.map((m) => m.id))
+        for (const id of ids) {
+          expect(seen.has(id)).toBe(true)
+        }
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.Test())),
+    )
+  })
 })
