@@ -5,6 +5,7 @@ import { ProviderAuthError, type DriverError } from "../domain/driver.js"
 import type { ProviderAuthInfo } from "../domain/extension.js"
 import { Model, ModelId, ProviderId } from "../domain/model.js"
 import type { ModelPricing } from "../domain/model.js"
+import { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 import { DriverRegistry } from "./extensions/driver-registry.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -31,10 +32,12 @@ type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
 type JsonRecord = Record<string, unknown>
-type CacheLoad =
-  | { readonly _tag: "Missing" }
-  | { readonly _tag: "Canonical"; readonly models: readonly Model[] }
-  | { readonly _tag: "Legacy"; readonly models: readonly Model[] }
+const CacheLoad = TaggedEnumClass("ModelRegistry/CacheLoad", {
+  Missing: {},
+  Canonical: { models: Schema.Array(Model) },
+  Legacy: { models: Schema.Array(Model) },
+})
+type CacheLoad = Schema.Schema.Type<typeof CacheLoad>
 
 const isRecord = (value: unknown): value is JsonRecord =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -80,24 +83,24 @@ const parseModelsDev = (data: unknown): readonly Model[] => {
 const readCachedModels = Effect.fn("ModelRegistry.loadFromDisk")(
   function* (fs: FileSystem.FileSystem, cachePath: string) {
     const exists = yield* fs.exists(cachePath)
-    if (!exists) return { _tag: "Missing" } as CacheLoad
+    if (!exists) return CacheLoad.Missing.make({})
     const content = yield* fs
       .readFileString(cachePath)
       .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return { _tag: "Missing" } as CacheLoad
+    if (content.trim().length === 0) return CacheLoad.Missing.make({})
 
     const canonical = decodeCachedModels(content)
     if (canonical._tag === "Some") {
-      return { _tag: "Canonical", models: canonical.value } as CacheLoad
+      return CacheLoad.Canonical.make({ models: canonical.value })
     }
 
     const json = decodeJson(content)
-    if (json._tag === "None") return { _tag: "Missing" } as CacheLoad
+    if (json._tag === "None") return CacheLoad.Missing.make({})
     const legacyModels = parseModelsDev(json.value)
-    if (legacyModels.length === 0) return { _tag: "Missing" } as CacheLoad
-    return { _tag: "Legacy", models: legacyModels } as CacheLoad
+    if (legacyModels.length === 0) return CacheLoad.Missing.make({})
+    return CacheLoad.Legacy.make({ models: legacyModels })
   },
-  Effect.catchEager(() => Effect.succeed({ _tag: "Missing" } as CacheLoad)),
+  Effect.catchEager(() => Effect.succeed(CacheLoad.Missing.make({}))),
 )
 
 const writeCachedModels = Effect.fn("ModelRegistry.writeCache")(

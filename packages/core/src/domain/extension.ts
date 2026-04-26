@@ -262,9 +262,21 @@ export interface TurnProjection {
 // Extension Actor — OTP-inspired unified state model
 
 /** Public effect union available to extension authors. */
-export type ExtensionEffect =
-  | { readonly _tag: "BusEmit"; readonly channel: string; readonly payload: unknown }
-  | { readonly _tag: "Send"; readonly message: AnyExtensionCommandMessage }
+export const ExtensionEffectBusEmit = Schema.TaggedStruct("BusEmit", {
+  channel: Schema.String,
+  payload: Schema.Unknown,
+})
+// `AnyExtensionCommandMessage` is a structural protocol shape with no
+// canonical Schema. `Schema.Any` is widened to the static TS binding
+// via the cast so the type alias below remains precise.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const ExtensionCommandMessageSchema =
+  Schema.Any as unknown as Schema.Schema<AnyExtensionCommandMessage>
+export const ExtensionEffectSend = Schema.TaggedStruct("Send", {
+  message: ExtensionCommandMessageSchema,
+})
+export const ExtensionEffectSchema = Schema.Union([ExtensionEffectBusEmit, ExtensionEffectSend])
+export type ExtensionEffect = typeof ExtensionEffectSchema.Type
 
 /** Result of a reducer/message handler call — always object form */
 export interface ReduceResult<State> {

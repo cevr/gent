@@ -13,8 +13,12 @@
  * `layerFromRef` hoist.
  */
 
-import { Clock, Context, Effect, Layer, Ref } from "effect"
-import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { Clock, Context, Effect, Layer, Ref, Schema } from "effect"
+import {
+  ProviderAuthError,
+  TaggedEnumClass,
+  type ProviderAuthInfo,
+} from "@gent/core/extensions/api"
 import { refreshOpenAIOauth } from "./oauth.js"
 
 // ── Cache constants ──
@@ -36,48 +40,57 @@ const freshEnoughForUse = (creds: OpenAICredentials, now: number): boolean =>
 
 // ── Internal cache cell ──
 
-export type CredentialCacheCell =
-  | {
-      readonly _tag: "Empty"
-      readonly creds: null
-      readonly at: 0
-    }
-  | {
-      readonly _tag: "Durable"
-      readonly creds: OpenAICredentials
-      readonly at: number
-      readonly invalidated: boolean
-    }
-  | {
-      readonly _tag: "PendingPersist"
-      readonly creds: OpenAICredentials
-      readonly at: number
-      readonly invalidated: boolean
-    }
+const OpenAICredentialsSchema: Schema.Schema<OpenAICredentials> = Schema.Struct({
+  access: Schema.String,
+  refresh: Schema.String,
+  expires: Schema.Number,
+  accountId: Schema.optional(Schema.String),
+})
 
-export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = { _tag: "Empty", creds: null, at: 0 }
+export const CredentialCacheCell = TaggedEnumClass("@gent/extensions/openai/CredentialCacheCell", {
+  Empty: {
+    creds: Schema.Null,
+    at: Schema.Literal(0),
+  },
+  Durable: {
+    creds: OpenAICredentialsSchema,
+    at: Schema.Number,
+    invalidated: Schema.Boolean,
+  },
+  PendingPersist: {
+    creds: OpenAICredentialsSchema,
+    at: Schema.Number,
+    invalidated: Schema.Boolean,
+  },
+})
+export type CredentialCacheCell = Schema.Schema.Type<typeof CredentialCacheCell>
+
+export const EMPTY_CREDENTIAL_CELL: CredentialCacheCell = CredentialCacheCell.Empty.make({
+  creds: null,
+  at: 0,
+})
 
 const durableCell = (
   creds: OpenAICredentials,
   at: number,
   invalidated: boolean,
-): CredentialCacheCell => ({
-  _tag: "Durable",
-  creds,
-  at,
-  invalidated,
-})
+): CredentialCacheCell =>
+  CredentialCacheCell.Durable.make({
+    creds,
+    at,
+    invalidated,
+  })
 
 const pendingPersistCell = (
   creds: OpenAICredentials,
   at: number,
   invalidated: boolean,
-): CredentialCacheCell => ({
-  _tag: "PendingPersist",
-  creds,
-  at,
-  invalidated,
-})
+): CredentialCacheCell =>
+  CredentialCacheCell.PendingPersist.make({
+    creds,
+    at,
+    invalidated,
+  })
 
 // ── Service interface ──
 

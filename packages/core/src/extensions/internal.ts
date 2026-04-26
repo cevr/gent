@@ -5,14 +5,15 @@
  * which are intentionally excluded from the public authoring API.
  */
 
+import { Schema } from "effect"
 import type { SlotsDef } from "effect-machine"
-import type {
-  ExtensionEffect,
+import {
+  ExtensionEffectSchema,
   MessageMetadata,
-  ResourceContribution,
-  ResourceMachine,
-  ResourceScope,
-  ResourceSpec,
+  type ResourceContribution,
+  type ResourceMachine,
+  type ResourceScope,
+  type ResourceSpec,
 } from "./api.js"
 
 export type { ExtensionStorage } from "../runtime/extensions/extension-storage.js"
@@ -26,14 +27,22 @@ export {
   type PendingInteraction,
 } from "../storage/interaction-pending-reader.js"
 
-export type BuiltinRuntimeEffect =
-  | {
-      readonly _tag: "QueueFollowUp"
-      readonly content: string
-      readonly metadata?: MessageMetadata
-    }
-  | { readonly _tag: "Interject"; readonly content: string }
-  | ExtensionEffect
+export const BuiltinQueueFollowUpEffect = Schema.TaggedStruct("QueueFollowUp", {
+  content: Schema.String,
+  metadata: Schema.optional(MessageMetadata),
+})
+
+export const BuiltinInterjectEffect = Schema.TaggedStruct("Interject", {
+  content: Schema.String,
+})
+
+export const BuiltinRuntimeEffectSchema = Schema.Union([
+  BuiltinQueueFollowUpEffect,
+  BuiltinInterjectEffect,
+  ExtensionEffectSchema,
+])
+
+export type BuiltinRuntimeEffect = typeof BuiltinRuntimeEffectSchema.Type
 
 export interface BuiltinResourceMachine<
   State extends { readonly _tag: string } = { readonly _tag: string },

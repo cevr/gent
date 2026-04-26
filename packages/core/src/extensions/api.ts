@@ -88,6 +88,7 @@ export {
   type ExtensionActorDefinition,
   type AnyExtensionActorDefinition,
   type ExtensionEffect,
+  ExtensionEffectSchema,
   type TurnProjection,
   type ReduceResult,
   type ExtensionReduceContext,
@@ -178,12 +179,7 @@ export { Model, ModelId } from "../domain/model.js"
 export { Task, TaskStatus, TaskTransitionError, isValidTaskTransition } from "../domain/task.js"
 export { AuthMethod } from "../domain/auth-method.js"
 export { AuthOauth } from "../domain/auth-store.js"
-export {
-  type Message,
-  type MessagePart,
-  type MessageMetadata,
-  type Branch,
-} from "../domain/message.js"
+export { type Message, type MessagePart, MessageMetadata, type Branch } from "../domain/message.js"
 export { PermissionRule, type PermissionResult } from "../domain/permission.js"
 export { OutputBuffer, saveFullOutput, headTailChars } from "../domain/output-buffer.js"
 export {
@@ -192,6 +188,7 @@ export {
   type ExtensionHostContext,
 } from "../domain/extension-host-context.js"
 export { isRecord, isRecordArray } from "../domain/guards.js"
+export { TaggedEnumClass } from "../domain/schema-tagged-enum-class.js"
 export { FileIndex } from "../domain/file-index.js"
 export { FileLockService } from "../domain/file-lock.js"
 export {
