@@ -5,17 +5,16 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import { Branch, Session } from "@gent/core/domain/message"
 import type { QueueSnapshot } from "@gent/core/domain/queue"
-import {
-  createSequenceProvider,
-  finishPart,
-  textDeltaPart,
-  textStep,
-  toolCallPart,
-  type ProviderStreamPart,
-} from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
 import { EventEnvelope, EventId, EventStoreError, type AgentEvent } from "@gent/core/domain/event"
 import { tool, type AnyCapabilityContribution } from "@gent/core/extensions/api"
-import { Provider } from "@gent/core/providers/provider"
+import {
+  Provider,
+  finishPart,
+  textDeltaPart,
+  toolCallPart,
+  type ProviderStreamPart,
+} from "@gent/core/providers/provider"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { EventPublisherLive } from "../../src/server/event-publisher"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -397,7 +396,7 @@ const makeInteractionProviderLayer = () => {
 
 describe("SessionRuntime", () => {
   test("control-plane dispatch checks session existence without resolving profiles", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     const profileCacheLayer = Layer.succeed(SessionProfileCache, {
       resolve: () => Effect.die("control-plane dispatch must not resolve session profiles"),
     })
@@ -465,7 +464,7 @@ describe("SessionRuntime", () => {
 
   test("sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("override reply"),
           assertRequest: (request) => {
@@ -536,7 +535,7 @@ describe("SessionRuntime", () => {
   })
 
   test("invokeTool persists assistant and tool messages without queueing a follow-up turn", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
@@ -575,7 +574,7 @@ describe("SessionRuntime", () => {
   })
 
   test("recordToolResult rolls back the tool message when durable event append fails", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     const failingPublisherLayer = Layer.succeed(EventPublisher, {
       append: (event: AgentEvent) =>
         event._tag === "ToolCallSucceeded"
@@ -617,7 +616,7 @@ describe("SessionRuntime", () => {
   })
 
   test("recordToolResult retry does not duplicate the durable event", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     const layer = makeRuntimeLayer(providerLayer)
 
     await Effect.runPromise(
@@ -650,7 +649,7 @@ describe("SessionRuntime", () => {
   })
 
   test("recordToolResult retries committed event delivery without duplicating the durable event", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     const delivered: string[] = []
     const eventPublisherLayer = makePublisherFailingFirstMatchingDelivery(
       (event) => event._tag === "ToolCallSucceeded",
@@ -691,7 +690,7 @@ describe("SessionRuntime", () => {
   })
 
   test("recordToolResult commands are serialized per session", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([]))
     let releaseFirstDelivery: () => void = () => {}
     let markFirstDeliveryStarted: () => void = () => {}
     const firstDeliveryStarted = new Promise<void>((resolve) => {
@@ -855,7 +854,7 @@ describe("SessionRuntime", () => {
 
   test("dispatch ApplySteer interjects ahead of queued follow-ups", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -930,7 +929,7 @@ describe("SessionRuntime", () => {
 
   test("dispatch SendUserMessage concurrent with turn completion runs the follow-up once", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,
@@ -984,7 +983,7 @@ describe("SessionRuntime", () => {
 
   test("drainQueuedMessages atomically clears follow-ups during an active turn", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("first reply"),
           gated: true,

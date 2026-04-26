@@ -4,8 +4,8 @@ import { AgentDefinition } from "@gent/core/domain/agent"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { Model, ModelId } from "@gent/core/domain/model"
 import { Branch, Session } from "@gent/core/domain/message"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
-import type { Provider } from "@gent/core/providers/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { ModelRegistry } from "../../src/runtime/model-registry"
 import { SessionRuntime } from "../../src/runtime/session-runtime"
 import { Storage } from "@gent/core/storage/sqlite-storage"
@@ -64,7 +64,7 @@ const createSessionBranch = (modelIdLabel = "test/priced") =>
 describe("SessionRuntime metrics", () => {
   test("StreamEnded.costUsd is frozen at emit time and summed into metrics.costUsd", async () => {
     const { layer: providerLayer } = await Effect.runPromise(
-      createSequenceProvider([textStep("reply one"), textStep("reply two")]),
+      Provider.Sequence([textStep("reply one"), textStep("reply two")]),
     )
 
     const result = await Effect.runPromise(
@@ -110,9 +110,7 @@ describe("SessionRuntime metrics", () => {
   })
 
   test("metrics.costUsd does not drift when pricing changes after emission", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(
-      createSequenceProvider([textStep("reply")]),
-    )
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([textStep("reply")]))
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -139,9 +137,7 @@ describe("SessionRuntime metrics", () => {
   })
 
   test("StreamEnded omits costUsd when model has no pricing", async () => {
-    const { layer: providerLayer } = await Effect.runPromise(
-      createSequenceProvider([textStep("reply")]),
-    )
+    const { layer: providerLayer } = await Effect.runPromise(Provider.Sequence([textStep("reply")]))
     const unpriced = new Model({
       id: ModelId.make("test/priced"),
       name: "No Pricing",

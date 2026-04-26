@@ -1,6 +1,6 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Context, Deferred, Effect, Layer, Logger, Option, Stream } from "effect"
-import { createSequenceProvider, createSignalProvider, textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
 import { ModelId } from "@gent/core/domain/model"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { Branch, Message, Session, TextPart } from "@gent/core/domain/message"
@@ -36,7 +36,7 @@ import { SessionMutations } from "../../src/domain/session-mutations"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* createSequenceProvider([textStep(reply)])
+    const { layer: providerLayer } = yield* Provider.Sequence([textStep(reply)])
     return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
   })
 
@@ -1107,7 +1107,7 @@ describe("session.delete", () => {
   it.live("closes runtime streams and interrupts active loops on public delete", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* createSignalProvider("delete me later")
+        const { layer: providerLayer, controls } = yield* Provider.Signal("delete me later")
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({ cwd: process.cwd() })
         const runtimeClosed = yield* collectSessionEvents(
@@ -1490,7 +1490,7 @@ describe("message.send", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const assistantText = "runSpec acceptance reply"
-        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+        const { layer: providerLayer, controls } = yield* Provider.Sequence([
           {
             ...textStep(assistantText),
             assertRequest: (request) => {
@@ -1548,7 +1548,7 @@ describe("message.send", () => {
       Effect.gen(function* () {
         const assistantText = "parent tool call acceptance reply"
         const parentToolCallId = ToolCallId.make("tc-parent-acceptance")
-        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+        const { layer: providerLayer, controls } = yield* Provider.Sequence([
           {
             ...textStep(assistantText),
             assertRequest: (request) => {
@@ -1598,7 +1598,7 @@ describe("message.send", () => {
   it.live("rejects a deleted session before provider dispatch", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* createSequenceProvider([
+        const { layer: providerLayer, controls } = yield* Provider.Sequence([
           textStep("should not run"),
         ])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))

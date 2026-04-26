@@ -1,11 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, type Layer, Ref, Stream } from "effect"
-import {
-  createSequenceProvider,
-  toolCallStep,
-  textStep,
-  type SequenceStep,
-} from "@gent/core/debug/provider"
+import { toolCallStep, textStep } from "@gent/core/debug/provider"
+import { Provider, type SequenceStep } from "@gent/core/providers/provider"
 import {
   createE2ELayer,
   withTinyContextWindow,
@@ -51,15 +47,15 @@ const reviewCompatibleRunner = {
 }
 
 const runE2ETest = (
-  steps: Parameters<typeof createSequenceProvider>[0],
+  steps: Parameters<typeof Provider.Sequence>[0],
   test: (
     controls: Awaited<
-      ReturnType<typeof Effect.runPromise<ReturnType<typeof createSequenceProvider>>>["then"]
+      ReturnType<typeof Effect.runPromise<ReturnType<typeof Provider.Sequence>>>["then"]
     >["controls"],
   ) => Effect.Effect<void, unknown, AgentLoop | MachineEngine>,
 ) =>
   Effect.gen(function* () {
-    const { layer: providerLayer, controls } = yield* createSequenceProvider(steps)
+    const { layer: providerLayer, controls } = yield* Provider.Sequence(steps)
     const e2eLayer = createE2ELayer({
       ...e2ePreset,
       providerLayer,
@@ -242,7 +238,7 @@ describe("Auto extension E2E", () => {
         textStep("Shouldn't reach here."), // Turn 7 — auto is now inactive
       ]
 
-      const { layer: providerLayer } = yield* createSequenceProvider(steps)
+      const { layer: providerLayer } = yield* Provider.Sequence(steps)
       const e2eLayer = createE2ELayer({ ...e2ePreset, providerLayer })
 
       yield* Effect.gen(function* () {
@@ -283,7 +279,7 @@ describe("Auto extension E2E", () => {
         gated: true,
       }
 
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         textStep("Starting."), // Turn 1: initial
         gatedCheckpoint, // Turn 2: gated — held until we release
         textStep("Done."), // Continuation after checkpoint tool result
@@ -343,7 +339,7 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-      const { layer: providerLayer } = yield* createSequenceProvider([
+      const { layer: providerLayer } = yield* Provider.Sequence([
         textStep("Starting auto."),
         toolCallStep("auto_checkpoint", {
           status: "continue",
@@ -405,7 +401,7 @@ describe("Auto extension E2E", () => {
     Effect.gen(function* () {
       const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-      const { layer: providerLayer, controls } = yield* createSequenceProvider([
+      const { layer: providerLayer, controls } = yield* Provider.Sequence([
         textStep("Working on it."),
         toolCallStep("auto_checkpoint", {
           status: "complete",
@@ -451,7 +447,7 @@ describe("Auto extension E2E", () => {
         Effect.gen(function* () {
           const { layer: handoffLayer, presentCalled } = yield* trackingApprovalService()
 
-          const { layer: providerLayer, controls } = yield* createSequenceProvider([
+          const { layer: providerLayer, controls } = yield* Provider.Sequence([
             textStep("x".repeat(2000)), // ~500 tokens — context over 85%
             toolCallStep("auto_checkpoint", {
               status: "complete",

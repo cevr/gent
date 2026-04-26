@@ -1,15 +1,13 @@
 import { describe, test, expect } from "bun:test"
 import { Effect, Layer, Schema, Stream, SubscriptionRef } from "effect"
-import { Provider } from "@gent/core/providers/provider"
 import {
-  createSequenceProvider,
+  Provider,
   finishPart,
   textDeltaPart,
-  textStep,
-  toolCallStep,
   toolCallPart,
   type ProviderStreamPart,
-} from "@gent/core/debug/provider"
+} from "@gent/core/providers/provider"
+import { textStep, toolCallStep } from "@gent/core/debug/provider"
 import { resolveExtensions, ExtensionRegistry } from "../../src/runtime/extensions/registry"
 import { DriverRegistry } from "../../src/runtime/extensions/driver-registry"
 import { InProcessRunner, getSessionDepth } from "../../src/runtime/agent/agent-runner"
@@ -247,7 +245,7 @@ describe("RunSpec", () => {
 
   test("durable helper-agent runSpec reaches the provider through AgentRunner", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("child result"),
           assertRequest: (request) => {
@@ -1209,9 +1207,7 @@ describe("ephemeral service propagation", () => {
 
   test("ephemeral agent writes to ephemeral storage, not parent", () =>
     Effect.gen(function* () {
-      const { layer: providerLayer } = yield* createSequenceProvider([
-        textStep("ephemeral text output"),
-      ])
+      const { layer: providerLayer } = yield* Provider.Sequence([textStep("ephemeral text output")])
       const layer = makeEphemeralLayer(providerLayer)
 
       yield* Effect.gen(function* () {
@@ -1269,7 +1265,7 @@ describe("ephemeral service propagation", () => {
         ]),
       )
 
-      const { layer: providerLayer } = yield* createSequenceProvider([
+      const { layer: providerLayer } = yield* Provider.Sequence([
         toolCallStep("approve_test", { text: "test" }),
         textStep("approved"),
       ])

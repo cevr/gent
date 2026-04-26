@@ -15,7 +15,8 @@ import { BunServices } from "@effect/platform-bun"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { AuthMethod } from "@gent/core/domain/auth-method"
 import { AuthStore, AuthStoreError } from "@gent/core/domain/auth-store"
 import { AuthStorage, AuthStorageError } from "@gent/core/domain/auth-storage"
@@ -102,7 +103,7 @@ describe("auth.listProviders", () => {
   it.live("returns providers without sessionId (back-compat with launch-cwd default)", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
@@ -144,7 +145,7 @@ describe("auth.listProviders", () => {
             Layer.provide(Layer.merge(BunServices.layer, runtimePlatformLive)),
           )
 
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({
               ...e2ePreset,
@@ -185,7 +186,7 @@ describe("auth.listProviders", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
           const drivers = (yield* client.driver.list()).drivers
           const externalDriver = drivers.find((d) => d._tag === "external")
@@ -206,7 +207,7 @@ describe("auth.listProviders", () => {
   it.live("rejects auth provider listing for a deleted session", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
 
         const session = yield* client.session.create({})
@@ -229,7 +230,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.listProviders surfaces auth read failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -248,7 +249,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.setKey surfaces write failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -267,7 +268,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.deleteKey surfaces delete failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -286,7 +287,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.authorize surfaces credentials persisted during authorize", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,
@@ -312,7 +313,7 @@ describe("auth persistence RPC failures", () => {
   it.live("auth.callback surfaces callback credential persistence failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+        const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
         const { client } = yield* Gent.test(
           createE2ELayer({
             ...e2ePreset,

@@ -2,7 +2,8 @@ import { describe, it, expect } from "effect-bun-test"
 import { Effect, Fiber, Schema, Stream } from "effect"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { tool } from "@gent/core/extensions/api"
-import { createSequenceProvider, textStep, toolCallStep } from "@gent/core/debug/provider"
+import { textStep, toolCallStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { ApprovalService } from "../../src/runtime/approval-service"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -39,7 +40,7 @@ describe("interaction.respondInteraction", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const finalReply = "approval resumed"
-          const { layer: providerLayer } = yield* createSequenceProvider([
+          const { layer: providerLayer } = yield* Provider.Sequence([
             toolCallStep("approval_probe", { text: "approve deploy?" }),
             textStep(finalReply),
           ])

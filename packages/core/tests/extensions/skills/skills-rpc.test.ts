@@ -9,7 +9,8 @@ import { describe, it, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, type Layer } from "effect"
 import type { LoadedExtension } from "../../../src/domain/extension.js"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { SkillsExtension } from "@gent/extensions/skills"
 import { SkillsProtocol } from "@gent/extensions/skills/protocol"
@@ -69,7 +70,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
@@ -96,7 +97,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )
@@ -123,7 +124,7 @@ describe("SkillsExtension via RPC", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const ext = yield* setupSkillsExtension
-          const { layer: providerLayer } = yield* createSequenceProvider([textStep("ok")])
+          const { layer: providerLayer } = yield* Provider.Sequence([textStep("ok")])
           const { client } = yield* Gent.test(
             createE2ELayer({ ...e2ePreset, providerLayer, extensions: [ext] }),
           )

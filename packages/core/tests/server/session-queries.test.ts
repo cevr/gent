@@ -1,6 +1,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Deferred, Effect, Ref, Stream } from "effect"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
 import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { waitFor } from "@gent/core/test-utils/fixtures"
@@ -9,7 +10,7 @@ import { e2ePreset } from "../extensions/helpers/test-preset"
 
 const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* createSequenceProvider([textStep(reply)])
+    const { layer: providerLayer } = yield* Provider.Sequence([textStep(reply)])
     return yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
   })
 

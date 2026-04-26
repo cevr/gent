@@ -16,10 +16,11 @@ import {
   type ProviderError,
   providerRequestFromMessages,
   type ProviderResolution,
+  finishPart,
+  toolCallPart,
 } from "@gent/core/providers/provider"
 import { ProviderAuthError } from "@gent/core/domain/driver"
 import { toPrompt } from "@gent/core/providers/ai-transcript"
-import { finishPart, toolCallPart } from "@gent/core/debug/provider"
 import { ImagePart, Message, ReasoningPart, TextPart } from "@gent/core/domain/message"
 import { LanguageModel } from "effect/unstable/ai"
 import * as AiError from "effect/unstable/ai/AiError"

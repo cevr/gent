@@ -6,13 +6,13 @@ import type { ExtensionSetupContext } from "../domain/extension.js"
 import { BranchId, SessionId, type ToolCallId } from "../domain/ids.js"
 import { Branch, Session } from "../domain/message.js"
 import { Storage } from "../storage/sqlite-storage.js"
-import { Provider } from "../providers/provider.js"
 import {
+  Provider,
   finishPart,
   textDeltaPart,
   toolCallPart,
   type ProviderStreamPart,
-} from "../debug/provider.js"
+} from "../providers/provider.js"
 import {
   EventStore,
   EventEnvelope,

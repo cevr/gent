@@ -107,7 +107,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **Default is integration**: use `createE2ELayer`, `baseLocalLayer`, or `Storage.TestWithSql()` with in-memory SQLite + `Provider.Sequence` for LLM responses.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM provider (via `Provider.Sequence` / `Provider.Debug`). Use real services inside the boundary.
-- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `Provider.Sequence([...])` or `Provider.Debug()` for provider mocking, `EventStore.Memory` for in-memory event stores. Step builders (`textStep`, `toolCallStep`, etc.) are exported from `@gent/core/providers/provider`.
+- **`Provider.Test()` and `EventStore.Test()` are deleted** — use `Provider.Sequence([...])` or `Provider.Debug()` for provider mocking, `EventStore.Memory` for in-memory event stores. Provider statics (`Provider.Sequence`, `Provider.Signal`, `Provider.Debug`, `Provider.Failing`) and stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`) live in `@gent/core/providers/provider`. Step builders (`textStep`, `toolCallStep`, `textThenToolCallStep`, `multiToolCallStep`) live in `@gent/core/debug/provider`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.

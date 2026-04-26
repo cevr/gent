@@ -1,6 +1,7 @@
-import { Context, Duration, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import type { AnyCapabilityContribution } from "../domain/capability.js"
 import type { Message } from "../domain/message.js"
+import { ToolCallId } from "../domain/ids.js"
 import { AuthOauth, AuthStore, type AuthStoreService } from "../domain/auth-store.js"
 import { ProviderAuthError, type ProviderAuthInfo, type ProviderHints } from "../domain/driver.js"
 import {
@@ -149,40 +150,10 @@ export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("Pro
 // ── Provider Stream Parts ──
 
 export type ProviderToolMap = Record<string, AiTool.Any>
-export type ProviderStreamPart<Tools extends ProviderToolMap = ProviderToolMap> =
-  Response.StreamPart<Tools>
 type ProviderStream<Tools extends ProviderToolMap = ProviderToolMap> = Stream.Stream<
   ProviderStreamPart<Tools>,
   ProviderError
 >
-
-let _streamPartIdCounter = 0
-const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
-
-const textDeltaPart = (text: string, id = makeStreamPartId("text")): ProviderStreamPart =>
-  Response.makePart("text-delta", { id, delta: text })
-
-const finishPart = (params: {
-  finishReason: Response.FinishReason
-  usage?: { inputTokens: number; outputTokens: number }
-}): ProviderStreamPart =>
-  Response.makePart("finish", {
-    reason: params.finishReason,
-    usage: new Response.Usage({
-      inputTokens: {
-        uncached: undefined,
-        total: params.usage?.inputTokens,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-      },
-      outputTokens: {
-        total: params.usage?.outputTokens,
-        text: undefined,
-        reasoning: undefined,
-      },
-    }),
-    response: undefined,
-  })
 
 // ── Provider Request ──
 
@@ -414,6 +385,207 @@ const _DebugFailingProvider = () => {
   return _debugFailingProviderCache
 }
 
+// ── Stream-part helpers (test-only) ──
+
+export type ProviderStreamPart<Tools extends ProviderToolMap = ProviderToolMap> =
+  Response.StreamPart<Tools>
+
+export interface SignalProviderControls {
+  readonly emitNext: () => Effect.Effect<void>
+  readonly emitAll: () => Effect.Effect<void>
+  readonly waitForStreamStart: Effect.Effect<void>
+}
+
+export interface SequenceStep {
+  readonly parts: ReadonlyArray<ProviderStreamPart>
+  readonly assertRequest?: (request: ProviderRequest) => void
+  readonly gated?: boolean
+}
+
+export interface SequenceProviderControls {
+  readonly waitForCall: (index: number) => Effect.Effect<void>
+  readonly emitAll: (index: number) => Effect.Effect<void>
+  readonly callCount: Effect.Effect<number>
+  readonly assertDone: () => Effect.Effect<void>
+}
+
+let _streamPartIdCounter = 0
+const _makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
+
+export const textDeltaPart = (text: string, id = _makeStreamPartId("text")): ProviderStreamPart =>
+  Response.makePart("text-delta", { id, delta: text })
+
+export const toolCallPart = (
+  toolName: string,
+  input: unknown,
+  options?: { toolCallId?: ToolCallId },
+): ProviderStreamPart =>
+  Response.makePart("tool-call", {
+    id: options?.toolCallId ?? ToolCallId.make(_makeStreamPartId("tool")),
+    name: toolName,
+    params: input,
+    providerExecuted: false,
+  })
+
+export const reasoningDeltaPart = (
+  text: string,
+  id = _makeStreamPartId("reasoning"),
+): ProviderStreamPart => Response.makePart("reasoning-delta", { id, delta: text })
+
+export const finishPart = (params: {
+  finishReason: Response.FinishReason
+  usage?: { inputTokens: number; outputTokens: number }
+}): ProviderStreamPart =>
+  Response.makePart("finish", {
+    reason: params.finishReason,
+    usage: new Response.Usage({
+      inputTokens: {
+        uncached: undefined,
+        total: params.usage?.inputTokens,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      },
+      outputTokens: {
+        total: params.usage?.outputTokens,
+        text: undefined,
+        reasoning: undefined,
+      },
+    }),
+    response: undefined,
+  })
+
+const _SignalProvider = (
+  reply: string,
+  options?: { inputTokens?: number; outputTokens?: number },
+) =>
+  Effect.gen(function* () {
+    const gate = yield* Queue.unbounded<null>()
+    const streamStarted = yield* Deferred.make<void>()
+
+    const parts = reply
+      .split(/(?<=[.!?])\s+/)
+      .filter((chunk) => chunk.length > 0)
+      .map((text) => textDeltaPart(`${text} `))
+
+    const allParts = [
+      ...parts,
+      finishPart({
+        finishReason: "stop",
+        usage: {
+          inputTokens: options?.inputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+          outputTokens: options?.outputTokens ?? Math.max(1, Math.ceil(reply.length / 4)),
+        },
+      }),
+    ]
+
+    const layer = Layer.succeed(Provider, {
+      stream: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(streamStarted, void 0)
+          return Stream.fromIterable(allParts).pipe(
+            Stream.mapEffect((part) => Queue.take(gate).pipe(Effect.as(part))),
+          )
+        }),
+      generate: () => Effect.succeed(reply),
+    })
+
+    const controls: SignalProviderControls = {
+      emitNext: () => Queue.offer(gate, null).pipe(Effect.asVoid),
+      emitAll: () => Effect.forEach(allParts, () => Queue.offer(gate, null).pipe(Effect.asVoid)),
+      waitForStreamStart: Deferred.await(streamStarted),
+    }
+
+    return { layer, controls }
+  })
+
+const _SequenceProvider = (steps: ReadonlyArray<SequenceStep>) =>
+  Effect.gen(function* () {
+    const indexRef = yield* Ref.make(0)
+
+    const callStarted = yield* Effect.forEach(steps, () => Deferred.make<void>())
+    const emitGates = yield* Effect.forEach(steps, () => Deferred.make<void>())
+
+    yield* Effect.forEach(steps, (step, i) => {
+      const gate = emitGates[i]
+      if (step.gated || gate === undefined) return Effect.void
+      return Deferred.succeed(gate, void 0)
+    })
+
+    const layer = Layer.succeed(Provider, {
+      stream: (request: ProviderRequest) =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(indexRef, (n) => n + 1)
+
+          if (idx >= steps.length) {
+            return yield* new ProviderError({
+              message: `Sequence provider: stream() called ${idx + 1} times but only ${steps.length} steps scripted`,
+              model: request.model,
+            })
+          }
+
+          const step = steps[idx] ?? steps[0]
+          const started = callStarted[idx] ?? callStarted[0]
+          const gate = emitGates[idx] ?? emitGates[0]
+
+          if (started !== undefined) yield* Deferred.succeed(started, void 0)
+
+          if (step?.assertRequest) {
+            yield* Effect.try({
+              try: () => step.assertRequest?.(request),
+              catch: (e) =>
+                new ProviderError({
+                  message: `Sequence provider: assertRequest failed at step ${idx}: ${e}`,
+                  model: request.model,
+                }),
+            })
+          }
+
+          if (gate !== undefined) {
+            return Stream.fromEffect(Deferred.await(gate)).pipe(
+              Stream.flatMap(() => Stream.fromIterable(step?.parts ?? [])),
+            )
+          }
+          return Stream.fromIterable(step?.parts ?? [])
+        }),
+      generate: () => Effect.succeed("sequence provider"),
+    })
+
+    const controls: SequenceProviderControls = {
+      waitForCall: (index) => {
+        const deferred = callStarted[index]
+        if (index < 0 || index >= steps.length || deferred === undefined) {
+          return Effect.die(
+            new Error(`waitForCall: index ${index} out of range [0, ${steps.length})`),
+          )
+        }
+        return Deferred.await(deferred)
+      },
+
+      emitAll: (index) => {
+        const deferred = emitGates[index]
+        if (index < 0 || index >= steps.length || deferred === undefined) {
+          return Effect.die(new Error(`emitAll: index ${index} out of range [0, ${steps.length})`))
+        }
+        return Deferred.succeed(deferred, void 0)
+      },
+
+      callCount: Ref.get(indexRef),
+
+      assertDone: () =>
+        Effect.gen(function* () {
+          const consumed = yield* Ref.get(indexRef)
+          if (consumed >= steps.length) return
+          return yield* Effect.die(
+            new Error(
+              `Sequence provider: ${steps.length - consumed} unconsumed steps (consumed ${consumed}/${steps.length})`,
+            ),
+          )
+        }),
+    }
+
+    return { layer, controls }
+  })
+
 // ── Provider Live ──
 
 export class Provider extends Context.Service<Provider, ProviderService>()(
@@ -519,4 +691,18 @@ export class Provider extends Context.Service<Provider, ProviderService>()(
   static get Failing() {
     return _DebugFailingProvider()
   }
+
+  /**
+   * Scripted provider — replays a list of `SequenceStep`s in order.
+   * Returns `{ layer, controls }`; `controls` exposes `waitForCall`,
+   * `emitAll`, `callCount`, and `assertDone` for deterministic tests.
+   */
+  static Sequence = _SequenceProvider
+
+  /**
+   * Per-chunk-gated provider — yields one stream part per `emitNext()` call.
+   * Returns `{ layer, controls }`; use `controls.waitForStreamStart` then
+   * `controls.emitNext()` / `controls.emitAll()` to drive lifecycle assertions.
+   */
+  static Signal = _SignalProvider
 }

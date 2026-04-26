@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentDefinition } from "@gent/core/domain/agent"
 import type { CallRecord } from "@gent/core/test-utils"
-import type { Provider } from "@gent/core/providers/provider"
-import { createSequenceProvider, textStep } from "@gent/core/debug/provider"
+import { Provider } from "@gent/core/providers/provider"
+import { textStep } from "@gent/core/debug/provider"
 import { EventPublisherLive } from "../../../src/server/event-publisher"
 import { SessionCwdRegistry } from "../../../src/runtime/session-cwd-registry"
 import { SessionCommands } from "../../../src/server/session-commands"
@@ -91,7 +91,7 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
 describe("agent override behavior", () => {
   test("sendMessage keeps agentOverride turn-scoped and does not switch the session agent", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("override reply"),
           assertRequest: (request) => {
@@ -148,7 +148,7 @@ describe("agent override behavior", () => {
 
   test("createSession with initialPrompt uses the override for the first turn without persisting an agent switch", async () => {
     const { layer: providerLayer, controls } = await Effect.runPromise(
-      createSequenceProvider([
+      Provider.Sequence([
         {
           ...textStep("seeded reply"),
           assertRequest: (request) => {
@@ -186,7 +186,7 @@ describe("agent override behavior", () => {
   })
 
   test("createSession skips dispatch when initialPrompt is missing or empty", async () => {
-    const { layer: providerLayer, controls } = await Effect.runPromise(createSequenceProvider([]))
+    const { layer: providerLayer, controls } = await Effect.runPromise(Provider.Sequence([]))
 
     await Effect.runPromise(
       Effect.gen(function* () {
