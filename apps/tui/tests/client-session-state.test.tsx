@@ -286,4 +286,128 @@ describe("ClientProvider session lifecycle", () => {
 
     expect(eventCalls).not.toContain("session-a:branch-a")
   })
+
+  test("model() prefers snapshot.metrics.lastModelId over agent default", async () => {
+    let ctx: ClientContextValue | undefined
+
+    const client = createMockClient({
+      session: {
+        getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) =>
+          Effect.succeed({
+            sessionId,
+            branchId,
+            messages: [],
+            lastEventId: null,
+            reasoningLevel: undefined,
+            runtime: {
+              _tag: "Idle" as const,
+              agent: "cowork" as const,
+              queue: emptyQueueSnapshot(),
+            },
+            metrics: {
+              turns: 1,
+              tokens: 0,
+              toolCalls: 0,
+              retries: 0,
+              durationMs: 0,
+              costUsd: 0,
+              lastInputTokens: 0,
+              lastModelId: "anthropic/claude-haiku-4-5-20251001",
+            },
+          }),
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        client,
+        initialSession: {
+          id: SessionId.make("session-model"),
+          branchId: BranchId.make("branch-model"),
+          name: "M",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    await waitForState(
+      setup,
+      () => ctx!.sessionState(),
+      (state) =>
+        state.status === "active" && ctx!.model() === "anthropic/claude-haiku-4-5-20251001",
+    )
+
+    expect(ctx.model()).toBe("anthropic/claude-haiku-4-5-20251001")
+  })
+
+  test("switchSession clears stale lastModelId before re-hydration", async () => {
+    let ctx: ClientContextValue | undefined
+
+    // Snapshot for the prior session resolves immediately with a known
+    // lastModelId; snapshot for the next session never resolves so the
+    // store has no chance to re-hydrate before our assertion.
+    const client = createMockClient({
+      session: {
+        getSnapshot: ({ sessionId, branchId }: { sessionId: SessionId; branchId: BranchId }) => {
+          if (sessionId === SessionId.make("session-prev")) {
+            return Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: null,
+              reasoningLevel: undefined,
+              runtime: {
+                _tag: "Idle" as const,
+                agent: "cowork" as const,
+                queue: emptyQueueSnapshot(),
+              },
+              metrics: {
+                turns: 1,
+                tokens: 0,
+                toolCalls: 0,
+                retries: 0,
+                durationMs: 0,
+                costUsd: 0,
+                lastInputTokens: 0,
+                lastModelId: "anthropic/claude-haiku-4-5-20251001",
+              },
+            })
+          }
+          return Effect.never
+        },
+      },
+    })
+
+    const setup = await renderWithProviders(
+      () => <ClientProbe onReady={(value) => (ctx = value)} />,
+      {
+        client,
+        initialSession: {
+          id: SessionId.make("session-prev"),
+          branchId: BranchId.make("branch-prev"),
+          name: "P",
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      },
+    )
+    if (ctx === undefined) throw new Error("client context not ready")
+
+    await waitForState(
+      setup,
+      () => ctx!.sessionState(),
+      (state) =>
+        state.status === "active" && ctx!.model() === "anthropic/claude-haiku-4-5-20251001",
+    )
+
+    ctx.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N", "deepwork")
+    // The next-session snapshot never resolves in this fixture, so the only
+    // way `model()` could still echo the prior session's lastModelId is if
+    // switchSession failed to clear it. With clearing in place we get the
+    // new agent's local default.
+    expect(ctx.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+  })
 })
