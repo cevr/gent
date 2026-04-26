@@ -1,4 +1,4 @@
-import { DateTime, Deferred, Effect, Layer, Context, Ref, Stream } from "effect"
+import { DateTime, Deferred, Duration, Effect, Layer, Context, Ref, Stream } from "effect"
 import { EventPublisher, type EventPublisherService } from "../domain/event-publisher.js"
 import { SessionMutations, type SessionMutationsService } from "../domain/session-mutations.js"
 import {
@@ -51,6 +51,12 @@ import type {
 } from "./transport-contract.js"
 
 const NAME_GEN_MODEL = "anthropic/claude-haiku-4-5-20251001"
+
+// Dedup cache (W6-29): bound success entries by both time and count so a
+// long-running shared server does not accumulate one Map entry per user
+// prompt + per session create indefinitely.
+const DEDUP_SUCCESS_TTL_MS = Duration.seconds(60)
+const DEDUP_MAX_ENTRIES = 1024
 
 interface SessionRuntimeTerminatorService {
   readonly register: (runtime: SessionRuntimeService) => Effect.Effect<void>
@@ -671,12 +677,19 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
 
       /**
        * Atomic-claim dedup helper. Concurrent callers with the same
-       * `requestId` collapse onto the first caller's outcome. On failure,
-       * the entry is evicted so retries can re-attempt under the same id.
+       * `requestId` collapse onto the first caller's outcome.
        *
-       * The cache is in-memory and unbounded for the lifetime of the
-       * server process (W6-29 in the audit batch is a separate fix —
-       * this helper does not change the eviction story).
+       * Eviction (W6-29):
+       * - On failure: evict immediately so retries can re-attempt the same
+       *   `requestId` under fresh state.
+       * - On success: schedule a delayed eviction after `DEDUP_SUCCESS_TTL_MS`.
+       *   The window matches the transport retry window — long enough to
+       *   collapse a retried RPC, short enough that a long-running server
+       *   does not accumulate one entry per user prompt indefinitely.
+       * - Hard cap: when the cache exceeds `DEDUP_MAX_ENTRIES`, the
+       *   oldest-inserted entry is evicted before insert. JS `Map` preserves
+       *   insertion order, so the first key returned by the iterator is the
+       *   oldest. This guarantees bounded memory regardless of TTL.
        */
       const dedupRequest = <A, E>(
         cache: Ref.Ref<Map<string, Deferred.Deferred<A, E>>>,
@@ -690,12 +703,34 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
             const existing = m.get(requestId)
             if (existing !== undefined) return [existing, m] as const
             const next = new Map(m)
+            // Hard cap: evict oldest insertion-ordered entry once full.
+            if (next.size >= DEDUP_MAX_ENTRIES) {
+              const oldest = next.keys().next().value
+              if (oldest !== undefined) next.delete(oldest)
+            }
             next.set(requestId, fresh)
             return [fresh, next] as const
           })
           if (claimed !== fresh) return yield* Deferred.await(claimed)
+          const evictAfterTtl = Effect.gen(function* () {
+            yield* Effect.sleep(DEDUP_SUCCESS_TTL_MS)
+            yield* Ref.update(cache, (m) => {
+              if (m.get(requestId) !== fresh) return m
+              const next = new Map(m)
+              next.delete(requestId)
+              return next
+            })
+          })
           return yield* body.pipe(
-            Effect.tap((result) => Deferred.succeed(fresh, result)),
+            Effect.tap((result) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(fresh, result)
+                // Schedule delayed eviction so retries inside the window still
+                // collapse onto the cached outcome, but the entry does not
+                // survive indefinitely. Detached fork — outlives this call.
+                yield* Effect.forkDetach(evictAfterTtl)
+              }),
+            ),
             Effect.tapCause((cause) =>
               Effect.gen(function* () {
                 yield* Ref.update(cache, (m) => {
