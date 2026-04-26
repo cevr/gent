@@ -199,7 +199,7 @@ describe("external turn execution", () => {
           expect(tags).toContain("StreamStarted")
           expect(tags).toContain("StreamChunk")
           expect(tags).toContain("TurnCompleted")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -228,7 +228,7 @@ describe("external turn execution", () => {
 
           expect(tags).toContain("ToolCallStarted")
           expect(tags).toContain("ToolCallSucceeded")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -255,7 +255,7 @@ describe("external turn execution", () => {
           const tags = events.map((e) => e._tag)
 
           expect(tags).toContain("ToolCallFailed")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -277,7 +277,7 @@ describe("external turn execution", () => {
           const tags = events.map((e) => e._tag)
 
           expect(tags).toContain("ErrorOccurred")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -311,7 +311,7 @@ describe("external turn execution", () => {
           // Only one ToolCallStarted (from external events), not two (no re-execution)
           const toolStartedCount = tags.filter((t) => t === "ToolCallStarted").length
           expect(toolStartedCount).toBe(1)
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -367,7 +367,7 @@ describe("external turn execution", () => {
 
           expect(tags).toContain("StreamStarted")
           expect(tags).toContain("TurnCompleted")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -389,7 +389,7 @@ describe("external turn execution", () => {
           yield* runAgentLoop(agentLoop, makeMessage("context check"), {
             agentOverride: "test-external",
           })
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
 
@@ -425,7 +425,7 @@ describe("external turn execution", () => {
           yield* runAgentLoop(agentLoop, message, {
             agentOverride: "test-external",
           })
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
 
@@ -460,7 +460,7 @@ describe("external turn execution", () => {
           // Turn should complete successfully with reasoning present
           expect(tags).toContain("TurnCompleted")
           expect(tags).toContain("StreamChunk")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -560,7 +560,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           )
           const combined = allText.join("")
           expect(combined).toContain(expectedText)
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -674,7 +674,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           if (succeeded !== undefined && "toolName" in succeeded) {
             expect(succeeded.toolName).toBe("read_file")
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -772,7 +772,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           if (failed !== undefined && "toolName" in failed) {
             expect(failed.toolName).toBe("bash")
           }
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
@@ -863,7 +863,7 @@ describe("ExternalDriverContribution end-to-end", () => {
           )
           expect(toolCallParts.length).toBe(1)
           expect(toolCallParts[0]?.toolName).toBe("write_file")
-        }).pipe(Effect.provide(layer)),
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       ),
     )
   })
