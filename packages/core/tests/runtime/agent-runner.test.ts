@@ -240,7 +240,7 @@ describe("RunSpec", () => {
       expect(a).toBe(resolveAgentModel(Agents.cowork))
       expect(b).toBe(resolveAgentModel(Agents.deepwork))
       expect(a).not.toBe(b)
-    }).pipe(Effect.provide(impl), Effect.runPromise)
+    }).pipe(Effect.timeout("4 seconds"), Effect.provide(impl), Effect.runPromise)
   })
 
   test("durable helper-agent runSpec reaches the provider through AgentRunner", async () => {
@@ -295,7 +295,7 @@ describe("RunSpec", () => {
           expect(result.text).toContain("child result")
         }
         yield* controls.assertDone()
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 })
@@ -391,7 +391,7 @@ describe("AgentRunner", () => {
         expect(event.savedPath).toBeDefined()
         expect(typeof event.savedPath).toBe("string")
         expect(event.savedPath).toContain("/tmp/gent/outputs/")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -450,7 +450,7 @@ describe("AgentRunner", () => {
         expect(result._tag).toBe("error")
         const sessions = yield* storage.listSessions()
         expect(sessions.filter((candidate) => candidate.parentSessionId === session.id)).toEqual([])
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -505,7 +505,7 @@ describe("AgentRunner", () => {
 
         // Without retry, failure propagates as error result
         expect(result._tag).toBe("error")
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
   })
 
@@ -555,7 +555,7 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "durable" },
         })
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result._tag).toBe("error")
@@ -613,7 +613,7 @@ describe("AgentRunner", () => {
 
         const sessions = yield* storage.listSessions()
         return { runResult, sessions }
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result.runResult._tag).toBe("success")
@@ -687,7 +687,7 @@ describe("AgentRunner", () => {
           runResult,
           childTags: childEvents.map((event) => event.event._tag),
         }
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result.runResult._tag).toBe("success")
@@ -768,7 +768,7 @@ describe("AgentRunner", () => {
           cwd: process.cwd(),
           runSpec: { persistence: "ephemeral" },
         })
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(publishedSessionIds.length).toBeGreaterThan(0)
@@ -824,7 +824,7 @@ describe("AgentRunner", () => {
 
         const sessions = yield* storage.listSessions()
         return { runResult, sessions }
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result.runResult._tag).toBe("success")
@@ -897,7 +897,7 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           persistence: "durable",
         })
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result._tag).toBe("success")
@@ -966,7 +966,7 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           persistence: "durable",
         })
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result._tag).toBe("success")
@@ -1035,7 +1035,7 @@ describe("AgentRunner", () => {
           cwd: "/tmp",
           persistence: "durable",
         })
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
     )
 
     expect(result._tag).toBe("success")
@@ -1064,7 +1064,7 @@ describe("AgentRunner", () => {
 
 describe("session depth guard", () => {
   const run = <A, E>(effect: Effect.Effect<A, E, Storage>) =>
-    Effect.runPromise(Effect.provide(effect, Storage.Test()))
+    Effect.runPromise(effect.pipe(Effect.timeout("4 seconds"), Effect.provide(Storage.Test())))
 
   const makeSession = (id: string, parentSessionId?: string) =>
     new Session({
@@ -1234,7 +1234,7 @@ describe("ephemeral service propagation", () => {
         const sessions = yield* storage.listSessions()
         expect(sessions.map((s) => s.id)).toEqual(["parent-svc-prop"])
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.runPromise))
+    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
 
   test("ephemeral agent auto-approves interactions", () =>
     Effect.gen(function* () {
@@ -1306,5 +1306,5 @@ describe("ephemeral service propagation", () => {
           expect(result.text).toContain("approved")
         }
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.runPromise))
+    }).pipe(Effect.timeout("4 seconds"), Effect.runPromise))
 })
