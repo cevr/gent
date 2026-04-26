@@ -529,7 +529,6 @@ const repairForeignKeyOrphans = Effect.fn("Storage.repairForeignKeyOrphans")(fun
       yield* sql`DELETE FROM agent_loop_checkpoints WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`DELETE FROM agent_loop_checkpoints WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM agent_loop_checkpoints WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = agent_loop_checkpoints.branch_id AND branches.session_id != agent_loop_checkpoints.session_id)`
-      yield* sql`DELETE FROM todos WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM interaction_requests WHERE session_id NOT IN (SELECT id FROM sessions)`
       yield* sql`DELETE FROM interaction_requests WHERE branch_id NOT IN (SELECT id FROM branches)`
       yield* sql`DELETE FROM interaction_requests WHERE EXISTS (SELECT 1 FROM branches WHERE branches.id = interaction_requests.branch_id AND branches.session_id != interaction_requests.session_id)`
@@ -588,28 +587,32 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
   function* () {
     const sql = yield* SqlClient.SqlClient
 
-    yield* sql.unsafe(`PRAGMA foreign_keys = OFF`)
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql.unsafe(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
-        )
-        yield* migrateTableForeignKeys({
-          table: "sessions",
-          columns: [
-            "id",
-            "name",
-            "cwd",
-            "bypass",
-            "reasoning_level",
-            "active_branch_id",
-            "parent_session_id",
-            "parent_branch_id",
-            "created_at",
-            "updated_at",
-          ],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+    // Flip `foreign_keys` OFF so we can rebuild parent tables, then ALWAYS
+    // restore ON — including on transaction failure — via acquireUseRelease.
+    yield* Effect.acquireUseRelease(
+      sql.unsafe(`PRAGMA foreign_keys = OFF`),
+      () =>
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql.unsafe(
+              `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
+            )
+            yield* migrateTableForeignKeys({
+              table: "sessions",
+              columns: [
+                "id",
+                "name",
+                "cwd",
+                "bypass",
+                "reasoning_level",
+                "active_branch_id",
+                "parent_session_id",
+                "parent_branch_id",
+                "created_at",
+                "updated_at",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE sessions (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -627,28 +630,28 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
           )
         `,
-          shouldMigrate: (keys) =>
-            keys.some(
-              (key) =>
-                key.table === "branches" &&
-                key.from === "parent_branch_id" &&
-                key.on_delete.toUpperCase() === "CASCADE",
-            ),
-          shouldMigrateSql: (createSql) => !hasSessionParentBranchCheck(createSql),
-        })
-        yield* migrateTableForeignKeys({
-          table: "branches",
-          columns: [
-            "id",
-            "session_id",
-            "parent_branch_id",
-            "parent_message_id",
-            "name",
-            "summary",
-            "created_at",
-          ],
-          expectedParents: ["sessions", "branches"],
-          createSql: `
+              shouldMigrate: (keys) =>
+                keys.some(
+                  (key) =>
+                    key.table === "branches" &&
+                    key.from === "parent_branch_id" &&
+                    key.on_delete.toUpperCase() === "CASCADE",
+                ),
+              shouldMigrateSql: (createSql) => !hasSessionParentBranchCheck(createSql),
+            })
+            yield* migrateTableForeignKeys({
+              table: "branches",
+              columns: [
+                "id",
+                "session_id",
+                "parent_branch_id",
+                "parent_message_id",
+                "name",
+                "summary",
+                "created_at",
+              ],
+              expectedParents: ["sessions", "branches"],
+              createSql: `
           CREATE TABLE branches (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -662,25 +665,25 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
           )
         `,
-        })
-        yield* sql.unsafe(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
-        )
-        yield* migrateTableForeignKeys({
-          table: "messages",
-          columns: [
-            "id",
-            "session_id",
-            "branch_id",
-            "kind",
-            "role",
-            "parts",
-            "created_at",
-            "turn_duration_ms",
-            "metadata",
-          ],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+            })
+            yield* sql.unsafe(
+              `CREATE UNIQUE INDEX IF NOT EXISTS idx_branches_id_session ON branches(id, session_id)`,
+            )
+            yield* migrateTableForeignKeys({
+              table: "messages",
+              columns: [
+                "id",
+                "session_id",
+                "branch_id",
+                "kind",
+                "role",
+                "parts",
+                "created_at",
+                "turn_duration_ms",
+                "metadata",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -695,12 +698,12 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "message_chunks",
-          columns: ["message_id", "ordinal", "chunk_id"],
-          expectedParents: ["messages", "content_chunks"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "message_chunks",
+              columns: ["message_id", "ordinal", "chunk_id"],
+              expectedParents: ["messages", "content_chunks"],
+              createSql: `
           CREATE TABLE message_chunks (
             message_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
@@ -710,20 +713,20 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (chunk_id) REFERENCES content_chunks(id)
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "events",
-          columns: [
-            "id",
-            "session_id",
-            "branch_id",
-            "event_tag",
-            "event_json",
-            "created_at",
-            "trace_id",
-          ],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "events",
+              columns: [
+                "id",
+                "session_id",
+                "branch_id",
+                "event_tag",
+                "event_json",
+                "created_at",
+                "trace_id",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE events (
             id INTEGER PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -736,25 +739,25 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "actor_inbox",
-          columns: [
-            "command_id",
-            "session_id",
-            "branch_id",
-            "command_kind",
-            "payload_json",
-            "status",
-            "attempts",
-            "created_at",
-            "updated_at",
-            "started_at",
-            "completed_at",
-            "last_error",
-          ],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "actor_inbox",
+              columns: [
+                "command_id",
+                "session_id",
+                "branch_id",
+                "command_kind",
+                "payload_json",
+                "status",
+                "attempts",
+                "created_at",
+                "updated_at",
+                "started_at",
+                "completed_at",
+                "last_error",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE actor_inbox (
             command_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -772,12 +775,19 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "agent_loop_checkpoints",
-          columns: ["session_id", "branch_id", "version", "state_tag", "state_json", "updated_at"],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "agent_loop_checkpoints",
+              columns: [
+                "session_id",
+                "branch_id",
+                "version",
+                "state_tag",
+                "state_json",
+                "updated_at",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE agent_loop_checkpoints (
             session_id TEXT NOT NULL,
             branch_id TEXT NOT NULL,
@@ -790,37 +800,20 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "todos",
-          columns: ["id", "branch_id", "content", "status", "priority", "created_at", "updated_at"],
-          expectedParents: ["branches"],
-          createSql: `
-          CREATE TABLE todos (
-            id TEXT PRIMARY KEY,
-            branch_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            status TEXT NOT NULL,
-            priority TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
-          )
-        `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "interaction_requests",
-          columns: [
-            "request_id",
-            "type",
-            "session_id",
-            "branch_id",
-            "params_json",
-            "status",
-            "created_at",
-          ],
-          expectedParents: ["branches", "sessions"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "interaction_requests",
+              columns: [
+                "request_id",
+                "type",
+                "session_id",
+                "branch_id",
+                "params_json",
+                "status",
+                "created_at",
+              ],
+              expectedParents: ["branches", "sessions"],
+              createSql: `
           CREATE TABLE interaction_requests (
             request_id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -833,12 +826,12 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
           )
         `,
-        })
-        yield* migrateTableForeignKeys({
-          table: "extension_state",
-          columns: ["session_id", "extension_id", "state_json", "version", "updated_at"],
-          expectedParents: ["sessions"],
-          createSql: `
+            })
+            yield* migrateTableForeignKeys({
+              table: "extension_state",
+              columns: ["session_id", "extension_id", "state_json", "version", "updated_at"],
+              expectedParents: ["sessions"],
+              createSql: `
           CREATE TABLE extension_state (
             session_id TEXT NOT NULL,
             extension_id TEXT NOT NULL,
@@ -849,10 +842,11 @@ const migrateForeignKeyConstraints = Effect.fn("Storage.migrateForeignKeyConstra
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
           )
         `,
-        })
-      }),
+            })
+          }),
+        ),
+      () => sql.unsafe(`PRAGMA foreign_keys = ON`),
     )
-    yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
   },
 )
 
@@ -1022,19 +1016,6 @@ const initSchema = Effect.gen(function* () {
   `)
 
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS todos (
-      id TEXT PRIMARY KEY,
-      branch_id TEXT NOT NULL,
-      content TEXT NOT NULL,
-      status TEXT NOT NULL,
-      priority TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
-    )
-  `)
-
-  yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS interaction_requests (
       request_id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -1088,7 +1069,10 @@ const initSchema = Effect.gen(function* () {
     `CREATE INDEX IF NOT EXISTS idx_agent_loop_checkpoints_updated ON agent_loop_checkpoints(updated_at)`,
   )
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id)`)
-  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_todos_branch ON todos(branch_id)`)
+  // Drop dead `todos` table left over from earlier schemas. No writers
+  // remain — task tracking lives in the task-tools extension's own storage.
+  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_todos_branch`).pipe(Effect.ignoreCause)
+  yield* sql.unsafe(`DROP TABLE IF EXISTS todos`).pipe(Effect.ignoreCause)
   yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_interaction_requests_status ON interaction_requests(status)`,
@@ -1605,20 +1589,19 @@ const makeStorage = Effect.gen(function* () {
 
     getSessionAncestors: Effect.fn("Storage.getSessionAncestors")(
       function* (sessionId) {
-        const rows = yield* sql.unsafe<SessionRow>(
-          `WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
-            SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, 0
-            FROM sessions WHERE id = '${sessionId.replace(/'/g, "''")}'
-            UNION ALL
-            SELECT s.id, s.name, s.cwd, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
-            FROM sessions s
-            JOIN ancestors a ON s.id = a.parent_session_id
-            WHERE a.depth < 20
-          )
-          SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at
-          FROM ancestors
-          ORDER BY depth ASC`,
+        const rows =
+          yield* sql<SessionRow>`WITH RECURSIVE ancestors(id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, depth) AS (
+          SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at, 0
+          FROM sessions WHERE id = ${sessionId}
+          UNION ALL
+          SELECT s.id, s.name, s.cwd, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.created_at, s.updated_at, a.depth + 1
+          FROM sessions s
+          JOIN ancestors a ON s.id = a.parent_session_id
+          WHERE a.depth < 20
         )
+        SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at
+        FROM ancestors
+        ORDER BY depth ASC`
         return rows.map(sessionFromRow)
       },
       Effect.mapError(mapError("Failed to get session ancestors")),

@@ -452,4 +452,20 @@ describe("getSessionAncestors", () => {
       expect(ancestors.length).toBe(1)
       expect(ancestors[0]!.id).toBe(root.sessionId)
     }))
+
+  test("session id with single-quote literal binds as parameter (no injection)", () =>
+    Effect.gen(function* () {
+      const storage = yield* Storage
+      const now = new Date()
+      // Quote-bearing id would have terminated the literal under the prior
+      // hand-rolled `'${id.replace(...)}'` form. Parameter binding makes the
+      // value opaque — the row simply doesn't exist, no SQL is forged.
+      const hostileId = SessionId.make("o'brien")
+      yield* storage.createSession(
+        new Session({ id: hostileId, name: "hostile", createdAt: now, updatedAt: now }),
+      )
+      const ancestors = yield* storage.getSessionAncestors(hostileId)
+      expect(ancestors.length).toBe(1)
+      expect(ancestors[0]!.id).toBe(hostileId)
+    }))
 })

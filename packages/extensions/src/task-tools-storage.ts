@@ -205,48 +205,53 @@ const makeTaskStorageService: Effect.Effect<TaskStorageService, never, SqlClient
     )
 
     if (!hasCompositeBranchFk) {
-      yield* sql.unsafe(`PRAGMA foreign_keys = OFF`).pipe(Effect.orDie)
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* sql.unsafe(`DROP TABLE IF EXISTS tasks__legacy_fk_migration`)
-            yield* sql.unsafe(`ALTER TABLE tasks RENAME TO tasks__legacy_fk_migration`)
-            yield* sql.unsafe(tasksCreateSql)
-            yield* sql.unsafe(`
-              INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at)
-              SELECT legacy.id, legacy.session_id, legacy.branch_id, legacy.subject, legacy.description, legacy.status, legacy.owner, legacy.agent_type, legacy.prompt, legacy.cwd, legacy.metadata, legacy.created_at, legacy.updated_at
-              FROM tasks__legacy_fk_migration AS legacy
-              INNER JOIN branches ON branches.id = legacy.branch_id AND branches.session_id = legacy.session_id
-            `)
-            yield* sql.unsafe(`DROP TABLE tasks__legacy_fk_migration`)
-            // Fail the rebuild if any surviving row still violates an FK.
-            // SQLite silently accepts bad rows when foreign_keys is OFF;
-            // foreign_key_check surfaces them so we don't commit a
-            // corrupt table.
-            interface ForeignKeyViolation {
-              readonly table: string
-              readonly rowid: number | null
-              readonly parent: string
-              readonly fkid: number
-            }
-            const violations = yield* sql.unsafe<ForeignKeyViolation>(
-              `PRAGMA foreign_key_check(tasks)`,
+      // Flip `foreign_keys` OFF for the legacy-table dance, then ALWAYS
+      // restore ON — including on transaction failure — via acquireUseRelease.
+      yield* Effect.acquireUseRelease(
+        sql.unsafe(`PRAGMA foreign_keys = OFF`).pipe(Effect.orDie),
+        () =>
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* sql.unsafe(`DROP TABLE IF EXISTS tasks__legacy_fk_migration`)
+                yield* sql.unsafe(`ALTER TABLE tasks RENAME TO tasks__legacy_fk_migration`)
+                yield* sql.unsafe(tasksCreateSql)
+                yield* sql.unsafe(`
+                  INSERT INTO tasks (id, session_id, branch_id, subject, description, status, owner, agent_type, prompt, cwd, metadata, created_at, updated_at)
+                  SELECT legacy.id, legacy.session_id, legacy.branch_id, legacy.subject, legacy.description, legacy.status, legacy.owner, legacy.agent_type, legacy.prompt, legacy.cwd, legacy.metadata, legacy.created_at, legacy.updated_at
+                  FROM tasks__legacy_fk_migration AS legacy
+                  INNER JOIN branches ON branches.id = legacy.branch_id AND branches.session_id = legacy.session_id
+                `)
+                yield* sql.unsafe(`DROP TABLE tasks__legacy_fk_migration`)
+                // Fail the rebuild if any surviving row still violates an FK.
+                // SQLite silently accepts bad rows when foreign_keys is OFF;
+                // foreign_key_check surfaces them so we don't commit a
+                // corrupt table.
+                interface ForeignKeyViolation {
+                  readonly table: string
+                  readonly rowid: number | null
+                  readonly parent: string
+                  readonly fkid: number
+                }
+                const violations = yield* sql.unsafe<ForeignKeyViolation>(
+                  `PRAGMA foreign_key_check(tasks)`,
+                )
+                if (violations.length > 0) {
+                  const details = violations
+                    .slice(0, 10)
+                    .map((v) => `rowid=${v.rowid ?? "?"} parent=${v.parent}#${v.fkid}`)
+                    .join(", ")
+                  return yield* Effect.die(
+                    new TaskStorageError({
+                      message: `TaskStorage migration left FK violations: ${details}`,
+                    }),
+                  )
+                }
+              }),
             )
-            if (violations.length > 0) {
-              const details = violations
-                .slice(0, 10)
-                .map((v) => `rowid=${v.rowid ?? "?"} parent=${v.parent}#${v.fkid}`)
-                .join(", ")
-              return yield* Effect.die(
-                new TaskStorageError({
-                  message: `TaskStorage migration left FK violations: ${details}`,
-                }),
-              )
-            }
-          }),
-        )
-        .pipe(Effect.orDie)
-      yield* sql.unsafe(`PRAGMA foreign_keys = ON`).pipe(Effect.orDie)
+            .pipe(Effect.orDie),
+        () => sql.unsafe(`PRAGMA foreign_keys = ON`).pipe(Effect.orDie),
+      )
     }
 
     // Indexes come AFTER the migration so they always land on the current
