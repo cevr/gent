@@ -32,6 +32,7 @@ import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
+import { ServerIdentity } from "../server/server-identity.js"
 import { testExtensionRegistryLayer } from "./reconciled-extensions.js"
 import { FallbackFileIndexLive } from "../runtime/file-index/index.js"
 
@@ -127,6 +128,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
       eventPublisherLive,
       sessionMutationsLive,
       sessionRuntimeLive,
+      ServerIdentity.Test(),
     ),
   )
 }

@@ -4,9 +4,6 @@ import type { RpcHandlerDeps } from "./shared.js"
 export const buildServerRpcHandlers = (deps: RpcHandlerDeps) => ({
   "server.status": () =>
     Effect.gen(function* () {
-      if (deps.serverIdentity === undefined) {
-        return yield* Effect.die("ServerIdentity not available")
-      }
       const connectionCount =
         deps.connectionTracker !== undefined ? yield* deps.connectionTracker.count() : 0
       return {

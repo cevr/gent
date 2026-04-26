@@ -44,7 +44,7 @@ export interface RpcHandlerDeps {
   readonly bus: SubscriptionEngineService | undefined
   readonly storage: StorageService | undefined
   readonly connectionTracker: ConnectionTrackerService | undefined
-  readonly serverIdentity: ServerIdentityShape | undefined
+  readonly serverIdentity: ServerIdentityShape
   readonly resolveSessionServices: (
     sessionId: string | undefined,
   ) => Effect.Effect<ResolvedSessionServices>

@@ -19,4 +19,16 @@ export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdenti
 ) {
   static Live = (config: ServerIdentityShape): Layer.Layer<ServerIdentity> =>
     Layer.succeed(ServerIdentity, config)
+
+  /** Deterministic identity for tests; values are stable so snapshots don't drift. */
+  static Test = (overrides: Partial<ServerIdentityShape> = {}): Layer.Layer<ServerIdentity> =>
+    Layer.succeed(ServerIdentity, {
+      serverId: "test-server",
+      pid: 0,
+      hostname: "test-host",
+      dbPath: ":memory:",
+      buildFingerprint: "test-fingerprint",
+      startedAt: 0,
+      ...overrides,
+    })
 }

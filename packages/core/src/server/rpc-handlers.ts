@@ -55,8 +55,7 @@ export const RpcHandlersLive = GentRpcs.toLayer(
     const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
     const connectionTracker =
       connectionTrackerOpt._tag === "Some" ? connectionTrackerOpt.value : undefined
-    const serverIdentityOpt = yield* Effect.serviceOption(ServerIdentity)
-    const serverIdentity = serverIdentityOpt._tag === "Some" ? serverIdentityOpt.value : undefined
+    const serverIdentity = yield* ServerIdentity
 
     const loadSession = (sessionId: string) => {
       if (storage !== undefined) {

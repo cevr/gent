@@ -48,6 +48,7 @@ import { SessionCommands } from "../server/session-commands.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
 import { AppServicesLive } from "../server/index.js"
 import { Storage, subTagLayers } from "../storage/sqlite-storage.js"
+import { ServerIdentity } from "../server/server-identity.js"
 import {
   reconcileLoadedExtensions,
   setupBuiltinExtensions,
@@ -287,6 +288,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           toolRunnerLive,
           sessionMutationsLive,
           sessionRuntimeLive,
+          ServerIdentity.Test(),
         ),
       )
     }),
