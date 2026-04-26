@@ -1,5 +1,5 @@
 /**
- * Layer-wiring contract for `SessionRuntimeTerminator` (the private service
+ * Service-pair contract for `SessionRuntimeTerminator` (the private service
  * inside `session-commands.ts`).
  *
  * `SessionRuntimeTerminatorLive` constructs an empty `Ref<SessionRuntimeService>`.
@@ -12,17 +12,19 @@
  * Production wires both halves via `dependencies.ts:207` + `:322`. The test
  * layers (`in-process-layer`, `e2e-layer`) historically wired only the
  * first half, so anything booting through `AppServicesLive` had a dead
- * terminator and the runtime-side cleanup was silently skipped. The bug
- * was invisible because no test exercised the wiring at the layer
- * boundary — the existing terminator-contract tests in
- * `session-commands.test.ts` use a hand-rolled layer that already
- * registers the runtime, so they exercise the service contract but not
- * the wiring.
+ * terminator and the runtime-side cleanup was silently skipped.
  *
- * This file exercises the wiring via the public surface of
- * `SessionCommands.deleteSession`, which is what reaches the terminator
- * inside `cleanupSessionRuntimeState`. Two arms:
+ * This file pins down the service-pair contract on its own (using a
+ * hand-rolled layer with `SessionMutationsLive` directly, NOT
+ * `baseLocalLayer` / `createE2ELayer`). It proves the second half of the
+ * pair is load-bearing — drop the registration layer, the positive arm
+ * fails. Real verification that `in-process-layer.ts` and `e2e-layer.ts`
+ * wire both halves correctly comes from `core-boundary.test.ts`, which
+ * deletes a session and awaits `events.closed` — that signal only fires
+ * when the registered runtime's stream closes, so a missing registration
+ * would hang the test past its 15s timeout.
  *
+ * Two arms:
  *   1. With registration → probe `SessionRuntime.terminateSession` is called.
  *   2. Without registration → probe is never called (silent no-op).
  *
