@@ -4,6 +4,25 @@ import { Option, Schema } from "effect"
 const JwtClaimsSchema = Schema.Record(Schema.String, Schema.Unknown)
 const decodeJwtClaims = Schema.decodeUnknownOption(Schema.fromJsonString(JwtClaimsSchema))
 
+/**
+ * Typed error for the OpenAI OAuth flow. Replaces the previous mix of
+ * `new Error(...)` throws — `reason` discriminates the failure mode so
+ * the surrounding `Effect.tryPromise → ProviderAuthError` boundary
+ * preserves structure in `cause`, not just a string message.
+ */
+export class OAuthError extends Schema.TaggedErrorClass<OAuthError>()("OAuthError", {
+  reason: Schema.Literals([
+    "token-exchange-failed",
+    "token-refresh-failed",
+    "callback-error",
+    "missing-code",
+    "state-mismatch",
+    "callback-timeout",
+    "cancelled",
+  ]),
+  message: Schema.String,
+}) {}
+
 export const OPENAI_OAUTH_ALLOWED_MODELS = new Set(["gpt-5.4", "gpt-5.4-mini"])
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -156,7 +175,10 @@ const exchangeCodeForTokens = async (
     }).toString(),
   })
   if (!response.ok) {
-    throw new Error(`Token exchange failed: ${response.status}`)
+    throw new OAuthError({
+      reason: "token-exchange-failed",
+      message: `Token exchange failed: ${response.status}`,
+    })
   }
   return response.json()
 }
@@ -172,7 +194,10 @@ const refreshAccessToken = async (refreshToken: string): Promise<TokenResponse> 
     }).toString(),
   })
   if (!response.ok) {
-    throw new Error(`Token refresh failed: ${response.status}`)
+    throw new OAuthError({
+      reason: "token-refresh-failed",
+      message: `Token refresh failed: ${response.status}`,
+    })
   }
   return response.json()
 }
@@ -223,7 +248,7 @@ const startOAuthServer = async (): Promise<{ port: number; redirectUri: string }
           const errorMsg = errorDescription ?? error
           if (pending !== undefined && stateParam !== null) {
             pendingOAuth.delete(stateParam)
-            pending.reject(new Error(errorMsg))
+            pending.reject(new OAuthError({ reason: "callback-error", message: errorMsg }))
           }
           if (pendingOAuth.size === 0) stopOAuthServer()
           return new Response(HTML_ERROR(errorMsg), { headers: { "Content-Type": "text/html" } })
@@ -233,7 +258,7 @@ const startOAuthServer = async (): Promise<{ port: number; redirectUri: string }
           const errorMsg = "Missing authorization code"
           if (pending !== undefined && stateParam !== null) {
             pendingOAuth.delete(stateParam)
-            pending.reject(new Error(errorMsg))
+            pending.reject(new OAuthError({ reason: "missing-code", message: errorMsg }))
           }
           if (pendingOAuth.size === 0) stopOAuthServer()
           return new Response(HTML_ERROR(errorMsg), {
@@ -246,7 +271,7 @@ const startOAuthServer = async (): Promise<{ port: number; redirectUri: string }
           const errorMsg = "Invalid state"
           if (pending !== undefined && stateParam !== null) {
             pendingOAuth.delete(stateParam)
-            pending.reject(new Error(errorMsg))
+            pending.reject(new OAuthError({ reason: "state-mismatch", message: errorMsg }))
           }
           if (pendingOAuth.size === 0) stopOAuthServer()
           return new Response(HTML_ERROR(errorMsg), {
@@ -295,7 +320,7 @@ const waitForOAuthCallback = (
       if (pendingOAuth.has(state)) {
         pendingOAuth.delete(state)
         if (pendingOAuth.size === 0) stopOAuthServer()
-        rejectFn(new Error("OAuth callback timeout"))
+        rejectFn(new OAuthError({ reason: "callback-timeout", message: "OAuth callback timeout" }))
       }
     },
     5 * 60 * 1000,
@@ -320,7 +345,7 @@ const waitForOAuthCallback = (
       if (pendingOAuth.size === 0) stopOAuthServer()
     }
     clearTimeout(timeout)
-    rejectFn(new Error(reason))
+    rejectFn(new OAuthError({ reason: "cancelled", message: reason }))
   }
 
   return { promise, cancel }
@@ -345,12 +370,15 @@ export const authorizeOpenAI = async () => {
         if (parsed.state !== undefined && parsed.state !== state) {
           pending.cancel("State mismatch")
           void pending.promise.catch(() => {})
-          throw new Error("State mismatch")
+          throw new OAuthError({ reason: "state-mismatch", message: "State mismatch" })
         }
         if (parsed.code === undefined || parsed.code.length === 0) {
           pending.cancel("Missing authorization code")
           void pending.promise.catch(() => {})
-          throw new Error("Missing authorization code")
+          throw new OAuthError({
+            reason: "missing-code",
+            message: "Missing authorization code",
+          })
         }
         pending.cancel("Manual authorization code provided")
         void pending.promise.catch(() => {})
