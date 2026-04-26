@@ -230,7 +230,7 @@ export type ResolvedTurn = {
 
 // ── 3-State Machine ──
 
-export const AgentLoopState = State({
+export const LoopMachineState = State({
   /** No turn in progress. */
   Idle: LoopStateBaseFields,
   /** Agentic loop running: resolve → stream → tools → repeat. */
@@ -260,11 +260,11 @@ export const AgentLoopEvent = Event({
 
 // ── Type aliases ──
 
-export type LoopState = typeof AgentLoopState.Type
+export type LoopState = typeof LoopMachineState.Type
 export type IdleState = Extract<LoopState, { _tag: "Idle" }>
 export type RunningState = Extract<LoopState, { _tag: "Running" }>
 export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForInteraction" }>
-export type LoopActor = ActorRef<typeof AgentLoopState.Type, typeof AgentLoopEvent.Type>
+export type LoopActor = ActorRef<typeof LoopMachineState.Type, typeof AgentLoopEvent.Type>
 
 // ── Runtime projection (transport/UI) ──
 // Public runtime state mirrors the machine directly. No parallel `phase/status`
@@ -291,7 +291,7 @@ export const isLoopRuntimeIdle = (state: LoopRuntimeState): boolean => state._ta
 // ── State builders ──
 
 export const buildIdleState = (params?: { currentAgent?: AgentNameType }): IdleState =>
-  AgentLoopState.Idle({
+  LoopMachineState.Idle({
     currentAgent: params?.currentAgent,
   })
 
@@ -299,7 +299,7 @@ export const buildRunningState = (
   base: { currentAgent?: AgentNameType },
   item: QueuedTurnItem,
 ): RunningState =>
-  AgentLoopState.Running({
+  LoopMachineState.Running({
     currentAgent: base.currentAgent,
     message: item.message,
     startedAtMs: Date.now(),
@@ -314,7 +314,7 @@ export const toWaitingForInteractionState = (params: {
   pendingRequestId: string
   pendingToolCallId: string
 }): WaitingForInteractionState =>
-  AgentLoopState.WaitingForInteraction.with(params.state, {
+  LoopMachineState.WaitingForInteraction.with(params.state, {
     currentTurnAgent: params.currentTurnAgent,
     pendingRequestId: params.pendingRequestId,
     pendingToolCallId: params.pendingToolCallId,
@@ -323,7 +323,7 @@ export const toWaitingForInteractionState = (params: {
 export const updateCurrentAgentOnState = <S extends LoopState>(
   state: S,
   currentAgent: AgentNameType,
-): S => AgentLoopState.with(state, { currentAgent })
+): S => LoopMachineState.with(state, { currentAgent })
 
 export const queueSnapshotFromQueueState = (queue: LoopQueueState): QueueSnapshot =>
   toQueueSnapshot(queue.steering, queue.followUp)

@@ -117,7 +117,7 @@ import {
 } from "./agent-loop.checkpoint.js"
 import {
   AgentLoopEvent,
-  AgentLoopState,
+  LoopMachineState,
   appendFollowUpQueueState,
   appendSteeringItem,
   buildIdleState,
@@ -1924,7 +1924,7 @@ const actorCauseFailure = (cause: Cause.Cause<unknown>) => {
       })
 }
 
-const failActorExit = (exit: ActorExit<typeof AgentLoopState.Type>) =>
+const failActorExit = (exit: ActorExit<typeof LoopMachineState.Type>) =>
   Effect.fail(
     exit._tag === "Defect"
       ? actorCauseFailure(exit.cause)
@@ -2300,7 +2300,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
           sessionId: SessionId,
           branchId: BranchId,
           handle: LoopHandle,
-          exit: ActorExit<typeof AgentLoopState.Type>,
+          exit: ActorExit<typeof LoopMachineState.Type>,
         ) =>
           cleanupLoopIfCurrent(sessionId, branchId, handle).pipe(
             Effect.andThen(failActorExit(exit)),
@@ -2752,21 +2752,25 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             })
 
             const loopMachine = Machine.make({
-              state: AgentLoopState,
+              state: LoopMachineState,
               event: AgentLoopEvent,
               initial: initialLoopState,
             })
               // Idle → Running
-              .on(AgentLoopState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
+              .on(LoopMachineState.Idle, AgentLoopEvent.Start, ({ state, event }) =>
                 buildRunningState(state, event.item),
               )
               .on(
-                [AgentLoopState.Idle, AgentLoopState.Running, AgentLoopState.WaitingForInteraction],
+                [
+                  LoopMachineState.Idle,
+                  LoopMachineState.Running,
+                  LoopMachineState.WaitingForInteraction,
+                ],
                 AgentLoopEvent.SwitchAgent,
                 ({ state, event }) => switchAgentOnState(state, event.agent),
               )
-              .on(AgentLoopState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
-              .on(AgentLoopState.Running, AgentLoopEvent.Interrupt, ({ state }) =>
+              .on(LoopMachineState.Idle, AgentLoopEvent.Interrupt, ({ state }) => state)
+              .on(LoopMachineState.Running, AgentLoopEvent.Interrupt, ({ state }) =>
                 Effect.gen(function* () {
                   yield* Ref.set(interruptedRef, true)
                   yield* interruptActiveStream(activeStreamRef)
@@ -2774,7 +2778,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }),
               )
               // Running → Idle (turn done), or re-enter Running (queued follow-up)
-              .reenter(AgentLoopState.Running, AgentLoopEvent.TurnDone, ({ state }) =>
+              .reenter(LoopMachineState.Running, AgentLoopEvent.TurnDone, ({ state }) =>
                 Effect.gen(function* () {
                   const { nextItem } = yield* takeNextQueuedTurnSerialized
                   if (nextItem !== undefined) {
@@ -2785,7 +2789,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                   return buildIdleState({ currentAgent: state.currentAgent })
                 }),
               )
-              .on(AgentLoopState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
+              .on(LoopMachineState.Running, AgentLoopEvent.TurnFailed, ({ state }) =>
                 Effect.gen(function* () {
                   const { nextItem } = yield* takeNextQueuedTurnSerialized
                   yield* Ref.set(interruptedRef, false)
@@ -2796,20 +2800,23 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 }),
               )
               // Running → WaitingForInteraction
-              .on(AgentLoopState.Running, AgentLoopEvent.InteractionRequested, ({ state, event }) =>
-                toWaitingForInteractionState({
-                  state,
-                  currentTurnAgent: event.currentTurnAgent,
-                  pendingRequestId: event.pendingRequestId,
-                  pendingToolCallId: event.pendingToolCallId,
-                }),
+              .on(
+                LoopMachineState.Running,
+                AgentLoopEvent.InteractionRequested,
+                ({ state, event }) =>
+                  toWaitingForInteractionState({
+                    state,
+                    currentTurnAgent: event.currentTurnAgent,
+                    pendingRequestId: event.pendingRequestId,
+                    pendingToolCallId: event.pendingToolCallId,
+                  }),
               )
               // WaitingForInteraction — cold state, no task fiber
-              .on(AgentLoopState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
+              .on(LoopMachineState.WaitingForInteraction, AgentLoopEvent.Interrupt, ({ state }) =>
                 Effect.gen(function* () {
                   // Transition to Running with interrupt set — task will finalize immediately
                   yield* Ref.set(interruptedRef, true)
-                  return AgentLoopState.Running.with(state, {
+                  return LoopMachineState.Running.with(state, {
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
@@ -2820,10 +2827,10 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
               // WaitingForInteraction → Running (resume)
               .on(
-                AgentLoopState.WaitingForInteraction,
+                LoopMachineState.WaitingForInteraction,
                 AgentLoopEvent.InteractionResponded,
                 ({ state }) =>
-                  AgentLoopState.Running.with(state, {
+                  LoopMachineState.Running.with(state, {
                     message: state.message,
                     startedAtMs: state.startedAtMs,
                     agentOverride: state.agentOverride,
@@ -2833,7 +2840,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
               )
               // Running task — the agentic loop
               .task(
-                AgentLoopState.Running,
+                LoopMachineState.Running,
                 ({ state }) =>
                   sideMutationSemaphore.withPermits(1)(
                     runTurn(state).pipe(
