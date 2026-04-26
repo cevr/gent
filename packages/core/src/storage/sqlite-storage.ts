@@ -1605,7 +1605,6 @@ const makeStorage = Effect.gen(function* () {
 
     getSessionDetail: Effect.fn("Storage.getSessionDetail")(
       function* (sessionId) {
-        // Get session
         const sessionRows =
           yield* sql<SessionRow>`SELECT id, name, cwd, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, created_at, updated_at FROM sessions WHERE id = ${sessionId}`
         const sessionRow = sessionRows[0]
@@ -1614,31 +1613,43 @@ const makeStorage = Effect.gen(function* () {
         }
         const session = sessionFromRow(sessionRow)
 
-        // Get all branches
         const branchRows =
           yield* sql<BranchRow>`SELECT id, session_id, parent_branch_id, parent_message_id, name, summary, created_at FROM branches WHERE session_id = ${sessionId} ORDER BY created_at ASC`
         const branches = branchRows.map(branchFromRow)
 
-        // Get messages per branch
+        if (branches.length === 0) {
+          return { session, branches: [] }
+        }
+
+        const branchIds = branches.map((b) => b.id)
+        const allMsgRows = yield* sql<MessageChunkRow>`SELECT
+            m.id,
+            m.session_id,
+            m.branch_id,
+            m.kind,
+            m.role,
+            m.parts,
+            m.created_at,
+            m.turn_duration_ms,
+            m.metadata,
+            mc.ordinal as chunk_ordinal,
+            c.part_json as chunk_part_json
+          FROM messages m
+          LEFT JOIN message_chunks mc ON mc.message_id = m.id
+          LEFT JOIN content_chunks c ON c.id = mc.chunk_id
+          WHERE m.branch_id IN ${sql.in(branchIds)}
+          ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+
+        const rowsByBranch = new Map<BranchId, Array<MessageChunkRow>>()
+        for (const branch of branches) rowsByBranch.set(branch.id, [])
+        for (const row of allMsgRows) {
+          const bucket = rowsByBranch.get(row.branch_id as BranchId)
+          if (bucket !== undefined) bucket.push(row)
+        }
+
         const result = yield* Effect.forEach(branches, (branch) =>
           Effect.gen(function* () {
-            const msgRows = yield* sql<MessageChunkRow>`SELECT
-                m.id,
-                m.session_id,
-                m.branch_id,
-                m.kind,
-                m.role,
-                m.parts,
-                m.created_at,
-                m.turn_duration_ms,
-                m.metadata,
-                mc.ordinal as chunk_ordinal,
-                c.part_json as chunk_part_json
-              FROM messages m
-              LEFT JOIN message_chunks mc ON mc.message_id = m.id
-              LEFT JOIN content_chunks c ON c.id = mc.chunk_id
-              WHERE m.branch_id = ${branch.id}
-              ORDER BY m.created_at ASC, m.id ASC, mc.ordinal ASC`
+            const msgRows = rowsByBranch.get(branch.id) ?? []
             const messages = yield* Effect.forEach(
               groupMessageChunkRows(msgRows),
               ({ row, partJsons }) => decodeStoredMessage(row, partJsons),
