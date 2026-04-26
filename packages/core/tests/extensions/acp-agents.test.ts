@@ -89,6 +89,59 @@ describe("mapAcpUpdateToTurnEvent", () => {
     expect(event).toBeInstanceOf(ToolFailed)
   })
 
+  test("captures text content blocks into tool-completed output", () => {
+    const event = mapAcpUpdateToTurnEvent(
+      makeNotification({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tc-out-1",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "text", text: "first " } },
+          { type: "content", content: { type: "text", text: "second" } },
+        ],
+      }),
+    )
+    expect(event).toEqual({
+      _tag: "tool-completed",
+      toolCallId: "tc-out-1",
+      output: "first second",
+    })
+    expect(event).toBeInstanceOf(ToolCompleted)
+  })
+
+  test("preserves a single non-text content block as structured output", () => {
+    const event = mapAcpUpdateToTurnEvent(
+      makeNotification({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tc-out-2",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: { type: "image", data: "base64...", mimeType: "image/png" },
+          },
+        ],
+      }),
+    )
+    expect(event).toEqual({
+      _tag: "tool-completed",
+      toolCallId: "tc-out-2",
+      output: { type: "image", data: "base64...", mimeType: "image/png" },
+    })
+  })
+
+  test("emits tool-completed with no output when content array is absent", () => {
+    const event = mapAcpUpdateToTurnEvent(
+      makeNotification({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tc-out-3",
+        status: "completed",
+      }),
+    )
+    expect(event).toEqual({ _tag: "tool-completed", toolCallId: "tc-out-3" })
+    expect(event).toBeInstanceOf(ToolCompleted)
+  })
+
   test("returns undefined for non-text content in message chunk", () => {
     const event = mapAcpUpdateToTurnEvent(
       makeNotification({

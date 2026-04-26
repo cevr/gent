@@ -84,12 +84,48 @@ const extractTextFromContent = (content: unknown): string | undefined => {
   return c["type"] === "text" && typeof c["text"] === "string" ? c["text"] : undefined
 }
 
+/**
+ * Extract the tool-result `output` payload from an ACP tool_call_update.
+ *
+ * ACP wire shape: `content: [{ type: "content", content: { type, ... } }, ...]`.
+ * We surface text content as a `string` and other content blocks as their
+ * raw structured form. Returns `undefined` if no recognizable content is
+ * present so callers can fall back to `null` in the transcript.
+ */
+const extractToolResultOutput = (obj: Record<string, unknown>): unknown => {
+  const blocks = obj["content"]
+  if (!Array.isArray(blocks) || blocks.length === 0) return undefined
+  const texts: Array<string> = []
+  const others: Array<unknown> = []
+  for (const block of blocks) {
+    if (typeof block !== "object" || block === null) continue
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- extension adapter narrows foreign SDK payload at boundary
+    const wrapper = block as Record<string, unknown>
+    const inner = wrapper["content"] ?? wrapper
+    const text = extractTextFromContent(inner)
+    if (text !== undefined) {
+      texts.push(text)
+    } else {
+      others.push(inner)
+    }
+  }
+  if (texts.length > 0 && others.length === 0) return texts.join("")
+  if (texts.length === 0 && others.length === 0) return undefined
+  if (others.length === 1 && texts.length === 0) return others[0]
+  return [...texts.map((text) => ({ type: "text", text })), ...others]
+}
+
 /** Map a tool_call_update to a TurnEvent based on status. */
 const mapToolCallUpdate = (obj: Record<string, unknown>): TurnEvent | undefined => {
   const toolCallId = typeof obj["toolCallId"] === "string" ? obj["toolCallId"] : undefined
   const status = typeof obj["status"] === "string" ? obj["status"] : undefined
   if (toolCallId === undefined) return undefined
-  if (status === "completed") return ToolCompleted.make({ toolCallId })
+  if (status === "completed") {
+    const output = extractToolResultOutput(obj)
+    return output === undefined
+      ? ToolCompleted.make({ toolCallId })
+      : ToolCompleted.make({ toolCallId, output })
+  }
   if (status === "failed") {
     return ToolFailed.make({
       toolCallId,
