@@ -11,6 +11,7 @@
  */
 
 import { Effect, Schema, type FileSystem, type Path } from "effect"
+import type { ExtensionId } from "../../domain/ids.js"
 
 export class ExtensionStorageError extends Schema.TaggedErrorClass<ExtensionStorageError>()(
   "ExtensionStorageError",
@@ -59,7 +60,7 @@ const validateExtensionId = (id: string): void => {
  * @param path - Captured Path service instance
  */
 export const createExtensionStorage = (
-  extensionId: string,
+  extensionId: ExtensionId,
   baseDir: string,
   fs: FileSystem.FileSystem,
   path: Path.Path,

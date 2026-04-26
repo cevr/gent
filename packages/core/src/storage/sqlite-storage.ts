@@ -9,7 +9,7 @@ import {
   getEventBranchId,
   getEventSessionId,
 } from "../domain/event.js"
-import type { SessionId, BranchId, MessageId } from "../domain/ids.js"
+import type { ExtensionId, SessionId, BranchId, MessageId } from "../domain/ids.js"
 import { ReasoningEffort } from "../domain/agent.js"
 import { isRecord } from "../domain/guards.js"
 import { SqlClient, SqlError } from "effect/unstable/sql"
@@ -186,13 +186,13 @@ export interface StorageService {
   // Extension state persistence
   readonly saveExtensionState: (params: {
     sessionId: SessionId
-    extensionId: string
+    extensionId: ExtensionId
     stateJson: string
     version: number
   }) => Effect.Effect<void, StorageError>
   readonly loadExtensionState: (params: {
     sessionId: SessionId
-    extensionId: string
+    extensionId: ExtensionId
   }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
 }
 
@@ -1666,7 +1666,7 @@ const makeStorage = Effect.gen(function* () {
     saveExtensionState: Effect.fn("Storage.saveExtensionState")(
       function* (params: {
         sessionId: SessionId
-        extensionId: string
+        extensionId: ExtensionId
         stateJson: string
         version: number
       }) {
@@ -1677,7 +1677,7 @@ const makeStorage = Effect.gen(function* () {
     ),
 
     loadExtensionState: Effect.fn("Storage.loadExtensionState")(
-      function* (params: { sessionId: SessionId; extensionId: string }) {
+      function* (params: { sessionId: SessionId; extensionId: ExtensionId }) {
         const rows = yield* sql<{
           state_json: string
           version: number

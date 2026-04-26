@@ -6,19 +6,19 @@
 
 import type { Effect } from "effect"
 import { Context, Layer } from "effect"
-import type { SessionId } from "../domain/ids.js"
+import type { ExtensionId, SessionId } from "../domain/ids.js"
 import type { StorageError } from "./sqlite-storage.js"
 
 export interface ExtensionStateStorageService {
   readonly saveExtensionState: (params: {
     sessionId: SessionId
-    extensionId: string
+    extensionId: ExtensionId
     stateJson: string
     version: number
   }) => Effect.Effect<void, StorageError>
   readonly loadExtensionState: (params: {
     sessionId: SessionId
-    extensionId: string
+    extensionId: ExtensionId
   }) => Effect.Effect<{ stateJson: string; version: number } | undefined, StorageError>
 }
 
