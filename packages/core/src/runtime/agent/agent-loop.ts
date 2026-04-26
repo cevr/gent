@@ -13,7 +13,6 @@ import {
   Scope,
   Stream,
   SubscriptionRef,
-  type Fiber,
 } from "effect"
 import {
   AgentDefinition,
@@ -2318,10 +2317,6 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             const turnFailureRef = yield* SubscriptionRef.make<TurnFailureState>({ count: 0 })
             const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
             const closed = yield* Deferred.make<void>()
-            // Plain-Effect driver state. Replaces effect-machine actor.
-            const turnFiberRef = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(
-              Option.none(),
-            )
             let started = false
 
             const persistRuntimeSnapshot = (state: LoopState, queue: LoopQueueState) =>
@@ -2709,9 +2704,9 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
             // event queue + transition table. With state already collapsed to
             // a single SubscriptionRef (W8-1), the driver is now a switch on
             // `state._tag` inside each method. The per-turn fiber is forked
-            // with `Effect.forkIn(loopScope)` and stored in `turnFiberRef`;
-            // its completion runs the post-turn transition (Done/Failed →
-            // drain queue, Interaction → cold state) inline.
+            // with `Effect.forkIn(loopScope)`; its completion runs the
+            // post-turn transition (Done/Failed → drain queue, Interaction →
+            // cold state) inline.
 
             // Persistence is invoked at every state mutation that the FSM
             // previously handled via `lifecycle.durability.save`. The
@@ -2813,10 +2808,7 @@ export class AgentLoop extends Context.Service<AgentLoop, AgentLoopService>()(
                 )
 
             const forkTurn = (startState: RunningState): Effect.Effect<void> =>
-              Effect.gen(function* () {
-                const fiber = yield* Effect.forkIn(runTurnFiber(startState), loopScope)
-                yield* Ref.set(turnFiberRef, Option.some(fiber))
-              })
+              Effect.forkIn(runTurnFiber(startState), loopScope).pipe(Effect.asVoid)
 
             // Public dispatch surface — replaces `actor.call(Event)` /
             // `actor.send(Event)`. Most events serialize via
