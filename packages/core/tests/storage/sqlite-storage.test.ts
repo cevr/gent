@@ -464,6 +464,92 @@ describe("Storage", () => {
       }).pipe(Effect.provide(Storage.TestWithSql())),
     )
 
+    // Observable post-state contract (sqlite-storage.ts:1204-1209):
+    // when `deleteSession(parent)` races with concurrent
+    // `createSession(child of parent)`, the durable state must satisfy:
+    //   1. parent is gone;
+    //   2. parent appears in the returned `cascadedIds`;
+    //   3. no row in `sessions` has `parent_session_id = parent`;
+    //   4. every id in `cascadedIds` is actually absent from `sessions` —
+    //      callers use this set to clean runtime state (loops, streams,
+    //      cwd-registry) and a divergence would leak ghost entries.
+    // The bun:sqlite driver serializes SQL calls, so this test cannot
+    // independently prove the `withTransaction` boundary is load-bearing
+    // (FK enforcement does most of the heavy lifting). It pins the public
+    // contract: a regression that returned a stale or empty cascade set
+    // while still completing the delete would fail invariants 2 or 4.
+    it.live("deleteSession racing with concurrent child createSession leaves no orphan rows", () =>
+      Effect.gen(function* () {
+        const storage = yield* Storage
+        const sql = yield* SqlClient.SqlClient
+        const now = new Date()
+        const parentId = SessionId.make("race-parent")
+        const parentBranchId = BranchId.make("race-parent-branch")
+        yield* storage.createSession(new Session({ id: parentId, createdAt: now, updatedAt: now }))
+        yield* storage.createBranch(
+          new Branch({ id: parentBranchId, sessionId: parentId, createdAt: now }),
+        )
+
+        const N = 24
+        const childIds = Array.from({ length: N }, (_, i) => SessionId.make(`race-child-${i}`))
+
+        // Race the delete against N concurrent child creates. Each child
+        // create may either:
+        //   (a) commit before the delete tx's SELECT — gets cascaded;
+        //   (b) commit after the delete tx finishes — survives, parent gone
+        //       (FK violation: should fail at commit time);
+        //   (c) commit while delete tx is in flight — serialized by sqlite.
+        // Use Effect.exit so individual failures (FK violations) don't
+        // short-circuit the race; we'll inspect the durable state directly.
+        const createChild = (id: SessionId) =>
+          Effect.exit(
+            storage.createSession(
+              new Session({
+                id,
+                parentSessionId: parentId,
+                parentBranchId,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            ),
+          )
+
+        const [cascadedIds] = yield* Effect.all(
+          [
+            storage.deleteSession(parentId),
+            Effect.forEach(childIds, createChild, { concurrency: "unbounded" }),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        // Invariant: parent is gone, and parent is in the returned set.
+        const parentRows = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${parentId}`
+        expect(parentRows[0]?.count).toBe(0)
+        expect(cascadedIds).toContain(parentId)
+
+        // Invariant: no child row points at the removed parent. Children
+        // that landed before the delete were cascaded; children that tried
+        // to land after were rejected by the FK or cascaded together.
+        const orphanRows = yield* sql<{
+          count: number
+        }>`SELECT COUNT(*) as count FROM sessions WHERE parent_session_id = ${parentId}`
+        expect(orphanRows[0]?.count).toBe(0)
+
+        // Invariant: every id the storage layer reports as cascaded is
+        // gone from the DB. The caller uses this set to clean runtime
+        // state (loops, streams, cwd-registry) — a divergence here would
+        // leak ghost entries pointing at deleted sessions.
+        for (const id of cascadedIds) {
+          const rows = yield* sql<{
+            count: number
+          }>`SELECT COUNT(*) as count FROM sessions WHERE id = ${id}`
+          expect(rows[0]?.count).toBe(0)
+        }
+      }).pipe(Effect.timeout("5 seconds"), Effect.provide(Storage.TestWithSql())),
+    )
+
     test("migrates legacy storage tables to enforced foreign keys", async () => {
       const dir = mkdtempSync(join(tmpdir(), "gent-fk-migration-"))
       const dbPath = join(dir, "gent.db")
