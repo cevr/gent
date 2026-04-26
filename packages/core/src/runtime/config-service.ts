@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
-import { DriverRef } from "../domain/agent.js"
+import { DriverRef, type AgentName } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -69,9 +69,9 @@ export interface ConfigServiceService {
    *  Use this rather than `set({ driverOverrides })` so callers don't have
    *  to remember the partial-merge semantics — `set({ driverOverrides: undefined })`
    *  preserves the existing record, which is the wrong default for clears. */
-  readonly setDriverOverride: (agent: string, driver: DriverRef) => Effect.Effect<void>
+  readonly setDriverOverride: (agent: AgentName, driver: DriverRef) => Effect.Effect<void>
   /** Remove a per-agent driver override. No-op when the agent has none. */
-  readonly clearDriverOverride: (agent: string) => Effect.Effect<void>
+  readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void>
   readonly loadInstructions: (cwd: string) => Effect.Effect<string>
 }
 

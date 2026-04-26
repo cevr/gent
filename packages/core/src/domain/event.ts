@@ -442,29 +442,6 @@ export interface EventStoreService {
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void>
 }
 
-/**
- * Defensive structural fallback for events that bypass schema validation —
- * synthetic test fixtures or future tags this build doesn't yet know about.
- * The exhaustive `match` paths above stay authoritative for valid events.
- */
-const readStringField = (event: Record<string, unknown>, key: string): string | undefined => {
-  const value = event[key]
-  return typeof value === "string" ? value : undefined
-}
-
-const fallbackSessionId = (event: Record<string, unknown>): SessionId | undefined => {
-  const direct = readStringField(event, "sessionId")
-  if (direct !== undefined) return SessionId.make(direct)
-  const parent = readStringField(event, "parentSessionId")
-  if (parent !== undefined) return SessionId.make(parent)
-  return undefined
-}
-
-const fallbackBranchId = (event: Record<string, unknown>): BranchId | undefined => {
-  const value = readStringField(event, "branchId")
-  return value !== undefined ? BranchId.make(value) : undefined
-}
-
 const matchEventSessionId = AgentEvent.match({
   SessionStarted: (e) => e.sessionId,
   MessageReceived: (e) => e.message.sessionId,
@@ -502,13 +479,8 @@ const matchEventSessionId = AgentEvent.match({
   ExtensionStateChanged: (e) => e.sessionId,
 })
 
-export const getEventSessionId = (event: AgentEvent): SessionId | undefined => {
-  try {
-    return matchEventSessionId(event)
-  } catch {
-    return fallbackSessionId(event)
-  }
-}
+export const getEventSessionId = (event: AgentEvent): SessionId | undefined =>
+  matchEventSessionId(event)
 
 const matchEventBranchId = AgentEvent.match({
   SessionStarted: (e) => e.branchId,
@@ -550,13 +522,8 @@ const matchEventBranchId = AgentEvent.match({
   ExtensionStateChanged: (e) => e.branchId,
 })
 
-export const getEventBranchId = (event: AgentEvent): BranchId | undefined => {
-  try {
-    return matchEventBranchId(event)
-  } catch {
-    return fallbackBranchId(event)
-  }
-}
+export const getEventBranchId = (event: AgentEvent): BranchId | undefined =>
+  matchEventBranchId(event)
 
 export const matchesEventFilter = (
   env: EventEnvelope,

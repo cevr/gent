@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  type AgentEvent,
   AgentRunFailed,
   AgentRunSpawned,
   AgentRunSucceeded,
@@ -50,19 +49,6 @@ describe("getEventSessionId", () => {
     expect(getEventSessionId(succeeded)).toBe(session)
     expect(getEventSessionId(failed)).toBe(session)
   })
-
-  test("structurally fabricated synthetic events fall back to sessionId field", () => {
-    const synthetic = {
-      _tag: "MockEvent",
-      sessionId: session,
-    } as unknown as AgentEvent
-    expect(getEventSessionId(synthetic)).toBe(session)
-  })
-
-  test("synthetic events without a session return undefined", () => {
-    const synthetic = { _tag: "Headless" } as unknown as AgentEvent
-    expect(getEventSessionId(synthetic)).toBeUndefined()
-  })
 })
 
 describe("getEventBranchId", () => {
@@ -90,14 +76,6 @@ describe("getEventBranchId", () => {
       toAgent: AgentName.make("research"),
     })
     expect(getEventBranchId(event)).toBe(branch)
-  })
-
-  test("synthetic events fall back structurally", () => {
-    const synthetic = {
-      _tag: "MockEvent",
-      branchId: branch,
-    } as unknown as AgentEvent
-    expect(getEventBranchId(synthetic)).toBe(branch)
   })
 })
 

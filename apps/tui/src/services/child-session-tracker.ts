@@ -9,6 +9,7 @@
 import { Effect, Fiber, FiberSet, PubSub, Ref, Stream } from "effect"
 import type { Scope } from "effect"
 import { EventStore, type AgentEvent, type EventEnvelope } from "@gent/core/domain/event.js"
+import type { AgentName } from "@gent/core/domain/agent.js"
 import { SessionId } from "@gent/core/domain/ids.js"
 import type { BranchId, ToolCallId } from "@gent/core/domain/ids.js"
 
@@ -34,7 +35,7 @@ export interface ChildSessionEntry {
   childSessionId: string
   childBranchId?: string
   toolCallId: ToolCallId
-  agentName: string
+  agentName: AgentName
   status: "running" | "completed" | "error"
   toolCalls: ChildToolCall[]
   /** Accumulated stream text (live, during running) */

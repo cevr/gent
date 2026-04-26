@@ -491,17 +491,17 @@ export type DriverInfo = typeof DriverInfo.Type
  *  the agent catalogue to render `/driver`. */
 export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
-  overrides: Schema.Record(Schema.String, DriverRef),
+  overrides: Schema.Record(AgentName, DriverRef),
 }) {}
 
 export const SetDriverOverrideInput = Schema.Struct({
-  agentName: Schema.String,
+  agentName: AgentName,
   driver: DriverRef,
 })
 export type SetDriverOverrideInput = typeof SetDriverOverrideInput.Type
 
 export const ClearDriverOverrideInput = Schema.Struct({
-  agentName: Schema.String,
+  agentName: AgentName,
 })
 export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 

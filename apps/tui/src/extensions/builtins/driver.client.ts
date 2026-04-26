@@ -17,7 +17,7 @@
 
 import { Effect } from "effect"
 import { defineClientExtension, clientCommandContribution } from "../client-facets.js"
-import { ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent.js"
+import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/domain/agent.js"
 import { ClientShell } from "../client-services"
 import { ClientTransport } from "../client-transport"
 
@@ -48,12 +48,13 @@ export default defineClientExtension("@gent/driver-ui", {
             shell.sendMessage(USAGE)
             return
           }
-          const agentName = parts[0]
+          const rawAgentName = parts[0]
           const driverArg = parts[1]
-          if (agentName === undefined || driverArg === undefined) {
+          if (rawAgentName === undefined || driverArg === undefined) {
             shell.sendMessage(USAGE)
             return
           }
+          const agentName = AgentName.make(rawAgentName)
           if (driverArg === "default" || driverArg === "clear") {
             void runtime
               .run(client.driver.clear({ agentName }))

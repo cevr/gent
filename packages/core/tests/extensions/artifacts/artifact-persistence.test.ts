@@ -5,9 +5,9 @@
 
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { type AgentRunResult } from "@gent/core/domain/agent"
+import { AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
-import { ArtifactId } from "@gent/core/domain/ids"
+import { ArtifactId, SessionId } from "@gent/core/domain/ids"
 import type { Artifact } from "@gent/extensions/artifacts-protocol"
 import { ARTIFACTS_EXTENSION_ID } from "@gent/extensions/artifacts-protocol"
 import { PlanTool } from "@gent/extensions/plan-tool"
@@ -55,12 +55,13 @@ const createAskSpy = () => {
 const stubAgentRun =
   (textFn?: (prompt: string) => string) =>
   (params: Parameters<ExtensionHostContext.Agent["run"]>[0]) =>
-    Effect.succeed({
-      _tag: "success" as const,
-      text: textFn?.(params.prompt) ?? "output",
-      sessionId: "s1",
-      agentName: params.agent.name,
-    } as AgentRunResult & { _tag: "success" })
+    Effect.succeed(
+      AgentRunResult.Success.make({
+        text: textFn?.(params.prompt) ?? "output",
+        sessionId: SessionId.make("s1"),
+        agentName: params.agent.name,
+      }),
+    )
 
 const agentLookup = {
   get: (name: string) => Effect.succeed(Object.values(Agents).find((a) => a.name === name)),

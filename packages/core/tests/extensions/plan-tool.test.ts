@@ -1,11 +1,11 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Effect } from "effect"
-import { type AgentRunResult } from "@gent/core/domain/agent"
+import { AgentName, AgentRunResult } from "@gent/core/domain/agent"
 import { Agents } from "@gent/extensions/all-agents"
 import { PlanTool } from "@gent/extensions/plan-tool"
 import type { ToolContext } from "@gent/core/domain/tool"
 import type { ExtensionHostContext } from "@gent/core/domain/extension-host-context"
-import { ToolCallId } from "@gent/core/domain/ids"
+import { SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { testToolContext } from "@gent/core/test-utils/extension-harness"
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
@@ -26,12 +26,13 @@ const makeCtx = (overrides: {
   const agentRun =
     overrides.agentRun ??
     (() =>
-      Effect.succeed({
-        _tag: "success" as const,
-        text: "output",
-        sessionId: "s1",
-        agentName: "test",
-      }))
+      Effect.succeed(
+        AgentRunResult.Success.make({
+          text: "output",
+          sessionId: SessionId.make("s1"),
+          agentName: AgentName.make("test"),
+        }),
+      ))
   return {
     ...base,
     extension: {
@@ -82,12 +83,13 @@ describe("Plan Tool", () => {
         calls.push({ prompt: params.prompt })
         parentToolCallIds.push(params.runSpec?.parentToolCallId)
         callIdx++
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: `phase-${callIdx}-output`,
-          sessionId: `session-${callIdx}`,
-          agentName: params.agent.name,
-        } as AgentRunResult & { _tag: "success" })
+        return Effect.succeed(
+          AgentRunResult.Success.make({
+            text: `phase-${callIdx}-output`,
+            sessionId: SessionId.make(`session-${callIdx}`),
+            agentName: params.agent.name,
+          }),
+        )
       },
     })
 
@@ -124,12 +126,13 @@ describe("Plan Tool", () => {
     const ctx = makeCtx({
       agentRun: (params) => {
         calls.push({ prompt: params.prompt })
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "output",
-          sessionId: "s1",
-          agentName: params.agent.name,
-        } as AgentRunResult & { _tag: "success" })
+        return Effect.succeed(
+          AgentRunResult.Success.make({
+            text: "output",
+            sessionId: SessionId.make("s1"),
+            agentName: params.agent.name,
+          }),
+        )
       },
     })
 
@@ -152,12 +155,13 @@ describe("Plan Tool", () => {
   it.live("returns rejected when user rejects plan", () => {
     const ctx = makeCtx({
       agentRun: (params) =>
-        Effect.succeed({
-          _tag: "success" as const,
-          text: "output",
-          sessionId: "s1",
-          agentName: params.agent.name,
-        } as AgentRunResult & { _tag: "success" }),
+        Effect.succeed(
+          AgentRunResult.Success.make({
+            text: "output",
+            sessionId: SessionId.make("s1"),
+            agentName: params.agent.name,
+          }),
+        ),
       reviewDecision: "no",
     })
 
@@ -176,12 +180,13 @@ describe("Plan Tool", () => {
         if (params.runSpec?.overrides?.modelId !== undefined) {
           models.push(params.runSpec.overrides.modelId)
         }
-        return Effect.succeed({
-          _tag: "success" as const,
-          text: "output",
-          sessionId: "s1",
-          agentName: params.agent.name,
-        } as AgentRunResult & { _tag: "success" })
+        return Effect.succeed(
+          AgentRunResult.Success.make({
+            text: "output",
+            sessionId: SessionId.make("s1"),
+            agentName: params.agent.name,
+          }),
+        )
       },
     })
 
@@ -206,27 +211,24 @@ describe("Plan Tool", () => {
               "Synthesize these two revised implementation plans into one execution plan organized into batches",
             )
           ) {
-            return {
-              _tag: "success" as const,
+            return AgentRunResult.Success.make({
               text: "Batch 1: update auth\n- Files: src/auth.ts\n- Changes: add validation",
-              sessionId: "synth-session",
+              sessionId: SessionId.make("synth-session"),
               agentName: params.agent.name,
-            } as AgentRunResult & { _tag: "success" }
+            })
           }
           if (params.prompt.includes("Execute this implementation plan")) {
-            return {
-              _tag: "success" as const,
+            return AgentRunResult.Success.make({
               text: "Executed batch 1 successfully.",
-              sessionId: "exec-session",
+              sessionId: SessionId.make("exec-session"),
               agentName: params.agent.name,
-            } as AgentRunResult & { _tag: "success" }
+            })
           }
-          return {
-            _tag: "success" as const,
+          return AgentRunResult.Success.make({
             text: "ok",
-            sessionId: "s1",
+            sessionId: SessionId.make("s1"),
             agentName: params.agent.name,
-          } as AgentRunResult & { _tag: "success" }
+          })
         }),
     })
 

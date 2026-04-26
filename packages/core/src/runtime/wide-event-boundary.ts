@@ -15,6 +15,7 @@ export type { WideEventContext, WideEventEnvelope, LogEvent } from "effect-wide-
 
 import type { WideEventContext } from "effect-wide-event"
 import type { SessionId, BranchId, ToolCallId } from "../domain/ids.js"
+import type { AgentName } from "../domain/agent.js"
 
 // =============================================================================
 // Tool outcome — canonical values for WideEvent.set({ toolError })
@@ -58,7 +59,7 @@ export type ToolWarning = (typeof ToolWarning)[keyof typeof ToolWarning]
 export const turnBoundary = (
   sessionId: SessionId,
   branchId: BranchId,
-  agent: string,
+  agent: AgentName,
 ): WideEventContext => ({
   service: "agent-loop",
   method: "turn",
@@ -85,7 +86,7 @@ export const rpcBoundary = (rpcName: string, requestId?: string): WideEventConte
 })
 
 export const agentRunBoundary = (
-  agentName: string,
+  agentName: AgentName,
   parentSessionId: SessionId,
 ): WideEventContext => ({
   service: "agent-run",

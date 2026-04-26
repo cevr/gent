@@ -328,7 +328,7 @@ export type ActiveStreamHandle = {
 
 /** Mutable accumulator for per-turn wide event fields. */
 export type TurnMetrics = {
-  agent: string
+  agent: AgentNameType
   model: string
   inputTokens: number
   outputTokens: number

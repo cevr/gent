@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
-import { type AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
+import { AgentEvent, type EventEnvelope, EventId, EventStore } from "@gent/core/domain/event"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/domain/ids"
 import { EventPublisher } from "@gent/core/domain/event-publisher"
 import { SubscriptionEngine } from "../../src/runtime/extensions/resource-host/subscription-engine"
 import { MachineEngine } from "../../src/runtime/extensions/resource-host/machine-engine"
@@ -10,18 +11,62 @@ import { EventPublisherLive, makeEventPublisherRouter } from "../../src/server/e
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import { SessionCwdRegistry } from "../../src/runtime/session-cwd-registry"
 import { SessionProfileCache, type SessionProfile } from "../../src/runtime/session-profile"
-import { BranchId, SessionId } from "@gent/core/domain/ids"
 import { CurrentMachinePublishListener } from "../../src/runtime/extensions/resource-host/machine-publish-listener"
 
 const registryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
 const runtimePlatformLayer = RuntimePlatform.Test({ cwd: "/tmp", home: "/tmp", platform: "test" })
 
-const makeEvent = (tag: string, sessionId: string, branchId?: string) =>
-  ({
-    _tag: tag,
-    sessionId: SessionId.make(sessionId),
-    ...(branchId !== undefined ? { branchId: BranchId.make(branchId) } : {}),
-  }) as unknown as AgentEvent
+// Real AgentEvent variants used as stand-ins for synthetic test fixtures.
+// Tests assert on `event._tag` strings; mapping each placeholder to a distinct
+// real tag keeps the test logic stable while passing schema validation
+// inside `getEventSessionId` / `getEventBranchId`.
+const TAG_MAP = {
+  OuterEvent: "ToolCallStarted",
+  NestedEvent: "ToolCallSucceeded",
+  BusNestedEvent: "ToolCallFailed",
+  PrimaryEvent: "ToolCallStarted",
+  SecondaryEvent: "ToolCallSucceeded",
+  EventA: "ToolCallStarted",
+  EventB: "ToolCallSucceeded",
+  FallbackEvent: "ToolCallFailed",
+} as const
+
+type SyntheticTag = keyof typeof TAG_MAP
+type RealTag = (typeof TAG_MAP)[SyntheticTag]
+
+const toBranchId = (branchId: string | BranchId | undefined): BranchId => {
+  if (branchId === undefined) return BranchId.make("default-branch")
+  if (typeof branchId === "string") return BranchId.make(branchId)
+  return branchId
+}
+
+const makeEvent = (
+  tag: SyntheticTag,
+  sessionId: string | SessionId,
+  branchId?: string | BranchId,
+): AgentEvent => {
+  const realTag = TAG_MAP[tag]
+  const sid = typeof sessionId === "string" ? SessionId.make(sessionId) : sessionId
+  const bid = toBranchId(branchId)
+  const base = {
+    _tag: realTag,
+    sessionId: sid,
+    branchId: bid,
+    toolCallId: ToolCallId.make(`${tag}-${sid}`),
+    toolName: tag,
+  }
+  switch (realTag) {
+    case "ToolCallStarted":
+      return AgentEvent.ToolCallStarted.make(base)
+    case "ToolCallSucceeded":
+      return AgentEvent.ToolCallSucceeded.make(base)
+    case "ToolCallFailed":
+      return AgentEvent.ToolCallFailed.make(base)
+  }
+}
+
+// Tests reference these by their real tag names in expectations.
+const TAG = TAG_MAP satisfies Record<SyntheticTag, RealTag>
 
 const makeEventStoreLayer = (onAppend?: (event: AgentEvent) => void) => {
   let nextId = 0
@@ -76,8 +121,8 @@ describe("EventPublisher", () => {
       yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(persisted).toEqual(["OuterEvent"])
-    expect(delivered).toEqual(["OuterEvent"])
+    expect(persisted).toEqual([TAG.OuterEvent])
+    expect(delivered).toEqual([TAG.OuterEvent])
   })
 
   test("nested publish from extension context completes without deadlocking", async () => {
@@ -91,14 +136,14 @@ describe("EventPublisher", () => {
       publish: (event) =>
         Effect.gen(function* () {
           delivered.push(event._tag)
-          if (event._tag === "OuterEvent" && publishFn !== undefined) {
+          if (event._tag === TAG.OuterEvent && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
                 sessionId: SessionId.make("session-1"),
               }),
             )
           }
-          if (event._tag === "NestedEvent") {
+          if (event._tag === TAG.NestedEvent) {
             yield* Deferred.succeed(nestedDelivered, void 0)
           }
           return [] as ReadonlyArray<string>
@@ -121,7 +166,7 @@ describe("EventPublisher", () => {
       yield* Deferred.await(nestedDelivered)
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(delivered).toEqual(["OuterEvent", "NestedEvent"])
+    expect(delivered).toEqual([TAG.OuterEvent, TAG.NestedEvent])
   })
 
   test("nested publish from extension context still appends both events", async () => {
@@ -134,14 +179,14 @@ describe("EventPublisher", () => {
     const stateRuntimeLayer = Layer.succeed(MachineEngine, {
       publish: (event) =>
         Effect.gen(function* () {
-          if (event._tag === "OuterEvent" && publishFn !== undefined) {
+          if (event._tag === TAG.OuterEvent && publishFn !== undefined) {
             yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
               Effect.provideService(CurrentExtensionSession, {
                 sessionId: SessionId.make("session-1"),
               }),
             )
           }
-          if (event._tag === "NestedEvent") {
+          if (event._tag === TAG.NestedEvent) {
             yield* Deferred.succeed(nestedDelivered, void 0)
           }
           return [] as ReadonlyArray<string>
@@ -164,37 +209,7 @@ describe("EventPublisher", () => {
       yield* Deferred.await(nestedDelivered)
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(persisted).toEqual(["OuterEvent", "NestedEvent"])
-  })
-
-  test("events without sessionId skip queued delivery", async () => {
-    let delivered = 0
-
-    const baseLayer = makeEventStoreLayer()
-
-    const stateRuntimeLayer = Layer.succeed(MachineEngine, {
-      publish: () =>
-        Effect.sync(() => {
-          delivered++
-          return [] as ReadonlyArray<string>
-        }),
-      send: () => Effect.void,
-      execute: () => Effect.die("not implemented"),
-      getActorStatuses: () => Effect.succeed([]),
-      terminateAll: () => Effect.void,
-    })
-
-    const layer = Layer.provide(
-      EventPublisherLive,
-      Layer.mergeAll(baseLayer, stateRuntimeLayer, registryLayer, runtimePlatformLayer),
-    )
-
-    await Effect.gen(function* () {
-      const publisher = yield* EventPublisher
-      yield* publisher.publish({ _tag: "SystemEvent" } as unknown as AgentEvent)
-    }).pipe(Effect.provide(layer), Effect.runPromise)
-
-    expect(delivered).toBe(0)
+    expect(persisted).toEqual([TAG.OuterEvent, TAG.NestedEvent])
   })
 
   test("bus-triggered same-session publish completes without deadlocking", async () => {
@@ -208,7 +223,7 @@ describe("EventPublisher", () => {
       publish: (event) =>
         Effect.gen(function* () {
           delivered.push(event._tag)
-          if (event._tag === "BusNestedEvent") {
+          if (event._tag === TAG.BusNestedEvent) {
             yield* Deferred.succeed(busNested, void 0)
           }
           return [] as ReadonlyArray<string>
@@ -222,7 +237,7 @@ describe("EventPublisher", () => {
     const busLayer = Layer.succeed(SubscriptionEngine, {
       emit: (envelope) =>
         envelope.payload !== undefined &&
-        envelope.channel === "agent:OuterEvent" &&
+        envelope.channel === `agent:${TAG.OuterEvent}` &&
         publishFn !== undefined
           ? publishFn(makeEvent("BusNestedEvent", "session-1", "branch-1"))
           : Effect.void,
@@ -241,7 +256,7 @@ describe("EventPublisher", () => {
       yield* Deferred.await(busNested)
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(delivered).toEqual(["OuterEvent", "BusNestedEvent"])
+    expect(delivered).toEqual([TAG.OuterEvent, TAG.BusNestedEvent])
   })
 
   test("nested publish still emits ExtensionStateChanged pulses when transitions are async", async () => {
@@ -254,14 +269,14 @@ describe("EventPublisher", () => {
           manifest: { id: "pulse-only-ext" },
           scope: "builtin",
           sourcePath: "builtin",
-          contributions: { pulseTags: ["OuterEvent", "NestedEvent"] },
+          contributions: { pulseTags: [TAG.OuterEvent, TAG.NestedEvent] },
         },
       ]),
     )
 
     const baseLayer = makeEventStoreLayer((event) => {
       persisted.push(event._tag)
-      if (event._tag === "ExtensionStateChanged" && persisted.includes("NestedEvent")) {
+      if (event._tag === "ExtensionStateChanged" && persisted.includes(TAG.NestedEvent)) {
         Effect.runSync(Deferred.succeed(nestedPulse, void 0).pipe(Effect.ignore))
       }
     })
@@ -270,7 +285,7 @@ describe("EventPublisher", () => {
       publish: (event) =>
         Effect.gen(function* () {
           const listener = yield* CurrentMachinePublishListener
-          if (event._tag === "OuterEvent") {
+          if (event._tag === TAG.OuterEvent) {
             yield* listener?.([]) ?? Effect.void
             if (publishFn !== undefined) {
               yield* publishFn(makeEvent("NestedEvent", "session-1", "branch-1")).pipe(
@@ -281,7 +296,7 @@ describe("EventPublisher", () => {
             }
             return [] as ReadonlyArray<string>
           }
-          if (event._tag === "NestedEvent") {
+          if (event._tag === TAG.NestedEvent) {
             yield* listener?.([]) ?? Effect.void
             return [] as ReadonlyArray<string>
           }
@@ -306,9 +321,9 @@ describe("EventPublisher", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     expect(persisted).toEqual([
-      "OuterEvent",
+      TAG.OuterEvent,
       "ExtensionStateChanged",
-      "NestedEvent",
+      TAG.NestedEvent,
       "ExtensionStateChanged",
     ])
   })
@@ -414,24 +429,16 @@ describe("EventPublisher per-cwd router", () => {
       const publisher = yield* EventPublisher
 
       // Publish event for session in primary cwd
-      yield* publisher.publish({
-        _tag: "PrimaryEvent",
-        sessionId: sessionA,
-        branchId: branchA,
-      } as unknown as AgentEvent)
+      yield* publisher.publish(makeEvent("PrimaryEvent", sessionA, branchA))
 
       // Publish event for session in secondary cwd
-      yield* publisher.publish({
-        _tag: "SecondaryEvent",
-        sessionId: sessionB,
-        branchId: branchB,
-      } as unknown as AgentEvent)
+      yield* publisher.publish(makeEvent("SecondaryEvent", sessionB, branchB))
     }).pipe(Effect.provide(Layer.merge(layer, profileCacheLayer)), Effect.runPromise)
 
     // Primary engine got only the primary event
-    expect(primaryDelivered).toEqual(["PrimaryEvent"])
+    expect(primaryDelivered).toEqual([TAG.PrimaryEvent])
     // Secondary engine got only the secondary event
-    expect(secondaryDelivered).toEqual(["SecondaryEvent"])
+    expect(secondaryDelivered).toEqual([TAG.SecondaryEvent])
   })
 
   test("per-cwd SubscriptionEngine receives only its cwd's events", async () => {
@@ -530,9 +537,9 @@ describe("EventPublisher per-cwd router", () => {
     }).pipe(Effect.provide(Layer.merge(layer, profileCacheLayer)), Effect.runPromise)
 
     // Primary bus got only primary cwd's event
-    expect(primaryBusChannels).toEqual(["agent:EventA"])
+    expect(primaryBusChannels).toEqual([`agent:${TAG.EventA}`])
     // Secondary bus got only secondary cwd's event
-    expect(secondaryBusChannels).toEqual(["agent:EventB"])
+    expect(secondaryBusChannels).toEqual([`agent:${TAG.EventB}`])
   })
 
   test("unset handle persists event but skips runtime dispatch (fail closed)", async () => {
@@ -586,7 +593,7 @@ describe("EventPublisher per-cwd router", () => {
     }).pipe(Effect.provide(layer), Effect.runPromise)
 
     // Event was persisted to storage
-    expect(persisted).toEqual(["FallbackEvent"])
+    expect(persisted).toEqual([TAG.FallbackEvent])
     // Primary engine did NOT receive it (fail closed, not fall-through)
     expect(primaryDelivered).toEqual([])
   })
