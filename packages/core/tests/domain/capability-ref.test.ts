@@ -19,13 +19,15 @@ import { Effect, Schema } from "effect"
 import { action, ref, request, tool } from "@gent/core/extensions/api"
 
 describe("ref(token)", () => {
-  test("returns the typed ref for a request token, preserving id + intent", () => {
+  test("returns the typed ref for a request token, preserving id + intent + schema identity", () => {
+    const inputSchema = Schema.Struct({ q: Schema.String })
+    const outputSchema = Schema.Struct({ n: Schema.Number })
     const token = request({
       id: "test.read",
       extensionId: "ext-test",
       intent: "read",
-      input: Schema.Struct({ q: Schema.String }),
-      output: Schema.Struct({ n: Schema.Number }),
+      input: inputSchema,
+      output: outputSchema,
       execute: () => Effect.succeed({ n: 1 }),
     })
 
@@ -33,8 +35,11 @@ describe("ref(token)", () => {
     expect(r.capabilityId).toBe("test.read")
     expect(r.extensionId).toBe("ext-test")
     expect(r.intent).toBe("read")
-    expect(r.input).toBeDefined()
-    expect(r.output).toBeDefined()
+    // Schema identity: refValue forwards author schemas by reference. A
+    // future refactor that clones/wraps would silently change decode
+    // behavior at the dispatcher boundary.
+    expect(r.input).toBe(inputSchema)
+    expect(r.output).toBe(outputSchema)
   })
 
   test("throws for a tool token (no ref attached) with a descriptive message", () => {
@@ -61,5 +66,6 @@ describe("ref(token)", () => {
     })
 
     expect(() => ref(token)).toThrow(/test\.action/)
+    expect(() => ref(token)).toThrow(/only request tokens carry a ref/)
   })
 })
