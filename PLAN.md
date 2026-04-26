@@ -1,73 +1,109 @@
-# Planify: Recursive Hardening Wave 6
+# Planify: Wave 7 — Pre-Migration Hardening
 
 ## Context
 
-Wave 5 implementation completed through commit `c56a1192` (C13 fixup) and was
-gated. Fresh final verification then ran eight independent audit lanes at HEAD
-`c56a1192`:
+Wave 6 implementation completed through commit `cad345ba` (C17 closeout:
+`FileLockService` refcount-bounded eviction) and was gated. The W6 receipt
+is archived at `plans/WAVE-6.md`.
 
-1. runtime ownership / actor-model clarity
-2. extension API boundaries
-3. Effect-native AI integration
-4. storage model
-5. domain modeling / constructor discipline
-6. suppression debt / boundary discipline
-7. SDK/TUI adapter debt
-8. test taxonomy / behavioral coverage
+The W6 closing recursive verification (nine lanes at `cad345ba`) surfaced
+a punch list of P1/P2 findings beyond the Lane 9 architectural finding
+about `Resource.machine`. The full list lives at
+`~/.claude/projects/-Users-cvr-Developer-personal-gent/memory/project_w7_findings.md`.
 
-All eight lanes completed and reported findings. The recursive audit surfaced
-nine P1s and twenty-five+ P2s spanning test scope-finalizer leaks, untyped
-business-validation defects in `session-commands`, a documented-but-missing
-`Provider.Sequence` API, ACP-driver tool-result transcript loss (regression of
-C6 intent on the protocol path), TUI ignoring server-authoritative
-`metrics.lastModelId` (regression of C10 lesson for the `model` field),
-headless retries without `requestId` (defeats C12), forbidden domain→runtime
-imports, and RunSpec construction sites that escaped C9.
+Most findings target surfaces that **survive** the upcoming actor-primitive
+redesign (W9) and surface-collapse (W10). Brand leaks on `domain/driver.ts`,
+domain back-imports, server hardening, and test gap closure are debt today
+that will still be debt after W10. Letting them age while three architectural
+waves churn the substrate around them means another year of accumulation on
+top.
 
-This plan supersedes Wave 5. The plan is not complete until every batch below
-is implemented, gated, reviewed once, and a final recursive audit reports no
-P1/P2 findings. Wave 5's text is archived at `plans/WAVE-5.md` with its
-verification receipt.
+A subset of findings target surfaces that **die** in W10 (intent default fix,
+`CapabilityId`/`ProjectionId` brands, `ReadOnlyTag` privacy). Those are
+explicitly **skipped** in W7 — fixing brand leaks on a primitive that is
+being deleted is wasted work.
+
+**Wave 7 is the pre-migration hardening pass.** It lands surface-independent
+findings against the W6 substrate before the architectural work begins. The
+plan is not complete until every batch below is implemented, gated, and
+reviewed once.
+
+## Roadmap
+
+W7 is one wave in a six-wave program:
+
+- **W7 (this file)** — pre-migration hardening: brand leaks, domain
+  back-imports, server hardening, test gap closure, low/cleanup tail.
+  Surfaces W10 collapses are explicitly skipped.
+- **`plans/WAVE-8.md`** — agent-loop simplification: drop `effect-machine`
+  from `agent-loop.ts` + `agent-loop.state.ts`; replace FSM driver with
+  plain `Effect.gen` + `Ref<Phase>`; collapse duplicated state Refs.
+  ~800 LOC deletion. Grounded in `plans/AGENT-LOOP-COMPARISON.md`.
+- **`plans/WAVE-9.md`** — actor primitive foundation: introduce
+  `domain/actor.ts` (`ActorRef<M>`, `Behavior`, `ActorContext`,
+  `ServiceKey<M>`, `tell`, `ask`, `Receptionist`, persistence). No
+  migrations — foundation work only.
+- **`plans/WAVE-10.md`** — full migration + extension surface collapse:
+  migrate all 7 `Resource.machine` sites + `executor/actor`; fold
+  `ProjectionContribution` into actor `view`; introduce per-bucket
+  inline handlers (`tools` / `commands` / `keybinds` / `rpc`); delete
+  `Capability` / `Intent` / `Projection` / `Resource.machine` /
+  `MachineEngine` / `runtime.*` slots / `subscriptions`. `effect-machine`
+  the library survives in `auto` and `executor/actor` (genuine FSMs);
+  `MachineEngine` the host dies.
+- **`plans/WAVE-11.md`** — `needs: [Tag, ...]`-derived concurrency +
+  read-safety; central `LOCK_REGISTRY` with fail-closed validation.
+- **`plans/WAVE-12.md`** — 9-lane recursive verification audit on the
+  fully settled W7+W8+W9+W10+W11 substrate. Closeout receipt.
 
 ## Scope
 
-- **In**: scope-finalizer-safe test timeouts, agent-loop interrupt observation
-  via state (no wall-clock sleep), typed RPC error channel for
-  session-commands business validation, `Provider.Sequence` realization (or
-  doc reconciliation), ACP tool-result `output` persistence, TUI model display
-  reading from `metrics.lastModelId`, headless `requestId` adoption, branch
-  mutation `requestId` adoption, bootstrap session-create `requestId` adoption,
-  domain→runtime back-import elimination, RunSpec migration in
-  `agent-runner.ts`, ephemeral runtime `InteractionPendingReader` override,
-  `terminateSessionMachineRuntime` cwd-resolution via registry, dedup cache
-  TTL/eviction, action `name`/`category`/`keybind` plumbing or removal,
-  request/Ref typed pairing, `tool()` `intent` field, `Provider.stream`
-  Effect.fn wrapping, `ProviderError` cause preservation, Bedrock/OpenAI
-  fail-closed conformance, `ProviderAuth.Test` deletion, hardcoded model
-  literal removal, dead `todos` table removal, `PRAGMA foreign_keys` acquire/
-  release, `getSessionAncestors` parameter binding, `getEventBranchId`/
-  `getEventSessionId` `_tag`-exhaustive narrowing, `ApprovalRequest`/
-  `ApprovalDecision` schemafication, `AgentRunResult`/`AgentRunToolCall`
-  schemafication, `AgentName` branding, `Layer.mergeAll` dependency violation
-  fix, `createRpcHarness` realization (or doc reconciliation), method-call-
-  shaped test name renaming.
-- **Out**: cosmetic refactors not tied to a finding, test naming wave (kept
-  in scope but lower priority than P1s), package-policy reintroduction.
+- **In**: P1 brand leaks (`SessionId`, `ToolCallId`, `AgentName` on
+  `domain/driver.ts` + `domain/agent.ts`); generic P2 brands (`ProviderId`,
+  `ActorId`, `InteractionRequestId`, `ExtensionId` — surfaces survive W10);
+  domain back-imports (`ProviderError`, `StorageError` on `domain/driver.ts`
+  - `domain/session-mutations.ts`); `DEFAULT_AGENT_NAME` adoption in TUI
+    fallbacks; `ServerIdentity` non-optional in `RpcHandlerDeps` (eliminates
+    `Effect.die`); `SessionMutationsService` parallel-surface deletion;
+    `cwdPulseCache` eviction wiring; test gap closure (`Effect.timeout`
+    sweeps on three runtime test files; TTL/size-cap eviction tests;
+    `Layer.build(AppServicesLive)` smoke test; provider cause-preservation
+    tests; concurrent-write storage tests; `migrateForeignKeyConstraints`
+    interrupt-restores-PRAGMA test; `deleteSession` cascade race test;
+    `sanitizeFts5Query` unit tests; pure-function tests for
+    `resolveAgentDriver`, `getDurableAgentRunSessionId`, exhaustive event
+    helpers, `makeRunSpec`, `copyMessageToBranch`); low/cleanup tail (dead
+    `bypass` column drop in next FK rebuild; `getSessionDetail` N+1 →
+    `IN (...)` + group in memory; `Bun.spawn` rationale comment at
+    `agent-runner.ts:1160`; `latestInputTokens` consolidation into
+    `agentStore.metrics`; shared `task-tools/refs.ts` for de-duplicated
+    `ref(TaskCreateRequest)` derivations; `tags` schemas → `NonEmptyString`;
+    `as` cast comment in `streamImpl` overload at `provider.ts:656-659`;
+    `resolveModel` test stub type hole at
+    `tests/providers/provider-auth.test.ts:18,46,55`).
+- **Out (Wave 8)**: agent-loop simplification.
+- **Out (Wave 9)**: actor primitive scaffolding.
+- **Out (Wave 10)**: extension surface collapse, `Resource.machine`
+  deletion, `Capability`/`Projection` deletion, intent default fix
+  (field deleted), `CapabilityId`/`ProjectionId` brands (surfaces
+  deleted), `ReadOnlyTag` (brand deleted).
+- **Out (Wave 11)**: `needs: [Tag, ...]` work.
+- **Out**: cosmetic refactors not in the W6 audit punch list;
+  package-policy reintroduction.
 
 ## Constraints
 
-- Correctness over pragmatism.
-- Breaking changes allowed if migrated in the same wave.
-- No feature cuts.
-- One implementation commit per batch (sub-commits allowed inside a batch if
-  blast radius > 20 files; each sub-commit must compile and pass gate).
-- Run `bun run gate` for every batch.
-- Run `bun run test:e2e` for high-blast-radius runtime/server/SDK batches
-  (marked below).
-- Run exactly one review subagent per implementation commit.
-- If a review finds real P1/P2, fix with a follow-up commit and gate again.
-- Final batch reruns the same eight audit lanes. If any P1/P2 remains,
-  overwrite this file with the next Planify plan and continue.
+- Correctness over pragmatism. Personal library; no shims, no parallel
+  APIs, no deprecation cycles.
+- Each commit compiles and passes `bun run gate`.
+- Sub-commits allowed inside any C-batch with blast radius > 20 files.
+  Each sub-commit must compile and pass gate.
+- One review subagent per implementation commit (per-commit Codex review
+  for drift detection).
+- High-blast-radius commits (`C1`, `C8`) also run `bun run test:e2e`.
+- Apply-tier delegation per CLAUDE.md: design-tier authors brand passes
+  - first test of each pattern; apply-tier subagents handle the
+    recipe-execution tail (e.g., the `Effect.timeout` sweep).
 
 ## Applicable Skills
 
@@ -79,274 +115,207 @@ verification receipt.
 
 ---
 
-## Audit Findings
+## Implementation Batches
 
-| ID    | Severity | Finding                                                                                                                                                                                                                      | Evidence                                                                                                                                                                                                                                                                           |
-| ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W6-1  | P1       | ACP-driver tool-result `output` is dropped by `mapToolCallUpdate`. Every successful ACP tool call round-trips into the transcript as `{ value: null }`. Regression of C6 intent on the protocol path.                        | `packages/extensions/src/acp-agents/executor.ts:88`, `packages/extensions/src/acp-agents/executor.ts:100`, `packages/core/src/runtime/agent/agent-loop.ts:925`, `packages/core/src/runtime/agent/agent-loop.ts:940`                                                                |
-| W6-2  | P1       | TUI displays the locally-resolved model from `AgentsByName` instead of the server-authoritative `metrics.lastModelId` exposed in the snapshot. Same C10 lesson as cost; not migrated for `model`.                            | `apps/tui/src/client/context.tsx:822`, `apps/tui/src/client/context.tsx:826`, `apps/tui/src/client/context.tsx:59`, `apps/tui/src/client/context.tsx:832`, `apps/tui/src/routes/session.tsx:110`, `packages/core/src/runtime/session-runtime.ts:189`                               |
-| W6-3  | P1       | Headless prompt send retries up to 20× without `requestId`. Each retry that lands after the server accepted the prior attempt produces a duplicate user message and extra turn. Defeats C12.                                 | `apps/tui/src/headless-runner.ts:69`, `apps/tui/src/headless-runner.ts:84`, `packages/core/src/server/session-commands.ts:1086`, `packages/core/src/server/session-commands.ts:1116`                                                                                               |
-| W6-4  | P1       | `Provider.Sequence([...])` is documented as the canonical mocking seam in `AGENTS.md` and `packages/core/CLAUDE.md` but does not exist; only `createSequenceProvider` is exported from `debug/provider.ts`.                  | `packages/core/src/providers/provider.ts:516`, `packages/core/src/debug/provider.ts:123`, `packages/core/src/debug/provider.ts:281`, `AGENTS.md:110`, `packages/core/CLAUDE.md`                                                                                                    |
-| W6-5  | P1       | Bun-test timeouts without internal `Effect.timeout` (~25 sites including the brand-new C13 two-cwd test). Scope finalizers do not run on test timeout — workers, EventPublisher fibers, tempdirs leak.                       | `packages/e2e/tests/transport-contract.test.ts:244`, `packages/core/tests/extensions/capability-permission-rules.test.ts:141`, `packages/core/tests/extensions/executor-integration.test.ts:294`, `packages/core/tests/extensions/skills/skills-rpc.test.ts:90`                    |
-| W6-6  | P1       | `Effect.sleep("1 millis")` used as a state-transition barrier between `agentLoop.steer({ _tag: "Interrupt" })` and `controls.emitAll(1)`. Should observe via `getState`, not wall-clock sleep.                               | `packages/core/tests/runtime/agent-loop.test.ts:1809`                                                                                                                                                                                                                              |
-| W6-7  | P1       | 26 `Effect.die` sites in `session-commands.ts` for user-input/business validation reachable from RPC handlers. RPC clients cannot pattern-match, retry, or surface clean errors. Should be typed `Schema.TaggedError` in E.  | `packages/core/src/server/session-commands.ts:274`, `packages/core/src/server/session-commands.ts:283`, `packages/core/src/server/session-commands.ts:466`, `packages/core/src/server/session-commands.ts:884`, `packages/core/src/server/session-commands.ts:1246`                |
-| W6-8  | P1       | Three domain modules import from `runtime/`, inverting the dependency rule. Domain types must not depend on runtime types.                                                                                                   | `packages/core/src/domain/auth-guard.ts:5`, `packages/core/src/domain/auth-guard.ts:6`, `packages/core/src/domain/prompt-presenter.ts:6`, `packages/core/src/domain/prompt-presenter.ts:7`, `packages/core/src/domain/resource.ts:52`                                              |
-| W6-9  | P1       | `agent-runner.ts` constructs RunSpec via spread literals at three sites instead of `makeRunSpec`. C9 migrated extension callers but the runtime itself bypasses the smart constructor.                                       | `packages/core/src/runtime/agent/agent-runner.ts:759`, `packages/core/src/runtime/agent/agent-runner.ts:976`, `packages/core/src/runtime/agent/agent-runner.ts:1123`                                                                                                               |
-| W6-10 | P2       | `OVERRIDE_TAG_SETS.storage` omits `InteractionPendingReader`. Ephemeral subagents read parent's durable interaction store while writing to a fresh in-memory store — wrong-store ghosts during ephemeral turns.              | `packages/core/src/runtime/composer.ts:174`, `packages/core/src/runtime/composer.ts:185`, `packages/core/src/runtime/composer.ts:144`, `packages/extensions/src/interaction-tools/projection.ts:36`, `packages/core/src/storage/sqlite-storage.ts:1834`                            |
-| W6-11 | P2       | `terminateSessionMachineRuntime` resolves the per-cwd MachineEngine via `sessionStorage.getSession()`. For descendants caught by the post-delete cleanup, the row is already gone → falls back to ambient → mailbox leaks.   | `packages/core/src/server/session-commands.ts:86`, `packages/core/src/server/session-commands.ts:118`, `packages/core/src/server/session-commands.ts:1216`                                                                                                                         |
-| W6-12 | P2       | `Provider.stream` is not wrapped in `Effect.fn`. Provider streams are the hottest tracing surface in the system; tracing is silently disabled on every model turn. Project rule: `Effect.fn` for all service methods.        | `packages/core/src/providers/provider.ts:429`, `packages/core/src/providers/provider.ts:486`                                                                                                                                                                                       |
-| W6-13 | P2       | `ProviderError` constructed at `resolveModel` catch loses `cause`. Schema accepts `cause` but the construction site never sets it. Original cause chain dropped at the seam.                                                 | `packages/core/src/providers/provider.ts:130`, `packages/core/src/providers/provider.ts:133`, `packages/core/src/providers/provider.ts:146`, `packages/extensions/src/bedrock/index.ts:7`, `packages/extensions/src/openai/index.ts:124`                                           |
-| W6-14 | P2       | Bedrock driver throws plain `Error` from `resolveModel` — wrapped as transient `ProviderError`, retried instead of failing closed. Violates C5 contract for `ProviderAuthError`.                                             | `packages/extensions/src/bedrock/index.ts:6`, `packages/extensions/src/bedrock/index.ts:10`, `packages/extensions/src/openai/index.ts:124`                                                                                                                                         |
-| W6-15 | P2       | `ProviderAuth.Test` is byte-identical to `.Live`. Lingering antipattern that the recent `Provider.Test()` / `EventStore.Test()` deletion sweep removed elsewhere.                                                            | `packages/core/src/providers/provider-auth.ts:32`, `packages/core/src/providers/provider-auth.ts:40`, `packages/core/src/providers/provider-auth.ts:47`                                                                                                                            |
-| W6-16 | P2       | Hardcoded `"anthropic/claude-opus-4-6"` literal bypasses `ModelId.make` brand. Two different "default" models in the codebase; `domain/agent.ts` already exports `DEFAULT_MODEL_ID`.                                         | `packages/core/src/runtime/make-extension-host-context.ts:330`, `packages/core/src/domain/agent.ts:96`                                                                                                                                                                             |
-| W6-17 | P2       | `getEventBranchId` uses raw `as BranchId` cast + structural-key `"branchId" in event` narrowing instead of `_tag`-exhaustive `Match.tag`. Adding a new branchId-bearing variant returns silent `undefined`.                  | `packages/core/src/domain/event.ts:447`, `packages/core/src/domain/event.ts:452`, `packages/core/src/domain/event.ts:456`                                                                                                                                                          |
-| W6-18 | P2       | `ApprovalRequest` / `ApprovalDecision` plain interfaces with dual declaration (`interface` + `Schema.Struct`) and `as unknown as Schema.Any` cast. No `ApprovalDecisionSchema` at all.                                       | `packages/core/src/domain/interaction-request.ts:25`, `packages/core/src/domain/interaction-request.ts:34`, `packages/core/src/domain/interaction-request.ts:67`, `packages/core/src/domain/interaction-request.ts:73`                                                             |
-| W6-19 | P2       | `AgentRunResult` is a hand-rolled `_tag` union, not `TaggedEnumClass`. Crosses serialization boundaries (RunSpec IPC nearby). No constructor enforces variant invariants. `AgentRunToolCall` plain interface.                | `packages/core/src/domain/agent.ts:205`, `packages/core/src/domain/agent.ts:228`                                                                                                                                                                                                   |
-| W6-20 | P2       | `AgentName` is unbranded `Schema.String`. 14 production call sites use `as AgentName` (no-op today) but will silently break when branding lands.                                                                             | `packages/core/src/domain/agent.ts:10`, `packages/core/src/domain/agent.ts:11`, `packages/core/src/domain/agent.ts:54`, `packages/extensions/src/memory/dreaming.ts:11`, `packages/extensions/src/memory/agents.ts:47`                                                             |
-| W6-21 | P2       | Dead `todos` table: schema, migration legacy-table dance, and orphan-cleanup all execute on every startup. Zero INSERT/UPDATE/SELECT writers in the repo.                                                                    | `packages/core/src/storage/sqlite-storage.ts:794`, `packages/core/src/storage/sqlite-storage.ts:810`, `packages/core/src/storage/sqlite-storage.ts:1024`, `packages/core/src/storage/sqlite-storage.ts:1091`, `packages/core/src/storage/sqlite-storage.ts:532`                    |
-| W6-22 | P2       | `PRAGMA foreign_keys = OFF` in `task-tools-storage` and `migrateForeignKeyConstraints` lacks `acquire/release`. Safety relies entirely on connection teardown, not failure-safe pragma flip.                                 | `packages/extensions/src/task-tools-storage.ts:207`, `packages/extensions/src/task-tools-storage.ts:248`, `packages/core/src/storage/sqlite-storage.ts:591`, `packages/core/src/storage/sqlite-storage.ts:855`                                                                     |
-| W6-23 | P2       | `getSessionAncestors` uses `sql.unsafe` with hand-rolled `'${sessionId.replace(/'/g, "''")}'` instead of parameter binding. Compare safe form in `deleteSession`. SessionId branding is structural, not enforced at runtime. | `packages/core/src/storage/sqlite-storage.ts:1608`, `packages/core/src/storage/sqlite-storage.ts:1621`, `packages/core/src/storage/sqlite-storage.ts:1226`, `packages/core/src/storage/sqlite-storage.ts:1234`                                                                     |
-| W6-24 | P2       | `action.name` / `category` / `keybind` documented in `ActionInput` but silently dropped in the lowering. Slash menus show `"executor-start"` instead of the author-supplied `"Executor: Start"`.                             | `packages/core/src/domain/capability/action.ts:36`, `packages/core/src/domain/capability/action.ts:67`, `packages/core/src/domain/capability/action.ts:87`, `packages/core/src/domain/capability/action.ts:103`, `packages/extensions/src/executor/index.ts:30`                    |
-| W6-25 | P2       | Every `request({...})` in task-tools is followed by a hand-rolled `CapabilityRef` re-stating intent/input/output. Typed link lost; intent typo only caught at runtime in `capability-host.ts`.                               | `packages/extensions/src/task-tools/requests.ts:28`, `packages/extensions/src/task-tools/requests.ts:49`, `packages/extensions/src/task-tools/requests.ts:51`, `packages/extensions/src/task-tools/requests.ts:57`, `packages/extensions/src/task-tools/requests.ts:326`           |
-| W6-26 | P2       | `tool()` hardcodes `intent: "write"`. Read-only `fs-tools/read.ts`, `grep.ts`, `glob.ts` cannot honestly express read intent. Future read-only sub-agent gates cannot use intent as the filter.                              | `packages/core/src/domain/capability/tool.ts:107`, `packages/core/src/domain/capability/tool.ts:121`, `packages/core/src/domain/capability/tool.ts:139`                                                                                                                            |
-| W6-27 | P2       | `app-bootstrap.ts` calls `client.session.create({ cwd })` without `requestId`. Bootstrap-time transient retry produces duplicate sessions. Interactive `createSession` path is correct.                                      | `apps/tui/src/app-bootstrap.ts:223`, `apps/tui/src/app-bootstrap.ts:274`, `apps/tui/src/client/context.tsx:659`                                                                                                                                                                    |
-| W6-28 | P2       | Branch mutations (`branch.create` / `branch.fork` / `branch.switch`) carry no `requestId`. Transient retry can fork twice or create two sibling branches.                                                                    | `packages/core/src/server/transport-contract.ts:127`, `packages/core/src/server/transport-contract.ts:193`, `apps/tui/src/client/context.tsx:751`, `apps/tui/src/client/context.tsx:815`                                                                                           |
-| W6-29 | P2       | Dedup cache (`createRequestCache` / `sendRequestCache`) leaks: success paths never evict, only failure does. Long-running shared servers accumulate one Map entry per user prompt + per session create indefinitely.         | `packages/core/src/server/session-commands.ts:607`, `packages/core/src/server/session-commands.ts:612`, `packages/core/src/server/session-commands.ts:709`, `packages/core/src/server/session-commands.ts:1102`                                                                    |
-| W6-30 | P2       | `Layer.mergeAll` dependency violation in server bootstrap. `SessionRuntimeTerminatorLive` provides a service required by sibling layers in the same `mergeAll` call. TS41 lint warning shipped.                              | `packages/core/src/server/index.ts:8`                                                                                                                                                                                                                                              |
-| W6-31 | P2       | `createRpcHarness` referenced in `packages/core/CLAUDE.md` as the canonical RPC acceptance helper does not exist (0 grep results). Rule cannot be followed; C13 ad-hoc layer composition was the only path.                  | `packages/core/CLAUDE.md`                                                                                                                                                                                                                                                          |
-| W6-32 | P2       | Method-call-shaped test names cluster. Project rule: "Behavioral naming: describe outcomes, not method calls." 8+ files affected.                                                                                            | `packages/core/tests/extensions/storage.test.ts:44`, `packages/core/tests/domain/auth-storage.test.ts:19`, `packages/core/tests/runtime/config-service.test.ts:18`, `packages/core/tests/extensions/registry.test.ts:314`, `packages/core/tests/runtime/agent-runner.test.ts:1173` |
+Order: brand passes first (highest user-impact P1s), then domain
+back-imports (decouple domain from infra), then server hardening, then
+test gap closure (apply-tier-friendly), then low/cleanup tail.
 
-Clean audit lanes at `c56a1192`:
+### Commit 1: `refactor(domain): brand SessionId, ToolCallId, AgentName across driver + agent surfaces`
 
-- No clean lanes this wave. All eight lanes returned at least one finding.
+**Why C1 first**: P1 brand leaks. `domain/driver.ts:131`
+`ProviderAuthorizeContext.sessionId: string` accepts any string; same
+for `TurnEvent.{ToolCall,ToolStarted,ToolCompleted,ToolFailed}.toolCallId`
+at `domain/driver.ts:214,219,224,228`; same for
+`resolveAgentDriver(overrides?: Record<string, DriverRef>)` at
+`domain/agent.ts:135`. Branding closes typed-id contracts at the
+boundary the actor migration will touch in W10.
+
+**Files**: `packages/core/src/domain/driver.ts`,
+`packages/core/src/domain/agent.ts`, every consumer that constructs
+these schemas (call sites of `ProviderAuthorizeContext`, `TurnEvent.*`,
+`resolveAgentDriver`); tests cover roundtrip + cross-id assignment is a
+type error.
+
+**Verification**: `bun run gate` + `bun run test:e2e`.
+
+**Cites**: `make-impossible-states-unrepresentable`,
+`fail-with-typed-errors`.
+
+### Commit 2: `refactor(domain): generic P2 brand pass — ProviderId, ActorId, InteractionRequestId, ExtensionId`
+
+**Why C2**: surfaces survive W10. `Model.provider` →
+`ProviderId` (`domain/model.ts:27`); new `ActorId` brand applied across
+`event.ts:175,182,188`; new `InteractionRequestId` across
+`event.ts:137,145` + `interaction-request.ts:45,57`; new `ExtensionId`
+on `extension.ts` + consumers.
+
+**Skipped from the original list**: `CapabilityId` and `ProjectionId`
+brands — those surfaces die in W10. Doing them now is wasted work.
+
+**Files**: schema definitions + all decode/construct sites; tests cover
+each brand.
+
+**Verification**: `bun run gate`.
+
+**Cites**: `make-impossible-states-unrepresentable`.
+
+### Commit 3: `refactor(domain): eliminate domain back-imports — ProviderError, StorageError`
+
+**Why C3**: `domain/driver.ts:40` imports `ProviderError` from infra;
+`domain/session-mutations.ts:5` imports `StorageError`. Domain layer
+should not depend on infra. Either move the error tags into domain or
+parameterize the schemas with opaque type params. Domain-purity matters
+because W10's surface collapse will re-shape every domain consumer; we
+want the domain layer free of infra-coupling first.
+
+**Files**: `packages/core/src/domain/driver.ts`,
+`packages/core/src/domain/session-mutations.ts`, error definitions
+(probably create `domain/provider-error.ts`,
+`domain/storage-error.ts`); update infra side to import from domain
+(re-export for back-compat is fine since infra is the consumer).
+
+**Verification**: `bun run gate`.
+
+**Cites**: `small-interface-deep-implementation`,
+`migrate-callers-then-delete-legacy-apis`.
+
+### Commit 4: `fix(server): ServerIdentity non-optional in RpcHandlerDeps`
+
+**Why C4**: `rpc-handler-groups/server.ts:8` carries `Effect.die` for the
+`ServerIdentity` missing case. Making the field non-optional eliminates
+the defect path. Resolves Lane 5 vs Lane 8 cross-conflict from W6 audit.
+
+**Files**: `packages/core/src/server/rpc-handler-groups/server.ts` and
+the `RpcHandlerDeps` definition; update construction sites to provide
+the field; remove `Effect.die`.
+
+**Verification**: `bun run gate`.
+
+**Cites**: `fail-with-typed-errors`,
+`make-impossible-states-unrepresentable`.
+
+### Commit 5: `refactor(server): delete SessionMutationsService parallel surface`
+
+**Why C5**: `server/session-commands.ts:407-616` duplicates
+`SessionCommands.Live` handlers via a parallel `SessionMutationsService`
+surface. Will drift since dedup logic is on `SessionCommands` only.
+Delete the parallel surface; route any external consumer through
+`SessionCommands` or `dispatch(...)`.
+
+**Files**: `packages/core/src/server/session-commands.ts` (delete the
+service shape), every call site of `SessionMutationsService.*` (route
+through `SessionCommands`); tests.
+
+**Verification**: `bun run gate`.
+
+**Cites**: `subtract-before-you-add`, `derive-dont-sync`.
+
+### Commit 6: `fix(server): wire cwdPulseCache eviction to SessionProfileCache invalidation`
+
+**Why C6**: `server/event-publisher.ts:241` reads `cwdPulseCache` but
+nothing invalidates it on `SessionProfileCache` mutation. Stale pulse
+data on cwd switch. Hook eviction into the existing
+`SessionProfileCache` invalidation point.
+
+**Files**: `packages/core/src/server/event-publisher.ts`, wherever
+`SessionProfileCache` invalidation lives (`session-profile-cache.ts` or
+similar); test covers cwd-switch invalidation.
+
+**Verification**: `bun run gate`.
+
+**Cites**: `derive-dont-sync`, `bound-resources-self-evict`.
+
+### Commit 7: `fix(tui): adopt DEFAULT_AGENT_NAME in client context fallbacks`
+
+**Why C7**: `apps/tui/src/client/context.tsx:285,867` uses bare strings
+where `DEFAULT_AGENT_NAME` constant should be referenced. Cosmetic but
+it's a brand-leak surface and lands cleanly with the C1 brand work.
+
+**Files**: `apps/tui/src/client/context.tsx`.
+
+**Verification**: `bun run gate`.
+
+**Cites**: `make-impossible-states-unrepresentable`.
+
+### Commit 8: `test(runtime): close deterministic test gaps — Effect.timeout sweeps + missing coverage`
+
+**Why C8**: 64 missing-`Effect.timeout` test bodies and ~12 missing
+deterministic tests from W6 audit. Apply-tier delegation.
+
+**Sub-commits permitted** (~80 test bodies):
+
+- **C8.1**: design-tier writes the `Effect.timeout` recipe + 1 worked
+  example per file; one TTL-eviction test as the reference for the
+  eviction-test pattern.
+- **C8.2**: apply-tier subagent applies the `Effect.timeout` sweep to
+  remaining 63 bodies in `tests/runtime/agent-runner.test.ts` (15
+  bodies, lines 261, 324, 420, 476, 529, 584, 651, 742, 795, 874,
+  948, 1017, 1067, 1237, 1309), `tests/runtime/external-turn.test.ts`
+  (26 bodies, 0 timeouts today), `tests/runtime/session-runtime.test.ts`
+  (23 bodies, 3 timeouts today).
+- **C8.3**: design-tier writes the missing-coverage tests:
+  size-cap eviction (>1024 distinct requestIds);
+  `Layer.build(AppServicesLive)` smoke test (catches
+  `SessionRuntimeTerminator` unsatisfied); provider cause-preservation
+  tests for `Provider.generate` and `Stream.catch`; OTel span test on
+  `Provider.stream`; concurrent-write storage tests
+  (`createSession`/`appendEvent`/`createMessage` races);
+  `migrateForeignKeyConstraints` interrupt-restores-PRAGMA test;
+  `deleteSession` cascade race test; `sanitizeFts5Query` unit tests;
+  headless retry uses same `sendRequestId` test;
+  ephemeral-scope cleanup-on-interrupt test (`runEphemeralAgent`);
+  parent-MemoMap-omission regression test (`composer.ts:354`);
+  `terminateSessionMachineRuntime` storage-failure fail-closed test;
+  pure-function tests for `resolveAgentDriver`,
+  `getDurableAgentRunSessionId`, exhaustive event helpers,
+  `makeRunSpec`, `copyMessageToBranch`.
+
+**Skipped from the original list**: `CAPABILITY_REF` privacy test,
+`ref()` throws-on-tool/action test — both target dies in W10.
+
+**Files**: `packages/core/tests/runtime/*.test.ts`,
+`packages/core/tests/storage/*.test.ts`,
+`packages/core/tests/providers/*.test.ts`,
+`packages/core/tests/domain/*.test.ts`.
+
+**Verification**: `bun run gate` + `bun run test:e2e` (final
+sub-commit).
+
+**Cites**: every brain principle the tests exercise (recorded
+per test).
+
+### Commit 9: `chore(domain,storage,runtime): low/cleanup tail`
+
+**Why C9**: low-priority cleanups. Bundle as one commit since each is
+small and the surfaces don't overlap.
+
+**Items**:
+
+- Drop dead `bypass INTEGER` column on `sessions` table in next FK
+  rebuild (`sqlite-storage.ts:606,620,882,898`).
+- `getSessionDetail` N+1 → `IN (...)` + group in memory
+  (`sqlite-storage.ts:1610-1657`).
+- `Bun.spawn` rationale comment at `agent-runner.ts:1160` (justified by
+  process-group `kill -pid`).
+- `latestInputTokens` consolidation into `agentStore.metrics`.
+- Shared `task-tools/refs.ts` for de-duplicated `ref(TaskCreateRequest)`
+  derivations.
+- `tags` schemas → `NonEmptyString` (`domain/agent.ts:171`,
+  `extension.ts:124`).
+- Comment the `as` cast in `streamImpl` overload return at
+  `provider.ts:656-659`.
+- Fix `resolveModel: () => ({})` typecheck-despite-missing-`layer`-field
+  type hole at `tests/providers/provider-auth.test.ts:18,46,55`.
+
+**Files**: per item.
+
+**Verification**: `bun run gate`.
+
+**Cites**: per item.
 
 ---
 
-## Implementation Batches
-
-Wave 6 batches are sequenced **P1s first, in blast-radius order**, then P2s
-clustered by surface. Each batch is one commit (sub-commits allowed if blast
-radius > 20 files); each batch gates and is reviewed once. The final batch is
-the recursive-audit rerun.
-
-### Commit 1: `fix(extensions): persist ACP-driver tool-result output into transcript`
-
-**Why W6-1 first**: regression of C6 intent on the protocol path — every
-successful ACP tool call is currently lossy in the transcript. Pure extension/
-runtime change, low blast radius.
-
-**Files**: `packages/extensions/src/acp-agents/executor.ts`,
-`packages/core/src/extensions/api.ts` (`ToolCompleted` if `output` field needs
-to land on the schema), `packages/core/src/runtime/agent/agent-loop.ts`
-(consumer side at lines 925-940), tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 2: `fix(tui): read model from snapshot.metrics.lastModelId`
-
-**Why W6-2**: regression of the C10 lesson on the `model` field. TUI shows
-wrong model when agent override resolves server-side to a different driver.
-
-**Files**: `apps/tui/src/client/context.tsx` (`model()` and `modelInfo()`),
-`apps/tui/src/routes/session.tsx`, tests.
-
-**Verification**: `bun run gate`.
-
-### Commit 3: `fix(tui,sdk): adopt requestId for headless retry, branch mutations, bootstrap session.create`
-
-**Why W6-3 + W6-27 + W6-28 batched**: same pattern, same surface, same
-contract addition. Headless duplication is the active P1; bootstrap and branch
-duplication are latent P2s on the same retry semantics.
-
-**Files**: `apps/tui/src/headless-runner.ts`,
-`apps/tui/src/app-bootstrap.ts`,
-`apps/tui/src/client/context.tsx` (createBranch/forkBranch/switchBranch),
-`packages/core/src/server/transport-contract.ts`
-(CreateBranchInput/ForkBranchInput/SwitchBranchInput requestId fields),
-`packages/core/src/server/session-commands.ts` (server-side dedup for branch
-mutations), tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 4: `feat(providers): expose Provider.Sequence + reconcile docs`
-
-**Why W6-4**: documented-but-missing API. Either add the static (preferred —
-matches `Provider.Debug` / `Provider.Failing` shape) or reconcile every doc
-reference. P1 because new test authors hit a dead surface.
-
-**Files**: `packages/core/src/providers/provider.ts` (add `Provider.Sequence`
-static delegating to `createSequenceProvider`),
-`packages/core/src/debug/provider.ts` (decide if standalone export stays or
-goes), `AGENTS.md`, `packages/core/CLAUDE.md`, `packages/core/AGENTS.md`,
-tests.
-
-**Verification**: `bun run gate`.
-
-### Commit 5: `test: wrap bun-test bodies in Effect.timeout for scope safety`
-
-**Why W6-5**: P1 across 25 sites. Scope finalizers leak on timeout; tests
-spawn workers, sqlite, EventPublisher fibers, tempdirs.
-
-**Files**: 7+ test files listed in evidence — `transport-contract.test.ts`,
-`capability-permission-rules.test.ts`, `executor-integration.test.ts`,
-`skills-rpc.test.ts`, `actor-lifecycle.test.ts`, `task-rpc.test.ts`,
-`interaction-commands.test.ts`. Pattern: wrap each test body in
-`Effect.timeout("N seconds")` shorter than the bun timeout.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 6: `test(runtime): observe interrupt via state, not Effect.sleep`
-
-**Why W6-6**: small P1, clean fix. Replace wall-clock sleep with state
-observation.
-
-**Files**: `packages/core/tests/runtime/agent-loop.test.ts` (line 1809),
-possibly `packages/core/src/runtime/agent/agent-loop.state.ts` if a state
-predicate is missing.
-
-**Verification**: `bun run gate`.
-
-### Commit 7: `fix(server): type session-commands business validation as RPC errors`
-
-**Why W6-7**: 26 `Effect.die` sites reachable from RPC. Largest blast radius
-in the wave; sub-commits allowed.
-
-**Files**: `packages/core/src/server/session-commands.ts` (define typed
-errors, replace each `Effect.die` with `Effect.fail` of the typed error),
-`packages/core/src/server/transport-contract.ts` (declare error schemas in
-RPC response unions), `packages/core/src/server/rpc-handler-groups/session.ts`
-(propagate typed errors), `packages/sdk/src/client.ts` (consumer-side typing),
-TUI consumers if they currently catch defects, tests.
-
-**Sub-commits permitted**: (7a) define error taxonomy + add to one path;
-(7b-d) migrate remaining paths grouped by RPC method.
-
-**Verification**: `bun run gate` + `bun run test:e2e` per sub-commit.
-
-### Commit 8: `refactor(domain): eliminate domain→runtime back-imports`
-
-**Why W6-8**: forbidden direction. Pure refactor. Move `ExtensionRegistry`,
-`DriverRegistry`, `ApprovalService`, `RuntimePlatform`, scope-brand types
-to wherever they're owned, or re-shape the consuming domain types so they
-don't need them.
-
-**Files**: `packages/core/src/domain/auth-guard.ts`,
-`packages/core/src/domain/prompt-presenter.ts`,
-`packages/core/src/domain/resource.ts`, downstream call sites.
-
-**Verification**: `bun run gate`.
-
-### Commit 9: `refactor(runtime): route agent-runner RunSpec construction through makeRunSpec`
-
-**Why W6-9**: completes C9. Three sites in `agent-runner.ts`.
-
-**Files**: `packages/core/src/runtime/agent/agent-runner.ts` (lines 759, 976,
-1123), tests.
-
-**Verification**: `bun run gate`.
-
-### Commit 10: `fix(runtime): add InteractionPendingReader to ephemeral storage override + cwd-resolve via registry on terminate`
-
-**Why W6-10 + W6-11 batched**: both are residual holes in the C1/C4 hardening
-of the runtime composition + termination paths. Same surface (descendant +
-ephemeral lifecycle), same evidence file, same gate.
-
-**Files**: `packages/core/src/runtime/composer.ts` (`OVERRIDE_TAG_SETS.storage`
-
-- `EphemeralOverrideProvides`), `packages/core/src/server/session-commands.ts`
-  (`terminateSessionMachineRuntime` accepts `sessionCwdRegistry`), tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 11: `fix(providers): wrap Provider.stream in Effect.fn + preserve cause + fail-closed Bedrock/OpenAI + delete ProviderAuth.Test + drop hardcoded model literal`
-
-**Why W6-12 through W6-16 batched**: all in the providers/AI surface, all
-small, all share the gate.
-
-**Files**: `packages/core/src/providers/provider.ts` (stream wrap, cause
-preservation), `packages/extensions/src/bedrock/index.ts` (typed error or
-removal), `packages/extensions/src/openai/index.ts` (typed error for OAuth
-gating), `packages/core/src/providers/provider-auth.ts` (delete `Test`
-duplicate), `packages/core/src/runtime/make-extension-host-context.ts:330`
-(reuse `DEFAULT_MODEL_ID`), tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 12: `refactor(domain): exhaustive event helpers + schemafy Approval/AgentRun + brand AgentName`
-
-**Why W6-17 through W6-20 batched**: domain modeling cluster. All
-`Schema.Class`/`TaggedEnumClass` work; touches the same domain files.
-
-**Files**: `packages/core/src/domain/event.ts` (exhaustive `Match.tag` for
-`getEventSessionId`/`getEventBranchId`),
-`packages/core/src/domain/interaction-request.ts` (single
-`Schema.Struct`-derived `ApprovalRequest`/`ApprovalDecision`),
-`packages/core/src/domain/agent.ts` (`AgentRunResult` as `TaggedEnumClass`,
-`AgentRunToolCall` as `Schema.Struct`, `AgentName` brand), 14 call sites of
-`as AgentName`, tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 13: `refactor(storage): drop dead todos table + acquire/release PRAGMA foreign_keys + parameterize getSessionAncestors`
-
-**Why W6-21 through W6-23 batched**: storage cluster.
-
-**Files**: `packages/core/src/storage/sqlite-storage.ts` (delete `todos`
-schema, migration block, repair query; wrap `PRAGMA foreign_keys = OFF` in
-`Effect.acquireUseRelease`; replace `sql.unsafe` recursive CTE with safe
-parameter binding), `packages/extensions/src/task-tools-storage.ts`
-(acquire/release pattern in migration), tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 14: `refactor(extensions): action display fields + request/Ref pairing + tool() intent`
-
-**Why W6-24 through W6-26 batched**: extension authoring API cluster.
-
-**Files**: `packages/core/src/domain/capability/action.ts` (lowering for
-`name`/`category`/`keybind` or removal), `packages/core/src/server/extension-health.ts`
-or wherever `SlashCommand` is shaped, `packages/extensions/src/executor/index.ts`
-(remove duplicated promptSnippet),
-`packages/core/src/domain/capability/request.ts` (return `{ token, ref }` or
-attach ref via symbol), `packages/extensions/src/task-tools/requests.ts`
-(8 sites, delete standalone refs), `packages/core/src/domain/capability/tool.ts`
-(accept `intent?: Intent`), `fs-tools/{read,grep,glob}.ts` (mark read), tests.
-
-**Verification**: `bun run gate`.
-
-### Commit 15: `fix(server): TTL/eviction for dedup cache + split Layer.mergeAll dependency`
-
-**Why W6-29 + W6-30 batched**: server bootstrap cluster.
-
-**Files**: `packages/core/src/server/session-commands.ts` (TTL/LRU eviction
-on success entries — bounded Map, scheduled cleanup, or evict-on-resolve
-after a delay window), `packages/core/src/server/index.ts` (split
-`SessionRuntimeTerminatorLive` from sibling layers via `Layer.provideMerge`),
-tests.
-
-**Verification**: `bun run gate` + `bun run test:e2e`.
-
-### Commit 16: `test: realize createRpcHarness + rename method-call-shaped tests`
-
-**Why W6-31 + W6-32 batched**: test infrastructure + naming cluster.
-
-**Files**: new `packages/core/src/test-utils/rpc-harness.ts` (or relative
-path used from tests), migrate one or two existing tests to demonstrate it,
-rename ~30 method-call-shaped test descriptions in 8 files.
-
-**Verification**: `bun run gate`.
-
-### Commit 17 (final): `chore(audit): rerun recursive verification`
-
-**Justification**: same recursive-audit gate as Wave 5 closer. Eight
-independent audit lanes against HEAD. If any P1/P2 remains, archive `PLAN.md`
-as `plans/WAVE-6.md` with verification receipt and overwrite `PLAN.md` with
-the next wave.
-
-**Files**: `plans/WAVE-6.md` + `PLAN.md` (one or the other).
-
-**Verification**:
-
-- `bun run gate`
-- `bun run test:e2e`
-- Eight independent audit agents (same lane definitions as Wave 5).
+W7 closes when the W6 audit punch list (minus W10-deleted-target items)
+is empty against HEAD and gate is green. **`plans/WAVE-8.md`** is the
+next wave: agent-loop simplification.
