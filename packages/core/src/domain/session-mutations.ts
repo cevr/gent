@@ -1,4 +1,5 @@
 import { Context, type Effect } from "effect"
+import type { ReasoningEffort } from "./agent.js"
 import type { EventStoreError } from "./event.js"
 import type { BranchId, MessageId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
@@ -48,6 +49,10 @@ export interface SessionMutationsService {
     readonly branchId: BranchId
     readonly afterMessageId?: MessageId
   }) => Effect.Effect<void, SessionMutationError>
+  readonly updateReasoningLevel: (input: {
+    readonly sessionId: SessionId
+    readonly reasoningLevel: ReasoningEffort | undefined
+  }) => Effect.Effect<{ reasoningLevel: ReasoningEffort | undefined }, SessionMutationError>
 }
 
 export class SessionMutations extends Context.Service<SessionMutations, SessionMutationsService>()(

@@ -148,6 +148,7 @@ export const HostSessionMutationsRef = Context.Reference<SessionMutationsService
       deleteSession: unavailable("SessionMutations"),
       deleteBranch: unavailable("SessionMutations"),
       deleteMessages: unavailable("SessionMutations"),
+      updateReasoningLevel: unavailable("SessionMutations"),
     }),
   },
 )

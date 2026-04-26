@@ -584,6 +584,27 @@ const makeSessionMutationsService: Effect.Effect<
       yield* validateMessageCursor(input)
       yield* messageStorage.deleteMessages(input.branchId, input.afterMessageId)
     }),
+
+    updateReasoningLevel: Effect.fn("SessionMutations.updateReasoningLevel")(function* (input) {
+      const session = yield* sessionStorage.getSession(input.sessionId)
+      if (session === undefined) {
+        return yield* new NotFoundError({ message: "Session not found", entity: "session" })
+      }
+      yield* transactWithEvent(
+        sessionStorage.updateSession(
+          new Session({
+            ...session,
+            reasoningLevel: input.reasoningLevel,
+            updatedAt: yield* DateTime.nowAsDate,
+          }),
+        ),
+        SessionSettingsUpdated.make({
+          sessionId: input.sessionId,
+          reasoningLevel: input.reasoningLevel,
+        }),
+      )
+      return { reasoningLevel: input.reasoningLevel }
+    }),
   } satisfies SessionMutationsService
 })
 
@@ -773,22 +794,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         return parts.join("").trim()
       })
 
-      const transactWithEvent = <A, E, R>(
-        mutation: Effect.Effect<A, E, R>,
-        event: AgentEvent,
-      ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
-        Effect.gen(function* () {
-          const committed = yield* storage.withTransaction(
-            Effect.gen(function* () {
-              const result = yield* mutation
-              const envelope = yield* eventPublisher.append(event)
-              return { result, envelope }
-            }),
-          )
-          yield* eventPublisher.deliver(committed.envelope)
-          return committed.result
-        })
-
       const createSession: (
         input: CreateSessionInput,
       ) => Effect.Effect<CreateSessionResult, AppServiceError> = Effect.fn(
@@ -960,29 +965,6 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
         })
       })
 
-      const updateReasoningLevel = Effect.fn("SessionCommands.updateReasoningLevel")(function* (
-        input: UpdateSessionReasoningLevelInput,
-      ) {
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (session === undefined) {
-          return yield* new NotFoundError({ message: "Session not found", entity: "session" })
-        }
-        yield* transactWithEvent(
-          sessionStorage.updateSession(
-            new Session({
-              ...session,
-              reasoningLevel: input.reasoningLevel,
-              updatedAt: yield* DateTime.nowAsDate,
-            }),
-          ),
-          SessionSettingsUpdated.make({
-            sessionId: input.sessionId,
-            reasoningLevel: input.reasoningLevel,
-          }),
-        )
-        return { reasoningLevel: input.reasoningLevel }
-      })
-
       const sendMessage: (input: SendMessageInput) => Effect.Effect<void, AppServiceError> =
         Effect.fn("SessionCommands.sendMessage")(function* (input: SendMessageInput) {
           yield* dedupRequest(sendRequestCache, input.requestId, doSendMessage(input))
@@ -1026,7 +1008,7 @@ export class SessionCommands extends Context.Service<SessionCommands, SessionCom
           sessionRuntime
             .drainQueuedMessages({ sessionId, branchId })
             .pipe(Effect.withSpan("SessionCommands.drainQueuedMessages")),
-        updateSessionReasoningLevel: updateReasoningLevel,
+        updateSessionReasoningLevel: mutations.updateReasoningLevel,
       } satisfies SessionCommandsService
     }),
   )
