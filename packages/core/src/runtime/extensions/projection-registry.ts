@@ -20,6 +20,7 @@
  */
 import { Effect } from "effect"
 import type { LoadedExtension, ToolPolicyFragment } from "../../domain/extension.js"
+import type { ExtensionId } from "../../domain/ids.js"
 import type {
   AnyProjectionContribution,
   ProjectionContext,
@@ -30,7 +31,7 @@ import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./effect-membrane.js"
 
 interface RegisteredProjection {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly projection: AnyProjectionContribution
 }
 
@@ -51,7 +52,7 @@ export interface CompiledProjections {
    * one (project > user > builtin) wins.
    */
   readonly query: (
-    extensionId: string,
+    extensionId: ExtensionId,
     projectionId: string,
     ctx: ProjectionContext,
   ) => Effect.Effect<unknown | undefined>

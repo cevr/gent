@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { tool, OutputBuffer, PermissionRule, saveFullOutput } from "@gent/core/extensions/api"
+import {
+  tool,
+  OutputBuffer,
+  PermissionRule,
+  saveFullOutput,
+  type SessionId,
+} from "@gent/core/extensions/api"
 import { classify } from "./bash-guardrails.js"
 import { ExecToolsProtocol } from "./protocol.js"
 
@@ -63,7 +69,7 @@ export function splitCdCommand(cmd: string): { cwd: string; command: string } | 
 /**
  * Inject --trailer on git commit commands for session traceability.
  */
-export function injectGitTrailers(cmd: string, sessionId: string): string {
+export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
   if (!/\bgit\s+commit\b/.test(cmd)) return cmd
   if (/--trailer/.test(cmd)) return cmd
   return cmd.replace(/\bgit\s+commit\b/, `git commit --trailer "Session-Id: ${sessionId}"`)

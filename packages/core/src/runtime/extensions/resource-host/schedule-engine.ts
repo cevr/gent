@@ -20,6 +20,7 @@
 
 import { Cause, Effect, FileSystem, Path, Schema } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
+import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceSchedule } from "../../../domain/resource.js"
 
 const extractResources = (ext: LoadedExtension): ReadonlyArray<AnyResourceContribution> =>
@@ -35,7 +36,7 @@ export type ScheduledJobCommand = readonly [string, ...ReadonlyArray<string>]
  * `server/extension-health.ts`) consumes this without change.
  */
 export interface SchedulerFailure {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly jobId: string
   readonly error: string
 }
@@ -71,7 +72,7 @@ interface CronRuntime {
 }
 
 interface DesiredScheduledJob {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly jobId: string
   readonly name: string
   readonly schedule: string
@@ -85,7 +86,7 @@ const STATE_FILE = [...SCHEDULER_DIR, "managed-jobs.json"] as const
 
 const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_-]+/g, "-")
 
-const jobName = (extensionId: string, jobId: string) =>
+const jobName = (extensionId: ExtensionId, jobId: string) =>
   `gent-${sanitize(extensionId)}-${sanitize(jobId)}`
 
 const renderCommand = (
@@ -194,7 +195,7 @@ const resolveCronRuntime = (): CronRuntime | undefined => {
  */
 export const collectSchedules = (
   extensions: ReadonlyArray<LoadedExtension>,
-): ReadonlyArray<{ readonly extensionId: string; readonly schedule: ResourceSchedule }> =>
+): ReadonlyArray<{ readonly extensionId: ExtensionId; readonly schedule: ResourceSchedule }> =>
   extensions.flatMap((ext) =>
     extractResources(ext)
       .filter((r) => r.scope === "process")

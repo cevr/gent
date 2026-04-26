@@ -12,6 +12,7 @@ import type {
   TurnAfterInput,
   TurnBeforeInput,
 } from "../../domain/extension.js"
+import type { ExtensionId } from "../../domain/ids.js"
 import type { ExtensionHostContext } from "../../domain/extension-host-context.js"
 import type { Message } from "../../domain/message.js"
 import type { PermissionResult } from "../../domain/permission.js"
@@ -63,26 +64,26 @@ export interface CompiledRuntimeSlots {
 }
 
 interface ProjectionSystemPromptSlot {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly projectionId: string
   readonly query: AnyProjectionContribution["query"]
   readonly systemPrompt: NonNullable<AnyProjectionContribution["systemPrompt"]>
 }
 
 interface ProjectionContextMessagesSlot {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly projectionId: string
   readonly query: AnyProjectionContribution["query"]
   readonly contextMessages: NonNullable<AnyProjectionContribution["contextMessages"]>
 }
 
 interface RegisteredReaction<Input> {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly slot: ResourceReaction<Input, unknown, unknown>
 }
 
 interface RegisteredToolResultTransform {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly handler: NonNullable<ResourceRuntimeSlots<unknown, unknown>["toolResult"]>
 }
 
@@ -96,7 +97,7 @@ const sortExtensions = (extensions: ReadonlyArray<LoadedExtension>) =>
   })
 
 const runProjectionQuery = (
-  extensionId: string,
+  extensionId: ExtensionId,
   projectionId: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Effect membrane owns erased runtime context boundary
   query: (ctx: ProjectionTurnContext) => Effect.Effect<any, any, any>,

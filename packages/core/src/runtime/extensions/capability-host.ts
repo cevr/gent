@@ -42,7 +42,7 @@ import { SCOPE_PRECEDENCE } from "./disabled.js"
 import { sealErasedEffect } from "./effect-membrane.js"
 
 interface RegisteredCapability {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly capability: AnyCapabilityContribution
 }
 
@@ -66,7 +66,7 @@ const WIDE_ONLY_CTX_KEYS = new Set<string>([
  *  proxy is transparent for keys that genuinely exist on the narrow ctx. */
 const narrowCtxGuard = (
   ctx: CapabilityCoreContext,
-  extensionId: string,
+  extensionId: ExtensionId,
   capabilityId: string,
 ): CapabilityContext =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Effect membrane owns erased runtime context boundary
@@ -155,7 +155,7 @@ export const compileCapabilities = (
    * contribution").
    */
   const resolveByIdentity = (
-    extensionId: string,
+    extensionId: ExtensionId,
     capabilityId: string,
   ): RegisteredCapability | undefined => {
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -178,7 +178,7 @@ export const compileCapabilities = (
    *  narrow audiences/intent but the lower-scope contribution would still
    *  leak through. */
   const findEntry = (
-    extensionId: string,
+    extensionId: ExtensionId,
     capabilityId: string,
     audience: Audience,
     requiredIntent: Intent | undefined,

@@ -155,8 +155,8 @@ describe("projection registry", () => {
         ext("shared", "builtin", [builtin]),
         ext("shared", "project", [project]),
       ])
-      const hit = yield* compiled.query("shared", "raw", turnEvalCtx)
-      const miss = yield* compiled.query("shared", "missing", turnEvalCtx)
+      const hit = yield* compiled.query(ExtensionId.make("shared"), "raw", turnEvalCtx)
+      const miss = yield* compiled.query(ExtensionId.make("shared"), "missing", turnEvalCtx)
       expect(hit).toBe("project")
       expect(miss).toBeUndefined()
     }),

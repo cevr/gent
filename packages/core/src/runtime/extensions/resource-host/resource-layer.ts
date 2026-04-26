@@ -10,6 +10,7 @@
 
 import { Effect, Exit, Layer } from "effect"
 import type { LoadedExtension } from "../../../domain/extension.js"
+import type { ExtensionId } from "../../../domain/ids.js"
 import type { AnyResourceContribution, ResourceScope } from "../../../domain/resource.js"
 import {
   emptyErasedResourceLayer,
@@ -19,7 +20,7 @@ import {
 } from "../effect-membrane.js"
 
 export interface ResourceEntry {
-  readonly extensionId: string
+  readonly extensionId: ExtensionId
   readonly resource: AnyResourceContribution
 }
 
