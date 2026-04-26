@@ -20,10 +20,10 @@ import {
   SubscriptionEngine,
   type SubscriptionEngineService,
 } from "../runtime/extensions/resource-host/subscription-engine.js"
-import { ExtensionRegistry, type ExtensionRegistryService } from "../runtime/extensions/registry.js"
+import { ExtensionRegistry } from "../runtime/extensions/registry.js"
 import { CurrentExtensionSession } from "../runtime/extensions/extension-actor-shared.js"
 import { SessionCwdRegistry } from "../runtime/session-cwd-registry.js"
-import type { SessionProfileCacheService } from "../runtime/session-profile.js"
+import { buildPulseIndex, type SessionProfileCacheService } from "../runtime/session-profile.js"
 import { RuntimePlatform } from "../runtime/runtime-platform.js"
 
 const logDeliveryFailure = (message: string, fields: Record<string, unknown>) =>
@@ -38,24 +38,6 @@ interface InnerPublisherDeps {
 }
 
 /**
- * Build the pulseByTag index from an extension registry's resolved set.
- * Maps event `_tag` → set of extension IDs that declared `pulseTags`.
- */
-const buildPulseIndex = (registryService: ExtensionRegistryService) => {
-  const pulseByTag = new Map<string, Set<string>>()
-  const resolved = registryService.getResolved()
-  for (const ext of resolved.extensions) {
-    const tags = ext.contributions.pulseTags ?? []
-    for (const tag of tags) {
-      const set = pulseByTag.get(tag) ?? new Set<string>()
-      set.add(ext.manifest.id)
-      pulseByTag.set(tag, set)
-    }
-  }
-  return pulseByTag
-}
-
-/**
  * Inner delivery logic. Broadcasts an already-durable event through live
  * subscriptions, machine engine,
  * pulse index, and subscription bus. Used by both `EventPublisherLive`
@@ -64,7 +46,7 @@ const buildPulseIndex = (registryService: ExtensionRegistryService) => {
 const deliverInner = (
   envelope: EventEnvelope,
   deps: InnerPublisherDeps,
-  pulseByTag: Map<string, Set<string>>,
+  pulseByTag: ReadonlyMap<string, ReadonlySet<string>>,
 ) =>
   Effect.gen(function* () {
     yield* deps.baseEventStore.broadcast(envelope)
@@ -237,8 +219,9 @@ export const makeEventPublisherRouter = (): {
       }
       const primaryPulseByTag = buildPulseIndex(primaryRegistry)
 
-      // Per-cwd pulse index cache — built lazily on first event for a cwd.
-      const cwdPulseCache = new Map<string, Map<string, Set<string>>>()
+      // Per-cwd pulse indices live on the SessionProfile itself
+      // (`profile.pulseByTag`), so they share the profile's lifecycle —
+      // no parallel cache to keep in sync.
 
       const deliverToProfile = (envelope: EventEnvelope) =>
         Effect.gen(function* () {
@@ -312,13 +295,7 @@ export const makeEventPublisherRouter = (): {
             bus: profile.subscriptionEngine,
           }
 
-          let pulseByTag = cwdPulseCache.get(sessionCwd)
-          if (pulseByTag === undefined) {
-            pulseByTag = buildPulseIndex(profile.registryService)
-            cwdPulseCache.set(sessionCwd, pulseByTag)
-          }
-
-          yield* deliverInner(envelope, cwdDeps, pulseByTag)
+          yield* deliverInner(envelope, cwdDeps, profile.pulseByTag)
         })
       const deliver = makeIdempotentDeliver(deliverToProfile)
 

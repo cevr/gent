@@ -23,6 +23,7 @@ import {
 import { makeAmbientExtensionHostContextDeps } from "../../src/runtime/make-extension-host-context"
 import { RuntimePlatform } from "../../src/runtime/runtime-platform"
 import {
+  buildPulseIndex,
   SessionProfileCache,
   type SessionProfile,
   type SessionProfileCacheService,
@@ -312,6 +313,7 @@ describe("resolveSessionEnvironment", () => {
               subscriptionEngine: undefined,
               baseSections: [],
               instructions: "",
+              pulseByTag: buildPulseIndex(Context.get(layerContext, ExtensionRegistry)),
             }
             const profileCache: SessionProfileCacheService = {
               resolve: () => Effect.succeed(profile),
@@ -584,6 +586,7 @@ describe("resolveSessionEnvironment", () => {
           subscriptionEngine: undefined,
           baseSections: [],
           instructions: "",
+          pulseByTag: new Map(),
         }
         const fakeProfileCache: SessionProfileCacheService = {
           resolve: () => Effect.succeed(fakeProfile),

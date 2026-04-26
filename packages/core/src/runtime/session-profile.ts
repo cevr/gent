@@ -62,6 +62,32 @@ export interface SessionProfile {
   readonly subscriptionEngine: SubscriptionEngineService | undefined
   readonly baseSections: ReadonlyArray<PromptSection>
   readonly instructions: string
+  /**
+   * Pulse index: event `_tag` → extension IDs that declared `pulseTags`.
+   * Pinned to the profile so it shares lifecycle with `registryService` —
+   * a separate cache could go stale if the profile is ever re-resolved.
+   */
+  readonly pulseByTag: ReadonlyMap<string, ReadonlySet<string>>
+}
+
+/**
+ * Build the pulseByTag index from an extension registry's resolved set.
+ * Maps event `_tag` → set of extension IDs that declared `pulseTags`.
+ */
+export const buildPulseIndex = (
+  registryService: ExtensionRegistryService,
+): Map<string, Set<string>> => {
+  const pulseByTag = new Map<string, Set<string>>()
+  const resolved = registryService.getResolved()
+  for (const ext of resolved.extensions) {
+    const tags = ext.contributions.pulseTags ?? []
+    for (const tag of tags) {
+      const set = pulseByTag.get(tag) ?? new Set<string>()
+      set.add(ext.manifest.id)
+      pulseByTag.set(tag, set)
+    }
+  }
+  return pulseByTag
 }
 
 // ── SessionProfileCache ──
@@ -151,6 +177,7 @@ export class SessionProfileCache extends Context.Service<
               subscriptionEngine: runtime.subscriptionEngine,
               baseSections: runtime.baseSections,
               instructions: profileData.instructions,
+              pulseByTag: buildPulseIndex(runtime.registryService),
             }
 
             yield* Effect.logInfo("session-profile.initialized").pipe(
@@ -236,6 +263,7 @@ export class SessionProfileCache extends Context.Service<
             subscriptionEngine: undefined,
             baseSections: [],
             instructions: "",
+            pulseByTag: new Map(),
           }
           cache.set(cwd, profile)
           return profile
