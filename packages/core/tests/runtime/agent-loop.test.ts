@@ -1797,15 +1797,15 @@ describe("continuation", () => {
         // Queue a follow-up while step 1 is gated
         yield* runAgentLoop(agentLoop, followUp)
 
-        // Interrupt the current turn
+        // Interrupt the current turn. `agentLoop.steer` issues
+        // `actor.call(Interrupt)` which is serialized request-reply — by the
+        // time it returns, the actor has already set `interruptedRef = true`
+        // and signalled the active stream. No additional wait needed.
         yield* agentLoop.steer({
           _tag: "Interrupt",
           sessionId: contSessionId,
           branchId: contBranchId,
         })
-
-        // Let the machine process the interrupt (sets interruptedRef + signals stream)
-        yield* Effect.sleep("1 millis")
 
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)
