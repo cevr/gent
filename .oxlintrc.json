@@ -33,6 +33,9 @@
     "gent/no-scope-brand-cast": "error",
     // Custom — no dynamic `import(...)` or `require(...)` (compiled-binary safety)
     "gent/no-dynamic-imports": "error",
+    // Custom — hand-rolled `_tag` discriminated unions banned; use TaggedEnumClass
+    // (warn for now: ~68 source-level violations to migrate before flipping to error)
+    "gent/no-hand-rolled-tagged-union": "warn",
     // TypeScript - no any
     "typescript/no-explicit-any": "error",
     // TypeScript - flag unsafe type assertions (as X)

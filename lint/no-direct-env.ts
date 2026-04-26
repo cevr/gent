@@ -24,6 +24,9 @@
  * - no-dynamic-imports: bans dynamic `import(...)` and `require(...)` outside
  *   a small allow-list of architecturally-justified files (extension plugin
  *   discovery, optional native module fallbacks). Compiled-binary safety.
+ * - no-hand-rolled-tagged-union: bans inline `{ _tag: "X"; ... } | { _tag: "Y"; ... }`
+ *   type literals; require `TaggedEnumClass` / `Schema.TaggedStruct` /
+ *   `Schema.TaggedErrorClass` instead.
  */
 
 import type { Plugin } from "#oxlint/plugins"
@@ -97,6 +100,12 @@ const getStringField = (n: AstNode, field: string): string | undefined => {
 const getNodeField = (n: AstNode, field: string): AstNode | undefined => {
   const v = n[field]
   return isAstNode(v) ? v : undefined
+}
+
+const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => {
+  const v = n[field]
+  if (!Array.isArray(v)) return undefined
+  return v.filter(isAstNode)
 }
 
 /** Return the call's function name (Identifier or MemberExpression property). */
@@ -937,6 +946,81 @@ const plugin: Plugin = {
               const effectFn = findCapabilityReadEffect(expr)
               if (effectFn !== undefined) reportWritesIn("Capability", effectFn)
             }
+          },
+        }
+      },
+    },
+
+    /**
+     * Flags hand-rolled `_tag` discriminated unions written as type
+     * literals — a union of two-or-more `{ _tag: "X"; ... }` shapes.
+     *
+     * Use `TaggedEnumClass` (`@gent/core/domain/schema-tagged-enum-class`),
+     * `Schema.TaggedStruct`, or `Schema.TaggedErrorClass` instead. Those
+     * give per-variant `.make({...})` constructors, structural
+     * `_tag` discrimination, and Schema-encode/decode for free.
+     *
+     * Detected: any `TSUnionType` with ≥2 `TSTypeLiteral` members each
+     * having a `_tag: "Pascal"` property.
+     *
+     * Limitations: AST-only. Does not flag types defined via interface
+     * heritage or hand-rolled union of named type aliases — only the
+     * inline-type-literal form. Construction-site form
+     * (`{ _tag: "X" } satisfies SomeUnion`) is not covered here; it's
+     * already vanishingly rare in this codebase.
+     */
+    "no-hand-rolled-tagged-union": {
+      create(context) {
+        const isReportableTagLiteral = (member: AstNode): boolean => {
+          if (member.type !== "TSPropertySignature") return false
+          const key = getNodeField(member, "key")
+          if (key === undefined) return false
+          let keyName: string | undefined
+          if (key.type === "Identifier") keyName = getStringField(key, "name")
+          else if (key.type === "StringLiteral" || key.type === "Literal")
+            keyName = getStringField(key, "value")
+          if (keyName !== "_tag") return false
+          const annotation = getNodeField(member, "typeAnnotation")
+          if (annotation === undefined) return false
+          const inner = getNodeField(annotation, "typeAnnotation")
+          if (inner === undefined || inner.type !== "TSLiteralType") return false
+          const literal = getNodeField(inner, "literal")
+          if (literal === undefined) return false
+          if (literal.type !== "StringLiteral" && literal.type !== "Literal") return false
+          const value = getStringField(literal, "value")
+          if (value === undefined || value.length === 0) return false
+          // Pascal-case heuristic — keeps the rule from chasing
+          // schema-internal lowercase wire tags like "regular" /
+          // "interjection" that legitimately appear inside Schema
+          // metadata. TaggedEnumClass member names are PascalCase by
+          // convention.
+          const first = value.charAt(0)
+          return first === first.toUpperCase() && first !== first.toLowerCase()
+        }
+
+        const literalHasTag = (literal: AstNode): boolean => {
+          if (literal.type !== "TSTypeLiteral") return false
+          const members = getNodeArrayField(literal, "members")
+          if (members === undefined) return false
+          return members.some(isReportableTagLiteral)
+        }
+
+        return {
+          TSUnionType(node) {
+            if (!isAstNode(node)) return
+            const types = getNodeArrayField(node, "types")
+            if (types === undefined || types.length < 2) return
+            let tagged = 0
+            for (const t of types) {
+              if (literalHasTag(t)) tagged += 1
+              if (tagged >= 2) break
+            }
+            if (tagged < 2) return
+            context.report({
+              message:
+                "Hand-rolled `_tag` discriminated union — use `TaggedEnumClass` from `@gent/core/domain/schema-tagged-enum-class` (or `Schema.TaggedStruct` / `Schema.TaggedErrorClass`). Construct via `Variant.make({...})`. See packages/core/CLAUDE.md.",
+              node,
+            })
           },
         }
       },
