@@ -23,6 +23,7 @@ import type {
   ExtensionReduceContext,
   LoadedExtension,
 } from "../../../domain/extension.js"
+import { ExtensionId } from "../../../domain/ids.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type {
   AnyExtensionCommandMessage,
@@ -96,7 +97,7 @@ export const makeMachineEngine = (
     })
     const mailbox = yield* makeSessionMailbox(runtimeScope)
 
-    const findEntry = (extensionId: string, sessionId: SessionId, branchId?: BranchId) =>
+    const findEntry = (extensionId: ExtensionId, sessionId: SessionId, branchId?: BranchId) =>
       lifecycle.getOrSpawnActors(sessionId, branchId).pipe(
         Effect.map((entries) => ({
           entry: entries.find((candidate) => candidate.ref.id === extensionId),
@@ -156,7 +157,11 @@ export const makeMachineEngine = (
     ): Effect.Effect<void, ExtensionProtocolError> =>
       Effect.gen(function* () {
         const decoded = yield* protocols.decodeCommand(message)
-        const { entry, entries } = yield* findEntry(decoded.extensionId, sessionId, branchId)
+        const { entry, entries } = yield* findEntry(
+          ExtensionId.make(decoded.extensionId),
+          sessionId,
+          branchId,
+        )
         if (entry === undefined) {
           yield* Effect.logWarning("extension.send.not-loaded").pipe(
             Effect.annotateLogs({
@@ -196,7 +201,11 @@ export const makeMachineEngine = (
           decoded.extensionId,
           decoded._tag,
         )
-        const { entry, entries } = yield* findEntry(decoded.extensionId, sessionId, branchId)
+        const { entry, entries } = yield* findEntry(
+          ExtensionId.make(decoded.extensionId),
+          sessionId,
+          branchId,
+        )
         if (entry === undefined) {
           yield* Effect.logWarning("extension.execute.not-loaded").pipe(
             Effect.annotateLogs({

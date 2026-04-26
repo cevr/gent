@@ -1,6 +1,7 @@
 import { Cause, Deferred, Effect, Ref, Schema, Semaphore } from "effect"
 import type { Scope } from "effect"
 import { ExtensionActorStatusInfo, type ExtensionRef } from "../../../domain/extension.js"
+import { ExtensionId } from "../../../domain/ids.js"
 import type { BranchId, SessionId } from "../../../domain/ids.js"
 import type { ExtensionProtocolError } from "../../../domain/extension-protocol.js"
 import { ExtensionPersistenceFailure, spawnMachineExtensionRef } from "../spawn-machine-ref.js"
@@ -75,14 +76,14 @@ export const makeMachineLifecycle = (params: {
 
     const stopActor = (entry: ActorEntry) => Effect.exit(entry.ref.stop).pipe(Effect.asVoid)
 
-    const getActorStatus = (sessionId: SessionId, extensionId: string) =>
+    const getActorStatus = (sessionId: SessionId, extensionId: ExtensionId) =>
       Ref.get(actorStatusesRef).pipe(
         Effect.map((current) => current.get(sessionId)?.get(extensionId)),
       )
 
     const replaceReadyEntry = (
       sessionId: SessionId,
-      extensionId: string,
+      extensionId: ExtensionId,
       nextEntry: ActorEntry | undefined,
     ) =>
       Ref.update(actorsRef, (current) => {
@@ -107,7 +108,7 @@ export const makeMachineLifecycle = (params: {
       })
 
     const markActorFailed = (
-      extensionId: string,
+      extensionId: ExtensionId,
       sessionId: SessionId,
       branchId: BranchId | undefined,
       error: string,
@@ -222,7 +223,8 @@ export const makeMachineLifecycle = (params: {
       error: string,
     ): Effect.Effect<ActorEntry | undefined> =>
       Effect.gen(function* () {
-        const currentStatus = yield* getActorStatus(sessionId, entry.ref.id)
+        const extensionId = ExtensionId.make(entry.ref.id)
+        const currentStatus = yield* getActorStatus(sessionId, extensionId)
         const currentRestartCount =
           currentStatus !== undefined && "restartCount" in currentStatus
             ? (currentStatus.restartCount ?? 0)
@@ -231,9 +233,9 @@ export const makeMachineLifecycle = (params: {
         yield* stopActor(entry)
 
         if (currentRestartCount >= ACTOR_RESTART_LIMIT) {
-          yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
+          yield* replaceReadyEntry(sessionId, extensionId, undefined)
           yield* markActorFailed(
-            entry.ref.id,
+            extensionId,
             sessionId,
             actorBranchId,
             error,
@@ -245,9 +247,9 @@ export const makeMachineLifecycle = (params: {
 
         const spec = params.spawnByExtension.get(entry.ref.id)
         if (spec === undefined) {
-          yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
+          yield* replaceReadyEntry(sessionId, extensionId, undefined)
           yield* markActorFailed(
-            entry.ref.id,
+            extensionId,
             sessionId,
             actorBranchId,
             `extension "${entry.ref.id}" cannot be restarted: spawn spec missing`,
@@ -265,7 +267,7 @@ export const makeMachineLifecycle = (params: {
           "runtime",
           currentRestartCount + 1,
         )
-        yield* replaceReadyEntry(sessionId, entry.ref.id, restarted)
+        yield* replaceReadyEntry(sessionId, extensionId, restarted)
         return restarted
       })
 
@@ -276,16 +278,17 @@ export const makeMachineLifecycle = (params: {
       error: string,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const currentStatus = yield* getActorStatus(sessionId, entry.ref.id)
+        const extensionId = ExtensionId.make(entry.ref.id)
+        const currentStatus = yield* getActorStatus(sessionId, extensionId)
         const currentRestartCount =
           currentStatus !== undefined && "restartCount" in currentStatus
             ? (currentStatus.restartCount ?? 0)
             : 0
         const actorBranchId = branchId ?? currentStatus?.branchId
         yield* stopActor(entry)
-        yield* replaceReadyEntry(sessionId, entry.ref.id, undefined)
+        yield* replaceReadyEntry(sessionId, extensionId, undefined)
         yield* markActorFailed(
-          entry.ref.id,
+          extensionId,
           sessionId,
           actorBranchId,
           error,
