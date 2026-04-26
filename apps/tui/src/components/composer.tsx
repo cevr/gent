@@ -7,6 +7,7 @@ import type { ActiveInteraction, ApprovalResult } from "@gent/core/domain/event.
 import { useTheme } from "../theme/index"
 import { AutocompletePopup, type AutocompleteState } from "./autocomplete-popup"
 import { useComposerController } from "./use-composer-controller"
+import { ComposerInteractionEvent } from "./composer-interaction-state"
 import { useSessionController } from "../routes/session-controller"
 import { useExtensionUI } from "../extensions/context"
 
@@ -82,7 +83,8 @@ export function Composer(props: ComposerProps) {
         {(Surface) =>
           Surface({
             draft: sc.interactionState().draft,
-            setDraft: (text: string) => sc.onComposerInteraction({ _tag: "RestoreDraft", text }),
+            setDraft: (text: string) =>
+              sc.onComposerInteraction(ComposerInteractionEvent.RestoreDraft.make({ text })),
             submit: () => controller.handleSubmitFromTextarea(),
             focused: controller.inputFocused(),
             // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- TUI adapter narrows heterogeneous framework value shape

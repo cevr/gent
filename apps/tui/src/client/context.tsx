@@ -49,13 +49,24 @@ import type {
   SessionTreeNode,
   SteerCommand,
 } from "@gent/sdk"
-import { SessionState, transitionSessionState, type Session } from "./session-state"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import {
+  SessionState,
+  SessionStateEvent,
+  transitionSessionState,
+  type Session,
+} from "./session-state"
 
-type SteerCommandInput =
-  | { _tag: "Cancel" }
-  | { _tag: "Interrupt" }
-  | { _tag: "Interject"; message: string; agent?: AgentName }
-  | { _tag: "SwitchAgent"; agent: AgentName }
+export const SteerCommandInput = TaggedEnumClass("SteerCommandInput", {
+  Cancel: {},
+  Interrupt: {},
+  Interject: {
+    message: Schema.String,
+    agent: Schema.optional(AgentNameSchema),
+  },
+  SwitchAgent: { agent: AgentNameSchema },
+})
+export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
 const resolveModelInfo = (
   models: Record<string, Model>,
@@ -550,23 +561,24 @@ export function ClientProvider(props: ClientProviderProps) {
         switch (event._tag) {
           case "SessionNameUpdated":
             if (event.sessionId === sessionId) {
-              dispatchSession({ _tag: "UpdateName", name: event.name })
+              dispatchSession(SessionStateEvent.UpdateName.make({ name: event.name }))
             }
             break
 
           case "BranchSwitched":
             if (event.sessionId === sessionId) {
-              dispatchSession({ _tag: "UpdateBranch", branchId: event.toBranchId })
+              dispatchSession(SessionStateEvent.UpdateBranch.make({ branchId: event.toBranchId }))
             }
             break
 
           case "SessionSettingsUpdated":
             if (event.sessionId === sessionId) {
               if (event.reasoningLevel !== undefined) {
-                dispatchSession({
-                  _tag: "UpdateReasoningLevel",
-                  reasoningLevel: event.reasoningLevel,
-                })
+                dispatchSession(
+                  SessionStateEvent.UpdateReasoningLevel.make({
+                    reasoningLevel: event.reasoningLevel,
+                  }),
+                )
               }
             }
             break
@@ -594,10 +606,11 @@ export function ClientProvider(props: ClientProviderProps) {
                 hydrateSnapshot: (snapshot) => {
                   setConnectionIssue(null)
                   if (snapshot.reasoningLevel !== undefined) {
-                    dispatchSession({
-                      _tag: "UpdateReasoningLevel",
-                      reasoningLevel: snapshot.reasoningLevel,
-                    })
+                    dispatchSession(
+                      SessionStateEvent.UpdateReasoningLevel.make({
+                        reasoningLevel: snapshot.reasoningLevel,
+                      }),
+                    )
                   }
                   const rt = snapshot.runtime
                   const status = rt._tag === "Idle" ? AgentStatus.idle() : AgentStatus.streaming()
@@ -680,7 +693,7 @@ export function ClientProvider(props: ClientProviderProps) {
     createSession: (onCreated) => {
       const requestId = crypto.randomUUID()
       log.info("createSession", { requestId })
-      dispatchSession({ _tag: "CreateRequested" })
+      dispatchSession(SessionStateEvent.CreateRequested.make({}))
       cast(
         client.session.create({ requestId, cwd: workspace.cwd }).pipe(
           Effect.tap((result) =>
@@ -699,22 +712,23 @@ export function ClientProvider(props: ClientProviderProps) {
               setLatestInputTokens(0)
               setConnectionIssue(null)
               setExtensionHealth(EMPTY_EXTENSION_HEALTH)
-              dispatchSession({
-                _tag: "CreateSucceeded",
-                session: {
-                  sessionId: result.sessionId,
-                  branchId: result.branchId,
-                  name: result.name,
-                  reasoningLevel: undefined,
-                },
-              })
+              dispatchSession(
+                SessionStateEvent.CreateSucceeded.make({
+                  session: {
+                    sessionId: result.sessionId,
+                    branchId: result.branchId,
+                    name: result.name,
+                    reasoningLevel: undefined,
+                  },
+                }),
+              )
               onCreated?.(SessionId.make(result.sessionId), BranchId.make(result.branchId))
             }),
           ),
           Effect.catchEager((err) =>
             Effect.sync(() => {
               log.error("createSession.failed", { error: String(err) })
-              dispatchSession({ _tag: "CreateFailed" })
+              dispatchSession(SessionStateEvent.CreateFailed.make({}))
               setAgentStore({ status: AgentStatus.error(formatError(err)) })
             }),
           ),
@@ -731,14 +745,15 @@ export function ClientProvider(props: ClientProviderProps) {
       if (currentSessionId !== sessionId) {
         setExtensionHealth(EMPTY_EXTENSION_HEALTH)
       }
-      dispatchSession({
-        _tag: "Activated",
-        session: { sessionId, branchId, name, reasoningLevel: undefined },
-      })
+      dispatchSession(
+        SessionStateEvent.Activated.make({
+          session: { sessionId, branchId, name, reasoningLevel: undefined },
+        }),
+      )
     },
 
     clearSession: () => {
-      dispatchSession({ _tag: "Clear" })
+      dispatchSession(SessionStateEvent.Clear.make({}))
       setAgentStore({
         agent: defaultAgent,
         status: AgentStatus.idle(),
@@ -770,10 +785,11 @@ export function ClientProvider(props: ClientProviderProps) {
       return client.session.updateReasoningLevel({ sessionId: s.sessionId, reasoningLevel }).pipe(
         Effect.tap((result) =>
           Effect.sync(() => {
-            dispatchSession({
-              _tag: "UpdateReasoningLevel",
-              reasoningLevel: result.reasoningLevel,
-            })
+            dispatchSession(
+              SessionStateEvent.UpdateReasoningLevel.make({
+                reasoningLevel: result.reasoningLevel,
+              }),
+            )
           }),
         ),
         Effect.asVoid,

@@ -1,3 +1,6 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+
 export interface MermaidViewerState {
   readonly diagramIndex: number
   readonly panX: number
@@ -12,15 +15,17 @@ export const MermaidViewerState = {
   }),
 } as const
 
-export type MermaidViewerEvent =
-  | { readonly _tag: "Open" }
-  | { readonly _tag: "PanLeft"; readonly step: number }
-  | { readonly _tag: "PanRight"; readonly step: number }
-  | { readonly _tag: "PanUp"; readonly step: number }
-  | { readonly _tag: "PanDown"; readonly step: number }
-  | { readonly _tag: "PrevDiagram" }
-  | { readonly _tag: "NextDiagram"; readonly diagramCount: number }
-  | { readonly _tag: "ResetPan" }
+export const MermaidViewerEvent = TaggedEnumClass("MermaidViewerEvent", {
+  Open: {},
+  PanLeft: { step: Schema.Number },
+  PanRight: { step: Schema.Number },
+  PanUp: { step: Schema.Number },
+  PanDown: { step: Schema.Number },
+  PrevDiagram: {},
+  NextDiagram: { diagramCount: Schema.Number },
+  ResetPan: {},
+})
+export type MermaidViewerEvent = Schema.Schema.Type<typeof MermaidViewerEvent>
 
 const resetPan = (state: MermaidViewerState): MermaidViewerState => ({
   ...state,

@@ -16,6 +16,7 @@ import { useClient } from "../client/index"
 import type { SessionInfo } from "../client"
 import { useCommand } from "../command/index"
 import {
+  CommandPaletteEvent,
   CommandPaletteState,
   transitionCommandPalette,
   type PaletteItem,
@@ -100,7 +101,7 @@ export function CommandPalette() {
   }
 
   const closePalette = () => {
-    dispatch({ _tag: "Close" })
+    dispatch(CommandPaletteEvent.Close.make({}))
     command.closePalette()
   }
 
@@ -207,7 +208,7 @@ export function CommandPalette() {
   }
 
   const pushLevel = (level: PaletteLevel) => {
-    dispatch({ _tag: "PushLevel", level })
+    dispatch(CommandPaletteEvent.PushLevel.make({ level }))
     level.onEnter?.()
   }
 
@@ -285,7 +286,7 @@ export function CommandPalette() {
       closePalette()
       return
     }
-    dispatch({ _tag: "PopLevel" })
+    dispatch(CommandPaletteEvent.PopLevel.make({}))
   }
 
   const handleSelect = () => {
@@ -298,7 +299,7 @@ export function CommandPalette() {
     (event) => {
       if (event.name === "escape") {
         if (searchQuery().length > 0) {
-          dispatch({ _tag: "ClearSearch" })
+          dispatch(CommandPaletteEvent.ClearSearch.make({}))
           return true
         }
         popLevel()
@@ -312,7 +313,7 @@ export function CommandPalette() {
 
       if (event.name === "backspace") {
         if (searchQuery().length > 0) {
-          dispatch({ _tag: "SearchBackspaced" })
+          dispatch(CommandPaletteEvent.SearchBackspaced.make({}))
           return true
         }
         if (state().levelStack.length > 1) {
@@ -328,19 +329,19 @@ export function CommandPalette() {
       }
 
       if (event.name === "up" || (event.ctrl === true && event.name === "p")) {
-        dispatch({ _tag: "MoveUp", itemCount: filteredItems().length })
+        dispatch(CommandPaletteEvent.MoveUp.make({ itemCount: filteredItems().length }))
         return true
       }
 
       if (event.name === "down" || (event.ctrl === true && event.name === "n")) {
-        dispatch({ _tag: "MoveDown", itemCount: filteredItems().length })
+        dispatch(CommandPaletteEvent.MoveDown.make({ itemCount: filteredItems().length }))
         return true
       }
 
       if (event.sequence !== undefined && event.sequence.length === 1) {
         const code = event.sequence.charCodeAt(0)
         if (code >= 32 && code <= 126) {
-          dispatch({ _tag: "SearchTyped", char: event.sequence })
+          dispatch(CommandPaletteEvent.SearchTyped.make({ char: event.sequence }))
           return true
         }
       }
@@ -352,7 +353,7 @@ export function CommandPalette() {
 
   createEffect(() => {
     if (command.paletteOpen()) {
-      dispatch({ _tag: "Open", rootLevel: rootLevel() })
+      dispatch(CommandPaletteEvent.Open.make({ rootLevel: rootLevel() }))
     }
   })
 

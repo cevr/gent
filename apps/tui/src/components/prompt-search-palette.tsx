@@ -8,7 +8,7 @@ import { truncate } from "../utils/truncate"
 import type { ScopedKeyboardEvent } from "../keyboard/context"
 import {
   getPromptSearchItems,
-  type PromptSearchEvent,
+  PromptSearchEvent,
   type PromptSearchState,
 } from "./prompt-search-state"
 
@@ -28,15 +28,15 @@ export const promptSearchEventFromKey = (
   event: ScopedKeyboardEvent,
   hasItems: boolean,
 ): PromptSearchEvent | undefined => {
-  if (event.name === "escape") return { _tag: "Cancel" }
-  if (event.name === "backspace") return { _tag: "Backspace" }
-  if (event.name === "return" || event.name === "linefeed") return { _tag: "Accept" }
+  if (event.name === "escape") return PromptSearchEvent.Cancel.make({})
+  if (event.name === "backspace") return PromptSearchEvent.Backspace.make({})
+  if (event.name === "return" || event.name === "linefeed") return PromptSearchEvent.Accept.make({})
 
   if (hasItems && (event.name === "up" || (event.ctrl === true && event.name === "p"))) {
-    return { _tag: "MoveUp" }
+    return PromptSearchEvent.MoveUp.make({})
   }
   if (hasItems && (event.name === "down" || (event.ctrl === true && event.name === "n"))) {
-    return { _tag: "MoveDown" }
+    return PromptSearchEvent.MoveDown.make({})
   }
 
   if (
@@ -46,7 +46,7 @@ export const promptSearchEventFromKey = (
     event.super !== true &&
     event.option !== true
   ) {
-    return { _tag: "TypeChar", char: event.sequence }
+    return PromptSearchEvent.TypeChar.make({ char: event.sequence })
   }
 
   return undefined

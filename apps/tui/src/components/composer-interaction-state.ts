@@ -1,3 +1,5 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { AutocompleteContribution } from "../extensions/client-facets.js"
 
 export interface AutocompleteState {
@@ -20,13 +22,15 @@ export const ComposerInteractionState = {
   }),
 } as const
 
-export type ComposerInteractionEvent =
-  | { readonly _tag: "DraftChanged"; readonly text: string }
-  | { readonly _tag: "RestoreDraft"; readonly text: string }
-  | { readonly _tag: "ClearDraft" }
-  | { readonly _tag: "EnterShell" }
-  | { readonly _tag: "ExitShell" }
-  | { readonly _tag: "CloseAutocomplete" }
+export const ComposerInteractionEvent = TaggedEnumClass("ComposerInteractionEvent", {
+  DraftChanged: { text: Schema.String },
+  RestoreDraft: { text: Schema.String },
+  ClearDraft: {},
+  EnterShell: {},
+  ExitShell: {},
+  CloseAutocomplete: {},
+})
+export type ComposerInteractionEvent = Schema.Schema.Type<typeof ComposerInteractionEvent>
 
 /**
  * Derive autocomplete state from text and registered contributions.

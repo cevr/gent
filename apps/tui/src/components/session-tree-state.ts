@@ -1,3 +1,6 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+
 export interface SessionTreeState {
   readonly query: string
   readonly selectedIndex: number
@@ -10,12 +13,14 @@ export const SessionTreeState = {
   }),
 } as const
 
-export type SessionTreeEvent =
-  | { readonly _tag: "Open"; readonly selectedIndex: number }
-  | { readonly _tag: "Backspace" }
-  | { readonly _tag: "MoveUp"; readonly itemCount: number }
-  | { readonly _tag: "MoveDown"; readonly itemCount: number }
-  | { readonly _tag: "TypeChar"; readonly char: string }
+export const SessionTreeEvent = TaggedEnumClass("SessionTreeEvent", {
+  Open: { selectedIndex: Schema.Number },
+  Backspace: {},
+  MoveUp: { itemCount: Schema.Number },
+  MoveDown: { itemCount: Schema.Number },
+  TypeChar: { char: Schema.String },
+})
+export type SessionTreeEvent = Schema.Schema.Type<typeof SessionTreeEvent>
 
 const wrapIndex = (selectedIndex: number, itemCount: number, direction: -1 | 1): number => {
   if (itemCount <= 0) return 0

@@ -47,4 +47,5 @@ export {
   useClientActions,
   useClientRuntime,
   useClientTransportState,
+  SteerCommandInput,
 } from "./context"

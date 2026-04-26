@@ -1,5 +1,14 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { AuthAuthorization, AuthMethod } from "@gent/core/domain/auth-method"
 import type { AuthProviderInfo } from "@gent/core/domain/auth-guard"
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const AuthProviderInfoSchema = Schema.Any as unknown as Schema.Schema<AuthProviderInfo>
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const AuthMethodSchema = Schema.Any as unknown as Schema.Schema<AuthMethod>
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const AuthAuthorizationSchema = Schema.Any as unknown as Schema.Schema<AuthAuthorization>
 
 type AuthCatalog = {
   readonly providers: readonly AuthProviderInfo[]
@@ -39,88 +48,39 @@ export type AuthState =
       readonly submitting: boolean
     } & AuthCatalog)
 
-export type AuthEvent =
-  | {
-      readonly _tag: "LoadStarted"
-    }
-  | {
-      readonly _tag: "Loaded"
-      readonly providers: readonly AuthProviderInfo[]
-      readonly methods: Readonly<Record<string, ReadonlyArray<AuthMethod>>>
-    }
-  | {
-      readonly _tag: "LoadFailed"
-      readonly error: string
-    }
-  | {
-      readonly _tag: "SelectProvider"
-      readonly index: number
-    }
-  | {
-      readonly _tag: "SelectMethod"
-      readonly index: number
-    }
-  | {
-      readonly _tag: "OpenMethod"
-    }
-  | {
-      readonly _tag: "StartKey"
-    }
-  | {
-      readonly _tag: "StartOAuthAuthorization"
-    }
-  | {
-      readonly _tag: "StartOAuth"
-      readonly authorization: AuthAuthorization
-      readonly method: AuthMethod
-      readonly providerIndex: number
-      readonly methodIndex: number
-    }
-  | {
-      readonly _tag: "TypeKey"
-      readonly char: string
-    }
-  | {
-      readonly _tag: "BackspaceKey"
-    }
-  | {
-      readonly _tag: "PasteKey"
-      readonly text: string
-    }
-  | {
-      readonly _tag: "SubmitKeyStarted"
-    }
-  | {
-      readonly _tag: "TypeCode"
-      readonly char: string
-    }
-  | {
-      readonly _tag: "BackspaceCode"
-    }
-  | {
-      readonly _tag: "PasteCode"
-      readonly text: string
-    }
-  | {
-      readonly _tag: "SubmitOAuthStarted"
-    }
-  | {
-      readonly _tag: "DeleteStarted"
-    }
-  | {
-      readonly _tag: "Cancel"
-    }
-  | {
-      readonly _tag: "ActionSucceeded"
-    }
-  | {
-      readonly _tag: "ActionFailed"
-      readonly error: string
-    }
-  | {
-      readonly _tag: "OAuthAutoFailed"
-      readonly error: string
-    }
+export const AuthEvent = TaggedEnumClass("AuthEvent", {
+  LoadStarted: {},
+  Loaded: {
+    providers: Schema.Array(AuthProviderInfoSchema),
+    methods: Schema.Record(Schema.String, Schema.Array(AuthMethodSchema)),
+  },
+  LoadFailed: { error: Schema.String },
+  SelectProvider: { index: Schema.Number },
+  SelectMethod: { index: Schema.Number },
+  OpenMethod: {},
+  StartKey: {},
+  StartOAuthAuthorization: {},
+  StartOAuth: {
+    authorization: AuthAuthorizationSchema,
+    method: AuthMethodSchema,
+    providerIndex: Schema.Number,
+    methodIndex: Schema.Number,
+  },
+  TypeKey: { char: Schema.String },
+  BackspaceKey: {},
+  PasteKey: { text: Schema.String },
+  SubmitKeyStarted: {},
+  TypeCode: { char: Schema.String },
+  BackspaceCode: {},
+  PasteCode: { text: Schema.String },
+  SubmitOAuthStarted: {},
+  DeleteStarted: {},
+  Cancel: {},
+  ActionSucceeded: {},
+  ActionFailed: { error: Schema.String },
+  OAuthAutoFailed: { error: Schema.String },
+})
+export type AuthEvent = Schema.Schema.Type<typeof AuthEvent>
 
 const catalogOf = (state: AuthState): AuthCatalog => ({
   providers: state.providers,

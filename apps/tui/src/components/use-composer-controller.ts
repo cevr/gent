@@ -16,7 +16,8 @@ import { formatError } from "../utils/format-error"
 import { openExternalEditor, resolveEditor } from "../utils/external-editor"
 import { expandFileRefs } from "../utils/file-refs"
 import { executeShell } from "../utils/shell"
-import type { AutocompleteState } from "./composer-interaction-state"
+import { ComposerInteractionEvent, type AutocompleteState } from "./composer-interaction-state"
+import { ComposerEvent } from "./composer-state"
 import type { ApprovalResult } from "@gent/core/domain/event.js"
 import { useExtensionUI } from "../extensions/context"
 
@@ -134,11 +135,11 @@ export function useComposerController(): ComposerController {
   const clearInput = () => {
     if (inputRef !== null) inputRef.setText("")
     resolvedTokens.length = 0
-    sc.onComposerInteraction({ _tag: "ClearDraft" })
+    sc.onComposerInteraction(ComposerInteractionEvent.ClearDraft.make({}))
   }
 
   const clearAutocomplete = () => {
-    sc.onComposerInteraction({ _tag: "CloseAutocomplete" })
+    sc.onComposerInteraction(ComposerInteractionEvent.CloseAutocomplete.make({}))
   }
 
   const focusTextarea = () => {
@@ -166,7 +167,7 @@ export function useComposerController(): ComposerController {
     const nextValue = beforeTrigger + insertion
     inputRef.replaceText(nextValue)
     inputRef.cursorOffset = nextValue.length
-    sc.onComposerInteraction({ _tag: "RestoreDraft", text: nextValue })
+    sc.onComposerInteraction(ComposerInteractionEvent.RestoreDraft.make({ text: nextValue }))
     applyTokenHighlights()
     focusTextarea()
   }
@@ -190,11 +191,11 @@ export function useComposerController(): ComposerController {
         const nextValue = previousValue + placeholder
         inputRef.replaceText(nextValue)
         inputRef.cursorOffset = nextValue.length
-        sc.onComposerInteraction({ _tag: "RestoreDraft", text: nextValue })
+        sc.onComposerInteraction(ComposerInteractionEvent.RestoreDraft.make({ text: nextValue }))
         return
       }
     }
-    sc.onComposerInteraction({ _tag: "DraftChanged", text: value })
+    sc.onComposerInteraction(ComposerInteractionEvent.DraftChanged.make({ text: value }))
 
     // Prune tokens that are no longer in the text, then re-apply highlights
     for (let i = resolvedTokens.length - 1; i >= 0; i--) {
@@ -215,7 +216,7 @@ export function useComposerController(): ComposerController {
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            sc.onComposerInteraction({ _tag: "ExitShell" })
+            sc.onComposerInteraction(ComposerInteractionEvent.ExitShell.make({}))
             clearInput()
             sc.onSubmit(userMessage)
           }),
@@ -310,7 +311,9 @@ export function useComposerController(): ComposerController {
         if (result._tag === "applied" && inputRef !== null) {
           inputRef.replaceText(result.content)
           inputRef.cursorOffset = result.content.length
-          sc.onComposerInteraction({ _tag: "RestoreDraft", text: result.content })
+          sc.onComposerInteraction(
+            ComposerInteractionEvent.RestoreDraft.make({ text: result.content }),
+          )
           return
         }
         if (result._tag === "error") {
@@ -349,21 +352,21 @@ export function useComposerController(): ComposerController {
       effectiveMode() === "editing" &&
       autocomplete() === null
     ) {
-      sc.onComposerInteraction({ _tag: "EnterShell" })
+      sc.onComposerInteraction(ComposerInteractionEvent.EnterShell.make({}))
       return true
     }
 
     if (effectiveMode() !== "shell") return false
 
     if (event.name === "escape") {
-      sc.onComposerInteraction({ _tag: "ExitShell" })
+      sc.onComposerInteraction(ComposerInteractionEvent.ExitShell.make({}))
       clearAutocomplete()
       clearInput()
       return true
     }
 
     if (event.name === "backspace" && (inputRef?.cursorOffset ?? 0) <= 1) {
-      sc.onComposerInteraction({ _tag: "ExitShell" })
+      sc.onComposerInteraction(ComposerInteractionEvent.ExitShell.make({}))
       clearAutocomplete()
       return true
     }
@@ -401,7 +404,7 @@ export function useComposerController(): ComposerController {
 
     inputRef.replaceText(result.text)
     inputRef.cursorOffset = result.cursor === "start" ? 0 : result.text.length
-    sc.onComposerInteraction({ _tag: "RestoreDraft", text: result.text })
+    sc.onComposerInteraction(ComposerInteractionEvent.RestoreDraft.make({ text: result.text }))
     return true
   }
 
@@ -515,10 +518,10 @@ export function useComposerController(): ComposerController {
     handleTextareaKeyDown,
     handleSubmitFromTextarea,
     resolveInteraction: (result: ApprovalResult) => {
-      sc.dispatchComposer({ _tag: "ResolveInteraction", result })
+      sc.dispatchComposer(ComposerEvent.ResolveInteraction.make({ result }))
     },
     cancelInteraction: () => {
-      sc.dispatchComposer({ _tag: "CancelInteraction" })
+      sc.dispatchComposer(ComposerEvent.CancelInteraction.make({}))
     },
     handleAutocompleteSelect,
     handleAutocompleteClose,

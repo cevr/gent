@@ -1,5 +1,7 @@
-import type { BranchId, SessionId } from "@gent/core/domain/ids.js"
-import type { ReasoningEffort } from "@gent/core/domain/agent.js"
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+import { BranchId, SessionId } from "@gent/core/domain/ids.js"
+import { ReasoningEffort } from "@gent/core/domain/agent.js"
 
 export interface Session {
   readonly sessionId: SessionId
@@ -8,20 +10,29 @@ export interface Session {
   readonly reasoningLevel: ReasoningEffort | undefined
 }
 
+const SessionSchema: Schema.Schema<Session> = Schema.Struct({
+  sessionId: SessionId,
+  branchId: BranchId,
+  name: Schema.String,
+  reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+})
+
 export type SessionState =
   | { readonly status: "none" }
   | { readonly status: "creating" }
   | { readonly status: "active"; readonly session: Session }
 
-export type SessionStateEvent =
-  | { readonly _tag: "CreateRequested" }
-  | { readonly _tag: "CreateSucceeded"; readonly session: Session }
-  | { readonly _tag: "CreateFailed" }
-  | { readonly _tag: "Activated"; readonly session: Session }
-  | { readonly _tag: "Clear" }
-  | { readonly _tag: "UpdateName"; readonly name: string }
-  | { readonly _tag: "UpdateBranch"; readonly branchId: BranchId }
-  | { readonly _tag: "UpdateReasoningLevel"; readonly reasoningLevel: ReasoningEffort | undefined }
+export const SessionStateEvent = TaggedEnumClass("SessionStateEvent", {
+  CreateRequested: {},
+  CreateSucceeded: { session: SessionSchema },
+  CreateFailed: {},
+  Activated: { session: SessionSchema },
+  Clear: {},
+  UpdateName: { name: Schema.String },
+  UpdateBranch: { branchId: BranchId },
+  UpdateReasoningLevel: { reasoningLevel: Schema.UndefinedOr(ReasoningEffort) },
+})
+export type SessionStateEvent = Schema.Schema.Type<typeof SessionStateEvent>
 
 export const SessionState = {
   none: (): SessionState => ({ status: "none" }),

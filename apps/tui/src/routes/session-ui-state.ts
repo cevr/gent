@@ -1,7 +1,17 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 import type { SessionInfo, SessionTreeNode } from "../client/index"
 import type { PromptSearchEvent, PromptSearchState } from "../components/prompt-search-state"
 import { PromptSearchState as PromptSearchStateFactory } from "../components/prompt-search-state"
 import { transitionPromptSearchRoute } from "./prompt-search-flow"
+
+// Schema.Any cast for types lacking canonical schemas
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const SessionTreeNodeSchema = Schema.Any as unknown as Schema.Schema<SessionTreeNode>
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const SessionInfoSchema = Schema.Any as unknown as Schema.Schema<SessionInfo>
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const PromptSearchEventSchema = Schema.Any as unknown as Schema.Schema<PromptSearchEvent>
 
 interface PromptSearchOverlayState {
   readonly _tag: "prompt-search"
@@ -37,24 +47,24 @@ export const SessionUiState = {
   }),
 } as const
 
-export type SessionUiEvent =
-  | { readonly _tag: "ToggleTools" }
-  | {
-      readonly _tag: "OpenTree"
-      readonly tree: SessionTreeNode
-      readonly sessions: readonly SessionInfo[]
-    }
-  | { readonly _tag: "OpenFork" }
-  | { readonly _tag: "OpenMermaid" }
-  | { readonly _tag: "OpenAuth"; readonly enforceAuth: boolean }
-  | { readonly _tag: "OpenPermissions" }
-  | { readonly _tag: "OpenExtensionOverlay"; readonly overlayId: string }
-  | { readonly _tag: "CloseOverlay" }
-  | {
-      readonly _tag: "PromptSearch"
-      readonly event: PromptSearchEvent
-      readonly entries: readonly string[]
-    }
+export const SessionUiEvent = TaggedEnumClass("SessionUiEvent", {
+  ToggleTools: {},
+  OpenTree: {
+    tree: SessionTreeNodeSchema,
+    sessions: Schema.Array(SessionInfoSchema),
+  },
+  OpenFork: {},
+  OpenMermaid: {},
+  OpenAuth: { enforceAuth: Schema.Boolean },
+  OpenPermissions: {},
+  OpenExtensionOverlay: { overlayId: Schema.String },
+  CloseOverlay: {},
+  PromptSearch: {
+    event: PromptSearchEventSchema,
+    entries: Schema.Array(Schema.String),
+  },
+})
+export type SessionUiEvent = Schema.Schema.Type<typeof SessionUiEvent>
 
 export type SessionUiEffect = { readonly _tag: "RestoreComposer"; readonly text: string }
 

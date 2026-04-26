@@ -1,7 +1,7 @@
 import type { ScopedKeyboardEvent } from "../keyboard/context"
 import {
   getPromptSearchItems,
-  type PromptSearchEvent,
+  PromptSearchEvent,
   type PromptSearchState,
 } from "../components/prompt-search-state"
 import { promptSearchEventFromKey } from "../components/prompt-search-palette"
@@ -28,7 +28,7 @@ export function createPromptSearchController(params: {
     state: params.state,
     isOpen: () => params.state()._tag === "open",
     open: () => {
-      onEvent({ _tag: "Open", draftBeforeOpen: params.draft() })
+      onEvent(PromptSearchEvent.Open.make({ draftBeforeOpen: params.draft() }))
     },
     onEvent,
     handleKey: (event) => {

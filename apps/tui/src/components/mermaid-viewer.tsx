@@ -8,7 +8,11 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../theme/index"
 import { renderMermaidToAscii, extractMermaidBlocks } from "../utils/mermaid"
 import { useScopedKeyboard } from "../keyboard/context"
-import { MermaidViewerState, transitionMermaidViewer } from "./mermaid-viewer-state"
+import {
+  MermaidViewerEvent,
+  MermaidViewerState,
+  transitionMermaidViewer,
+} from "./mermaid-viewer-state"
 
 export interface MermaidDiagram {
   source: string
@@ -32,7 +36,7 @@ export function MermaidViewer(props: MermaidViewerProps) {
 
   createEffect(() => {
     if (!props.open) return
-    setState(transitionMermaidViewer(state(), { _tag: "Open" }))
+    setState(transitionMermaidViewer(state(), MermaidViewerEvent.Open.make({})))
   })
 
   const currentDiagram = createMemo(() => {
@@ -74,45 +78,53 @@ export function MermaidViewer(props: MermaidViewerProps) {
       // Panning
       if (e.name === "left") {
         setState((current) =>
-          transitionMermaidViewer(current, { _tag: "PanLeft", step: PAN_STEP_X }),
+          transitionMermaidViewer(current, MermaidViewerEvent.PanLeft.make({ step: PAN_STEP_X })),
         )
         return true
       }
       if (e.name === "right") {
         setState((current) =>
-          transitionMermaidViewer(current, { _tag: "PanRight", step: PAN_STEP_X }),
+          transitionMermaidViewer(current, MermaidViewerEvent.PanRight.make({ step: PAN_STEP_X })),
         )
         return true
       }
       if (e.name === "up") {
-        setState((current) => transitionMermaidViewer(current, { _tag: "PanUp", step: PAN_STEP_Y }))
+        setState((current) =>
+          transitionMermaidViewer(current, MermaidViewerEvent.PanUp.make({ step: PAN_STEP_Y })),
+        )
         return true
       }
       if (e.name === "down") {
         setState((current) =>
-          transitionMermaidViewer(current, { _tag: "PanDown", step: PAN_STEP_Y }),
+          transitionMermaidViewer(current, MermaidViewerEvent.PanDown.make({ step: PAN_STEP_Y })),
         )
         return true
       }
 
       // Diagram cycling
       if (e.sequence === "[") {
-        setState((current) => transitionMermaidViewer(current, { _tag: "PrevDiagram" }))
+        setState((current) =>
+          transitionMermaidViewer(current, MermaidViewerEvent.PrevDiagram.make({})),
+        )
         return true
       }
       if (e.sequence === "]") {
         setState((current) =>
-          transitionMermaidViewer(current, {
-            _tag: "NextDiagram",
-            diagramCount: props.diagrams.length,
-          }),
+          transitionMermaidViewer(
+            current,
+            MermaidViewerEvent.NextDiagram.make({
+              diagramCount: props.diagrams.length,
+            }),
+          ),
         )
         return true
       }
 
       // Home/End for quick navigation
       if (e.name === "home") {
-        setState((current) => transitionMermaidViewer(current, { _tag: "ResetPan" }))
+        setState((current) =>
+          transitionMermaidViewer(current, MermaidViewerEvent.ResetPan.make({})),
+        )
         return true
       }
       return false

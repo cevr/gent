@@ -8,7 +8,7 @@ import { useTheme } from "../theme/index"
 import { useScrollSync } from "../hooks/use-scroll-sync"
 import { truncate } from "../utils/truncate"
 import { useScopedKeyboard } from "../keyboard/context"
-import { SessionTreeState, transitionSessionTree } from "./session-tree-state"
+import { SessionTreeEvent, SessionTreeState, transitionSessionTree } from "./session-tree-state"
 
 interface FlatNode {
   id: SessionId
@@ -102,10 +102,12 @@ export function SessionTree(props: SessionTreeProps) {
     if (!props.open) return
     const currentIndex = items().findIndex((item) => item.isCurrent)
     setState(
-      transitionSessionTree(state(), {
-        _tag: "Open",
-        selectedIndex: currentIndex >= 0 ? currentIndex : 0,
-      }),
+      transitionSessionTree(
+        state(),
+        SessionTreeEvent.Open.make({
+          selectedIndex: currentIndex >= 0 ? currentIndex : 0,
+        }),
+      ),
     )
   })
 
@@ -117,7 +119,7 @@ export function SessionTree(props: SessionTreeProps) {
       }
 
       if (e.name === "backspace") {
-        setState((current) => transitionSessionTree(current, { _tag: "Backspace" }))
+        setState((current) => transitionSessionTree(current, SessionTreeEvent.Backspace.make({})))
         return true
       }
 
@@ -132,14 +134,20 @@ export function SessionTree(props: SessionTreeProps) {
 
       if (e.name === "up" || (e.ctrl === true && e.name === "p")) {
         setState((current) =>
-          transitionSessionTree(current, { _tag: "MoveUp", itemCount: visible.length }),
+          transitionSessionTree(
+            current,
+            SessionTreeEvent.MoveUp.make({ itemCount: visible.length }),
+          ),
         )
         return true
       }
 
       if (e.name === "down" || (e.ctrl === true && e.name === "n")) {
         setState((current) =>
-          transitionSessionTree(current, { _tag: "MoveDown", itemCount: visible.length }),
+          transitionSessionTree(
+            current,
+            SessionTreeEvent.MoveDown.make({ itemCount: visible.length }),
+          ),
         )
         return true
       }
@@ -147,7 +155,9 @@ export function SessionTree(props: SessionTreeProps) {
       if (e.sequence !== undefined && e.sequence.length === 1) {
         const char = e.sequence
         if (char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126) {
-          setState((current) => transitionSessionTree(current, { _tag: "TypeChar", char }))
+          setState((current) =>
+            transitionSessionTree(current, SessionTreeEvent.TypeChar.make({ char })),
+          )
           return true
         }
       }

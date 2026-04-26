@@ -1,4 +1,6 @@
+import { Schema } from "effect"
 import type { Accessor } from "solid-js"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
 
 /** A menu item in the command palette. */
 export interface PaletteItem {
@@ -28,16 +30,21 @@ export interface CommandPaletteState {
   readonly searchQuery: string
 }
 
-export type CommandPaletteEvent =
-  | { readonly _tag: "Open"; readonly rootLevel: PaletteLevel }
-  | { readonly _tag: "Close" }
-  | { readonly _tag: "PushLevel"; readonly level: PaletteLevel }
-  | { readonly _tag: "PopLevel" }
-  | { readonly _tag: "SearchTyped"; readonly char: string }
-  | { readonly _tag: "SearchBackspaced" }
-  | { readonly _tag: "ClearSearch" }
-  | { readonly _tag: "MoveUp"; readonly itemCount: number }
-  | { readonly _tag: "MoveDown"; readonly itemCount: number }
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- runtime internal owns erased generic boundary
+const PaletteLevelSchema = Schema.Any as unknown as Schema.Schema<PaletteLevel>
+
+export const CommandPaletteEvent = TaggedEnumClass("CommandPaletteEvent", {
+  Open: { rootLevel: PaletteLevelSchema },
+  Close: {},
+  PushLevel: { level: PaletteLevelSchema },
+  PopLevel: {},
+  SearchTyped: { char: Schema.String },
+  SearchBackspaced: {},
+  ClearSearch: {},
+  MoveUp: { itemCount: Schema.Number },
+  MoveDown: { itemCount: Schema.Number },
+})
+export type CommandPaletteEvent = Schema.Schema.Type<typeof CommandPaletteEvent>
 
 const initial = (): CommandPaletteState => ({
   levelStack: [],

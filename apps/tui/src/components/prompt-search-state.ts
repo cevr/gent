@@ -1,3 +1,6 @@
+import { Schema } from "effect"
+import { TaggedEnumClass } from "@gent/core/domain/schema-tagged-enum-class"
+
 export type PromptSearchState =
   | { readonly _tag: "closed" }
   | {
@@ -19,18 +22,22 @@ export const PromptSearchState = {
   }),
 } as const
 
-export type PromptSearchEvent =
-  | { readonly _tag: "Open"; readonly draftBeforeOpen: string }
-  | { readonly _tag: "TypeChar"; readonly char: string }
-  | { readonly _tag: "Backspace" }
-  | { readonly _tag: "MoveUp" }
-  | { readonly _tag: "MoveDown" }
-  | { readonly _tag: "Accept" }
-  | { readonly _tag: "Cancel" }
+export const PromptSearchEvent = TaggedEnumClass("PromptSearchEvent", {
+  Open: { draftBeforeOpen: Schema.String },
+  TypeChar: { char: Schema.String },
+  Backspace: {},
+  MoveUp: {},
+  MoveDown: {},
+  Accept: {},
+  Cancel: {},
+})
+export type PromptSearchEvent = Schema.Schema.Type<typeof PromptSearchEvent>
 
-export type PromptSearchEffect =
-  | { readonly _tag: "Preview"; readonly text: string }
-  | { readonly _tag: "Close" }
+export const PromptSearchEffect = TaggedEnumClass("PromptSearchEffect", {
+  Preview: { text: Schema.String },
+  Close: {},
+})
+export type PromptSearchEffect = Schema.Schema.Type<typeof PromptSearchEffect>
 
 export interface PromptSearchTransitionResult {
   readonly state: PromptSearchState
@@ -93,11 +100,10 @@ export function transitionPromptSearch(
       return {
         state: PromptSearchState.closed(),
         effects: [
-          {
-            _tag: "Preview",
+          PromptSearchEffect.Preview.make({
             text: getPromptSearchPreview(state, entries) ?? state.draftBeforeOpen,
-          },
-          { _tag: "Close" },
+          }),
+          PromptSearchEffect.Close.make({}),
         ],
       }
 
@@ -105,7 +111,10 @@ export function transitionPromptSearch(
       if (state._tag !== "open") return { state, effects: [] }
       return {
         state: PromptSearchState.closed(),
-        effects: [{ _tag: "Preview", text: state.draftBeforeOpen }, { _tag: "Close" }],
+        effects: [
+          PromptSearchEffect.Preview.make({ text: state.draftBeforeOpen }),
+          PromptSearchEffect.Close.make({}),
+        ],
       }
   }
 
@@ -170,6 +179,8 @@ export function transitionPromptSearch(
 
   return {
     state: nextState,
-    effects: [{ _tag: "Preview", text: getPromptSearchPreview(nextState, entries) ?? "" }],
+    effects: [
+      PromptSearchEffect.Preview.make({ text: getPromptSearchPreview(nextState, entries) ?? "" }),
+    ],
   }
 }
