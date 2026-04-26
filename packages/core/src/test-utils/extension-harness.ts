@@ -10,6 +10,7 @@ import {
   AgentDefinition,
   AgentName,
   AgentRunnerService,
+  AgentRunResult,
   type AgentRunner,
 } from "../domain/agent.js"
 import {
@@ -222,12 +223,13 @@ export const createToolTestLayer = (config: ToolTestLayerConfig) => {
 
   const defaultRunner: AgentRunner = {
     run: () =>
-      Effect.succeed({
-        _tag: "success" as const,
-        text: "",
-        sessionId: SessionId.make("test-subagent-session"),
-        agentName: AgentName.make("cowork"),
-      }),
+      Effect.succeed(
+        AgentRunResult.Success.make({
+          text: "",
+          sessionId: SessionId.make("test-subagent-session"),
+          agentName: AgentName.make("cowork"),
+        }),
+      ),
   }
   const subagentRunnerLayer = Layer.succeed(
     AgentRunnerService,

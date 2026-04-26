@@ -13,6 +13,7 @@ import { BunServices } from "@effect/platform-bun"
 import {
   AgentName,
   AgentRunnerService,
+  AgentRunResult,
   DEFAULT_MODEL_ID,
   type AgentDefinition,
   type AgentRunner,
@@ -185,12 +186,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       // Subagent runner
       const defaultRunner: AgentRunner = {
         run: () =>
-          Effect.succeed({
-            _tag: "success" as const,
-            text: "",
-            sessionId: SessionId.make("test-subagent-session"),
-            agentName: AgentName.make("cowork"),
-          }),
+          Effect.succeed(
+            AgentRunResult.Success.make({
+              text: "",
+              sessionId: SessionId.make("test-subagent-session"),
+              agentName: AgentName.make("cowork"),
+            }),
+          ),
       }
       const subagentRunnerLayer = Layer.succeed(
         AgentRunnerService,

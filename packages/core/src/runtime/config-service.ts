@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema, FileSystem, Path } from "effect"
-import { DriverRef, type AgentName } from "../domain/agent.js"
+import { AgentName, DriverRef } from "../domain/agent.js"
 import { PermissionRule } from "../domain/permission.js"
 import { RuntimePlatform } from "./runtime-platform.js"
 
@@ -18,7 +18,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * `{ cowork: { _tag: "external", id: "acp-claude-code" } }` makes
    * `cowork` dispatch through the Claude Code SDK executor.
    */
-  driverOverrides: Schema.optional(Schema.Record(Schema.String, DriverRef)),
+  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
 }) {}
 
 /**
@@ -36,7 +36,7 @@ const mergeConfigsImpl = (user: UserConfig, project: UserConfig): UserConfig => 
     ...(user.disabledExtensions ?? []),
     ...(project.disabledExtensions ?? []),
   ]
-  const driverOverrides: Record<string, DriverRef> = {
+  const driverOverrides: Record<AgentName, DriverRef> = {
     ...(user.driverOverrides ?? {}),
     ...(project.driverOverrides ?? {}),
   }
