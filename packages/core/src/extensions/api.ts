@@ -219,7 +219,12 @@ export type {
   Intent,
   ModelAudienceFields,
 } from "../domain/capability.js"
-export { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
+export {
+  ref,
+  CAPABILITY_REF,
+  CapabilityError,
+  CapabilityNotFoundError,
+} from "../domain/capability.js"
 export type {
   ResourceContribution,
   AnyResourceContribution,

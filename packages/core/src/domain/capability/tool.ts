@@ -11,12 +11,10 @@
  * old `defineTool` carrier dies in B11.5d.
  *
  * Lowering: produces an `AnyCapabilityContribution` with
- * `audiences: ["model"]`, `intent: "write"` (legacy default — tools
- * that are genuinely read-only should be authored as `request({ intent:
- * "read" })` for extension-to-extension messaging or fold their
- * idempotence into the actor reducer). The internal Capability shape
- * stays unchanged; `audiences` + `intent` are derived from the factory
- * choice and never appear in the author surface.
+ * `audiences: ["model"]` and the author-supplied `intent` (default
+ * `"write"`). Read-only tools (`fs-tools/read.ts`, `grep.ts`,
+ * `glob.ts`) pass `intent: "read"` so future read-only sub-agent gates
+ * can filter honestly.
  *
  * @module
  */
@@ -25,6 +23,7 @@ import { type Effect, Schema } from "effect"
 import type {
   AnyCapabilityContribution,
   CapabilityToken,
+  Intent,
   ModelCapabilityContext,
 } from "../capability.js"
 import type { ToolCallId } from "../ids.js"
@@ -57,6 +56,10 @@ export interface ToolInput<
   readonly id: string
   /** Sent to the LLM as part of the tool schema — describes what the tool does. */
   readonly description: string
+  /** Read vs write. Defaults to `"write"`. Read-only tools (e.g. `fs-tools/read`,
+   *  `grep`, `glob`) should pass `intent: "read"` so that future read-only
+   *  sub-agent gates can filter honestly. */
+  readonly intent?: Intent
   /**
    * Schema for `execute` input. Must have no context requirement so the
    * LLM-bridge can decode JSON synchronously without resolving services.
@@ -118,7 +121,7 @@ export const tool = <
     id: input.id,
     description: input.description,
     audiences: ["model"],
-    intent: "write",
+    intent: input.intent ?? "write",
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- schema and brand factory owns nominal type boundary
     input: input.params as Schema.Schema<unknown>,
     // ToolRunner consumes raw JSON output — Schema.Unknown is a no-op encode.

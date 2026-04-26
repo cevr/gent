@@ -63,6 +63,6 @@ export const TaskExtension = defineExtension({
   ],
   // Request-backed snapshot — builtin event sink will emit `ExtensionStateChanged`
   // for `@gent/task-tools` whenever any of these tags is published, so the
-  // TUI widget refetches `TaskListRef` on every relevant mutation.
+  // TUI widget refetches `TaskListRequest` on every relevant mutation.
   pulseTags: ["TaskCreated", "TaskUpdated", "TaskCompleted", "TaskDeleted"],
 })

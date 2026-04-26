@@ -8,14 +8,7 @@
  * @module
  */
 import { Effect, Schema } from "effect"
-import {
-  AgentName,
-  type CapabilityRef,
-  CapabilityError,
-  request,
-  Task,
-  TaskId,
-} from "@gent/core/extensions/api"
+import { AgentName, CapabilityError, request, Task, TaskId } from "@gent/core/extensions/api"
 import { TaskService } from "../task-tools-service.js"
 import { TaskStorageReadOnly } from "../task-tools-storage.js"
 import { TASK_TOOLS_EXTENSION_ID } from "./identity.js"
@@ -27,6 +20,7 @@ export const TaskGetOutput = Schema.NullOr(Task)
 
 export const TaskGetRequest = request({
   id: "task.get",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "read",
   input: TaskGetInput,
   output: TaskGetOutput,
@@ -48,19 +42,12 @@ export const TaskGetRequest = request({
     }),
 })
 
-export const TaskGetRef: CapabilityRef<typeof TaskGetInput.Type, typeof TaskGetOutput.Type> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.get",
-  intent: "read",
-  input: TaskGetInput,
-  output: TaskGetOutput,
-}
-
 export const TaskListInput = Schema.Struct({})
 export const TaskListOutput = Schema.Array(Task)
 
 export const TaskListRequest = request({
   id: "task.list",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "read",
   input: TaskListInput,
   output: TaskListOutput,
@@ -81,19 +68,12 @@ export const TaskListRequest = request({
     }),
 })
 
-export const TaskListRef: CapabilityRef<typeof TaskListInput.Type, typeof TaskListOutput.Type> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.list",
-  intent: "read",
-  input: TaskListInput,
-  output: TaskListOutput,
-}
-
 export const TaskGetDepsInput = Schema.Struct({ taskId: TaskId })
 export const TaskGetDepsOutput = Schema.Array(TaskId)
 
 export const TaskGetDepsRequest = request({
   id: "task.getDeps",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "read",
   input: TaskGetDepsInput,
   output: TaskGetDepsOutput,
@@ -114,17 +94,6 @@ export const TaskGetDepsRequest = request({
     }),
 })
 
-export const TaskGetDepsRef: CapabilityRef<
-  typeof TaskGetDepsInput.Type,
-  typeof TaskGetDepsOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.getDeps",
-  intent: "read",
-  input: TaskGetDepsInput,
-  output: TaskGetDepsOutput,
-}
-
 // ── Write Requests ──
 
 export const TaskCreateInput = Schema.Struct({
@@ -139,6 +108,7 @@ export const TaskCreateOutput = Task
 
 export const TaskCreateRequest = request({
   id: "task.create",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "write",
   input: TaskCreateInput,
   output: TaskCreateOutput,
@@ -170,17 +140,6 @@ export const TaskCreateRequest = request({
     }),
 })
 
-export const TaskCreateRef: CapabilityRef<
-  typeof TaskCreateInput.Type,
-  typeof TaskCreateOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.create",
-  intent: "write",
-  input: TaskCreateInput,
-  output: TaskCreateOutput,
-}
-
 export const TaskUpdateInput = Schema.Struct({
   taskId: TaskId,
   status: Schema.optional(
@@ -194,6 +153,7 @@ export const TaskUpdateOutput = Schema.NullOr(Task)
 
 export const TaskUpdateRequest = request({
   id: "task.update",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "write",
   input: TaskUpdateInput,
   output: TaskUpdateOutput,
@@ -206,22 +166,12 @@ export const TaskUpdateRequest = request({
     }),
 })
 
-export const TaskUpdateRef: CapabilityRef<
-  typeof TaskUpdateInput.Type,
-  typeof TaskUpdateOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.update",
-  intent: "write",
-  input: TaskUpdateInput,
-  output: TaskUpdateOutput,
-}
-
 export const TaskDeleteInput = Schema.Struct({ taskId: TaskId })
 export const TaskDeleteOutput = Schema.Null
 
 export const TaskDeleteRequest = request({
   id: "task.delete",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "write",
   input: TaskDeleteInput,
   output: TaskDeleteOutput,
@@ -233,22 +183,12 @@ export const TaskDeleteRequest = request({
     }),
 })
 
-export const TaskDeleteRef: CapabilityRef<
-  typeof TaskDeleteInput.Type,
-  typeof TaskDeleteOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.delete",
-  intent: "write",
-  input: TaskDeleteInput,
-  output: TaskDeleteOutput,
-}
-
 export const TaskAddDepInput = Schema.Struct({ taskId: TaskId, blockedById: TaskId })
 export const TaskAddDepOutput = Schema.Null
 
 export const TaskAddDepRequest = request({
   id: "task.addDep",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "write",
   input: TaskAddDepInput,
   output: TaskAddDepOutput,
@@ -270,22 +210,12 @@ export const TaskAddDepRequest = request({
     }),
 })
 
-export const TaskAddDepRef: CapabilityRef<
-  typeof TaskAddDepInput.Type,
-  typeof TaskAddDepOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.addDep",
-  intent: "write",
-  input: TaskAddDepInput,
-  output: TaskAddDepOutput,
-}
-
 export const TaskRemoveDepInput = Schema.Struct({ taskId: TaskId, blockedById: TaskId })
 export const TaskRemoveDepOutput = Schema.Null
 
 export const TaskRemoveDepRequest = request({
   id: "task.removeDep",
+  extensionId: TASK_TOOLS_EXTENSION_ID,
   intent: "write",
   input: TaskRemoveDepInput,
   output: TaskRemoveDepOutput,
@@ -306,14 +236,3 @@ export const TaskRemoveDepRequest = request({
       return null
     }),
 })
-
-export const TaskRemoveDepRef: CapabilityRef<
-  typeof TaskRemoveDepInput.Type,
-  typeof TaskRemoveDepOutput.Type
-> = {
-  extensionId: TASK_TOOLS_EXTENSION_ID,
-  capabilityId: "task.removeDep",
-  intent: "write",
-  input: TaskRemoveDepInput,
-  output: TaskRemoveDepOutput,
-}

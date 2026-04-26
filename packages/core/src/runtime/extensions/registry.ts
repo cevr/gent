@@ -23,8 +23,16 @@ import { SCOPE_PRECEDENCE } from "./disabled.js"
 // surface as commands; the audience is the load-bearing filter. The legacy
 // server-side `CommandContribution` shape died in C8.
 export interface SlashCommand {
+  /** Routing key (capability id, extension-local). */
   readonly name: string
+  /** Author-supplied display name for the slash menu / palette. Falls back to
+   *  `name` when absent (`tool()` / `request()` capabilities). */
+  readonly displayName?: string
   readonly description?: string
+  /** Author-supplied palette category. */
+  readonly category?: string
+  /** Author-supplied keybind hint (display-only). */
+  readonly keybind?: string
   readonly extensionId: string
   readonly capabilityId: string
   readonly intent: "read" | "write"
@@ -87,16 +95,22 @@ const sortExtensionsByScope = (
     return a.manifest.id.localeCompare(b.manifest.id)
   })
 
-const capabilityToCommand = (
-  extensionId: string,
-  cap: AnyCapabilityContribution,
-): SlashCommand => ({
-  name: cap.id,
-  ...(cap.promptSnippet !== undefined ? { description: cap.promptSnippet } : {}),
-  extensionId,
-  capabilityId: cap.id,
-  intent: cap.intent,
-})
+const capabilityToCommand = (extensionId: string, cap: AnyCapabilityContribution): SlashCommand => {
+  // Prefer cap.description (author-supplied, human-readable) over
+  // cap.promptSnippet (LLM-prompt fragment) so action() callers don't have
+  // to duplicate the same string into both fields.
+  const description = cap.description ?? cap.promptSnippet
+  return {
+    name: cap.id,
+    ...(cap.displayName !== undefined ? { displayName: cap.displayName } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(cap.category !== undefined ? { category: cap.category } : {}),
+    ...(cap.keybind !== undefined ? { keybind: cap.keybind } : {}),
+    extensionId,
+    capabilityId: cap.id,
+    intent: cap.intent,
+  }
+}
 
 /** Compile prevalidated extensions into an immutable resolved snapshot. */
 export const resolveExtensions = (

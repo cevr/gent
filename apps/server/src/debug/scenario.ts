@@ -29,12 +29,18 @@ import { MessageStorage } from "@gent/core/storage/message-storage.js"
 import { ExtensionRegistry } from "@gent/core/runtime/extensions/registry.js"
 import { RuntimePlatform } from "@gent/core/runtime/runtime-platform.js"
 import type { CapabilityError, CapabilityNotFoundError } from "@gent/core/domain/capability.js"
+import { ref } from "@gent/core/extensions/api"
 import {
-  TaskCreateRef,
-  TaskDeleteRef,
-  TaskListRef,
-  TaskUpdateRef,
+  TaskCreateRequest,
+  TaskDeleteRequest,
+  TaskListRequest,
+  TaskUpdateRequest,
 } from "@gent/extensions/task-tools/requests.js"
+
+const TaskCreateRef = ref(TaskCreateRequest)
+const TaskDeleteRef = ref(TaskDeleteRequest)
+const TaskListRef = ref(TaskListRequest)
+const TaskUpdateRef = ref(TaskUpdateRequest)
 
 export interface DebugScenarioParams {
   sessionId: SessionId

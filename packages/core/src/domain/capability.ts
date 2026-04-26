@@ -169,6 +169,15 @@ export interface CapabilityContribution<
   readonly audiences: ReadonlyArray<Audience>
   /** Read vs write. Lint-enforced on `R` for `"read"`. */
   readonly intent: Intent
+  /** Display name for human-facing surfaces (slash menu, palette). Distinct
+   *  from `id` (routing key). Set by `action({ name })`; absent for tools and
+   *  requests. */
+  readonly displayName?: string
+  /** Category for palette grouping. Set by `action({ category })`. */
+  readonly category?: string
+  /** Keybind hint for the TUI. Display-only — TUI may ignore. Set by
+   *  `action({ keybind })`. */
+  readonly keybind?: string
   /** Schema for validating `input` at the boundary. */
   readonly input: Schema.Schema<Input>
   /** Schema for validating `output` at the boundary. May be `Schema.Unknown`
@@ -198,10 +207,19 @@ export type AnyCapabilityContribution = CapabilityContribution<any, any, any, an
  * only accepts `CapabilityToken` — not raw `AnyCapabilityContribution` — so
  * authors must go through a typed factory. Internal runtime code (registry,
  * capability-host) consumes `AnyCapabilityContribution` directly.
+ *
+ * The `Input`/`Output` parameters carry through from the factory so a typed
+ * `ref(token)` accessor can hand callers a `CapabilityRef<Input, Output>`
+ * without restating the schema.
  */
 declare const CapabilityTokenBrand: unique symbol
-export type CapabilityToken = AnyCapabilityContribution & {
+export interface CapabilityToken<
+  Input = unknown,
+  Output = unknown,
+> extends AnyCapabilityContribution {
   readonly [CapabilityTokenBrand]: true
+  /** Typed read for `ref(token)`. Internal — do not consume directly. */
+  readonly [CAPABILITY_REF]?: CapabilityRef<Input, Output>
 }
 
 /**
@@ -215,4 +233,26 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
   readonly intent: Intent
   readonly input: Schema.Decoder<Input, never>
   readonly output: Schema.Decoder<Output, never>
+}
+
+/** Symbol under which `request({...})` attaches a typed `CapabilityRef` to its
+ *  returned token. Read with `ref(token)`. Authors should not consume the
+ *  symbol directly — the typed accessor preserves Input/Output parameters. */
+export const CAPABILITY_REF: unique symbol = Symbol.for("@gent/core/capability/ref")
+
+/**
+ * Read the typed `CapabilityRef` attached to a `request(...)` token. Returns
+ * undefined for tokens produced by `tool(...)` / `action(...)` (which do not
+ * carry a ref).
+ */
+export const ref = <Input, Output>(
+  token: CapabilityToken<Input, Output>,
+): CapabilityRef<Input, Output> => {
+  const stored = token[CAPABILITY_REF]
+  if (stored === undefined) {
+    throw new Error(
+      `ref(token): token "${token.id}" was not produced by request(...) — only request tokens carry a ref`,
+    )
+  }
+  return stored
 }

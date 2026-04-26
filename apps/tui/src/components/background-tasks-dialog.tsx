@@ -11,8 +11,9 @@
 import { createSignal, createEffect, Show, For } from "solid-js"
 import { Effect } from "effect"
 import { useTerminalDimensions } from "@opentui/solid"
+import { ref } from "@gent/core/extensions/api"
 import type { TaskId } from "@gent/core/domain/ids.js"
-import { TaskUpdateRef } from "@gent/extensions/task-tools/requests.js"
+import { TaskUpdateRequest } from "@gent/extensions/task-tools/requests.js"
 import { type TaskEntry } from "@gent/extensions/task-tools/identity.js"
 import { ChromePanel } from "./chrome-panel"
 import { useScopedKeyboard } from "../keyboard/context"
@@ -59,14 +60,15 @@ export function BackgroundTasksDialog(props: {
   const stopTask = (taskId: TaskId) => {
     const session = clientCtx.session()
     if (session === undefined || session === null) return
+    const updateRef = ref(TaskUpdateRequest)
     cast(
       clientCtx.client.extension
         .request({
           sessionId: session.sessionId,
           branchId: session.branchId,
-          extensionId: TaskUpdateRef.extensionId,
-          capabilityId: TaskUpdateRef.capabilityId,
-          intent: TaskUpdateRef.intent,
+          extensionId: updateRef.extensionId,
+          capabilityId: updateRef.capabilityId,
+          intent: updateRef.intent,
           input: { taskId, status: "stopped" },
         })
         .pipe(Effect.catchEager(() => Effect.void)),

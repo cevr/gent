@@ -392,8 +392,16 @@ export const ListExtensionCommandsInput = Schema.Struct({
 export type ListExtensionCommandsInput = typeof ListExtensionCommandsInput.Type
 
 export class CommandInfo extends Schema.Class<CommandInfo>("CommandInfo")({
+  /** Routing key (capability id). */
   name: Schema.String,
+  /** Author-supplied display name (slash menu / palette). Falls back to
+   *  `name` when absent. */
+  displayName: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
+  /** Author-supplied palette category. */
+  category: Schema.optional(Schema.String),
+  /** Author-supplied keybind hint (display-only). */
+  keybind: Schema.optional(Schema.String),
   extensionId: Schema.String,
   capabilityId: Schema.String,
   intent: Schema.Literals(["read", "write"]),

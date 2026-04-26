@@ -298,9 +298,10 @@ export function ExtensionUIProvider(props: { children: JSX.Element }) {
 
                 return {
                   id: `server:${c.name}`,
-                  title: c.description ?? c.name,
+                  title: c.displayName ?? c.description ?? c.name,
                   slash: c.name,
-                  category: "Extension",
+                  category: c.category ?? "Extension",
+                  ...(c.keybind !== undefined ? { keybind: c.keybind } : {}),
                   onSelect: () => run(""),
                   onSlash: run,
                 }

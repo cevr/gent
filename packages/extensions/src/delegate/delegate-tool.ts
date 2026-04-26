@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   tool,
+  ref,
   AgentName,
   getDurableAgentRunSessionId,
   makeRunSpec,
@@ -10,7 +11,7 @@ import {
   type SessionId,
   type Task,
 } from "@gent/core/extensions/api"
-import { TaskCreateRef, TaskGetRef, TaskUpdateRef } from "../task-tools/requests.js"
+import { TaskCreateRequest, TaskGetRequest, TaskUpdateRequest } from "../task-tools/requests.js"
 
 const MAX_PARALLEL_TASKS = 8
 const MAX_CONCURRENCY = 4
@@ -81,7 +82,7 @@ export const DelegateTool = tool({
 
     /** Check if task is still in a non-terminal state before writing completion */
     const isTaskStillActive = (taskId: string) =>
-      ctx.extension.request(TaskGetRef, { taskId: TaskId.make(taskId) }).pipe(
+      ctx.extension.request(ref(TaskGetRequest), { taskId: TaskId.make(taskId) }).pipe(
         Effect.map(
           (t) => t !== null && t !== undefined && t.status !== "stopped" && t.status !== "failed",
         ),
@@ -92,13 +93,13 @@ export const DelegateTool = tool({
       Effect.gen(function* () {
         // Set task to in_progress
         yield* ctx.extension
-          .request(TaskUpdateRef, { taskId: task.id, status: "in_progress" })
+          .request(ref(TaskUpdateRequest), { taskId: task.id, status: "in_progress" })
           .pipe(Effect.catchEager(() => Effect.void))
 
         const resolvedAgent = yield* ctx.agent.get(agent.name)
         if (resolvedAgent === undefined) {
           yield* ctx.extension
-            .request(TaskUpdateRef, {
+            .request(ref(TaskUpdateRequest), {
               taskId: task.id,
               status: "failed",
               metadata: { error: `Unknown agent: ${agent.name}` },
@@ -121,7 +122,7 @@ export const DelegateTool = tool({
 
         if (result._tag === "success") {
           yield* ctx.extension
-            .request(TaskUpdateRef, {
+            .request(ref(TaskUpdateRequest), {
               taskId: task.id,
               status: "completed",
               owner: result.sessionId,
@@ -135,7 +136,7 @@ export const DelegateTool = tool({
             .pipe(Effect.catchEager(() => Effect.void))
         } else {
           yield* ctx.extension
-            .request(TaskUpdateRef, {
+            .request(ref(TaskUpdateRequest), {
               taskId: task.id,
               status: "failed",
               metadata: {
@@ -154,7 +155,7 @@ export const DelegateTool = tool({
       if (!resolved.ok) return { error: resolved.error }
 
       const task = yield* ctx.extension
-        .request(TaskCreateRef, {
+        .request(ref(TaskCreateRequest), {
           subject: params.description ?? params.task ?? "background task",
           agentType: resolved.agent.name,
           prompt: params.task,
@@ -182,7 +183,7 @@ export const DelegateTool = tool({
         const resolved = yield* resolveAgent(item.agent)
         if (!resolved.ok) return { error: resolved.error }
         const task = yield* ctx.extension
-          .request(TaskCreateRef, {
+          .request(ref(TaskCreateRequest), {
             subject: summarizeTaskSubject(item.task),
             agentType: resolved.agent.name,
             prompt: item.task,

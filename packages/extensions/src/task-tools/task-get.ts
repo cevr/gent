@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
-import { tool, TaskId } from "@gent/core/extensions/api"
-import { TaskGetDepsRef, TaskGetRef } from "./requests.js"
+import { tool, ref, TaskId } from "@gent/core/extensions/api"
+import { TaskGetDepsRequest, TaskGetRequest } from "./requests.js"
 
 export const TaskGetParams = Schema.Struct({
   taskId: Schema.String.annotate({ description: "Task ID to get details for" }),
@@ -13,12 +13,12 @@ export const TaskGetTool = tool({
   params: TaskGetParams,
   execute: Effect.fn("TaskGetTool.execute")(function* (params, ctx) {
     const taskId = TaskId.make(params.taskId)
-    const task = yield* ctx.extension.request(TaskGetRef, { taskId })
+    const task = yield* ctx.extension.request(ref(TaskGetRequest), { taskId })
     if (task == null) {
       return { error: `Task not found: ${params.taskId}` }
     }
 
-    const deps = yield* ctx.extension.request(TaskGetDepsRef, { taskId })
+    const deps = yield* ctx.extension.request(ref(TaskGetDepsRequest), { taskId })
 
     return {
       id: task.id,

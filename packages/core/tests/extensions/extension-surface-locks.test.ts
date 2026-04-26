@@ -97,23 +97,10 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("tool({...}) rejects `intent` field (request-only)", () => {
-    const badInput = {
-      id: "bad-tool",
-      description: "x",
-      params: NoInput,
-      // @ts-expect-error — `intent` is a request-only field
-      intent: "read",
-      execute: () => Effect.succeed("x"),
-    } satisfies ToolInput
-
-    void badInput
-    expect(true).toBe(true)
-  })
-
   test("request({ intent: 'read' }) — happy path compiles with ReadOnly Tag", () => {
     const ok = request({
       id: "ok-read",
+      extensionId: "test-ext",
       intent: "read",
       input: NoInput,
       output: StringOutput,
@@ -131,6 +118,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({ intent: 'read' }) rejects write-capable Tag in R", () => {
     const badInput = {
       id: "bad-read",
+      extensionId: "test-ext",
       intent: "read" as const,
       input: NoInput,
       output: StringOutput,
@@ -150,6 +138,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({ intent: 'write' }) — write-capable Tag in R is allowed", () => {
     const ok = request({
       id: "ok-write",
+      extensionId: "test-ext",
       intent: "write",
       input: NoInput,
       output: StringOutput,
@@ -168,6 +157,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
   test("request({...}) rejects `params` field (tool-only)", () => {
     const badInput = {
       id: "bad-request",
+      extensionId: "test-ext",
       intent: "write" as const,
       // @ts-expect-error — `params` belongs to tool(), not request()
       params: NoInput,

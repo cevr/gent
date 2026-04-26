@@ -3,7 +3,7 @@
  *
  * B11.6: migrated off the paired-package snapshot cache. The widget owns
  * its own Solid signal inside an Effect-typed setup, fetched via the
- * typed transport (`requestExtension(TaskListRef)`) and refreshed on
+ * typed transport (`requestExtension(ref(TaskListRequest))`) and refreshed on
  * `ExtensionStateChanged` pulses for `@gent/task-tools`.
  *
  * Lifecycle: setup runs once per `ExtensionUIProvider` mount via
@@ -25,7 +25,8 @@ import { TaskWidget, type TaskPreview } from "../../components/task-widget"
 import { BackgroundTasksDialog } from "../../components/background-tasks-dialog"
 import type { TaskEntry } from "@gent/extensions/task-tools/identity.js"
 import { TASK_TOOLS_EXTENSION_ID } from "@gent/extensions/task-tools/identity.js"
-import { TaskListRef } from "@gent/extensions/task-tools/requests.js"
+import { TaskListRequest } from "@gent/extensions/task-tools/requests.js"
+import { ref } from "@gent/core/extensions/api"
 import { ClientTransport, requestExtension } from "../client-transport"
 import { ClientShell, ClientComposer, ClientLifecycle } from "../client-services"
 import { useScopedKeyboard } from "../../keyboard/context"
@@ -70,7 +71,7 @@ export default defineClientExtension("@gent/task-tools", {
     const runRefetch = async (captured: ActiveSession): Promise<void> => {
       try {
         const out = await transport.runtime.run(
-          requestExtension(TaskListRef, {}, transport, captured),
+          requestExtension(ref(TaskListRequest), {}, transport, captured),
         )
         const current = transport.currentSession()
         if (

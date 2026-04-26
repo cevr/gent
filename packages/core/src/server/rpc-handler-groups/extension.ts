@@ -254,7 +254,10 @@ export const buildExtensionRpcHandlers = (deps: RpcHandlerDeps) => ({
         (command) =>
           new CommandInfo({
             name: command.name,
+            displayName: command.displayName,
             description: command.description,
+            category: command.category,
+            keybind: command.keybind,
             extensionId: command.extensionId,
             capabilityId: command.capabilityId,
             intent: command.intent,

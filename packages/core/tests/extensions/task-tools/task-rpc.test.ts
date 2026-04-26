@@ -17,11 +17,12 @@ import { Provider } from "@gent/core/providers/provider"
 import { setupExtension } from "../../../src/runtime/extensions/loader"
 import { TaskExtension } from "@gent/extensions/task-tools"
 import {
-  TaskCreateRef,
-  TaskDeleteRef,
-  TaskListRef,
-  TaskUpdateRef,
+  TaskCreateRequest,
+  TaskDeleteRequest,
+  TaskListRequest,
+  TaskUpdateRequest,
 } from "@gent/extensions/task-tools/requests"
+import { ref } from "@gent/core/extensions/api"
 import { Gent } from "@gent/sdk"
 import { createE2ELayer } from "@gent/core/test-utils/e2e-layer"
 import { e2ePreset } from "../helpers/test-preset"
@@ -52,9 +53,9 @@ describe("TaskExtension via RPC", () => {
           const created = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskCreateRef.extensionId,
-            capabilityId: TaskCreateRef.capabilityId,
-            intent: TaskCreateRef.intent,
+            extensionId: ref(TaskCreateRequest).extensionId,
+            capabilityId: ref(TaskCreateRequest).capabilityId,
+            intent: ref(TaskCreateRequest).intent,
             input: { subject: "Inspect repo" },
           })) as { id: string; subject: string; status: string }
           expect(created.id).toBeDefined()
@@ -65,9 +66,9 @@ describe("TaskExtension via RPC", () => {
           const listed = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: ref(TaskListRequest).extensionId,
+            capabilityId: ref(TaskListRequest).capabilityId,
+            intent: ref(TaskListRequest).intent,
             input: {},
           })) as ReadonlyArray<{ id: string; subject: string; status: string }>
           expect(listed).toHaveLength(1)
@@ -77,18 +78,18 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskUpdateRef.extensionId,
-            capabilityId: TaskUpdateRef.capabilityId,
-            intent: TaskUpdateRef.intent,
+            extensionId: ref(TaskUpdateRequest).extensionId,
+            capabilityId: ref(TaskUpdateRequest).capabilityId,
+            intent: ref(TaskUpdateRequest).intent,
             input: { taskId: created.id, status: "in_progress" },
           })
 
           const afterUpdate = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: ref(TaskListRequest).extensionId,
+            capabilityId: ref(TaskListRequest).capabilityId,
+            intent: ref(TaskListRequest).intent,
             input: {},
           })) as ReadonlyArray<{ id: string; status: string }>
           expect(afterUpdate[0]?.status).toBe("in_progress")
@@ -97,17 +98,17 @@ describe("TaskExtension via RPC", () => {
           yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskDeleteRef.extensionId,
-            capabilityId: TaskDeleteRef.capabilityId,
-            intent: TaskDeleteRef.intent,
+            extensionId: ref(TaskDeleteRequest).extensionId,
+            capabilityId: ref(TaskDeleteRequest).capabilityId,
+            intent: ref(TaskDeleteRequest).intent,
             input: { taskId: created.id },
           })
           const afterDelete = (yield* client.extension.request({
             sessionId,
             branchId,
-            extensionId: TaskListRef.extensionId,
-            capabilityId: TaskListRef.capabilityId,
-            intent: TaskListRef.intent,
+            extensionId: ref(TaskListRequest).extensionId,
+            capabilityId: ref(TaskListRequest).capabilityId,
+            intent: ref(TaskListRequest).intent,
             input: {},
           })) as ReadonlyArray<unknown>
           expect(afterDelete).toHaveLength(0)
@@ -132,9 +133,9 @@ describe("TaskExtension via RPC", () => {
             .request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
-              capabilityId: TaskCreateRef.capabilityId,
-              intent: TaskCreateRef.intent,
+              extensionId: ref(TaskCreateRequest).extensionId,
+              capabilityId: ref(TaskCreateRequest).capabilityId,
+              intent: ref(TaskCreateRequest).intent,
               // subject is required String; passing wrong type forces decode failure
               input: { subject: 123 },
             })
@@ -162,7 +163,7 @@ describe("TaskExtension via RPC", () => {
             .request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
+              extensionId: ref(TaskCreateRequest).extensionId,
               capabilityId: "not-a-real-capability",
               intent: "write",
               input: {},
@@ -190,8 +191,8 @@ describe("TaskExtension via RPC", () => {
             .request({
               sessionId,
               branchId,
-              extensionId: TaskCreateRef.extensionId,
-              capabilityId: TaskCreateRef.capabilityId,
+              extensionId: ref(TaskCreateRequest).extensionId,
+              capabilityId: ref(TaskCreateRequest).capabilityId,
               intent: "read",
               input: { subject: "Inspect repo" },
             })

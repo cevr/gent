@@ -31,7 +31,6 @@ export const ExecutorExtension = defineExtension({
       description: "Connect to the configured Executor endpoint.",
       surface: "slash",
       public: true,
-      promptSnippet: "Connect to the configured Executor endpoint.",
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
@@ -45,7 +44,6 @@ export const ExecutorExtension = defineExtension({
       description: "Disconnect from the Executor sidecar.",
       surface: "slash",
       public: true,
-      promptSnippet: "Disconnect from the Executor sidecar.",
       input: Schema.String,
       output: Schema.Void,
       execute: (_args, extCtx) =>
