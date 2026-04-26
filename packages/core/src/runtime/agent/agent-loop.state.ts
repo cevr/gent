@@ -354,3 +354,29 @@ export const runtimeStateFromLoopState = (
       })
   }
 }
+
+// ── Aggregate (W8-1 single-Ref shape) ──
+//
+// Replaces the stateRef / queueRef / runtimeStateRef projection mirror set
+// with one source of truth. The FSM driver still owns the LoopState
+// transition table; this aggregate is the per-session memory the loop
+// reads/writes through a single SubscriptionRef. `runtimeState` derives
+// from `state` + `queue` at the watchState boundary — never stored.
+
+export interface AgentLoopState {
+  readonly state: LoopState
+  readonly queue: LoopQueueState
+  readonly startingState: LoopState | undefined
+}
+
+export const buildInitialAgentLoopState = (params: {
+  state: LoopState
+  queue?: LoopQueueState
+}): AgentLoopState => ({
+  state: params.state,
+  queue: params.queue ?? emptyLoopQueueState(),
+  startingState: undefined,
+})
+
+export const projectRuntimeState = (s: AgentLoopState): LoopRuntimeState =>
+  runtimeStateFromLoopState(s.state, s.queue)
