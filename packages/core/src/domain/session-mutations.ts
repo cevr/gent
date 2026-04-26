@@ -2,7 +2,7 @@ import { Context, type Effect } from "effect"
 import type { EventStoreError } from "./event.js"
 import type { BranchId, MessageId, SessionId } from "./ids.js"
 import type { InvalidStateError, NotFoundError } from "./business-errors.js"
-import type { StorageError } from "../storage/sqlite-storage.js"
+import type { StorageError } from "./storage-error.js"
 
 export type SessionMutationError =
   | StorageError

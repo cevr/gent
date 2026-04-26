@@ -24,6 +24,7 @@ import { MessageStorage } from "./message-storage.js"
 import { EventStorage } from "./event-storage.js"
 import { RelationshipStorage } from "./relationship-storage.js"
 import { ExtensionStateStorage } from "./extension-state-storage.js"
+import { StorageError } from "../domain/storage-error.js"
 
 // Schema decoders - Effect-based (no sync throws)
 const MessagePartsJson = Schema.fromJsonString(Schema.Array(MessagePart))
@@ -74,12 +75,11 @@ const expandEventTags = (tags: ReadonlyArray<string>) => [
     tags.flatMap((tag) => LEGACY_EVENT_TAGS[tag as keyof typeof LEGACY_EVENT_TAGS] ?? [tag]),
   ),
 ]
-// Storage Error
+// Storage Error — definition lives in domain/ to keep the brand single-sourced.
+// `domain/session-mutations.ts` (and other domain interfaces) reference this
+// type; importing from infra would invert the dependency direction.
 
-export class StorageError extends Schema.TaggedErrorClass<StorageError>()("StorageError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export { StorageError }
 
 // Storage Service Interface
 

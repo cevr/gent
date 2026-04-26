@@ -37,7 +37,7 @@ import type { ExtensionHostContext } from "./extension-host-context.js"
 import { ToolCallId, type BranchId, type SessionId } from "./ids.js"
 import type { Message } from "./message.js"
 import type { Model } from "./model.js"
-import type { ProviderError } from "../providers/provider.js"
+import type { ProviderError } from "./provider-error.js"
 import { TaggedEnumClass } from "./schema-tagged-enum-class.js"
 
 // Note: TurnExecutor is defined below alongside the driver primitives — no

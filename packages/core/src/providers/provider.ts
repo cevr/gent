@@ -15,6 +15,7 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import * as AiError from "effect/unstable/ai/AiError"
 import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 import { toPrompt } from "./ai-transcript.js"
+import { ProviderError } from "../domain/provider-error.js"
 
 // ── Provider Resolution ──
 
@@ -141,12 +142,10 @@ const makeModelResolver = (authStore: AuthStoreService, defaultRegistry: DriverR
 }
 
 // ── Provider Error ──
+// Definition lives in domain/ so `domain/driver.ts` can reference it without
+// back-importing infrastructure. One brand, single source.
 
-export class ProviderError extends Schema.TaggedErrorClass<ProviderError>()("ProviderError", {
-  message: Schema.String,
-  model: Schema.String,
-  cause: Schema.optional(Schema.Defect),
-}) {}
+export { ProviderError }
 
 // ── Provider Stream Parts ──
 
