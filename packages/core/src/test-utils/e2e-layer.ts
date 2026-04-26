@@ -279,6 +279,13 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
         ),
       )
 
+      // Wire the live SessionRuntime into the terminator's empty Ref so
+      // terminateSession/restoreSession actually fire (otherwise they no-op).
+      const registerTerminatorLive = Layer.provide(
+        SessionCommands.RegisterSessionRuntimeTerminatorLive,
+        Layer.mergeAll(baseDeps, sessionRuntimeLive),
+      )
+
       return Layer.provideMerge(
         AppServicesLive,
         Layer.mergeAll(
@@ -288,6 +295,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
           toolRunnerLive,
           sessionMutationsLive,
           sessionRuntimeLive,
+          registerTerminatorLive,
           ServerIdentity.Test(),
         ),
       )

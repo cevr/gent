@@ -120,6 +120,15 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
     Layer.mergeAll(baseDeps, eventStoreLive, eventPublisherLive, sessionMutationsLive),
   )
 
+  // Wire the live SessionRuntime into the terminator's empty Ref. Without
+  // this, terminator.terminateSession / restoreSession silently no-op,
+  // hiding the runtime-side cleanup half from any test that boots through
+  // AppServicesLive.
+  const registerTerminatorLive = Layer.provide(
+    SessionCommands.RegisterSessionRuntimeTerminatorLive,
+    Layer.mergeAll(baseDeps, sessionRuntimeLive),
+  )
+
   return Layer.provideMerge(
     AppServicesLive,
     Layer.mergeAll(
@@ -128,6 +137,7 @@ const buildLayer = (providerLive: Layer.Layer<Provider>, config: InProcessLayerC
       eventPublisherLive,
       sessionMutationsLive,
       sessionRuntimeLive,
+      registerTerminatorLive,
       ServerIdentity.Test(),
     ),
   )
